@@ -1,0 +1,1 @@
+Sadly, my LZSS implementation in Python is too slow, so you may prefer to compile your pck with --no-angou. If you need to use ASCII text for dialogue (e.g., for an English translation) in the original .ss files, wrap them in double quotes. I'm sure you are clever enough to use this tool without a README to guide you.

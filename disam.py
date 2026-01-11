@@ -1,0 +1,1092 @@
+import re, struct
+import const as C
+
+NAME_W = 40
+MAX_LIST_PREVIEW = 8
+
+
+def hx(x):
+    try:
+        v = int(x)
+    except Exception:
+        return "-"
+    if v < 0:
+        return "-"
+    if v <= 0xFFFFFFFF:
+        return "0x%08X" % v
+    return "0x%X" % v
+
+
+def _safe_i32(buf, ofs):
+    try:
+        ofs = int(ofs)
+    except Exception:
+        return None
+    if ofs < 0 or ofs + 4 > len(buf):
+        return None
+    try:
+        return struct.unpack_from("<i", buf, ofs)[0]
+    except Exception:
+        return None
+
+
+def _invert_form_code_map():
+    out = {}
+    try:
+        fm = getattr(C, "_FORM_CODE", None)
+        if isinstance(fm, dict):
+            for k, v in fm.items():
+                try:
+                    out[int(v)] = str(k)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
+
+
+def _build_system_element_map():
+    elm_map = {}
+    elm_multi = {}
+    try:
+        defs = getattr(C, "SYSTEM_ELEMENT_DEFS", None)
+        if not isinstance(defs, (list, tuple)):
+            return elm_map, elm_multi
+
+        fm = getattr(C, "_FORM_CODE", {}) or {}
+
+        def _to_code(t):
+            try:
+                t = str(t).strip()
+            except Exception:
+                return None
+            if not t:
+                return None
+            try:
+                if t in fm:
+                    return int(fm[t])
+            except Exception:
+                pass
+            return t
+
+        def _parse_overload_spec(spec):
+
+            out = []
+            if spec is None:
+                return out
+            try:
+                parts = str(spec).split(";")
+            except Exception:
+                return out
+            for p in parts:
+                p = (p or "").strip()
+                if not p or ":" not in p:
+                    continue
+                k, v = p.split(":", 1)
+                try:
+                    ki = int(k.strip())
+                except Exception:
+                    continue
+                if ki < 0:
+                    continue
+                v = (v or "").strip()
+                if not v:
+                    out.append(tuple())
+                    continue
+                args = []
+                for x in v.split(","):
+                    x = (x or "").strip()
+                    if not x:
+                        continue
+                    args.append(_to_code(x))
+                out.append(tuple(args))
+            return out
+
+        from collections import defaultdict
+
+        bucket = defaultdict(list)
+        for it in defs:
+            try:
+                if not isinstance(it, (list, tuple)) or len(it) < 7:
+                    continue
+                parent = str(it[1])
+                ret = it[2]
+                name = str(it[3])
+                owner = int(it[4])
+                group = int(it[5])
+                code = int(it[6])
+                spec = it[7] if len(it) >= 8 else ""
+                ec = C.create_elm_code(owner, group, code)
+                q = (parent + "." + name) if parent else name
+                cand = {
+                    "q": q,
+                    "parent": parent,
+                    "name": name,
+                    "ret": _to_code(ret),
+                    "sigs": _parse_overload_spec(spec),
+                    "has_named": ("-1:" in str(spec)) if spec is not None else False,
+                }
+                bucket[ec].append(cand)
+            except Exception:
+                continue
+
+        for ec, cands in bucket.items():
+            if not cands:
+                continue
+            if len(cands) == 1:
+                elm_map[ec] = cands[0].get("q", "")
+            else:
+                elm_multi[ec] = cands
+
+                elm_map[ec] = cands[0].get("q", "")
+    except Exception:
+        pass
+    return elm_map, elm_multi
+
+
+def _escape_preview(s, limit=80):
+    if s is None:
+        return ""
+    try:
+        t = str(s)
+    except Exception:
+        return ""
+    t = (
+        t.replace("\\", "\\\\")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    if len(t) > limit:
+        return t[: limit - 1] + "…"
+    return t
+
+
+def disassemble_scn_bytes(
+    scn, str_list, label_list, z_label_list=None, read_flag_cnt=None
+):
+    z_label_list = z_label_list or []
+    form_rev = _invert_form_code_map()
+    op_names = {}
+    for nm in (
+        "CD_NONE",
+        "CD_NL",
+        "CD_PUSH",
+        "CD_POP",
+        "CD_COPY",
+        "CD_PROPERTY",
+        "CD_COPY_ELM",
+        "CD_DEC_PROP",
+        "CD_ELM_POINT",
+        "CD_ARG",
+        "CD_GOTO",
+        "CD_GOTO_TRUE",
+        "CD_GOTO_FALSE",
+        "CD_GOSUB",
+        "CD_GOSUBSTR",
+        "CD_RETURN",
+        "CD_EOF",
+        "CD_ASSIGN",
+        "CD_OPERATE_1",
+        "CD_OPERATE_2",
+        "CD_COMMAND",
+        "CD_TEXT",
+        "CD_NAME",
+        "CD_SEL_BLOCK_START",
+        "CD_SEL_BLOCK_END",
+    ):
+        try:
+            op_names[int(getattr(C, nm))] = nm
+        except Exception:
+            pass
+    FM_VOID_CODE = int((getattr(C, "_FORM_CODE", {}) or {}).get("void", 0) or 0)
+    FM_STR_CODE = int((getattr(C, "_FORM_CODE", {}) or {}).get("str", 3) or 3)
+    FM_INT_CODE = int((getattr(C, "_FORM_CODE", {}) or {}).get("int", 2) or 2)
+    FM_LIST_CODE = int((getattr(C, "_FORM_CODE", {}) or {}).get("list", 100) or 100)
+    FM_OBJECT_CODE = int(
+        (getattr(C, "_FORM_CODE", {}) or {}).get("object", 1310) or 1310
+    )
+    ELM_ARRAY = int(getattr(C, "ELM_ARRAY", -1))
+    labels_at = {}
+    try:
+        for i, ofs in enumerate(label_list or []):
+            if ofs is None:
+                continue
+            o = int(ofs)
+            labels_at.setdefault(o, []).append("L%d" % i)
+    except Exception:
+        pass
+    try:
+        for i, ofs in enumerate(z_label_list or []):
+            if ofs is None:
+                continue
+            o = int(ofs)
+            labels_at.setdefault(o, []).append("Z%d" % i)
+    except Exception:
+        pass
+    elm_map, elm_multi = _build_system_element_map()
+
+    def fmt_form(f):
+        try:
+            fi = int(f)
+        except Exception:
+            return str(f)
+        return "%s(%d)" % (form_rev.get(fi, "form"), fi)
+
+    def _call_sig_from_arg_forms(arg_forms):
+        sig = []
+        try:
+            for af0 in arg_forms or []:
+                if not isinstance(af0, dict):
+                    sig.append(int(af0) if af0 is not None else 0)
+                    continue
+                f = int(af0.get("form", 0) or 0)
+
+                sig.append(FM_LIST_CODE if f == FM_LIST_CODE else f)
+        except Exception:
+            pass
+        return tuple(sig)
+
+    def _guess_parent_hint_from_stack(stack, argc, arg_forms):
+
+        try:
+            if not stack or not str_list or argc is None:
+                return None
+            argc = int(argc)
+            if argc <= 0 or len(stack) < argc:
+                return None
+            args = stack[-argc:]
+            for a, af0 in zip(args, arg_forms or []):
+                try:
+                    if int((af0 or {}).get("form", 0) or 0) != FM_STR_CODE:
+                        continue
+                    sid = (a or {}).get("val")
+                    if sid is None:
+                        continue
+                    sid = int(sid)
+                    if sid < 0 or sid >= len(str_list):
+                        continue
+                    s = str_list[sid] or ""
+                    s0 = s.lower()
+                    if (
+                        s0.startswith("se_")
+                        or s0.startswith("se-")
+                        or s0.startswith("se")
+                    ):
+                        return "se"
+                    if (
+                        s0.startswith("bgm")
+                        or s0.startswith("music_")
+                        or s0.startswith("bgm_")
+                    ):
+                        return "bgm"
+                except Exception:
+                    continue
+        except Exception:
+            return None
+        return None
+
+    def _build_decompile_note(stack, argc, ename):
+        try:
+            argc = int(argc)
+        except Exception:
+            return ""
+        if argc <= 0 or not stack:
+            return ""
+        try:
+            args = stack[-argc:] if len(stack) >= argc else []
+        except Exception:
+            args = []
+        qname = (ename or "").strip()
+        if qname:
+            qname = qname.split(" ", 1)[0]
+            qname = qname.split("{", 1)[0].strip()
+
+        def _get_str(a):
+            try:
+                if int((a or {}).get("form", -1)) != FM_STR_CODE:
+                    return None
+                sid = (a or {}).get("val")
+                if sid is None:
+                    return None
+                sid = int(sid)
+                if sid < 0 or sid >= len(str_list or []):
+                    return None
+                return str_list[sid]
+            except Exception:
+                return None
+
+        def _get_int(a):
+            try:
+                if int((a or {}).get("form", -1)) != FM_INT_CODE:
+                    return None
+                v = (a or {}).get("val")
+                if v is None:
+                    return None
+                return int(v)
+            except Exception:
+                return None
+
+        if qname in ("global.koe", "global.exkoe") or (
+            qname.endswith(".koe") or qname.endswith(".exkoe")
+        ):
+            if "wait_key" not in qname:
+                ints = []
+                for a in args:
+                    v = _get_int(a)
+                    if v is not None:
+                        ints.append(v)
+                if len(ints) >= 2:
+                    vid = ints[0]
+                    ch = ints[1]
+                    if 999000000 <= vid < 1000000000:
+                        vid -= 999000000
+                    if 0 <= vid <= 999999999 and 0 <= ch <= 999:
+                        return "KOE(%09d,%03d)" % (vid, ch)
+                    if 0 <= vid <= 999999999:
+                        return "KOE(%09d,%d)" % (vid, ch)
+                    return "KOE(%d,%d)" % (vid, ch)
+        res = None
+        res_l = None
+        for a in args:
+            s = _get_str(a)
+            if not s:
+                continue
+            sl = str(s).lower()
+            if sl.startswith(
+                (
+                    "bg_",
+                    "cg_",
+                    "ev_",
+                    "se_",
+                    "se-",
+                    "bgm",
+                    "music_",
+                    "koe",
+                    "voice",
+                    "mov",
+                    "movie",
+                    "ef_",
+                )
+            ):
+                res = str(s)
+                res_l = sl
+                break
+        if res is None:
+            for a in reversed(stack):
+                s = _get_str(a)
+                if not s:
+                    continue
+                sl = str(s).lower()
+                if sl.startswith(
+                    (
+                        "bg_",
+                        "cg_",
+                        "ev_",
+                        "se_",
+                        "se-",
+                        "bgm",
+                        "music_",
+                        "koe",
+                        "voice",
+                        "mov",
+                        "movie",
+                        "ef_",
+                    )
+                ):
+                    res = str(s)
+                    res_l = sl
+                    break
+        if res is None:
+            return ""
+        tag = "RES"
+        if res_l.startswith(("bg_", "cg_", "ev_")):
+            tag = "BG"
+        elif res_l.startswith(("se_", "se-")):
+            tag = "SE"
+        elif res_l.startswith(("bgm", "music_")):
+            tag = "BGM"
+        elif res_l.startswith(("mov", "movie")):
+            tag = "MOV"
+        elif res_l.startswith(("ef_",)):
+            tag = "EF"
+        elif res_l.startswith(("koe", "voice")):
+            tag = "KOE"
+        parts = []
+        for a in args:
+            s = _get_str(a)
+            if s is not None:
+                sl = str(s).lower()
+                if sl.startswith(
+                    (
+                        "bg_",
+                        "cg_",
+                        "ev_",
+                        "se_",
+                        "se-",
+                        "bgm",
+                        "music_",
+                        "koe",
+                        "voice",
+                        "mov",
+                        "movie",
+                        "ef_",
+                    )
+                ):
+                    parts.append('"%s"' % _escape_preview(s, 120))
+                    continue
+            v = _get_int(a)
+            if v is not None:
+                parts.append(str(v))
+        if not parts:
+            parts = ['"%s"' % _escape_preview(res, 120)]
+        return "%s(%s)" % (tag, ", ".join(parts))
+
+    def _sig_exact_match(sig, call_sig):
+        if len(sig) != len(call_sig):
+            return False
+        for x, y in zip(sig, call_sig):
+            if not isinstance(x, int):
+                return False
+            if x != y:
+                return False
+        return True
+
+    def _score_ec_candidate(ec, call_sig, ret_form, named_cnt, hint_parent):
+
+        try:
+            ec = int(ec)
+        except Exception:
+            return -9999
+        score = 0
+        if ec == 0:
+            score -= 5
+        if ec in elm_map:
+            score += 5
+            if ec >= 0x01000000:
+                score += 8
+        if ec in elm_multi:
+            best = 0
+            cands = elm_multi.get(ec) or []
+            for c in cands:
+                s = 0
+                sigs = c.get("sigs") or []
+                if sigs:
+                    if any(_sig_exact_match(sig, call_sig) for sig in sigs):
+                        s += 60
+                    elif any(len(sig) == len(call_sig) for sig in sigs):
+                        s += 12
+                if hint_parent and c.get("parent") == hint_parent:
+                    s += 18
+                if named_cnt and c.get("has_named"):
+                    s += 4
+                try:
+                    if (
+                        isinstance(c.get("ret"), int)
+                        and ret_form is not None
+                        and int(c.get("ret")) == int(ret_form)
+                    ):
+                        s += 6
+                except Exception:
+                    pass
+                if s > best:
+                    best = s
+            score += best
+        else:
+
+            if ec >= 0x01000000:
+                score += 40
+        return score
+
+    def _resolve_ename(ec, argc, arg_forms, ret_form, named_cnt, stack):
+        if ec is None:
+            return ""
+        try:
+            ec = int(ec)
+        except Exception:
+            return ""
+        if ec not in elm_multi:
+            return (" " + elm_map.get(ec, "")) if ec in elm_map else ""
+
+        call_sig = _call_sig_from_arg_forms(arg_forms)
+        hint_parent = _guess_parent_hint_from_stack(stack, argc, arg_forms)
+
+        cands = elm_multi.get(ec) or []
+        best = []
+        best_score = -9999
+        for c in cands:
+            s = 0
+            sigs = c.get("sigs") or []
+            if sigs:
+                if any(_sig_exact_match(sig, call_sig) for sig in sigs):
+                    s += 60
+                elif any(len(sig) == len(call_sig) for sig in sigs):
+                    s += 12
+            if hint_parent and c.get("parent") == hint_parent:
+                s += 18
+            if named_cnt and c.get("has_named"):
+                s += 4
+            try:
+                if (
+                    isinstance(c.get("ret"), int)
+                    and ret_form is not None
+                    and int(c.get("ret")) == int(ret_form)
+                ):
+                    s += 6
+            except Exception:
+                pass
+            if s > best_score:
+                best_score = s
+                best = [c]
+            elif s == best_score:
+                best.append(c)
+
+        if best_score < 15:
+            alts0 = [str(x.get("q", "")) for x in cands if x.get("q")]
+            alts0 = [x for x in alts0 if x]
+            if not alts0:
+                return (" " + elm_map.get(ec, "")) if ec in elm_map else ""
+            if len(alts0) > 4:
+                alts0 = alts0[:4] + ["…"]
+            return " " + alts0[0] + " {dup:" + "|".join(alts0[1:]) + "}"
+
+        if len(best) == 1:
+            return " " + str(best[0].get("q", ""))
+
+        alts = [str(x.get("q", "")) for x in best if x.get("q")]
+        alts = [x for x in alts if x]
+        if not alts:
+            return (" " + elm_map.get(ec, "")) if ec in elm_map else ""
+        if len(alts) > 3:
+            alts = alts[:3] + ["…"]
+        return " " + alts[0] + " {alt:" + "|".join(alts[1:]) + "}"
+
+    def read_u8(p):
+        if p < 0 or p >= len(scn):
+            return None
+        return scn[p]
+
+    def read_i32(p):
+        v = _safe_i32(scn, p)
+        return v
+
+    out = []
+    i = 0
+    cur_line = None
+    stack = []
+    elm_points = []
+    elm_point_pending_idx = None
+
+    def stack_pop():
+        if stack:
+            stack.pop()
+
+    while i < len(scn):
+        ofs = i
+        if ofs in labels_at:
+            out.append("%08X: <%s>" % (ofs, ",".join(labels_at[ofs])))
+        op = read_u8(i)
+        if op is None:
+            break
+        i += 1
+        opname = op_names.get(op, "OP_%02X" % op)
+        if (
+            i + 8 <= len(scn)
+            and scn[i + 3] == getattr(C, "CD_POP", 3)
+            and scn[i + 4 : i + 8] == b"\x00\x00\x00\x00"
+        ):
+            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            i += 3
+            continue
+        if (
+            op == 0x0D
+            and i + 16 <= len(scn)
+            and scn[i : i + 3] == b"\x00\x00\x00"
+            and scn[i + 16] == getattr(C, "CD_ELM_POINT", 8)
+        ):
+            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            i += 16
+            continue
+        if (
+            opname[0] == "O"
+            and i + 22 <= len(scn)
+            and scn[i + 3] == 0x20
+            and scn[i + 4] == 0x0D
+            and scn[i + 21] == getattr(C, "CD_ELM_POINT", 8)
+        ):
+            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            i += 21
+            continue
+        if (
+            opname[0] == "O"
+            and i + 5 <= len(scn)
+            and scn[i + 3] == getattr(C, "CD_ELM_POINT", 8)
+            and scn[i + 4] == getattr(C, "CD_PUSH", 2)
+        ):
+            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            i += 3
+            continue
+        if op == getattr(C, "CD_NONE", 0):
+            out.append("%08X: %s" % (ofs, opname))
+            continue
+        if op == getattr(C, "CD_NL", 1):
+            ln = read_i32(i)
+            if ln is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            cur_line = int(ln)
+            stack = []
+            elm_points = []
+            elm_point_pending_idx = None
+            out.append("%08X: %s %d" % (ofs, opname, cur_line))
+            continue
+        if op == getattr(C, "CD_PUSH", 2):
+            form = read_i32(i)
+            val = read_i32(i + 4)
+            if form is None or val is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 8
+            s = ""
+            if int(form) == FM_STR_CODE and 0 <= int(val) < len(str_list or []):
+                s = ' ; "%s"' % _escape_preview(str_list[int(val)])
+            out.append("%08X: %s %s, %d%s" % (ofs, opname, fmt_form(form), int(val), s))
+            stack.append({"form": int(form), "val": int(val)})
+            if elm_point_pending_idx is not None and int(form) == FM_INT_CODE:
+                try:
+                    if (
+                        0 <= int(elm_point_pending_idx) < len(elm_points)
+                        and (elm_points[elm_point_pending_idx] or {}).get("first_int")
+                        is None
+                    ):
+                        elm_points[elm_point_pending_idx]["first_int"] = int(val)
+                except Exception:
+                    pass
+            continue
+        if op == getattr(C, "CD_POP", 3):
+            form = read_i32(i)
+            if form is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            out.append("%08X: %s %s" % (ofs, opname, fmt_form(form)))
+            stack_pop()
+            continue
+        if op == getattr(C, "CD_COPY", 4):
+            v = read_i32(i)
+            if v is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            out.append("%08X: %s %d" % (ofs, opname, int(v)))
+            continue
+        if op in (
+            getattr(C, "CD_PROPERTY", 5),
+            getattr(C, "CD_COPY_ELM", 6),
+            getattr(C, "CD_ELM_POINT", 8),
+            getattr(C, "CD_ARG", 9),
+            getattr(C, "CD_SEL_BLOCK_START", 51),
+            getattr(C, "CD_SEL_BLOCK_END", 52),
+        ):
+            out.append("%08X: %s" % (ofs, opname))
+            if op == getattr(C, "CD_PROPERTY", 5):
+                stack_pop()
+                stack.append({"form": FM_INT_CODE, "val": None})
+            elif op == getattr(C, "CD_COPY_ELM", 6):
+                if stack:
+                    stack.append(dict(stack[-1]))
+            elif op == getattr(C, "CD_ELM_POINT", 8):
+                elm_points.append(
+                    {"ofs": ofs, "stack_len": len(stack), "first_int": None}
+                )
+                elm_point_pending_idx = len(elm_points) - 1
+            continue
+        if op == getattr(C, "CD_DEC_PROP", 7):
+            a = read_i32(i)
+            b = read_i32(i + 4)
+            if a is None or b is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 8
+            out.append("%08X: %s %d, %d" % (ofs, opname, int(a), int(b)))
+            continue
+        if op in (
+            getattr(C, "CD_GOTO", 16),
+            getattr(C, "CD_GOTO_TRUE", 17),
+            getattr(C, "CD_GOTO_FALSE", 18),
+        ):
+            lid = read_i32(i)
+            if lid is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            dest = ""
+            try:
+                li = int(lid)
+                if 0 <= li < len(label_list or []):
+                    dest = " -> %08X" % int(label_list[li])
+            except Exception:
+                dest = ""
+            out.append("%08X: %s L%d%s" % (ofs, opname, int(lid), dest))
+            if op in (getattr(C, "CD_GOTO_TRUE", 17), getattr(C, "CD_GOTO_FALSE", 18)):
+                stack_pop()
+            continue
+        if op in (getattr(C, "CD_GOSUB", 19), getattr(C, "CD_GOSUBSTR", 20)):
+            lid = read_i32(i)
+            argc = read_i32(i + 4)
+            if lid is None or argc is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 8
+            forms = []
+            for _k in range(max(0, int(argc))):
+                f = read_i32(i)
+                if f is None:
+                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    i = len(scn)
+                    break
+                i += 4
+                forms.append(int(f))
+            dest = ""
+            try:
+                li = int(lid)
+                if 0 <= li < len(label_list or []):
+                    dest = " -> %08X" % int(label_list[li])
+            except Exception:
+                dest = ""
+            out.append(
+                "%08X: %s L%d argc=%d forms=[%s]%s"
+                % (
+                    ofs,
+                    opname,
+                    int(lid),
+                    int(argc),
+                    ", ".join([fmt_form(f) for f in forms]),
+                    dest,
+                )
+            )
+            continue
+        if op == getattr(C, "CD_RETURN", 21):
+            has_arg = read_i32(i)
+            if has_arg is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            extra = ""
+            if int(has_arg) != 0:
+                form = read_i32(i)
+                if form is None:
+                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    break
+                i += 4
+                extra = " %s" % fmt_form(form)
+            out.append("%08X: %s %d%s" % (ofs, opname, int(has_arg), extra))
+            stack = []
+            continue
+        if op == getattr(C, "CD_ASSIGN", 32):
+            a = read_i32(i)
+            b = read_i32(i + 4)
+            c = read_i32(i + 8)
+            if a is None or b is None or c is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 12
+            out.append(
+                "%08X: %s l=%s r=%s al_id=%d"
+                % (ofs, opname, fmt_form(a), fmt_form(b), int(c))
+            )
+            stack_pop()
+            stack_pop()
+            continue
+        if op == getattr(C, "CD_OPERATE_1", 33):
+            form = read_i32(i)
+            opr = read_u8(i + 4)
+            if form is None or opr is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 5
+            out.append("%08X: %s %s op=%d" % (ofs, opname, fmt_form(form), int(opr)))
+            stack_pop()
+            stack.append({"form": int(form), "val": None})
+            continue
+        if op == getattr(C, "CD_OPERATE_2", 34):
+            fl = read_i32(i)
+            fr = read_i32(i + 4)
+            opr = read_u8(i + 8)
+            if fl is None or fr is None or opr is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 9
+            out.append(
+                "%08X: %s %s, %s op=%d"
+                % (ofs, opname, fmt_form(fl), fmt_form(fr), int(opr))
+            )
+            stack_pop()
+            stack_pop()
+            stack.append({"form": int(fl), "val": None})
+            continue
+        if op == getattr(C, "CD_TEXT", 49):
+            rf = read_i32(i)
+            rb = int.from_bytes(scn[i : i + 4], "big")
+            rf = (
+                rb
+                if rf is not None and (rf < 0 or rf > 0xFFFF) and rb <= 0xFFFF
+                else rf
+            )
+            if rf is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            txt = ""
+            if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
+                sid = stack[-1].get("val")
+                if sid is not None and 0 <= int(sid) < len(str_list or []):
+                    txt = ' ; "%s"' % _escape_preview(str_list[int(sid)], 120)
+            out.append("%08X: %s read_flag=%d%s" % (ofs, opname, int(rf), txt))
+            stack_pop()
+            continue
+        if op == getattr(C, "CD_NAME", 50):
+            nm = ""
+            if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
+                sid = stack[-1].get("val")
+                if sid is not None and 0 <= int(sid) < len(str_list or []):
+                    nm = ' "%s"' % _escape_preview(str_list[int(sid)], 120)
+            out.append("%08X: %s%s" % (ofs, opname, nm))
+            stack_pop()
+            continue
+        if op == getattr(C, "CD_COMMAND", 48):
+            arg_list_id = read_i32(i)
+            argc = read_i32(i + 4)
+            if arg_list_id is None or argc is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 8
+            arg_forms = []
+            for _k in range(max(0, int(argc))):
+                f = read_i32(i)
+                if f is None:
+                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    i = len(scn)
+                    break
+                i += 4
+                f = int(f)
+                if f == FM_LIST_CODE:
+                    nsub = read_i32(i)
+                    if nsub is None:
+                        out.append("%08X: %s <truncated>" % (ofs, opname))
+                        i = len(scn)
+                        break
+                    i += 4
+                    sub = []
+                    for _j in range(max(0, int(nsub))):
+                        sf = read_i32(i)
+                        if sf is None:
+                            out.append("%08X: %s <truncated>" % (ofs, opname))
+                            i = len(scn)
+                            break
+                        i += 4
+                        sub.append(int(sf))
+                    arg_forms.append({"form": f, "sub": sub})
+                else:
+                    arg_forms.append({"form": f})
+            if i >= len(scn):
+                break
+            named_cnt = read_i32(i)
+            if named_cnt is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            named_ids = []
+            for _k in range(max(0, int(named_cnt))):
+                ni = read_i32(i)
+                if ni is None:
+                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    i = len(scn)
+                    break
+                i += 4
+                named_ids.append(int(ni))
+            if i >= len(scn):
+                break
+            ret_form = read_i32(i)
+            if ret_form is None:
+                out.append("%08X: %s <truncated>" % (ofs, opname))
+                break
+            i += 4
+            trf = None
+            if read_flag_cnt and i + 4 < len(scn):
+                rf0 = read_i32(i)
+                if rf0 is not None and 0 <= int(rf0) < int(read_flag_cnt):
+                    if i + 9 <= len(scn) and scn[i + 4] == getattr(C, "CD_POP", 3):
+                        trf = int(rf0)
+                        i += 4
+                    elif (
+                        i + 22 <= len(scn) and scn[i + 4] == 0x20 and scn[i + 5] == 0x0D
+                    ):
+                        trf = int(rf0)
+                        i += 22
+            rf_s = (" read_flag=%d" % trf) if trf is not None else ""
+            element_code = None
+            weak_ec = False
+            try:
+
+                if len(stack) >= int(argc) + 1:
+                    cand = stack[-(int(argc) + 1)]
+                    if (
+                        int(cand.get("form", -1)) == FM_INT_CODE
+                        and cand.get("val") is not None
+                    ):
+                        v0 = int(cand.get("val"))
+                        if (
+                            v0 >= 0
+                            and v0 != ELM_ARRAY
+                            and (v0 == 0 or v0 in elm_map or v0 >= 0x01000000)
+                        ):
+                            element_code = v0
+                            weak_ec = v0 == 0
+
+                if element_code is None or weak_ec:
+                    need_obj = 0
+                    try:
+                        for a0 in arg_forms or []:
+                            if int((a0 or {}).get("form", 0) or 0) == FM_OBJECT_CODE:
+                                need_obj += 1
+                    except Exception:
+                        need_obj = 0
+                    idx0 = len(elm_points) - 1 - int(need_obj)
+                    if idx0 >= 0:
+                        v1 = (elm_points[idx0] or {}).get("first_int")
+                        if v1 is not None:
+                            v1 = int(v1)
+                            if (
+                                v1 >= 0
+                                and v1 != ELM_ARRAY
+                                and (v1 == 0 or v1 in elm_map or v1 >= 0x01000000)
+                            ):
+                                element_code = v1
+                                weak_ec = False
+
+                if element_code is None or weak_ec:
+                    scan_end = max(0, len(stack) - max(0, int(argc)))
+                    best = None
+                    best_score = -(10**9)
+                    for j in range(scan_end - 1, -1, -1):
+                        it = stack[j]
+                        if not isinstance(it, dict):
+                            continue
+                        if int(it.get("form", -1)) != FM_INT_CODE:
+                            continue
+                        v = it.get("val")
+                        if v is None:
+                            continue
+                        v = int(v)
+                        if v < 0 or v == ELM_ARRAY:
+                            continue
+                        score = 0
+                        if v >= 0x01000000:
+                            score += 100
+                        if v in elm_map:
+                            score += 50
+                        if v == 0:
+                            score += 1
+
+                        if score > best_score:
+                            best_score = score
+                            best = v
+                    if best is not None and best_score >= 0:
+                        element_code = best
+                        weak_ec = False
+            except Exception:
+                element_code = None
+
+            ename = _resolve_ename(
+                element_code, argc, arg_forms, ret_form, named_cnt, stack
+            )
+            ec_s = (" ec=%s" % hx(element_code)) if element_code is not None else ""
+            hint_s = ""
+            try:
+
+                res0 = None
+                for it in reversed(stack):
+                    if not isinstance(it, dict):
+                        continue
+                    if int(it.get("form", -1)) != FM_STR_CODE:
+                        continue
+                    vi = it.get("val")
+                    if vi is None:
+                        continue
+                    vi = int(vi)
+                    if vi < 0 or vi >= len(str_list or []):
+                        continue
+                    s0 = str(str_list[vi])
+                    sl = s0.lower()
+                    if sl.startswith(
+                        (
+                            "bg_",
+                            "cg_",
+                            "ev_",
+                            "se_",
+                            "bgm",
+                            "koe",
+                            "voice",
+                            "mov",
+                            "movie",
+                            "ef_",
+                        )
+                    ):
+                        res0 = sl
+                        break
+                if res0:
+                    if res0.startswith(("bg_", "cg_", "ev_")):
+                        hint_s = " hint=@bg"
+                    elif res0.startswith("se_"):
+                        hint_s = " hint=@se"
+                    elif res0.startswith("bgm"):
+                        hint_s = " hint=@bgm"
+                    elif res0.startswith(("koe", "voice")):
+                        hint_s = " hint=@koe"
+                    elif res0.startswith(("mov", "movie")):
+                        hint_s = " hint=@mov"
+            except Exception:
+                hint_s = ""
+            af = []
+            for af0 in arg_forms:
+                if not isinstance(af0, dict):
+                    af.append(str(af0))
+                    continue
+                f = int(af0.get("form", 0) or 0)
+                if f == FM_LIST_CODE:
+                    af.append(
+                        "list[%s]"
+                        % (",".join([fmt_form(x) for x in (af0.get("sub") or [])]))
+                    )
+                else:
+                    af.append(fmt_form(f))
+            line = "%08X: %s arg_list=%d argc=%d args=[%s] named=%d ret=%s%s%s%s%s" % (
+                ofs,
+                opname,
+                int(arg_list_id),
+                int(argc),
+                ", ".join(af),
+                int(named_cnt),
+                fmt_form(ret_form),
+                rf_s,
+                ec_s,
+                ename,
+                hint_s,
+            )
+            note = _build_decompile_note(stack, argc, ename)
+            if note:
+                line += " // " + note
+            out.append(line)
+            for _k in range(min(len(stack), int(argc) + 1)):
+                stack.pop()
+            if int(ret_form) != FM_VOID_CODE:
+                stack.append({"form": int(ret_form), "val": None})
+            continue
+        if op == getattr(C, "CD_EOF", 22):
+            out.append("%08X: %s" % (ofs, opname))
+            break
+        out.append("%08X: %s (unknown)" % (ofs, opname))
+        break
+    return out
