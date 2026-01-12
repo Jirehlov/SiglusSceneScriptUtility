@@ -1804,10 +1804,36 @@ def compile_one(ctx, ss_path, stop_after=None):
     wr(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"], 1)
 
 
-def compile_all(ctx, only=None, stop_after=None):
+def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=True):
+    """
+    Compile all .ss files in the project.
+
+    Args:
+        ctx: Compilation context dictionary
+        only: Optional list of specific files to compile
+        stop_after: Optional stage to stop after ('la', 'sa', 'ma', 'bs')
+        max_workers: Maximum number of parallel workers (None for auto)
+        parallel: If True, compile files in parallel (default: True)
+    """
     if isinstance(ctx, dict) and not isinstance(ctx.get("ia_data"), dict):
         ctx["ia_data"] = build_ia_data(ctx)
-    for p in find_ss(ctx, only):
+
+    ss_files = list(find_ss(ctx, only))
+    if not ss_files:
+        return
+
+    # Use parallel compilation if enabled and there are multiple files
+    if parallel and len(ss_files) > 1:
+        try:
+            from .parallel import parallel_compile
+            parallel_compile(ctx, ss_files, stop_after, max_workers)
+            return
+        except ImportError:
+            # Fall back to serial if parallel module not available
+            pass
+
+    # Serial compilation
+    for p in ss_files:
         compile_one(ctx, p, stop_after)
 
 

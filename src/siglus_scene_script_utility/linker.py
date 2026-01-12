@@ -154,15 +154,40 @@ def _get_scene_names(ctx):
     return out
 
 
-def _load_scene_data(ctx, scn_names, lzss_mode):
+def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True):
+    """
+    Load scene data files and optionally compress them with LZSS.
+
+    Args:
+        ctx: Context dictionary containing paths and settings
+        scn_names: List of scene names (without extension)
+        lzss_mode: Whether to perform LZSS compression
+        max_workers: Maximum parallel workers (None for auto)
+        parallel: If True, use parallel compression (default: True)
+
+    Returns:
+        Tuple of (enc_names, dat_list, lzss_list)
+    """
     tmp = ctx.get("tmp_path") or ""
     bs_dir = os.path.join(tmp, "bs")
+
+    # Try parallel loading if enabled
+    if parallel and lzss_mode and len(scn_names) > 1:
+        try:
+            from .parallel import parallel_lzss_compress
+            return parallel_lzss_compress(ctx, scn_names, bs_dir, lzss_mode, max_workers)
+        except ImportError:
+            # Fall back to serial if parallel module not available
+            pass
+
+    # Serial loading
+    from . import compiler as _m
+
     enc_names = []
     dat_list = []
     lzss_list = []
-    from . import compiler as _m
-
     easy_code = ctx.get("easy_angou_code") or b""
+
     for nm in scn_names:
         dat_path = os.path.join(bs_dir, nm + ".dat")
         if not os.path.isfile(dat_path):
@@ -295,7 +320,19 @@ def _build_pack_bytes(
     return bytes(b)
 
 
-def _build_original_source_chunks(ctx, lzss_mode):
+def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=True):
+    """
+    Build encrypted chunks for original source files.
+
+    Args:
+        ctx: Context dictionary containing paths and settings
+        lzss_mode: Whether LZSS mode is enabled
+        max_workers: Maximum parallel workers (None for auto)
+        parallel: If True, use parallel encryption (default: True)
+
+    Returns:
+        Tuple of (header_size, chunks_list)
+    """
     if not lzss_mode:
         return (0, [])
     if not ctx.get("source_angou"):
@@ -307,11 +344,30 @@ def _build_original_source_chunks(ctx, lzss_mode):
         os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
     if not scn_path:
         return (0, [])
+
     from . import compiler as _m
 
     rel_list = _make_original_source_rel_list(scn_path)
     if not rel_list:
         return (0, [])
+
+    # Try parallel encryption if enabled
+    if parallel and len(rel_list) > 1:
+        try:
+            from .parallel import parallel_source_encrypt
+            sizes, chunks = parallel_source_encrypt(
+                ctx, rel_list, scn_path, tmp_path, skip, max_workers
+            )
+            if not sizes:
+                return (0, [])
+            size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
+            size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
+            return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
+        except ImportError:
+            # Fall back to serial if parallel module not available
+            pass
+
+    # Serial encryption
     sizes = []
     chunks = []
     for rel in rel_list:
