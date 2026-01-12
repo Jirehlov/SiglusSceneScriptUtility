@@ -6,10 +6,21 @@ mod xor;
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes};
 
-/// LZSS compression
+/// LZSS compression with default level (17)
 #[pyfunction]
 fn lzss_pack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = lzss::pack(data);
+    Ok(PyBytes::new(py, &result).into())
+}
+
+/// LZSS compression with configurable level
+///
+/// Level ranges from 2 to 17:
+/// - 2: Fastest compression, worst ratio
+/// - 17: Slowest compression, best ratio (default)
+#[pyfunction]
+fn lzss_pack_level(py: Python<'_>, data: &[u8], level: usize) -> PyResult<Py<PyBytes>> {
+    let result = lzss::pack_with_level(data, level);
     Ok(PyBytes::new(py, &result).into())
 }
 
@@ -64,6 +75,7 @@ fn tile_copy(
 #[pymodule]
 fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(lzss_pack_level, m)?)?;
     m.add_function(wrap_pyfunction!(lzss_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(xor_cycle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(md5_digest, m)?)?;

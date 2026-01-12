@@ -1,5 +1,5 @@
 //! LZSS compression/decompression implementation
-//! 
+//!
 //! This is a port of the Python LZSS implementation with significant
 //! performance improvements using Rust's efficient memory management.
 
@@ -11,6 +11,7 @@ const WINDOW_SIZE: usize = 1 << INDEX_BITS;
 
 /// Binary tree node for LZSS compression
 struct LzssTree {
+    #[allow(dead_code)]
     size: usize,
     root: usize,
     unused: usize,
@@ -24,15 +25,15 @@ impl LzssTree {
         let n = tree_size + 2;
         let unused = tree_size + 1;
         let root = tree_size;
-        
+
         let mut parent = vec![unused; n];
-        let mut sml = vec![unused; n];
+        let sml = vec![unused; n];
         let mut big = vec![unused; n];
-        
+
         parent[0] = root;
         parent[root] = 0;
         big[root] = 0;
-        
+
         Self {
             size: tree_size,
             root,
@@ -47,9 +48,9 @@ impl LzssTree {
         if self.parent[target] == self.unused {
             return;
         }
-        
+
         let parent = self.parent[target];
-        
+
         if self.big[target] == self.unused {
             let nxt = self.sml[target];
             self.parent[nxt] = parent;
@@ -93,18 +94,23 @@ impl LzssTree {
         self.parent[target] = self.unused;
     }
 
-    fn additional_connect(&mut self, target: usize, nxt: usize, matching_result: i32) -> (bool, usize) {
+    fn additional_connect(
+        &mut self,
+        target: usize,
+        nxt: usize,
+        matching_result: i32,
+    ) -> (bool, usize) {
         let child = if matching_result >= 0 {
             &mut self.big
         } else {
             &mut self.sml
         };
-        
+
         let child_idx = child[target];
         if child_idx != self.unused {
             return (false, child_idx);
         }
-        
+
         child[target] = nxt;
         self.parent[nxt] = target;
         self.big[nxt] = self.unused;
@@ -123,7 +129,9 @@ struct LzssTreeFind<'a> {
     src: &'a [u8],
     src_cnt: usize,
     window_size: usize,
+    #[allow(dead_code)]
     look_ahead_size: usize,
+    max_match_len: usize, // Configurable max match length (level)
     src_index: usize,
     match_target: usize,
     match_size: usize,
@@ -132,12 +140,15 @@ struct LzssTreeFind<'a> {
 }
 
 impl<'a> LzssTreeFind<'a> {
-    fn new(src: &'a [u8], window_size: usize, look_ahead_size: usize) -> Self {
+    fn new(src: &'a [u8], window_size: usize, look_ahead_size: usize, level: usize) -> Self {
+        // Clamp level to valid range (2-17)
+        let max_match_len = level.clamp(2, look_ahead_size);
         Self {
             src,
             src_cnt: src.len(),
             window_size,
             look_ahead_size,
+            max_match_len,
             src_index: 0,
             match_target: 0,
             match_size: 0,
@@ -152,36 +163,37 @@ impl<'a> LzssTreeFind<'a> {
             let src_page = self.src_index / self.window_size;
             self.window_top = (self.window_top + 1) % self.window_size;
             self.tree.connect(self.window_top);
-            
+
             let mut target = self.tree.get_root_big();
             self.match_size = 0;
-            
+
             let src_left = self.src_cnt.saturating_sub(self.src_index);
             if src_left == 0 {
                 return;
             }
-            
-            let matching_loop_cnt = self.look_ahead_size.min(src_left);
-            
+
+            // Use max_match_len (level) to limit how far we search for matches
+            let matching_loop_cnt = self.max_match_len.min(src_left);
+
             loop {
                 let p1 = self.src_index;
                 let mut p2 = src_page * self.window_size + target;
                 if target > self.src_index % self.window_size {
                     p2 = p2.wrapping_sub(self.window_size);
                 }
-                
+
                 let mut matching_counter = 0;
                 let mut matching_result = 0i32;
-                
+
                 while matching_counter < matching_loop_cnt {
-                    matching_result = self.src[p1 + matching_counter] as i32 
+                    matching_result = self.src[p1 + matching_counter] as i32
                         - self.src[p2 + matching_counter] as i32;
                     if matching_result != 0 {
                         break;
                     }
                     matching_counter += 1;
                 }
-                
+
                 if matching_counter > self.match_size {
                     self.match_size = matching_counter;
                     self.match_target = target;
@@ -190,10 +202,10 @@ impl<'a> LzssTreeFind<'a> {
                         break;
                     }
                 }
-                
-                let (done, new_target) = self.tree.additional_connect(
-                    target, self.window_top, matching_result
-                );
+
+                let (done, new_target) =
+                    self.tree
+                        .additional_connect(target, self.window_top, matching_result);
                 if done {
                     break;
                 }
@@ -203,20 +215,26 @@ impl<'a> LzssTreeFind<'a> {
     }
 }
 
-/// LZSS compression
-pub fn pack(src: &[u8]) -> Vec<u8> {
+/// LZSS compression with configurable level
+///
+/// # Arguments
+/// * `src` - Source data to compress
+/// * `level` - Compression level (2-17). Higher = better compression but slower.
+///   - 2: Fastest, worst compression
+///   - 17: Slowest, best compression (default)
+pub fn pack_with_level(src: &[u8], level: usize) -> Vec<u8> {
     if src.is_empty() {
         return Vec::new();
     }
 
-    let mut tree_find = LzssTreeFind::new(src, WINDOW_SIZE, LOOK_AHEAD);
-    
+    let mut tree_find = LzssTreeFind::new(src, WINDOW_SIZE, LOOK_AHEAD, level);
+
     let mut pack_buf = vec![0u8; 8];
-    let mut pack_data = vec![0u8; 1 + 2 * 8];
+    let mut pack_data = [0u8; 1 + 2 * 8];
     let mut pack_bit_count = 0usize;
     let mut pack_data_count = 1usize;
     let mut replace_cnt = 0usize;
-    
+
     const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 
     loop {
@@ -225,16 +243,16 @@ pub fn pack(src: &[u8]) -> Vec<u8> {
             pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
             break;
         }
-        
+
         if replace_cnt > 0 {
             tree_find.proc(replace_cnt);
         }
-        
+
         if tree_find.src_index >= tree_find.src_cnt {
             pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
             break;
         }
-        
+
         if tree_find.match_size <= BREAK_EVEN {
             replace_cnt = 1;
             pack_data[0] |= BIT_MASK[pack_bit_count];
@@ -248,9 +266,9 @@ pub fn pack(src: &[u8]) -> Vec<u8> {
             pack_data[pack_data_count + 1] = (tok >> 8) as u8;
             pack_data_count += 2;
         }
-        
+
         pack_bit_count += 1;
-        
+
         if pack_bit_count == 8 {
             pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
             pack_bit_count = 0;
@@ -264,8 +282,14 @@ pub fn pack(src: &[u8]) -> Vec<u8> {
     let org_size = src.len() as u32;
     pack_buf[0..4].copy_from_slice(&pack_buf_size.to_le_bytes());
     pack_buf[4..8].copy_from_slice(&org_size.to_le_bytes());
-    
+
     pack_buf
+}
+
+/// LZSS compression with default level (17 = best compression)
+#[inline]
+pub fn pack(src: &[u8]) -> Vec<u8> {
+    pack_with_level(src, LOOK_AHEAD)
 }
 
 /// LZSS decompression
@@ -273,24 +297,24 @@ pub fn unpack(src: &[u8]) -> Vec<u8> {
     if src.len() < 8 {
         return Vec::new();
     }
-    
+
     let org = u32::from_le_bytes([src[4], src[5], src[6], src[7]]) as usize;
     if org == 0 {
         return Vec::new();
     }
-    
+
     let mut out = Vec::with_capacity(org);
     let mut si = 8;
-    
+
     while out.len() < org && si < src.len() {
         let mut fl = src[si];
         si += 1;
-        
+
         for _ in 0..8 {
             if out.len() >= org {
                 break;
             }
-            
+
             if fl & 1 != 0 {
                 if si < src.len() {
                     out.push(src[si]);
@@ -305,7 +329,7 @@ pub fn unpack(src: &[u8]) -> Vec<u8> {
                 let off = tok >> 4;
                 let ln = (tok & 0xF) + 2;
                 let st = out.len().wrapping_sub(off);
-                
+
                 for j in 0..ln {
                     if out.len() >= org {
                         break;
@@ -319,7 +343,7 @@ pub fn unpack(src: &[u8]) -> Vec<u8> {
             fl >>= 1;
         }
     }
-    
+
     out
 }
 

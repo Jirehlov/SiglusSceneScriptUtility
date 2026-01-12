@@ -62,7 +62,8 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     hs = sa.get("header_size")
     if not hs:
         todo("source_angou: missing header_size")
-    lz = lzss_pack(data)
+    lzss_level = ctx.get("lzss_level", 17)
+    lz = lzss_pack(data, level=lzss_level)
     lzsz = len(lz)
     b = bytearray(lz)
     xor_cycle_inplace(b, eg, int(sa.get("easy_index", 0)))
@@ -347,6 +348,12 @@ def main(argv=None):
     ap.add_argument(
         "--no-angou", action="store_true", help="No encrypt/compress (header_size=0)."
     )
+    ap.add_argument(
+        "--lzss-level",
+        type=int,
+        default=17,
+        help="LZSS compression level (2-17, default: 17).",
+    )
     ap.add_argument("--gei", action="store_true", help="Only generate Gameexe.dat.")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     inp = os.path.abspath(a.input_dir)
@@ -397,7 +404,9 @@ def main(argv=None):
         "inc_list": inc,
         "ini_list": ini,
         "utf8": bool(use_utf8),
+        "utf8": bool(use_utf8),
         "charset": enc,
+        "lzss_level": a.lzss_level,
         "test_check": bool(a.debug),
         "lzss_mode": (not a.no_angou),
         "exe_angou_mode": (not a.no_angou),

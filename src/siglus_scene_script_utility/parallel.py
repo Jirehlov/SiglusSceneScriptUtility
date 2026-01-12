@@ -200,17 +200,17 @@ def parallel_compile(
 # =============================================================================
 
 
-def _lzss_compress_task(args: Tuple[str, str, str, bytes]) -> Tuple[str, bytes, bytes, Optional[Exception]]:
+def _lzss_compress_task(args: Tuple[str, str, str, bytes, int]) -> Tuple[str, bytes, bytes, Optional[Exception]]:
     """
     Worker function for LZSS compression of a single scene file.
 
     Args:
-        args: Tuple of (scene_name, dat_path, lz_path, easy_code)
+        args: Tuple of (scene_name, dat_path, lz_path, easy_code, lzss_level)
 
     Returns:
         Tuple of (scene_name, dat_bytes, lzss_bytes, exception or None)
     """
-    nm, dat_path, lz_path, easy_code = args
+    nm, dat_path, lz_path, easy_code, lzss_level = args
 
     try:
         from .CA import rd, wr
@@ -229,7 +229,7 @@ def _lzss_compress_task(args: Tuple[str, str, str, bytes]) -> Tuple[str, bytes, 
             # Compress and encrypt
             if not easy_code:
                 raise RuntimeError("missing .lzss and ctx.easy_angou_code is not set")
-            lz = _m.lzss_pack(dat)
+            lz = _m.lzss_pack(dat, level=lzss_level)
             b = bytearray(lz)
             xor_cycle_inplace(b, easy_code, 0)
             lz = bytes(b)
@@ -279,9 +279,11 @@ def parallel_lzss_compress(
             enc_names.append(nm)
         return (enc_names, dat_list, [])
 
+    lzss_level = ctx.get("lzss_level", 17)
+
     # Prepare tasks for parallel execution
     tasks = [
-        (nm, os.path.join(bs_dir, nm + ".dat"), os.path.join(bs_dir, nm + ".lzss"), easy_code)
+        (nm, os.path.join(bs_dir, nm + ".dat"), os.path.join(bs_dir, nm + ".lzss"), easy_code, lzss_level)
         for nm in scn_names
     ]
 
@@ -327,17 +329,17 @@ def parallel_lzss_compress(
 # =============================================================================
 
 
-def _source_encrypt_task(args: Tuple[str, str, str, Dict, bool]) -> Tuple[str, int, bytes, Optional[Exception]]:
+def _source_encrypt_task(args: Tuple[str, str, str, Dict, bool, int]) -> Tuple[str, int, bytes, Optional[Exception]]:
     """
     Worker function for encrypting a single source file.
 
     Args:
-        args: Tuple of (rel_path, src_path, cache_path, source_angou, skip_chunk)
+        args: Tuple of (rel_path, src_path, cache_path, source_angou, skip_chunk, lzss_level)
 
     Returns:
         Tuple of (rel_path, size, encrypted_blob, exception or None)
     """
-    rel, src_path, cache_path, source_angou, skip = args
+    rel, src_path, cache_path, source_angou, skip, lzss_level = args
 
     try:
         from .CA import rd, wr
@@ -347,7 +349,7 @@ def _source_encrypt_task(args: Tuple[str, str, str, Dict, bool]) -> Tuple[str, i
             return (rel, 0, b"", None)  # Skip missing files
 
         # Build minimal ctx for source_angou_encrypt
-        ctx = {"source_angou": source_angou}
+        ctx = {"source_angou": source_angou, "lzss_level": lzss_level}
 
         # Check cache
         use_cache = False
@@ -411,10 +413,11 @@ def parallel_source_encrypt(
 
     # Prepare tasks
     tasks = []
+    lzss_level = ctx.get("lzss_level", 17)
     for rel in rel_list:
         src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
         cache_path = os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
-        tasks.append((rel, src_path, cache_path, source_angou, skip))
+        tasks.append((rel, src_path, cache_path, source_angou, skip, lzss_level))
 
     workers = get_max_workers(max_workers)
 

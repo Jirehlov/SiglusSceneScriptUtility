@@ -24,7 +24,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
     out.write("\n")

@@ -18,6 +18,7 @@ import math
 try:
     from . import native_accel
     _native_lzss_pack = native_accel.lzss_pack
+    _native_lzss_pack_level = native_accel.lzss_pack_level
     _native_lzss_unpack = native_accel.lzss_unpack
     _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
     _native_md5_digest = native_accel.md5_digest
@@ -25,6 +26,7 @@ try:
     _USE_NATIVE = True
 except (ImportError, AttributeError):
     _USE_NATIVE = False
+    _native_lzss_pack_level = None
 
 
 def is_native_available() -> bool:
@@ -109,12 +111,14 @@ class _LzssTree:
 
 class _LzssTreeFind:
     def ready(
-        self, src: memoryview, src_cnt: int, window_size: int, look_ahead_size: int
+        self, src: memoryview, src_cnt: int, window_size: int, look_ahead_size: int, level: int = 17
     ):
         self.src = src
         self.src_cnt = src_cnt
         self.window_size = window_size
         self.look_ahead_size = look_ahead_size
+        # Clamp level to valid range (2-17)
+        self.max_match_len = max(2, min(level, look_ahead_size))
         self.src_index = 0
         self.match_target = 0
         self.match_size = 0
@@ -130,7 +134,7 @@ class _LzssTreeFind:
             self.tree.connect(self.window_top)
             target = self.tree.get_root_big()
             self.match_size = 0
-            matching_loop_cnt = self.look_ahead_size
+            matching_loop_cnt = self.max_match_len  # Use level-based max match length
             src_left = self.src_cnt - self.src_index
             if src_left == 0:
                 return
@@ -163,8 +167,14 @@ class _LzssTreeFind:
                     break
 
 
-def _py_lzss_pack(src: bytes) -> bytes:
-    """Pure Python LZSS compression."""
+def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
+    """
+    Pure Python LZSS compression.
+    
+    Args:
+        src: Source data to compress
+        level: Compression level (2-17). Higher = better compression but slower.
+    """
     if not src:
         return b""
     INDEX_BITS = 12
@@ -174,7 +184,7 @@ def _py_lzss_pack(src: bytes) -> bytes:
     WINDOW_SIZE = 1 << INDEX_BITS
     tree_find = _LzssTreeFind()
     mv = memoryview(src)
-    tree_find.ready(mv, len(src), WINDOW_SIZE, LOOK_AHEAD)
+    tree_find.ready(mv, len(src), WINDOW_SIZE, LOOK_AHEAD, level)
     pack_buf = bytearray(b"\0" * 8)
     pack_buf_size = 8
     pack_data = bytearray(1 + (2 * 8))
@@ -354,11 +364,26 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
 # Public API - uses native when available, falls back to pure Python
 # ============================================================================
 
-def lzss_pack(src: bytes) -> bytes:
-    """LZSS compression. Uses Rust when available."""
+def lzss_pack(src: bytes, level: int = 17) -> bytes:
+    """
+    LZSS compression. Uses Rust when available.
+    
+    Args:
+        src: Source data to compress
+        level: Compression level (2-17). Higher = better compression but slower.
+               Default is 17 (best compression).
+    
+    Returns:
+        Compressed data
+    """
     if _USE_NATIVE:
-        return _native_lzss_pack(src)
-    return _py_lzss_pack(src)
+        if level == 17:
+            return _native_lzss_pack(src)
+        elif _native_lzss_pack_level is not None:
+            return _native_lzss_pack_level(src, level)
+        else:
+            return _native_lzss_pack(src)  # Fallback if level function not available
+    return _py_lzss_pack(src, level)
 
 
 def lzss_unpack(src: bytes) -> bytes:
