@@ -1,14 +1,14 @@
 [package]
 name = "siglus_ssu_native"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "siglus_ssu_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.27", features = ["extension-module"] }
 
 [profile.release]
 lto = true
