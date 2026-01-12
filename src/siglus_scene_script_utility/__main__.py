@@ -64,6 +64,7 @@ def main(argv=None):
 
     if mode in ("-c", "--compile"):
         from . import compiler
+
         rc = compiler.main(argv[1:])
         if rc == 2:
             _usage_short()
@@ -71,6 +72,7 @@ def main(argv=None):
 
     if mode in ("-x", "--extract"):
         from . import extract
+
         rc = extract.main(argv[1:])
         if rc == 2:
             _usage_short()
@@ -78,13 +80,15 @@ def main(argv=None):
 
     if mode in ("-a", "--analyze"):
         from . import analyze
-        rc = analyze.main(argv[1:]) # Assuming analyze has a main function
+
+        rc = analyze.main(argv[1:])  # Assuming analyze has a main function
         if rc == 2:
             _usage_short()
         return rc
 
     if mode in ("-k", "--koe"):
         from . import koe_collector
+
         rc = koe_collector.main(argv[1:])
         if rc == 2:
             _usage_short()
@@ -92,6 +96,7 @@ def main(argv=None):
 
     if mode in ("-e", "--exec", "--execute"):
         from . import exec
+
         rc = exec.main(argv[1:])
         if rc == 2:
             _usage_short()

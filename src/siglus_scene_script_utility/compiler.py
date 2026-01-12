@@ -20,7 +20,6 @@ from .native_ops import (
 )
 
 
-
 def tpc_xor_inplace(b):
     for i in range(len(b)):
         b[i] ^= C.TPC[i & 255]
@@ -30,6 +29,7 @@ def easy_xor_inplace(b, ctx, st=0):
     code = ctx.get("easy_angou_code") if isinstance(ctx, dict) else None
     if not code:
         from .CA import todo
+
         todo("easy_xor: need easy_angou_code")
     xor_cycle_inplace(b, code, st)
 
@@ -78,7 +78,7 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     md5_code[: len(md5)] = md5
     n0x40 = lzsz
     n65 = 65 if (((n0x40 + 1) & 0x3F) <= 0x38) else 129
-    v13 = n65 - (((n0x40 + 1) & 0x3F))
+    v13 = n65 - ((n0x40 + 1) & 0x3F)
     v73 = (n0x40 * 8) & 0xFFFFFFFF
     idx = v13 + 60
     if idx + 4 <= len(md5_code):

@@ -68,7 +68,9 @@ def _fc(x):
     return (
         int(x)
         if isinstance(x, int)
-        else int(C._FORM_CODE.get(x, -1)) if isinstance(x, str) else -1
+        else int(C._FORM_CODE.get(x, -1))
+        if isinstance(x, str)
+        else -1
     )
 
 
@@ -1830,6 +1832,7 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=True
     if parallel and len(ss_files) > 1:
         try:
             from .parallel import parallel_compile
+
             parallel_compile(ctx, ss_files, stop_after, max_workers)
             return
         except ImportError:

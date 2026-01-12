@@ -17,6 +17,7 @@ import math
 # Try to import native Rust implementations
 try:
     from . import native_accel
+
     _native_lzss_pack = native_accel.lzss_pack
     _native_lzss_pack_level = native_accel.lzss_pack_level
     _native_lzss_unpack = native_accel.lzss_unpack
@@ -37,6 +38,7 @@ def is_native_available() -> bool:
 # ============================================================================
 # Pure Python implementations (fallback)
 # ============================================================================
+
 
 class _LzssTree:
     def ready(self, tree_size: int):
@@ -111,7 +113,12 @@ class _LzssTree:
 
 class _LzssTreeFind:
     def ready(
-        self, src: memoryview, src_cnt: int, window_size: int, look_ahead_size: int, level: int = 17
+        self,
+        src: memoryview,
+        src_cnt: int,
+        window_size: int,
+        look_ahead_size: int,
+        level: int = 17,
     ):
         self.src = src
         self.src_cnt = src_cnt
@@ -170,7 +177,7 @@ class _LzssTreeFind:
 def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
     """
     Pure Python LZSS compression.
-    
+
     Args:
         src: Source data to compress
         level: Compression level (2-17). Higher = better compression but slower.
@@ -364,15 +371,16 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
 # Public API - uses native when available, falls back to pure Python
 # ============================================================================
 
+
 def lzss_pack(src: bytes, level: int = 17) -> bytes:
     """
     LZSS compression. Uses Rust when available.
-    
+
     Args:
         src: Source data to compress
         level: Compression level (2-17). Higher = better compression but slower.
                Default is 17 (best compression).
-    
+
     Returns:
         Compressed data
     """
@@ -396,7 +404,9 @@ def lzss_unpack(src: bytes) -> bytes:
 def xor_cycle_inplace(b, code, st=0):
     """XOR cycle operation (in-place). Uses Rust when available."""
     if _USE_NATIVE and isinstance(b, bytearray):
-        _native_xor_cycle_inplace(b, bytes(code) if not isinstance(code, bytes) else code, st)
+        _native_xor_cycle_inplace(
+            b, bytes(code) if not isinstance(code, bytes) else code, st
+        )
     else:
         _py_xor_cycle_inplace(b, code, st)
 
@@ -415,7 +425,9 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         d_arr = bytearray(d) if isinstance(d, memoryview) else d
         s_bytes = bytes(s) if isinstance(s, memoryview) else s
         t_bytes = bytes(t) if not isinstance(t, bytes) else t
-        _native_tile_copy(d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim)
+        _native_tile_copy(
+            d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim
+        )
         # Copy back if it was a memoryview
         if isinstance(d, memoryview):
             d[:] = d_arr

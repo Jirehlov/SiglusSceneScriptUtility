@@ -16,7 +16,9 @@ def deref(f):
             else (
                 C.FM_INTLIST
                 if f == C.FM_INTLISTREF
-                else C.FM_STRLIST if f == C.FM_STRLISTREF else f
+                else C.FM_STRLIST
+                if f == C.FM_STRLISTREF
+                else f
             )
         )
     )

@@ -41,7 +41,9 @@ def get_max_workers(max_workers: Optional[int] = None) -> int:
 
 
 # Top-level function for ProcessPoolExecutor (must be picklable)
-def _compile_one_process(ss_path: str, tmp_path: str, stop_after: str, ia_data: Dict, enc: str) -> Tuple[str, Optional[str]]:
+def _compile_one_process(
+    ss_path: str, tmp_path: str, stop_after: str, ia_data: Dict, enc: str
+) -> Tuple[str, Optional[str]]:
     """
     Worker function for compiling a single .ss file in a separate process.
 
@@ -144,7 +146,7 @@ def parallel_compile(
         RuntimeError: If any file fails to compile
     """
     from concurrent.futures import ProcessPoolExecutor
-    
+
     if not ss_files:
         return
 
@@ -168,7 +170,9 @@ def parallel_compile(
     with ProcessPoolExecutor(max_workers=workers) as executor:
         # Submit all tasks
         futures = {
-            executor.submit(_compile_one_process, ss_path, tmp_path, stop, ia_data, enc): ss_path
+            executor.submit(
+                _compile_one_process, ss_path, tmp_path, stop, ia_data, enc
+            ): ss_path
             for ss_path in ss_files
         }
 
@@ -198,7 +202,9 @@ def parallel_compile(
 # =============================================================================
 
 
-def _lzss_compress_task(args: Tuple[str, str, str, bytes, int]) -> Tuple[str, bytes, bytes, Optional[Exception]]:
+def _lzss_compress_task(
+    args: Tuple[str, str, str, bytes, int],
+) -> Tuple[str, bytes, bytes, Optional[Exception]]:
     """
     Worker function for LZSS compression of a single scene file.
 
@@ -281,7 +287,13 @@ def parallel_lzss_compress(
 
     # Prepare tasks for parallel execution
     tasks = [
-        (nm, os.path.join(bs_dir, nm + ".dat"), os.path.join(bs_dir, nm + ".lzss"), easy_code, lzss_level)
+        (
+            nm,
+            os.path.join(bs_dir, nm + ".dat"),
+            os.path.join(bs_dir, nm + ".lzss"),
+            easy_code,
+            lzss_level,
+        )
         for nm in scn_names
     ]
 
@@ -294,7 +306,9 @@ def parallel_lzss_compress(
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_lzss_compress_task, task): task[0] for task in tasks}
+        futures = {
+            executor.submit(_lzss_compress_task, task): task[0] for task in tasks
+        }
 
         for future in as_completed(futures):
             nm, dat, lz, error = future.result()
@@ -327,7 +341,9 @@ def parallel_lzss_compress(
 # =============================================================================
 
 
-def _source_encrypt_task(args: Tuple[str, str, str, Dict, bool, int]) -> Tuple[str, int, bytes, Optional[Exception]]:
+def _source_encrypt_task(
+    args: Tuple[str, str, str, Dict, bool, int],
+) -> Tuple[str, int, bytes, Optional[Exception]]:
     """
     Worker function for encrypting a single source file.
 
@@ -414,7 +430,9 @@ def parallel_source_encrypt(
     lzss_level = ctx.get("lzss_level", 17)
     for rel in rel_list:
         src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
-        cache_path = os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
+        cache_path = (
+            os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
+        )
         tasks.append((rel, src_path, cache_path, source_angou, skip, lzss_level))
 
     workers = get_max_workers(max_workers)
@@ -426,7 +444,9 @@ def parallel_source_encrypt(
     print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_source_encrypt_task, task): task[0] for task in tasks}
+        futures = {
+            executor.submit(_source_encrypt_task, task): task[0] for task in tasks
+        }
 
         for future in as_completed(futures):
             rel, size, chunk, error = future.result()

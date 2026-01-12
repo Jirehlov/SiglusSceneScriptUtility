@@ -59,9 +59,62 @@ uv run siglus-ssu -a <file1> [file2]
 - `tests/`: Test and benchmark scripts.
 - `pyproject.toml`: Modern project configuration using `maturin` backend.
 
-## Benchmarks
 
-Run the benchmark script to see the speed improvement on your machine:
+
+## Development
+
+### Code Quality
+
+This project maintains code quality standards using modern tooling for both Python and Rust.
+
+**Python (checked via [Ruff](https://docs.astral.sh/ruff/)):**
+```bash
+# Check for issues
+uv run ruff check .
+
+# Auto-fix fixable issues
+uv run ruff check . --fix
+```
+
+**Rust (checked via [Clippy](https://doc.rust-lang.org/clippy/)):**
+```bash
+cd src/siglus_scene_script_utility/rust
+cargo clippy -- -D warnings
+```
+
+### Formatting
+
+To ensure consistent code style, run the formatters:
+
+**Python (via [Ruff](https://docs.astral.sh/ruff/formatter/)):**
+```bash
+uv run ruff format .
+```
+
+**Rust (via [rustfmt](https://github.com/rust-lang/rustfmt)):**
+```bash
+cd src/siglus_scene_script_utility/rust
+cargo fmt
+```
+
+### Testing
+
+Run the test suite using `pytest`:
+
+```bash
+uv run pytest
+```
+
+**Rust:**
+```bash
+cd src/siglus_scene_script_utility/rust
+cargo test
+```
+
+### Benchmarks
+
+Run the benchmark script to measure performance improvements:
+
 ```bash
 uv run python tests/benchmark.py
 ```

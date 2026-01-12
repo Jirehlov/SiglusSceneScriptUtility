@@ -178,7 +178,10 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
     if parallel and lzss_mode and len(scn_names) > 1:
         try:
             from .parallel import parallel_lzss_compress
-            return parallel_lzss_compress(ctx, scn_names, bs_dir, lzss_mode, max_workers)
+
+            return parallel_lzss_compress(
+                ctx, scn_names, bs_dir, lzss_mode, max_workers
+            )
         except ImportError:
             # Fall back to serial if parallel module not available
             pass
@@ -359,13 +362,16 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
     if parallel and len(rel_list) > 1:
         try:
             from .parallel import parallel_source_encrypt
+
             sizes, chunks = parallel_source_encrypt(
                 ctx, rel_list, scn_path, tmp_path, skip, max_workers
             )
             if not sizes:
                 return (0, [])
             size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
-            size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
+            size_list_enc = _m.source_angou_encrypt(
+                size_list_bytes, "__DummyName__", ctx
+            )
             return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
         except ImportError:
             # Fall back to serial if parallel module not available
@@ -455,7 +461,7 @@ def link_pack(ctx):
                 if cmd_id < inc_command_cnt and 0 <= cmd_id < len(inc_cmds):
                     if inc_cmds[cmd_id].get("is_defined"):
                         raise RuntimeError(
-                            f"command {inc_cmds[cmd_id].get('name','')} defined more than once"
+                            f"command {inc_cmds[cmd_id].get('name', '')} defined more than once"
                         )
                     inc_cmd_list[cmd_id] = (scn_no, off)
                     inc_cmds[cmd_id]["is_defined"] = True
@@ -463,7 +469,7 @@ def link_pack(ctx):
             for i in range(min(inc_command_cnt, len(inc_cmds))):
                 if not inc_cmds[i].get("is_defined"):
                     raise RuntimeError(
-                        f"command {inc_cmds[i].get('name','')} is not defined"
+                        f"command {inc_cmds[i].get('name', '')} is not defined"
                     )
     noangou_scene_data = lzss_list if lzss_mode else dat_list
     exe_on, exe_el = _resolve_exe_angou(ctx)

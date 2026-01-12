@@ -6,10 +6,14 @@ import os
 
 # Force Python implementation first
 from siglus_scene_script_utility import native_ops
+
 native_ops._USE_NATIVE = False
 
 from siglus_scene_script_utility.native_ops import (  # noqa: E402
-    _py_lzss_pack, _py_lzss_unpack, _py_md5_digest, _py_xor_cycle_inplace,
+    _py_lzss_pack,
+    _py_lzss_unpack,
+    _py_md5_digest,
+    _py_xor_cycle_inplace,
 )
 
 # Load native implementations separately
@@ -20,6 +24,7 @@ try:
         md5_digest as native_md5_digest,
         xor_cycle_inplace as native_xor_cycle_inplace,
     )
+
     NATIVE_AVAILABLE = True
 except ImportError:
     NATIVE_AVAILABLE = False
@@ -95,7 +100,7 @@ for _ in range(iterations):
 py_time = (time.time() - start) / iterations
 print(f"Python: {py_time * 1000:.4f}ms per iteration")
 
-# Rust  
+# Rust
 start = time.time()
 for _ in range(iterations):
     native_md5_digest(test_data)

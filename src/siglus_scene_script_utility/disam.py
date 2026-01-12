@@ -70,7 +70,6 @@ def _build_system_element_map():
             return t
 
         def _parse_overload_spec(spec):
-
             out = []
             if spec is None:
                 return out
@@ -248,7 +247,6 @@ def disassemble_scn_bytes(
         return tuple(sig)
 
     def _guess_parent_hint_from_stack(stack, argc, arg_forms):
-
         try:
             if not stack or not str_list or argc is None:
                 return None
@@ -453,7 +451,6 @@ def disassemble_scn_bytes(
         return True
 
     def _score_ec_candidate(ec, call_sig, ret_form, named_cnt, hint_parent):
-
         try:
             ec = int(ec)
         except Exception:
@@ -493,7 +490,6 @@ def disassemble_scn_bytes(
                     best = s
             score += best
         else:
-
             if ec >= 0x01000000:
                 score += 40
         return score
@@ -996,7 +992,6 @@ def disassemble_scn_bytes(
             element_code = None
             weak_ec = False
             try:
-
                 if len(stack) >= int(argc) + 1:
                     cand = stack[-(int(argc) + 1)]
                     if (
@@ -1072,7 +1067,6 @@ def disassemble_scn_bytes(
             ec_s = (" ec=%s" % hx(element_code)) if element_code is not None else ""
             hint_s = ""
             try:
-
                 res0 = None
                 for it in reversed(stack):
                     if not isinstance(it, dict):

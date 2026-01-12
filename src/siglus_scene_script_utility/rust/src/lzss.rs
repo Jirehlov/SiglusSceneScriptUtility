@@ -364,4 +364,26 @@ mod tests {
         assert!(pack(&[]).is_empty());
         assert!(unpack(&[]).is_empty());
     }
+
+    #[test]
+    fn test_compression_levels() {
+        // Create repeating data that compresses well
+        let mut data = Vec::with_capacity(1000);
+        for _ in 0..100 {
+            data.extend_from_slice(b"0123456789");
+        }
+
+        // Level 2 (fastest, worst compression)
+        let packed_2 = pack_with_level(&data, 2);
+        let unpacked_2 = unpack(&packed_2);
+        assert_eq!(data, unpacked_2);
+
+        // Level 17 (slowest, best compression)
+        let packed_17 = pack_with_level(&data, 17);
+        let unpacked_17 = unpack(&packed_17);
+        assert_eq!(data, unpacked_17);
+
+        // Expected behavior: lower level (shorter match) -> larger size
+        assert!(packed_2.len() >= packed_17.len());
+    }
 }

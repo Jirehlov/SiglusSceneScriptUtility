@@ -1462,7 +1462,6 @@ def sa_test(path, ref_json=None, out_json=None):
 
 
 def _sa_main(argv):
-
     if not argv:
         return
     if argv[0] in ("dump", "diff"):

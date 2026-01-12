@@ -19,6 +19,7 @@ siglus-ssu = "siglus_scene_script_utility.__main__:main"
 [dependency-groups]
 dev = [
     "maturin>=1.11.5",
+    "pytest>=8.3.5",
     "ruff>=0.14.11",
 ]
 

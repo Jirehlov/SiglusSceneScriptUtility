@@ -396,7 +396,6 @@ class CharacterAnalizer:
             return self.error(bcl, "Unclosed /* comment.")
         return "".join(out)
 
-
     def analize_file_2(self, in_text):
         t = in_text + ("\0" * 256)
         out = []
@@ -545,7 +544,6 @@ class CharacterAnalizer:
             return self.error(self.m_line, "Unclosed #ifdef.")
         return "".join(out), "".join(inc)
 
-
     def _std_replace(self, text, pos, default_rt, added_rt):
         r1 = _rt_search(default_rt, text, pos) if default_rt else None
         r2 = _rt_search(added_rt, text, pos) if added_rt and added_rt.get("c") else None
@@ -566,7 +564,6 @@ class CharacterAnalizer:
                 return text, pos, 0
             return text[:st] + res + text[p2:], st + len(res), 1
         return text, pos + 1, 1
-
 
     def _analize_macro(self, text, p, macro, default_rt, added_rt):
         real = []
@@ -649,7 +646,6 @@ class CharacterAnalizer:
             return 0, p, ""
         return 1, p, res
 
-
     def _analize_macro_replace(self, src, args, real, default_rt, added_rt):
         reps = []
         for i, a in enumerate(args):
@@ -682,7 +678,6 @@ class CharacterAnalizer:
                 return None
         return t[:-256]
 
-
     def analize_line(self, in_text, piad):
         self.iad = piad
         t = in_text + "\0"
@@ -712,7 +707,6 @@ class CharacterAnalizer:
                 loop = 0
         return t[:-1]
 
-
     def analize_file(self, in_text, piad, pcad):
         in_text = in_text.replace("\r", "")
         self.iad = piad
@@ -725,6 +719,7 @@ class CharacterAnalizer:
         scn, inc = r
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         from .IA import IncAnalyzer
+
         ia = IncAnalyzer(inc, C.FM_SCENE, piad, iad2)
         if not ia.step1():
             self.error(ia.el, "inc: " + ia.es)
