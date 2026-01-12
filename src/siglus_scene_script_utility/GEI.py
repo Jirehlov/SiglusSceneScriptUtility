@@ -1,4 +1,5 @@
-import os, struct, json
+import os
+import struct
 from . import const as C
 from .CA import rd, wr, todo
 

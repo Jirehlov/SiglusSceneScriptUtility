@@ -1,4 +1,8 @@
-import os, struct, json, re, math
+import os
+import struct
+
+import re
+import sys
 from . import const as C
 from . import extract
 from . import disam
@@ -1127,8 +1131,7 @@ def compare_files(p1, p2):
         end2 = h2.get("scn_name_list_ofs", 0) + _max_pair_end(n2) * 2
         names1 = _decode_utf16le_strings(b1, n1, h1.get("scn_name_list_ofs", 0), end1)
         names2 = _decode_utf16le_strings(b2, n2, h2.get("scn_name_list_ofs", 0), end2)
-        item1 = min(len(idx1), len(names1)) if names1 else len(idx1)
-        item2 = min(len(idx2), len(names2)) if names2 else len(idx2)
+
 
         def _scene_map(names, idx, base_ofs, blob):
             m = {}

@@ -1,4 +1,7 @@
-import os, struct, json, re, shutil, time, glob
+import os
+import struct
+import time
+import glob
 from . import const as C
 from .CA import rd, wr, _rt
 from .IA import IncAnalyzer

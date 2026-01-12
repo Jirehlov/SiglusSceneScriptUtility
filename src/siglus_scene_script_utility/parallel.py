@@ -14,9 +14,8 @@ Design notes:
 """
 
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple, Any, Dict
+from typing import List, Optional, Tuple, Dict
 
 
 def get_max_workers(max_workers: Optional[int] = None) -> int:
@@ -121,7 +120,6 @@ def _compile_one_process(ss_path: str, tmp_path: str, stop_after: str, ia_data: 
         return (fname, None)
 
     except Exception as e:
-        import traceback
         return (fname, str(e))
 
 
@@ -175,7 +173,7 @@ def parallel_compile(
         }
 
         for future in as_completed(futures):
-            ss_path = futures[future]
+            _ = futures[future]
             fname, error = future.result()
             completed += 1
 
@@ -320,7 +318,7 @@ def parallel_lzss_compress(
             dat_list.append(dat)
             lzss_list.append(lz)
 
-    print(f"[PARALLEL] LZSS compression complete")
+    print("[PARALLEL] LZSS compression complete")
     return (enc_names, dat_list, lzss_list)
 
 

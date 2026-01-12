@@ -1,4 +1,7 @@
-import sys, os, struct, glob, re, time, json, unicodedata
+import os
+import re
+import json
+import unicodedata
 from functools import lru_cache
 from . import const as C
 

@@ -1,4 +1,8 @@
-import os, glob, json, struct, copy, time, re, shutil
+import os
+import glob
+import struct
+import copy
+import time
 from . import const as C
 from .CA import absp, rd, wr, _rt, CharacterAnalizer
 from .IA import IncAnalyzer
@@ -1767,7 +1771,7 @@ def compile_one(ctx, ss_path, stop_after=None):
     if stop_after == "sa":
         return
     _log_stage("MA", ss_path)
-    ma_retry = 0
+
     while True:
         t = time.time()
         ma = MA(iad, lad, sad)

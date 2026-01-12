@@ -1,4 +1,4 @@
-import os, struct, json, re
+import struct
 from . import const as C
 
 NAME_W = 40

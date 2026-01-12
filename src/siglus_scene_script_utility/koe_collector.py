@@ -1,4 +1,6 @@
-import csv, os, re
+import csv
+import os
+import re
 import sys
 
 from . import koe_extract

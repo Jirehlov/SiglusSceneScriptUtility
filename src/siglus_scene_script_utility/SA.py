@@ -1,4 +1,4 @@
-import os, json, re, struct
+import json
 from . import const as C
 from .CA import get_form_code_by_name
 
@@ -7,8 +7,8 @@ def create_elm_code(o, g, c):
     return (int(o) << 24) | (int(g) << 16) | (int(c) & 0xFFFF)
 
 
-def N(l, **k):
-    d = {"node_line": l, "node_form": 0, "node_type": 0, "node_sub_type": 0}
+def N(ln, **k):
+    d = {"node_line": ln, "node_form": 0, "node_type": 0, "node_sub_type": 0}
     d.update(k)
     return d
 
@@ -1025,11 +1025,11 @@ class SA:
     def sa_elm_exp(s, i):
         p = i
         err = s.last
-        ok, p, l = s.sa_elm_list(p)
+        ok, p, el_list = s.sa_elm_list(p)
         if not ok:
             return 0, i, None
         s.last = err
-        return 1, p, N(s._a(i).get("line", 0), elm_list=l, element_type=0)
+        return 1, p, N(s._a(i).get("line", 0), elm_list=el_list, element_type=0)
 
     def sa_elm_list(s, i):
         p = i
@@ -1383,14 +1383,14 @@ def _sa_read(p):
     for e in ("utf-8-sig", "cp932", "utf-16", "utf-16le", "utf-16be"):
         try:
             return b.decode(e)
-        except:
+        except Exception:
             pass
     return b.decode("latin1", "ignore")
 
 
 def _sa_diff(a, b, p=""):
     r = []
-    if type(a) != type(b):
+    if type(a) is not type(b):
         return [(p, a, b)]
     if isinstance(a, dict):
         ks = sorted(set(a.keys()) | set(b.keys()))
@@ -1417,7 +1417,6 @@ def _sa_diff(a, b, p=""):
 
 
 def sa_test(path, ref_json=None, out_json=None):
-    import json
     from .CA import CharacterAnalizer, _rt
     from .LA import la_analize
 
@@ -1463,7 +1462,6 @@ def sa_test(path, ref_json=None, out_json=None):
 
 
 def _sa_main(argv):
-    import json
 
     if not argv:
         return

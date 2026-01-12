@@ -8,7 +8,7 @@ import os
 from siglus_scene_script_utility import native_ops
 native_ops._USE_NATIVE = False
 
-from siglus_scene_script_utility.native_ops import (
+from siglus_scene_script_utility.native_ops import (  # noqa: E402
     _py_lzss_pack, _py_lzss_unpack, _py_md5_digest, _py_xor_cycle_inplace,
 )
 

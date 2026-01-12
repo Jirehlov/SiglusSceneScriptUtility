@@ -1,4 +1,8 @@
-import sys, os, struct, json, re, shutil, time, glob
+import sys
+import os
+import struct
+import time
+import glob
 from . import const as C
 from .CA import rd, wr, _parse_code
 from . import compiler
@@ -195,7 +199,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     try:
         if compiler.md5_digest(lz) != md5_code[:16]:
             raise RuntimeError("source_angou: md5 mismatch")
-    except Exception as e:
+    except Exception:
         pass
     lz = _xor_cycle(lz, eg, int(sa.get("easy_index", 0)))
     raw = compiler.lzss_unpack(lz)
@@ -323,7 +327,6 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     A = None
     if os.path.exists(os.path.join(os.path.dirname(input_pck), "Gameexe.ini")):
         from . import analyze as A
-        from . import GEI
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
             continue

@@ -1,4 +1,11 @@
-import sys, os, struct, hashlib, json, re, time, shutil, math
+import sys
+import os
+import struct
+import hashlib
+import json
+import re
+import time
+import shutil
 from . import const as C
 from .BS import compile_all
 from . import CA
@@ -7,11 +14,9 @@ from .GEI import write_gameexe_dat
 from .linker import link_pack
 from .native_ops import (
     lzss_pack,
-    lzss_unpack,
     xor_cycle_inplace,
     md5_digest,
     tile_copy,
-    is_native_available,
 )
 
 
@@ -403,7 +408,6 @@ def main(argv=None):
         "scn_list": [os.path.basename(x) for x in ss],
         "inc_list": inc,
         "ini_list": ini,
-        "utf8": bool(use_utf8),
         "utf8": bool(use_utf8),
         "charset": enc,
         "lzss_level": a.lzss_level,

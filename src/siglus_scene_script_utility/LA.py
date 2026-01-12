@@ -34,8 +34,8 @@ def la_analize(pcad):
             return i, 1
 
     def find_label(name):
-        for k, l in enumerate(label_list):
-            if l["name"] == name:
+        for k, lbl in enumerate(label_list):
+            if lbl["name"] == name:
                 return k
         return -1
 

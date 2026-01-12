@@ -1,15 +1,10 @@
-import os, json, re, struct
 from . import const as C
 from .CA import (
     CharacterAnalizer,
-    absp,
-    rd,
-    wr,
     get_form_code_by_name,
     _isalpha,
     _isnum,
     _iszen,
-    _rt,
     _rt_add,
 )
 from .MA import FormTable, create_elm_code
