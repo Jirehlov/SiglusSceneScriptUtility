@@ -1,4 +1,4 @@
-import sys, os, struct, json, re, shutil
+import sys, os, struct, json, re, shutil, time, glob
 from . import const as C
 from .CA import rd, wr, _parse_code
 from . import compiler
@@ -247,6 +247,7 @@ def _compute_exe_el(os_dir: str):
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
+    ok_cnt = 0
     dat = rd(input_pck, 1)
     hdr = _parse_pack_header(dat)
     if not hdr:
@@ -320,7 +321,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
     A = None
-    if os.path.exists(os.path.join(path, "Gameexe.ini")):
+    if os.path.exists(os.path.join(os.path.dirname(input_pck), "Gameexe.ini")):
         from . import analyze as A
         from . import GEI
     for nm, blob in zip(scn_names, scn_data):
