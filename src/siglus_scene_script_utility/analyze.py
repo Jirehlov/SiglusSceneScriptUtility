@@ -1,7 +1,7 @@
-import os, sys, struct, hashlib, time, difflib, re
-import const as C
-import extract
-import disam
+import os, struct, json, re, math
+from . import const as C
+from . import extract
+from . import disam
 
 NAME_W = 40
 MAX_LIST_PREVIEW = 8
@@ -215,6 +215,7 @@ def _strip_scn_ofs_prefix(line):
 
 
 def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
+    import difflib
     a = [_strip_scn_ofs_prefix(x) for x in (dis1 or [])]
     b = [_strip_scn_ofs_prefix(x) for x in (dis2 or [])]
     if a == b:
@@ -295,6 +296,7 @@ def _dn(name):
 
 
 def _fmt_ts(ts):
+    import time
     try:
         lt = time.localtime(float(ts))
     except Exception:
@@ -308,6 +310,7 @@ def _read_file(path):
 
 
 def _sha1(b):
+    import hashlib
     try:
         return hashlib.sha1(b).hexdigest()
     except Exception:
@@ -853,6 +856,7 @@ def _pck_original_sources(blob, h, scn_data_end):
 
 
 def analyze_gameexe_dat(path):
+    import sys
     if not os.path.exists(path):
         sys.stderr.write("not found: %s\n" % path)
         return 2
@@ -873,7 +877,7 @@ def analyze_gameexe_dat(path):
     exe_el = b""
     if int(mode) != 0:
         exe_el = extract._compute_exe_el(os.path.dirname(os.path.abspath(path)))
-    import GEI
+    from . import GEI
 
     info = None
     try:

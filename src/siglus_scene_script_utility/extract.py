@@ -1,7 +1,7 @@
-import os, sys, struct, glob, time
-import const as C
-from CA import rd, wr, _parse_code
-import compiler
+import sys, os, struct, json, re, shutil
+from . import const as C
+from .CA import rd, wr, _parse_code
+from . import compiler
 
 
 def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
@@ -320,9 +320,9 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
     A = None
-    if dat_txt:
-        import analyze as A
-    ok_cnt = 0
+    if os.path.exists(os.path.join(path, "Gameexe.ini")):
+        from . import analyze as A
+        from . import GEI
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
             continue

@@ -1,5 +1,5 @@
-import re, struct
-import const as C
+import os, struct, json, re
+from . import const as C
 
 NAME_W = 40
 MAX_LIST_PREVIEW = 8

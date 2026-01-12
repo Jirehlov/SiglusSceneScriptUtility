@@ -1,5 +1,6 @@
-import const as C
-from CA import get_form_code_by_name
+import os, json, re, struct
+from . import const as C
+from .CA import get_form_code_by_name
 
 
 def create_elm_code(o, g, c):
@@ -1417,8 +1418,8 @@ def _sa_diff(a, b, p=""):
 
 def sa_test(path, ref_json=None, out_json=None):
     import json
-    from CA import CharacterAnalizer, _rt
-    from LA import la_analize
+    from .CA import CharacterAnalizer, _rt
+    from .LA import la_analize
 
     iad = {
         "replace_tree": _rt(),

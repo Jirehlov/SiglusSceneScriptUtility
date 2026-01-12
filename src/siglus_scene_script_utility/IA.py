@@ -1,13 +1,17 @@
-import const as C
-from CA import (
+import os, json, re, struct
+from . import const as C
+from .CA import (
+    CharacterAnalizer,
+    absp,
+    rd,
+    wr,
     _isalpha,
     _isnum,
     _iszen,
-    get_form_code_by_name,
+    _rt,
     _rt_add,
-    CharacterAnalizer,
 )
-from MA import FormTable, create_elm_code
+from .MA import FormTable, create_elm_code
 
 
 class IncAnalyzer:

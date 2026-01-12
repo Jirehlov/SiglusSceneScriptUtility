@@ -1,5 +1,5 @@
-import const as C
-from CA import _iszen
+from . import const as C
+from .CA import _iszen
 
 
 def _tostr_moji(c):

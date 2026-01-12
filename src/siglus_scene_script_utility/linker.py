@@ -1,7 +1,7 @@
-import const as C
-import os, glob, struct, time
-from CA import rd, wr, _rt
-from IA import IncAnalyzer
+import os, struct, json, re, shutil
+from . import const as C
+from .CA import rd, wr, _rt
+from .IA import IncAnalyzer
 
 
 def _enc_w(s):
@@ -140,7 +140,7 @@ def _resolve_exe_angou(ctx):
     mb = angou_str.encode("cp932", "ignore")
     if len(mb) < 8:
         return (False, b"")
-    import compiler as _m
+    from . import compiler as _m
 
     return (True, _m.exe_angou_element(mb))
 
@@ -160,7 +160,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
     enc_names = []
     dat_list = []
     lzss_list = []
-    import compiler as _m
+    from . import compiler as _m
 
     easy_code = ctx.get("easy_angou_code") or b""
     for nm in scn_names:
@@ -307,7 +307,7 @@ def _build_original_source_chunks(ctx, lzss_mode):
         os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
     if not scn_path:
         return (0, [])
-    import compiler as _m
+    from . import compiler as _m
 
     rel_list = _make_original_source_rel_list(scn_path)
     if not rel_list:

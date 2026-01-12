@@ -1,10 +1,10 @@
 import os, glob, json, struct, copy, time, re, shutil
-import const as C
-from CA import absp, rd, wr, _rt, CharacterAnalizer
-from IA import IncAnalyzer
-from LA import la_analize
-from SA import SA
-from MA import MA
+from . import const as C
+from .CA import absp, rd, wr, _rt, CharacterAnalizer
+from .IA import IncAnalyzer
+from .LA import la_analize
+from .SA import SA
+from .MA import MA
 
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1

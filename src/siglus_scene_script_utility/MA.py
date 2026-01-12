@@ -1,5 +1,5 @@
-import copy
-import const as C
+import os, json, re, struct
+from . import const as C
 
 
 def create_elm_code(o, g, c):

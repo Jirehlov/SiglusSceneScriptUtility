@@ -1,6 +1,6 @@
-import const as C
-import os, struct
-from CA import rd, wr, todo
+import os, struct, json
+from . import const as C
+from .CA import rd, wr, todo
 
 
 def _read_text(p, utf8):
