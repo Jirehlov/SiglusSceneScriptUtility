@@ -1,4 +1,4 @@
-import os, json, re, struct
+import os, json, re, struct, copy
 from . import const as C
 
 

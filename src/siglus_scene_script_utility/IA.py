@@ -5,6 +5,7 @@ from .CA import (
     absp,
     rd,
     wr,
+    get_form_code_by_name,
     _isalpha,
     _isnum,
     _iszen,

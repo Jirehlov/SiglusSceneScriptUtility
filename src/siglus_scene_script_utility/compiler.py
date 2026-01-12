@@ -1,6 +1,7 @@
 import sys, os, struct, hashlib, json, re, time, shutil, math
 from . import const as C
 from .BS import compile_all
+from . import CA
 from .CA import rd, wr, todo, _parse_code
 from .GEI import write_gameexe_dat
 from .linker import link_pack
