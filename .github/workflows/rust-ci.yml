@@ -9,6 +9,7 @@ on:
 jobs:
   rust-quality:
     name: Lint & Format
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
