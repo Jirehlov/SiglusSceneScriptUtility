@@ -107,9 +107,7 @@ def _locate_tokens(source_text: str, tokens):
         quoted = '"' + _encode_quoted(text) + '"'
         pos_quoted = line_text.find(quoted, cursor)
         pos_raw = line_text.find(text, cursor)
-        use_quoted = False
         if pos_quoted >= 0 and (pos_raw < 0 or pos_quoted <= pos_raw):
-            use_quoted = True
             start = line_start + pos_quoted + 1
             cursor = pos_quoted + len(quoted)
         elif pos_raw >= 0:
