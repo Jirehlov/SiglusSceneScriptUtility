@@ -11,11 +11,21 @@ When the siglus_native module is available, it uses Rust implementations for:
 Falls back to pure Python implementations if Rust bindings are not available.
 """
 
+import os
 import struct
 import math
 
+
+def _legacy_mode_enabled() -> bool:
+    value = os.environ.get("SIGLUS_SSU_LEGACY", "")
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+_LEGACY_MODE = _legacy_mode_enabled()
 # Try to import native Rust implementations
 try:
+    if _LEGACY_MODE:
+        raise ImportError("Legacy mode requested")
     from . import native_accel
 
     _native_lzss_pack = native_accel.lzss_pack
