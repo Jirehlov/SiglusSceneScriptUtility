@@ -26,24 +26,14 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      # --- PR Suggestions (Reviewdog) ---
-      - name: Ruff Lint with Reviewdog
+      # --- PR Checks ---
+      - name: Lint check
         if: github.event_name == 'pull_request'
-        uses: benny123tw/action-ruff@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          reporter: github-pr-review
+        run: uv run ruff check .
 
-      - name: Ruff Format (Suggestions Setup)
+      - name: Format check
         if: github.event_name == 'pull_request'
-        run: uv run ruff format .
-
-      - name: Post Format Suggestions
-        if: github.event_name == 'pull_request'
-        uses: reviewdog/action-suggester@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tool_name: ruff-format
+        run: uv run ruff format --check .
 
       # --- Push Auto-Fixes (Auto-PR) ---
       - name: Apply Fixes
