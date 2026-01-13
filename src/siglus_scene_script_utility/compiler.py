@@ -14,7 +14,6 @@ from .GEI import write_gameexe_dat
 from .linker import link_pack
 from .native_ops import (
     lzss_pack,
-    lzss_unpack,
     xor_cycle_inplace,
     md5_digest,
     tile_copy,

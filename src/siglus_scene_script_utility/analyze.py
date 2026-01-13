@@ -1323,12 +1323,16 @@ def compare_files(p1, p2):
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    if (not argv) or argv[0] in ("-h", "--help", "help"):
+    args = list(argv)
+    if (not args) or args[0] in ("-h", "--help", "help"):
         return 2
-    if len(argv) == 1:
-        return analyze_file(argv[0])
-    if len(argv) == 2:
-        return compare_files(argv[0], argv[1])
+    if "--dat-txt" in args:
+        args.remove("--dat-txt")
+        globals()["DAT_TXT_OUT_DIR"] = "__DATDIR__"
+    if len(args) == 1:
+        return analyze_file(args[0])
+    if len(args) == 2:
+        return compare_files(args[0], args[1])
     return 2
 
 

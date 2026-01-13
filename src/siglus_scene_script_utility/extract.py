@@ -6,7 +6,9 @@ import glob
 from . import const as C
 from .CA import rd, wr, _parse_code
 from . import compiler
-
+from .native_ops import (
+    lzss_unpack
+)
 
 def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
     if not code:
@@ -202,7 +204,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     except Exception:
         pass
     lz = _xor_cycle(lz, eg, int(sa.get("easy_index", 0)))
-    raw = compiler.lzss_unpack(lz)
+    raw = lzss_unpack(lz)
     return (raw, name)
 
 
@@ -325,7 +327,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
     A = None
-    if os.path.exists(os.path.join(os.path.dirname(input_pck), "Gameexe.ini")):
+    if dat_txt:
         from . import analyze as A
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
@@ -341,7 +343,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             lz = b
         if lz:
             try:
-                out_dat = compiler.lzss_unpack(lz)
+                out_dat = lzss_unpack(lz)
             except Exception:
                 out_dat = b""
         else:
