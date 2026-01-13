@@ -256,7 +256,19 @@ class FormTable:
         s.f[C.FM_CALL] = copy.deepcopy(s.call_base if s.call_base is not None else {})
 
     def add(s, fc, e):
-        s.f.setdefault(fc, {})[e["name"]] = e
+        bucket = s.f.setdefault(fc, {})
+        nm = e.get("name")
+        # Keep the *first* binding for duplicate call-scope properties.
+        # This matches the legacy C++ behavior and prevents later duplicate
+        # `property` declarations from rebinding name->slot inside a command.
+        if nm in bucket:
+            if (
+                fc == C.FM_CALL
+                and e.get("origin") == "call"
+                and e.get("type") == C.ET_PROPERTY
+            ):
+                return
+        bucket[nm] = e
 
     def get(s, fc, name):
         return s.f.get(fc, {}).get(name)
