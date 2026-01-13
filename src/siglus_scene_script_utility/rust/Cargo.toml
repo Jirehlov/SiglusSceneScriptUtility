@@ -1,0 +1,18 @@
+[package]
+name = "siglus_ssu_native"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "siglus_ssu_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module"] }
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+panic = "abort"
+strip = true

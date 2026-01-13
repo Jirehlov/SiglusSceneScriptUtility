@@ -1,10 +1,14 @@
-import os, glob, json, struct, copy, time, re, shutil
-import const as C
-from CA import absp, rd, wr, _rt, CharacterAnalizer
-from IA import IncAnalyzer
-from LA import la_analize
-from SA import SA
-from MA import MA
+import os
+import glob
+import struct
+import copy
+import time
+from . import const as C
+from .CA import absp, rd, wr, _rt, CharacterAnalizer
+from .IA import IncAnalyzer
+from .LA import la_analize
+from .SA import SA
+from .MA import MA
 
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1
@@ -64,7 +68,9 @@ def _fc(x):
     return (
         int(x)
         if isinstance(x, int)
-        else int(C._FORM_CODE.get(x, -1)) if isinstance(x, str) else -1
+        else int(C._FORM_CODE.get(x, -1))
+        if isinstance(x, str)
+        else -1
     )
 
 
@@ -1767,7 +1773,7 @@ def compile_one(ctx, ss_path, stop_after=None):
     if stop_after == "sa":
         return
     _log_stage("MA", ss_path)
-    ma_retry = 0
+
     while True:
         t = time.time()
         ma = MA(iad, lad, sad)
@@ -1804,10 +1810,37 @@ def compile_one(ctx, ss_path, stop_after=None):
     wr(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"], 1)
 
 
-def compile_all(ctx, only=None, stop_after=None):
+def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=True):
+    """
+    Compile all .ss files in the project.
+
+    Args:
+        ctx: Compilation context dictionary
+        only: Optional list of specific files to compile
+        stop_after: Optional stage to stop after ('la', 'sa', 'ma', 'bs')
+        max_workers: Maximum number of parallel workers (None for auto)
+        parallel: If True, compile files in parallel (default: True)
+    """
     if isinstance(ctx, dict) and not isinstance(ctx.get("ia_data"), dict):
         ctx["ia_data"] = build_ia_data(ctx)
-    for p in find_ss(ctx, only):
+
+    ss_files = list(find_ss(ctx, only))
+    if not ss_files:
+        return
+
+    # Use parallel compilation if enabled and there are multiple files
+    if parallel and len(ss_files) > 1:
+        try:
+            from .parallel import parallel_compile
+
+            parallel_compile(ctx, ss_files, stop_after, max_workers)
+            return
+        except ImportError:
+            # Fall back to serial if parallel module not available
+            pass
+
+    # Serial compilation
+    for p in ss_files:
         compile_one(ctx, p, stop_after)
 
 

@@ -3,8 +3,8 @@ import sys
 
 
 def _prog():
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "main.py"
-    return p or "main.py"
+    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
+    return p or "siglus-tool"
 
 
 def _usage(out=None):
@@ -24,7 +24,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
     out.write("\n")
@@ -61,64 +61,33 @@ def main(argv=None):
         _usage()
         return 0
     mode = argv[0]
+
     if mode in ("-c", "--compile"):
-        import compiler
+        from . import compiler
 
         rc = compiler.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
+
     if mode in ("-x", "--extract"):
-        import extract
+        from . import extract
 
         rc = extract.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
-    if mode in ("-a", "--analyze"):
-        import analyze
 
-        args = argv[1:]
-        dat_txt = False
-        gei = False
-        files = []
-        i = 0
-        while i < len(args):
-            a = args[i]
-            if a == "--dat-txt":
-                dat_txt = True
-            elif a == "--gei":
-                gei = True
-            elif a.startswith("-"):
-                sys.stderr.write("Unknown option for -a mode: %s\n" % a)
-                _usage_short()
-                return 2
-            else:
-                files.append(a)
-            i += 1
-        if gei and dat_txt:
-            sys.stderr.write("--dat-txt is not supported with --gei\n")
+    if mode in ("-a", "--analyze"):
+        from . import analyze
+
+        rc = analyze.main(argv[1:])  # Assuming analyze has a main function
+        if rc == 2:
             _usage_short()
-            return 2
-        if gei:
-            if len(files) != 1:
-                _usage_short()
-                return 2
-            return analyze.analyze_gameexe_dat(files[0])
-        if dat_txt and any(str(f).lower().endswith(".pck") for f in files):
-            sys.stderr.write("--dat-txt is not supported for .pck in -a mode\n")
-            _usage_short()
-            return 2
-        analyze.DAT_TXT_OUT_DIR = "__DATDIR__" if dat_txt else None
-        if len(files) == 1:
-            return analyze.analyze_file(files[0])
-        if len(files) == 2:
-            return analyze.compare_files(files[0], files[1])
-        _usage_short()
-        return 2
+        return rc
 
     if mode in ("-k", "--koe"):
-        import koe_collector
+        from . import koe_collector
 
         rc = koe_collector.main(argv[1:])
         if rc == 2:
@@ -126,7 +95,7 @@ def main(argv=None):
         return rc
 
     if mode in ("-e", "--exec", "--execute"):
-        import exec
+        from . import exec
 
         rc = exec.main(argv[1:])
         if rc == 2:

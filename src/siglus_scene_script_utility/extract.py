@@ -1,7 +1,11 @@
-import os, sys, struct, glob, time
-import const as C
-from CA import rd, wr, _parse_code
-import compiler
+import sys
+import os
+import struct
+import time
+import glob
+from . import const as C
+from .CA import rd, wr, _parse_code
+from . import compiler
 
 
 def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
@@ -195,7 +199,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     try:
         if compiler.md5_digest(lz) != md5_code[:16]:
             raise RuntimeError("source_angou: md5 mismatch")
-    except Exception as e:
+    except Exception:
         pass
     lz = _xor_cycle(lz, eg, int(sa.get("easy_index", 0)))
     raw = compiler.lzss_unpack(lz)
@@ -247,6 +251,7 @@ def _compute_exe_el(os_dir: str):
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
+    ok_cnt = 0
     dat = rd(input_pck, 1)
     hdr = _parse_pack_header(dat)
     if not hdr:
@@ -320,9 +325,8 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
     A = None
-    if dat_txt:
-        import analyze as A
-    ok_cnt = 0
+    if os.path.exists(os.path.join(os.path.dirname(input_pck), "Gameexe.ini")):
+        from . import analyze as A
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
             continue

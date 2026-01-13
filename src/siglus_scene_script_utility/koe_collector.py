@@ -3,7 +3,7 @@ import os
 import re
 import sys
 
-import koe_extract
+from . import koe_extract
 
 
 _COORD_RE = re.compile(r"\bKOE\(\s*\d+\s*(?:,\s*\d+\s*)?\)", flags=re.IGNORECASE)

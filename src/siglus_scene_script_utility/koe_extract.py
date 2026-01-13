@@ -3,7 +3,7 @@ import os
 import re
 import struct
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 
 @dataclass(frozen=True)

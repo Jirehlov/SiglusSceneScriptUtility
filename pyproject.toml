@@ -1,0 +1,29 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "siglus-scene-script-utility"
+version = "0.1.0"
+description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    { name = "Jirehlov" }
+]
+dependencies = []
+
+[project.scripts]
+siglus-ssu = "siglus_scene_script_utility.__main__:main"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.11.5",
+    "pytest>=8.3.5",
+    "ruff>=0.14.11",
+]
+
+[tool.maturin]
+python-source = "src"
+module-name = "siglus_scene_script_utility.native_accel"
+manifest-path = "src/siglus_scene_script_utility/rust/Cargo.toml"

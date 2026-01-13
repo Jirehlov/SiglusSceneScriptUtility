@@ -1,6 +1,9 @@
-import os, json, re, unicodedata
+import os
+import re
+import json
+import unicodedata
 from functools import lru_cache
-import const as C
+from . import const as C
 
 
 def todo(s):
@@ -715,7 +718,7 @@ class CharacterAnalizer:
             return 0
         scn, inc = r
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
-        from IA import IncAnalyzer
+        from .IA import IncAnalyzer
 
         ia = IncAnalyzer(inc, C.FM_SCENE, piad, iad2)
         if not ia.step1():
