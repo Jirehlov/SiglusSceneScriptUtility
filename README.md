@@ -49,6 +49,9 @@ uv run siglus-ssu -x <input_pck> <output_dir>
 
 # Analyze or compare files
 uv run siglus-ssu -a <file1> [file2]
+
+# Force pure Python implementation (disable Rust accel)
+uv run siglus-ssu --legacy -c <input_dir> <output_dir>
 ```
 
 ## Project Structure
@@ -117,3 +120,7 @@ Run the benchmark script to measure performance improvements:
 ```bash
 uv run python tests/benchmark.py
 ```
+
+### Tips for scene script editing
+
+If you type something in a .ss file that would break tokenization, wrap it in double quotes so it’s treated as a literal.

@@ -11,7 +11,12 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] (-c|-x|-a|-k|-e) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e) [args]\n")
+    out.write("\n")
+    out.write("Options:\n")
+    out.write(
+        "  --legacy        Force pure Python implementation (disable Rust accel)\n"
+    )
     out.write("\n")
     out.write("Modes:\n")
     out.write("  -c, --compile   Compile scripts\n")
@@ -47,13 +52,24 @@ def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] (-c|-x|-a|-k|-e) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
+
+
+def _consume_legacy(argv):
+    legacy = False
+    if "--legacy" in argv:
+        legacy = True
+        argv = [arg for arg in argv if arg != "--legacy"]
+    if legacy:
+        os.environ["SIGLUS_SSU_LEGACY"] = "1"
+    return argv
 
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    argv = _consume_legacy(argv)
     if not argv or argv[0] in ("-h", "--help", "help"):
         _usage()
         return 0
