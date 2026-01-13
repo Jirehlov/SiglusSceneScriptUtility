@@ -21,6 +21,7 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # --- PR Suggestions (Reviewdog) ---
       - name: Clippy with Reviewdog
         if: github.event_name == 'pull_request'
         uses: giraffate/clippy-action@v1
@@ -29,7 +30,8 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           workdir: src/siglus_scene_script_utility/rust
 
-      - name: Rust Format
+      - name: Rust Format (Suggestions Setup)
+        if: github.event_name == 'pull_request'
         run: cd src/siglus_scene_script_utility/rust && cargo fmt
 
       - name: Post Format Suggestions
@@ -39,6 +41,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           tool_name: rustfmt
 
+      # --- Push Auto-Fixes (Auto-PR) ---
       - name: Apply Fixes
         id: apply_fixes
         if: github.event_name == 'push'
