@@ -51,12 +51,11 @@ def _encode_quoted(value: str) -> str:
     return "".join(out)
 
 
-def _collect_tokens(text: str, ss_path: str, utf8: bool):
-    ctx = {
-        "scn_path": os.path.dirname(os.path.abspath(ss_path)),
-        "utf8": bool(utf8),
-    }
-    iad = BS.build_ia_data(ctx)
+def _collect_tokens(text: str, ctx: dict, iad_base=None):
+    if iad_base is None:
+        iad = BS.build_ia_data(ctx)
+    else:
+        iad = BS._copy_ia_data(iad_base)
     pcad = {}
     ca = CA.CharacterAnalizer()
     if not ca.analize_file(text, iad, pcad):
@@ -117,7 +116,6 @@ def _locate_tokens(source_text: str, tokens):
             start = line_start + pos_raw
             cursor = pos_raw + len(text)
         else:
-            _eprint(f"textmap: unable to locate token {token['index']}: {text}")
             continue
         cursors[line_no] = cursor
         line_orders[line_no] = line_orders.get(line_no, 0) + 1
@@ -254,31 +252,35 @@ def _apply_map(text: str, entries, rows):
 def _usage(out=None):
     if out is None:
         out = sys.stderr
-    out.write("usage: -m [--apply] <path_to_ss>\n")
+    out.write("usage: -m [--apply] <path_to_ss|path_to_dir>\n")
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
-    if not argv or argv[0] in ("-h", "--help", "help"):
-        _usage(sys.stdout)
-        return 0
-    apply_mode = False
-    args = []
-    for a in argv:
-        if a in ("--apply", "-a"):
-            apply_mode = True
-        else:
-            args.append(a)
-    if len(args) != 1:
-        _usage()
-        return 2
-    ss_path = args[0]
+def _iter_ss_files(root: str):
+    ss_files = []
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            if name.lower().endswith(".ss"):
+                ss_files.append(os.path.join(dirpath, name))
+    return sorted(ss_files)
+
+
+def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     if not os.path.exists(ss_path):
         _eprint(f"textmap: file not found: {ss_path}")
         return 1
     text, encoding = _read_text(ss_path)
-    tokens = _collect_tokens(text, ss_path, encoding.startswith("utf-8"))
+    ctx = {
+        "scn_path": os.path.dirname(os.path.abspath(ss_path)),
+        "utf8": bool(encoding.startswith("utf-8")),
+    }
+    iad_base = None
+    if iad_cache is not None:
+        key = (ctx["scn_path"], ctx["utf8"])
+        iad_base = iad_cache.get(key)
+        if iad_base is None:
+            iad_base = BS.build_ia_data(ctx)
+            iad_cache[key] = iad_base
+    tokens = _collect_tokens(text, ctx, iad_base=iad_base)
     entries = _locate_tokens(text, tokens)
     csv_path = _csv_path_for_ss(ss_path)
     if not apply_mode:
@@ -300,6 +302,38 @@ def main(argv=None):
         _write_text(ss_path, updated, "utf-8")
     print(f"textmap: applied {count} changes")
     return 0
+
+
+def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        _usage(sys.stdout)
+        return 0
+    apply_mode = False
+    args = []
+    for a in argv:
+        if a in ("--apply", "-a"):
+            apply_mode = True
+        else:
+            args.append(a)
+    if len(args) != 1:
+        _usage()
+        return 2
+    ss_path = args[0]
+    if os.path.isdir(ss_path):
+        ss_files = _iter_ss_files(ss_path)
+        if not ss_files:
+            _eprint(f"textmap: no .ss files found in: {ss_path}")
+            return 1
+        iad_cache = {}
+        errors = 0
+        for file_path in ss_files:
+            rc = _process_ss(file_path, apply_mode, iad_cache=iad_cache)
+            if rc != 0:
+                errors += 1
+        return 1 if errors else 0
+    return _process_ss(ss_path, apply_mode)
 
 
 if __name__ == "__main__":

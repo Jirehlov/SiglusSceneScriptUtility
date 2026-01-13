@@ -26,7 +26,7 @@ def _usage(out=None):
     out.write("  -a, --analyze   Analyze/compare files\n")
     out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
     out.write("  -e, --exec      Execute at a #z label\n")
-    out.write("  -m, --textmap   Export/apply text mapping for a single .ss file\n")
+    out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -47,7 +47,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
-    out.write(f"  {p} -m [--apply] <path_to_ss>\n")
+    out.write(f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n")
 
 
 def _usage_short(out=None):
