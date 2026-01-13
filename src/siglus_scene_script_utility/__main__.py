@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m) [args]\n")
     out.write("\n")
     out.write("Options:\n")
     out.write(
@@ -26,6 +26,7 @@ def _usage(out=None):
     out.write("  -a, --analyze   Analyze/compare files\n")
     out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
     out.write("  -e, --exec      Execute at a #z label\n")
+    out.write("  -m, --textmap   Export/apply text mapping for a single .ss file\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -46,6 +47,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
+    out.write(f"  {p} -m [--apply] <path_to_ss>\n")
 
 
 def _usage_short(out=None):
@@ -114,6 +116,14 @@ def main(argv=None):
         from . import exec
 
         rc = exec.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-m", "--textmap"):
+        from . import textmap
+
+        rc = textmap.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc

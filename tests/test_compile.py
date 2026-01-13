@@ -45,9 +45,9 @@ def test_extract_compile_compare_flow(monkeypatch):
         compiled_pck = try_dir / "Scene.pck"
         compiled_gameexe = try_dir / "Gameexe.dat"
         assert compiled_pck.is_file(), "Expected Scene.pck to be created in tests/try"
-        assert (
-            compiled_gameexe.is_file()
-        ), "Expected Gameexe.dat to be created in tests/try"
+        assert compiled_gameexe.is_file(), (
+            "Expected Gameexe.dat to be created in tests/try"
+        )
 
         assert _sha256(compiled_pck) == _sha256(scene_pck)
         assert _sha256(compiled_gameexe) == _sha256(gameexe_dat)
