@@ -10,6 +10,10 @@ jobs:
   rust-quality:
     name: Lint & Format
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
     steps:
       - uses: actions/checkout@v4
 
@@ -18,11 +22,48 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      # --- PR Checks ---
+      - name: Clippy check
+        if: github.event_name == 'pull_request'
+        run: cd src/siglus_scene_script_utility/rust && cargo clippy -- -D warnings
+
       - name: Format check
+        if: github.event_name == 'pull_request'
         run: cd src/siglus_scene_script_utility/rust && cargo fmt -- --check
 
-      - name: Clippy check
-        run: cd src/siglus_scene_script_utility/rust && cargo clippy -- -D warnings
+      # --- Push Auto-Fixes (Auto-PR) ---
+      - name: Apply Fixes
+        id: apply_fixes
+        if: github.event_name == 'push'
+        run: |
+          cd src/siglus_scene_script_utility/rust
+          cargo fmt
+          cargo clippy --fix --allow-dirty --allow-staged
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changes=true" >> $GITHUB_OUTPUT
+          else
+            echo "changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request for Fixes
+        id: cpr
+        if: github.event_name == 'push' && steps.apply_fixes.outputs.changes == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "style: fix lint and formatting (rust)"
+          title: "Fix lint and formatting (Rust) - Auto-generated"
+          body: "This PR contains automatic fixes for Rust lint (clippy) and formatting issues found after a direct push."
+          branch: "fix-rust-style-${{ github.ref_name }}"
+          delete-branch: true
+
+      - name: Permission Error Hint
+        if: failure() && steps.cpr.outcome == 'failure' && steps.apply_fixes.outputs.changes == 'true'
+        run: |
+          echo "::error::Auto-PR failed (403). Please check your repository settings:"
+          echo "::error::1. Go to Settings -> Actions -> General"
+          echo "::error::2. Set 'Workflow permissions' to 'Read and write permissions'"
+          echo "::error::3. Check 'Allow GitHub Actions to create and approve pull requests'"
 
   rust-tests:
     name: Tests
