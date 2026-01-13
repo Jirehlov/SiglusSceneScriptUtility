@@ -1,10 +1,6 @@
 # SiglusSceneScriptUtility
 
-This utility can compile and extract SiglusEngine scene scripts and data. It features **Rust-accelerated core operations** (LZSS, MD5, XOR) for significantly improved performance.
-
-## Performance Note
-
-The original Python LZSS implementation was very slow. This project now includes a Rust native extension that provides up to **50x speedup** for LZSS and **180x speedup** for MD5.
+This utility aims to reproduce SiglusEngine’s scene-script compilation bit-for-bit, along with other related features.
 
 ## Installation
 
