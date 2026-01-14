@@ -3,11 +3,119 @@ import os
 import struct
 import time
 import glob
+import csv
 from . import const as C
 from .CA import rd, wr, _parse_code
 from . import compiler
 from . import GEI
 from .native_ops import lzss_unpack
+
+
+# --- DBS export support -------------------------------------------------
+
+
+def _iter_dbs_files(path: str):
+    """Yield .dbs files under path (file or directory)."""
+    if not path:
+        return
+    if os.path.isdir(path):
+        for root, _dirs, files in os.walk(path):
+            for fn in files:
+                if fn.lower().endswith(".dbs"):
+                    yield os.path.join(root, fn)
+    else:
+        if path.lower().endswith(".dbs") and os.path.isfile(path):
+            yield path
+
+
+def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> str:
+    """Convert a dbs cell value to a csv field string."""
+    try:
+        _, dt = info["col_headers"][col_idx]
+    except Exception:
+        dt = 0
+    ch = chr(dt & 0xFF) if 32 <= (dt & 0xFF) <= 126 else ""
+    if ch == "S":
+        # String offset relative to p_str
+        try:
+            return _ANALYZE._dbs_get_str(
+                m_type, info.get("str_blob") or b"", int(raw_val)
+            )
+        except Exception:
+            return ""
+    # Treat non-string as signed int32 for readability
+    try:
+        v = int(raw_val) & 0xFFFFFFFF
+        if v >= 0x80000000:
+            v -= 0x100000000
+        return str(v)
+    except Exception:
+        return str(raw_val)
+
+
+def export_dbs_to_csv(path: str) -> int:
+    """Export .dbs file(s) to .csv next to source (name.dbs.csv)."""
+    global _ANALYZE
+    try:
+        from . import (
+            analyze as _ANALYZE,
+        )  # lazy import to avoid circular import on startup
+    except Exception as e:
+        sys.stderr.write("dbs export: failed to import analyze: %s\n" % (e,))
+        return 1
+
+    err = 0
+    any_found = False
+    for fp in _iter_dbs_files(path):
+        any_found = True
+        out_fp = fp + ".csv"
+        try:
+            blob = rd(fp)
+            m_type, expanded = _ANALYZE._dbs_unpack(blob)
+            info = _ANALYZE._parse_dbs(m_type, expanded)
+
+            row_cnt = int(info.get("row_cnt") or 0)
+            col_cnt = int(info.get("col_cnt") or 0)
+            data_ofs = int(info.get("data_offset") or 0)
+            data_blob = info.get("data_blob") or expanded
+
+            # Build header row: row_call_no + per-column call_no (and type char)
+            header = ["row_call_no"]
+            for call_no, dt in info.get("col_headers") or []:
+                ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
+                if ch:
+                    header.append("%d(%s)" % (int(call_no), ch))
+                else:
+                    header.append("%d" % int(call_no))
+
+            with open(out_fp, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f, lineterminator="\r\n")
+                w.writerow(header)
+
+                # Stream rows to avoid holding huge tables in memory.
+                row_calls = info.get("row_calls") or []
+                for r in range(row_cnt):
+                    row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
+                    base = data_ofs + (r * col_cnt * 4)
+                    for c in range(col_cnt):
+                        try:
+                            raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[
+                                0
+                            ]
+                        except Exception:
+                            raw_val = 0
+                        row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
+                    w.writerow(row)
+
+            sys.stdout.write("Wrote: %s\n" % out_fp)
+        except Exception as e:
+            err = 1
+            sys.stderr.write("dbs export failed: %s: %s\n" % (fp, e))
+
+    if not any_found:
+        sys.stderr.write("dbs export: no .dbs found: %s\n" % path)
+        return 1
+    return err
 
 
 def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
@@ -376,7 +484,31 @@ def main(argv=None):
     if gei and dat_txt:
         sys.stderr.write("--dat-txt is not supported with --gei\n")
         return 2
-    if len(args) != 2 or args[0] in ("-h", "--help", "help"):
+    if not args or args[0] in ("-h", "--help", "help"):
+        return 2
+
+    # DBS export mode: single argument (.dbs file or directory containing .dbs)
+    if not gei and len(args) == 1:
+        return export_dbs_to_csv(args[0])
+
+    # Some users may still pass an output_dir for dbs; ignore it for compatibility.
+    if (
+        not gei
+        and len(args) == 2
+        and args[0].lower().endswith(".dbs")
+        and os.path.isfile(args[0])
+    ):
+        if (
+            args[1]
+            and args[1] not in (".", "./")
+            and os.path.abspath(args[1]) != os.path.abspath(os.path.dirname(args[0]))
+        ):
+            sys.stderr.write(
+                "warning: dbs export ignores output_dir; writing next to source file\n"
+            )
+        return export_dbs_to_csv(args[0])
+
+    if len(args) != 2:
         return 2
     if gei:
         exe_el = _compute_exe_el(os.path.dirname(os.path.abspath(args[0])))

@@ -2436,3 +2436,39 @@ SOURCE_ANGOU = {
     "tile_limit": 128,
     "header_size": 72,
 }
+
+DBS_XOR32_CODE = 0x89F4622D
+DBS_XOR32_CODE_A = 0x7190C70E
+DBS_XOR32_CODE_B = 0x499BF135
+DBS_MAP_WIDTH = 16
+DBS_TILE_WIDTH = 5
+DBS_TILE_HEIGHT = 5
+DBS_TILE = bytes(
+    [
+        255,
+        0,
+        0,
+        255,
+        255,
+        0,
+        0,
+        255,
+        255,
+        0,
+        255,
+        255,
+        255,
+        0,
+        255,
+        0,
+        0,
+        255,
+        0,
+        0,
+        0,
+        0,
+        0,
+        255,
+        255,
+    ]
+)
