@@ -37,22 +37,17 @@ You can use the `siglus-ssu` command directly through `uv run`:
 ```bash
 # Display help
 uv run siglus-ssu --help
-
-# Compile scripts (serial by default)
-uv run siglus-ssu -c <input_dir> <output_dir>
-
-# Enable parallel compilation if needed
-uv run siglus-ssu -c --parallel [--max-workers N] <input_dir> <output_dir>
-
-# Extract PCK files
-uv run siglus-ssu -x <input_pck> <output_dir>
-
-# Analyze or compare files
-uv run siglus-ssu -a <file1> [file2]
-
-# Force pure Python implementation (disable Rust accel)
-uv run siglus-ssu -c --legacy <input_dir> <output_dir>
 ```
+
+Common modes and examples:
+
+| Mode | Description | Example |
+| --- | --- | --- |
+| Compile | Build scripts into `.pck` | `uv run siglus-ssu -c <input_dir> <output_dir>` |
+| Compile (parallel) | Enable multi-process compile | `uv run siglus-ssu -c --parallel [--max-workers N] <input_dir> <output_dir>` |
+| Extract | Unpack `.pck` files | `uv run siglus-ssu -x <input_pck> <output_dir>` |
+| Analyze/compare | Inspect or diff files | `uv run siglus-ssu -a <file1> [file2]` |
+| Legacy | Force pure Python mode | `uv run siglus-ssu --legacy -c <input_dir> <output_dir>` |
 
 ## Project Structure
 

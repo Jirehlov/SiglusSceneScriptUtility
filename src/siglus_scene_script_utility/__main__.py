@@ -30,18 +30,32 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
+    out.write("    --debug        Keep temp files (also prints stage timings)\n")
+    out.write("    --charset ENC  Force source charset (jis/cp932 or utf8)\n")
+    out.write("    --no-os        Skip OS stage (do not pack source files)\n")
+    out.write("    --no-angou     Disable encryption/compression (header_size=0)\n")
+    out.write("    --parallel     Enable parallel compilation\n")
+    out.write("    --max-workers  Limit parallel workers (default: auto)\n")
+    out.write("    --lzss-level   LZSS compression level (2-17, default: 17)\n")
+    out.write("    --tmp          Use specific temp directory\n")
     out.write("\n")
     out.write("Extract mode:\n")
     out.write(f"  {p} -x [--dat-txt] <input_pck> <output_dir>\n")
     out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
+    out.write(f"  {p} -x <path_to_dbs|path_to_dir>\n")
     out.write(f"  {p} -x --apply <path_to_dbs|path_to_dir>\n")
+    out.write("    --dat-txt      Dump .dat disassembly when extracting .pck\n")
+    out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
+    out.write("    --apply        Apply .dbs CSV back to .dbs\n")
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(f"  {p} -a [--dat-txt] <input_file> [input_file_2]\n")
     out.write(f"  {p} -a --gei <Gameexe.dat>\n")
+    out.write("    --dat-txt      Write .dat disassembly to __DATDIR__\n")
+    out.write("    --gei          Analyze Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
     out.write(f"  {p} -k <ss_dir> <ovk_dir> <output_dir>\n")
@@ -57,7 +71,7 @@ def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
