@@ -37,6 +37,7 @@ def _usage(out=None):
     out.write("Extract mode:\n")
     out.write(f"  {p} -x [--dat-txt] <input_pck> <output_dir>\n")
     out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
+    out.write(f"  {p} -x --apply <path_to_dbs|path_to_dir>\n")
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(f"  {p} -a [--dat-txt] <input_file> [input_file_2]\n")
@@ -47,6 +48,8 @@ def _usage(out=None):
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
+    out.write("\n")
+    out.write("Textmap mode:\n")
     out.write(f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n")
 
 

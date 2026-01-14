@@ -128,18 +128,21 @@ def extract_ogg_bytes_from_ovk(ovk_path: str, koe_no: int) -> bytes:
     return chunk
 
 
+def _coerce_coord(coord: Union[KOECoord, Tuple[int, int], str]) -> KOECoord:
+    if isinstance(coord, str):
+        return parse_koe_coord(coord)
+    if isinstance(coord, tuple):
+        return KOECoord(coord[0], coord[1])
+    return coord
+
+
 def extract_koe_to_ogg(
     coord: Union[KOECoord, Tuple[int, int], str],
     voice_dir: str,
     out_dir: Optional[str] = None,
     export: bool = False,
 ) -> Tuple[bytes, str, str]:
-    if isinstance(coord, str):
-        coord_obj = parse_koe_coord(coord)
-    elif isinstance(coord, tuple):
-        coord_obj = KOECoord(coord[0], coord[1])
-    else:
-        coord_obj = coord
+    coord_obj = _coerce_coord(coord)
     ovk_path = find_ovk_path(voice_dir, coord_obj.koe_no, coord_obj.chara_no)
     ogg_bytes = extract_ogg_bytes_from_ovk(ovk_path, coord_obj.koe_no)
     out_path = ""
@@ -162,16 +165,11 @@ def extract_many(
 ) -> List[Tuple[str, str, str]]:
     results = []
     for c in coords:
-        if isinstance(c, str):
-            cc = parse_koe_coord(c)
-        elif isinstance(c, tuple):
-            cc = KOECoord(c[0], c[1])
-        else:
-            cc = c
+        coord_obj = _coerce_coord(c)
         _, ovk_path, out_path = extract_koe_to_ogg(
-            cc, voice_dir, out_dir=out_dir, export=export
+            coord_obj, voice_dir, out_dir=out_dir, export=export
         )
-        results.append((format_koe_coord(cc), ovk_path, out_path))
+        results.append((format_koe_coord(coord_obj), ovk_path, out_path))
     return results
 
 
