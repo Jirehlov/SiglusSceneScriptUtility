@@ -77,7 +77,7 @@ fn tile_copy(
 /// Takes the current PRNG state and a Python list, shuffles the list in-place,
 /// and returns the updated PRNG state.
 #[pyfunction]
-fn msvcrand_shuffle_inplace(py: Python<'_>, state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
+fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
     let mut x = state;
     let n = a.len();
     if n < 2 {
