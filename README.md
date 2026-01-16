@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility
 
-This utility aims to reproduce SiglusEngine’s scene script compilation bit-for-bit, along with other related features.
+This utility aims to reproduce SiglusEngine's scene script compilation bit-for-bit, along with other related features.
 
 ## Installation
 
@@ -116,6 +116,8 @@ Run the benchmark script to measure performance improvements:
 uv run python tests/benchmark.py
 ```
 
-## Tips for scene script editing
+## Tips
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.
+
+If you want to reproduce Kinetic builds, you need to set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.

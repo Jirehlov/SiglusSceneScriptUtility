@@ -218,32 +218,28 @@ class _MSVCRand:
         return (s.x >> 16) & 0x7FFF
 
     def shuffle(s, a):
-        n = len(a)
-        if n < 2:
-            return
-        n32 = 32
-        i_1 = 0xFFFFFFFF
-        while i_1 > 0x7FFF:
-            i_1 >>= 1
-            n32 -= 1
-        for i in range(2, n + 1):
-            mask = 0
-            chunks = 0
-            while mask < i - 1 and mask != 0xFFFFFFFF:
-                mask = ((mask << n32) | i_1) & 0xFFFFFFFF
-                chunks += 1
-            q1, r1 = divmod(mask, i)
-            while 1:
-                rnd = 0
-                for _ in range(chunks):
-                    rnd = ((rnd << n32) | s.rand()) & 0xFFFFFFFF
-                q2, j = divmod(rnd, i)
-                if q2 < q1 or r1 == i - 1:
-                    break
-            a[i - 1], a[j] = a[j], a[i - 1]
+        # Prefer Rust acceleration (native_ops) by default.
+        # Falls back to pure Python when unavailable or in legacy mode.
+        from .native_ops import msvcrand_shuffle_inplace
+
+        s.x = msvcrand_shuffle_inplace(s.x, a)
 
 
 _MSR = _MSVCRand()
+
+
+def set_shuffle_seed(seed=1):
+    """Reset the MSVC-compatible shuffle PRNG seed.
+
+    This affects the per-script string table order used when generating .dat.
+    The default behavior matches the historical compiler.
+    """
+    global _MSR
+    try:
+        seed_i = int(seed, 0) if isinstance(seed, str) else int(seed)
+    except Exception:
+        seed_i = 1
+    _MSR = _MSVCRand(seed_i)
 
 
 def _u16(t):

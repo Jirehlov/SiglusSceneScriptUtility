@@ -30,7 +30,10 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
+    )
+    out.write(
+        f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
     out.write("    --debug        Keep temp files (also prints stage timings)\n")
@@ -40,7 +43,13 @@ def _usage(out=None):
     out.write("    --parallel     Enable parallel compilation\n")
     out.write("    --max-workers  Limit parallel workers (default: auto)\n")
     out.write("    --lzss-level   LZSS compression level (2-17, default: 17)\n")
+    out.write(
+        "    --set-shuffle  Set initial shuffle seed (MSVCRand) for .dat string order\n"
+    )
     out.write("    --tmp          Use specific temp directory\n")
+    out.write(
+        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order\n"
+    )
     out.write("\n")
     out.write("Extract mode:\n")
     out.write(f"  {p} -x [--dat-txt] <input_pck> <output_dir>\n")

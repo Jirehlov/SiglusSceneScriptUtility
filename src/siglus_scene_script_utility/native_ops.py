@@ -34,10 +34,12 @@ try:
     _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
     _native_md5_digest = native_accel.md5_digest
     _native_tile_copy = native_accel.tile_copy
+    _native_msvcrand_shuffle_inplace = native_accel.msvcrand_shuffle_inplace
     _USE_NATIVE = True
 except (ImportError, AttributeError):
     _USE_NATIVE = False
     _native_lzss_pack_level = None
+    _native_msvcrand_shuffle_inplace = None
 
 
 def is_native_available() -> bool:
@@ -443,3 +445,53 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
             d[:] = d_arr
     else:
         _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim)
+
+
+def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
+    """Pure Python MSVC rand() compatible shuffle (in-place).
+
+    Args:
+        state: Initial PRNG state (u32).
+        a: Python list to shuffle in-place.
+
+    Returns:
+        Updated PRNG state (u32).
+    """
+    s = int(state) & 0xFFFFFFFF
+    n = len(a)
+    if n < 2:
+        return s
+    n32 = 15
+    i_1 = 0x7FFF
+    for i in range(2, n + 1):
+        mask = 0
+        chunks = 0
+        while mask < i - 1 and mask != 0xFFFFFFFF:
+            mask = ((mask << n32) | i_1) & 0xFFFFFFFF
+            chunks += 1
+        q1, r1 = divmod(mask, i)
+        while 1:
+            rnd = 0
+            for _ in range(chunks):
+                s = (s * 214013 + 2531011) & 0xFFFFFFFF
+                rnd = ((rnd << n32) | ((s >> 16) & 0x7FFF)) & 0xFFFFFFFF
+            q2, j = divmod(rnd, i)
+            if q2 < q1 or r1 == i - 1:
+                break
+        a[i - 1], a[j] = a[j], a[i - 1]
+    return s
+
+
+def msvcrand_shuffle_inplace(state: int, a) -> int:
+    """MSVC rand() compatible shuffle (in-place).
+
+    Uses Rust acceleration by default when available.
+    Returns the updated PRNG state.
+    """
+    if _USE_NATIVE and _native_msvcrand_shuffle_inplace is not None:
+        try:
+            return int(_native_msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
+        except Exception:
+            # Fallback to pure Python on any unexpected native error
+            return _py_msvcrand_shuffle_inplace(state, a)
+    return _py_msvcrand_shuffle_inplace(state, a)
