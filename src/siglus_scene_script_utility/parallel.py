@@ -513,12 +513,13 @@ def find_shuffle_seed_parallel(
       - SSU_TEST_SHUFFLE_WORKERS
       - SSU_TEST_SHUFFLE_CHUNK
       - SSU_TEST_SHUFFLE_PROGRESS
+      - SSU_TEST_SHUFFLE_NO_RUST (set to 1/true/yes to disable Rust fast path)
 
     Args:
         target_order: target permutation list[int]
         seed0: starting seed (inclusive)
-        workers: number of processes (None => env/auto)
-        chunk: seeds per process per round (None => env/default)
+        workers: number of processes/threads (None => env/auto)
+        chunk: seeds per worker per round (None => env/default)
         progress_iv: seconds between progress logs (None => env/default)
 
     Returns:
@@ -531,6 +532,80 @@ def find_shuffle_seed_parallel(
     target = list(target_order)
     n = len(target)
 
+    # progress interval (default: 1s). Explicit 0 disables progress.
+    if progress_iv is None:
+        env = os.environ.get("SSU_TEST_SHUFFLE_PROGRESS", "")
+        if env.strip() == "":
+            progress_iv = 1.0
+        else:
+            try:
+                progress_iv = float(env)
+            except Exception:
+                progress_iv = 1.0
+            if progress_iv < 0:
+                progress_iv = 0.0
+    else:
+        try:
+            progress_iv = float(progress_iv)
+        except Exception:
+            progress_iv = 1.0
+        if progress_iv < 0:
+            progress_iv = 0.0
+
+    # Fast path: Rust multi-threaded scan (releases GIL)
+    no_rust = os.environ.get("SSU_TEST_SHUFFLE_NO_RUST", "").strip().lower()
+    if no_rust in ("1", "true", "yes", "y", "on"):
+        raise ImportError("SSU_TEST_SHUFFLE_NO_RUST set")
+    try:
+        from .native_ops import is_native_available
+
+        if callable(is_native_available) and is_native_available():
+            try:
+                from . import native_accel as _na
+            except Exception:
+                _na = None
+            if _na is not None and hasattr(_na, "find_shuffle_seed_first"):
+                # workers/chunk defaults follow env variables for backwards-compat
+                if workers is None:
+                    try:
+                        workers = int(
+                            os.environ.get("SSU_TEST_SHUFFLE_WORKERS", "") or 0
+                        )
+                    except Exception:
+                        workers = 0
+                if not workers:
+                    workers = get_max_workers(None)
+                if chunk is None:
+                    try:
+                        chunk = int(os.environ.get("SSU_TEST_SHUFFLE_CHUNK", "") or 0)
+                    except Exception:
+                        chunk = 0
+                if not chunk:
+                    chunk = 8192
+                workers = max(1, int(workers))
+                chunk = max(1, int(chunk))
+
+                t0 = time.time()
+                sys.stderr.write(
+                    f"[test-shuffle] Rust scan: workers={workers} chunk={chunk} start={(int(seed0) & 0xFFFFFFFF)}\n"
+                )
+                sys.stderr.flush()
+                r = _na.find_shuffle_seed_first(
+                    target, int(seed0) & 0xFFFFFFFF, workers, chunk, progress_iv
+                )
+                if r is None:
+                    raise RuntimeError("test-shuffle: seed not found in full u32 space")
+                elapsed = time.time() - t0
+                if elapsed <= 0:
+                    elapsed = 1e-9
+                sys.stderr.write(
+                    f"[test-shuffle] Rust found={(int(r) & 0xFFFFFFFF)} elapsed={elapsed:.2f}s\n"
+                )
+                sys.stderr.flush()
+                return int(r) & 0xFFFFFFFF
+    except Exception:
+        # fall back to ProcessPool implementation
+        pass
     # workers
     if workers is None:
         try:
@@ -551,16 +626,8 @@ def find_shuffle_seed_parallel(
             chunk = 200
     chunk = max(1, int(chunk))
 
-    # progress interval
-    if progress_iv is None:
-        try:
-            progress_iv = float(os.environ.get("SSU_TEST_SHUFFLE_PROGRESS", "") or 0)
-        except Exception:
-            progress_iv = 0.0
-        if progress_iv <= 0:
-            progress_iv = 1.0
-
     cur = int(seed0) & 0xFFFFFFFF
+    max_scan = 1 << 32
     t0 = time.time()
     last = t0
     scanned = 0
@@ -571,6 +638,10 @@ def find_shuffle_seed_parallel(
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
         while True:
+            if scanned >= max_scan:
+                sys.stderr.write("[test-shuffle] scanned full u32 space: not found\n")
+                sys.stderr.flush()
+                return None
             futs = []
             for w in range(workers):
                 st = (cur + w * chunk) & 0xFFFFFFFF
@@ -603,7 +674,7 @@ def find_shuffle_seed_parallel(
 
             scanned += workers * chunk
             now = time.time()
-            if now - last >= progress_iv:
+            if progress_iv and now - last >= progress_iv:
                 elapsed = now - t0
                 if elapsed <= 0:
                     elapsed = 1e-9

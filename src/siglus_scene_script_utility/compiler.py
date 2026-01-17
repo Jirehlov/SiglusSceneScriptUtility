@@ -746,18 +746,8 @@ def main(argv=None):
                             for s0 in only_off:
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         return 1
-
-                    # read expected target orders in EXACT compile order
-                    targets = []
-                    for ss_path in compile_list:
-                        nm = os.path.splitext(os.path.basename(ss_path))[0]
-                        exp_dat = os.path.join(test_dir, nm + ".dat")
-                        if not os.path.isfile(exp_dat):
-                            raise FileNotFoundError(
-                                f"expected dat not found: {exp_dat}"
-                            )
-                        targets.append(_read_scn_dat_order(exp_dat))
-
+                    # Read expected order for the first script only (used for seed scan).
+                    target0 = _read_scn_dat_order(exp_first)
                     # Brute-force seed ONLY for the first script.
                     # Once we have a seed that matches the first file, use it as the initial
                     # seed and compile sequentially.
@@ -773,15 +763,16 @@ def main(argv=None):
                     )
                     from .parallel import find_shuffle_seed_parallel
 
-                    cand = find_shuffle_seed_parallel(targets[0], seed0)
+                    cand = find_shuffle_seed_parallel(target0, seed0)
                     seed = int(cand) & 0xFFFFFFFF
                     sys.stderr.write(
                         f"[test-shuffle] using seed={seed} (matched first script)\n"
                     )
-
                     # compile with the discovered seed, in the same order as normal -c
                     set_shuffle_seed(seed)
-                    all_ok = True
+
+                    # Verify sequentially and stop at the first mismatch.
+                    # If mismatch happens, user can continue from (seed + 1) as the next starting point.
                     for i, ss_path in enumerate(compile_list):
                         compile_one(ctx, ss_path, "bs")
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
@@ -790,19 +781,22 @@ def main(argv=None):
                             raise FileNotFoundError(
                                 f"generated dat not found: {my_dat}"
                             )
-                        try:
-                            my_order = _read_scn_dat_order(my_dat)
-                        except Exception:
-                            my_order = None
-                        if my_order != targets[i]:
-                            all_ok = False
-                            sys.stderr.write(
-                                f"[test-shuffle] order mismatch: {os.path.basename(ss_path)}\n"
+
+                        # Load expected order lazily (saves IO when mismatch happens early).
+                        exp_dat = os.path.join(test_dir, nm + ".dat")
+                        if not os.path.isfile(exp_dat):
+                            raise FileNotFoundError(
+                                f"expected dat not found: {exp_dat}"
                             )
-                    if not all_ok:
-                        raise RuntimeError(
-                            "test-shuffle: seed matched first script but mismatch found in later scripts"
-                        )
+
+                        my_order = _read_scn_dat_order(my_dat)
+                        exp_order = target0 if i == 0 else _read_scn_dat_order(exp_dat)
+                        if my_order != exp_order:
+                            sys.stderr.write(
+                                f"[test-shuffle] order mismatch: {os.path.basename(ss_path)} -> continue from seed={((seed + 1) & 0xFFFFFFFF)}\n"
+                            )
+                            sys.stderr.flush()
+                            return 1
                 else:
                     compile_all(
                         ctx,

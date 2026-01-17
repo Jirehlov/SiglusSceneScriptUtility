@@ -118,4 +118,9 @@ uv run python tests/benchmark.py
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.
 
-Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle.
+Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle, which is expected but not guaranteed to be there. Some known seeds are as follows,
+
+| PCK | initial seed |
+| --- | --- |
+| [augment_protocol_hZTHqv8A_DL](https://www.virustotal.com/gui/file/1e5d5d094e19df0e7b160022fd34ab8fb25d4af7882935692bc0182c0ad21dc8) | 1769178361 |
+| [prima02_Vwm4NjRVFPnf_Tr](https://www.virustotal.com/gui/file/968e8c2d2952ef671e9736de383361b393ea161d5948ae15c72ffb5a1ea7edde) | 1556068939 |
