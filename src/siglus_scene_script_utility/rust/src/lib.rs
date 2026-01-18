@@ -129,8 +129,6 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
     Ok(x)
 }
 
-
-
 // ============================================================================
 // Fast seed scan for --test-shuffle (first file only)
 // ============================================================================
@@ -240,8 +238,8 @@ fn find_shuffle_seed_first(
     chunk: Option<u32>,
     progress_iv: Option<f64>,
 ) -> PyResult<Option<u32>> {
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
     use std::time::{Duration, Instant};
 
     let n = target.len();
@@ -258,9 +256,9 @@ fn find_shuffle_seed_first(
 
     let total_u32: u64 = 1u64 << 32;
 
-   // Scan seeds in the increasing order [seed0 .. 2^32-1].
-   // This matches the user workflow: if a candidate seed fails later, they
-   // continue from (seed+1). Wrapping is left to the caller if desired.
+    // Scan seeds in the increasing order [seed0 .. 2^32-1].
+    // This matches the user workflow: if a candidate seed fails later, they
+    // continue from (seed+1). Wrapping is left to the caller if desired.
     let total: u64 = total_u32.saturating_sub(seed0 as u64);
 
     let target = Arc::new(target);
@@ -362,7 +360,11 @@ fn find_shuffle_seed_first(
             let elapsed = t0.elapsed().as_secs_f64().max(1e-9);
             let rate = (s as f64) / elapsed;
             let remain = total.saturating_sub(s);
-            let eta = if rate > 0.0 { (remain as f64) / rate } else { f64::NAN };
+            let eta = if rate > 0.0 {
+                (remain as f64) / rate
+            } else {
+                f64::NAN
+            };
 
             // Next seed to be tried (decimal, like seed0). When the scan completes,
             // this will reach 2^32 (4294967296).
@@ -385,11 +387,7 @@ fn find_shuffle_seed_first(
     }
 
     let r = found.load(Ordering::Relaxed);
-    if r == u32::MAX {
-        Ok(None)
-    } else {
-        Ok(Some(r))
-    }
+    if r == u32::MAX { Ok(None) } else { Ok(Some(r)) }
 }
 /// Python module definition
 #[pymodule]
