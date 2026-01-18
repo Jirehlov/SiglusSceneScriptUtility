@@ -6,8 +6,8 @@ mod xor;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// LZSS compression with default level (17)
@@ -143,7 +143,6 @@ fn msvc_rand15(x: &mut u32) -> u32 {
     (*x >> 16) & 0x7FFF
 }
 
-
 #[derive(Clone, Copy)]
 struct ShuffleParam {
     iu: u32,
@@ -210,7 +209,6 @@ fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
     }
     x
 }
-
 
 fn fmt_hms(secs: f64) -> String {
     if !(secs.is_finite()) || secs <= 0.0 {
@@ -370,9 +368,17 @@ fn find_shuffle_seed_first(
         if progress_iv > 0.0 && last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
             let done = done_attempts.load(Ordering::Relaxed);
             let elapsed = t0.elapsed().as_secs_f64();
-            let rate = if elapsed > 0.0 { (done as f64) / elapsed } else { 0.0 };
-            let remain = (total - done).max(0) as f64;
-            let eta = if rate > 0.0 { remain / rate } else { f64::INFINITY };
+            let rate = if elapsed > 0.0 {
+                (done as f64) / elapsed
+            } else {
+                0.0
+            };
+            let remain = (total - done) as f64;
+            let eta = if rate > 0.0 {
+                remain / rate
+            } else {
+                f64::INFINITY
+            };
             let next_seed = seed0.wrapping_add(done as u32);
             eprintln!(
                 "{} next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
