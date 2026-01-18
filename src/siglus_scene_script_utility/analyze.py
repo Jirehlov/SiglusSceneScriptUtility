@@ -1601,6 +1601,98 @@ def _diff_kv(k, a, b):
     return "%s: %r -> %r" % (k, a, b)
 
 
+def _gei_decode_txt(path):
+    blob = _read_file(path)
+    if not blob or len(blob) < 8:
+        raise RuntimeError("Invalid Gameexe.dat: too small")
+    _, mode = struct.unpack_from("<ii", blob, 0)
+    exe_el = b""
+    if int(mode) != 0:
+        exe_el = extract._compute_exe_el(os.path.dirname(os.path.abspath(path)))
+    from . import GEI
+
+    info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
+    return info, txt
+
+
+def _gei_strip_inline_comment(line):
+    in_q = False
+    esc = False
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if in_q:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_q = False
+            i += 1
+            continue
+        if ch == '"':
+            in_q = True
+            i += 1
+            continue
+        if ch == ";":
+            return line[:i]
+        if ch == "/" and i + 1 < n and line[i + 1] == "/":
+            return line[:i]
+        i += 1
+    return line
+
+
+def _parse_gameexe_ini_configs(txt):
+    m = {}
+    if not txt:
+        return m
+    for raw in txt.splitlines():
+        line = _gei_strip_inline_comment(raw).strip()
+        if not line:
+            continue
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        k = k.upper()
+        m.setdefault(k, []).append(v)
+    return m
+
+
+def compare_gameexe_dat(p1, p2):
+    if not os.path.exists(p1) or not os.path.exists(p2):
+        sys.stderr.write("not found\n")
+        return 2
+    try:
+        _, t1 = _gei_decode_txt(p1)
+        _, t2 = _gei_decode_txt(p2)
+    except Exception as e:
+        sys.stderr.write(str(e) + "\n")
+        return 1
+    c1 = _parse_gameexe_ini_configs(t1)
+    c2 = _parse_gameexe_ini_configs(t2)
+    keys = sorted(set(c1.keys()) | set(c2.keys()))
+    diffs = []
+    for k in keys:
+        v1 = c1.get(k)
+        v2 = c2.get(k)
+        if v1 == v2:
+            continue
+        diffs.append((k, v1, v2))
+    if not diffs:
+        print("Configs are identical.")
+        return 0
+    for k, v1, v2 in diffs:
+        s1 = " | ".join(v1) if v1 else "<missing>"
+        s2 = " | ".join(v2) if v2 else "<missing>"
+        print("%s: %s -> %s" % (k, s1, s2))
+    return 0
+
+
 def compare_files(p1, p2):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
@@ -1863,9 +1955,11 @@ def main(argv=None):
         args.remove("--dat-txt")
         globals()["DAT_TXT_OUT_DIR"] = "__DATDIR__"
     if gei:
-        if len(args) != 1:
-            return 2
-        return analyze_gameexe_dat(args[0])
+        if len(args) == 1:
+            return analyze_gameexe_dat(args[0])
+        if len(args) == 2:
+            return compare_gameexe_dat(args[0], args[1])
+        return 2
     if len(args) == 1:
         return analyze_file(args[0])
     if len(args) == 2:
