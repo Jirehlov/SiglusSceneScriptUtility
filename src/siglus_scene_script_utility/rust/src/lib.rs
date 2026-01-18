@@ -167,12 +167,7 @@ fn precompute_params(n: usize) -> Vec<ShuffleParam> {
         }
         let q1 = mask / iu;
         let r1 = mask % iu;
-        out.push(ShuffleParam {
-            iu,
-            chunks,
-            q1,
-            r1,
-        });
+        out.push(ShuffleParam { iu, chunks, q1, r1 });
     }
     out
 }
