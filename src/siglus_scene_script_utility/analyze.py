@@ -1615,40 +1615,12 @@ def _gei_decode_txt(path):
     return info, txt
 
 
-def _gei_strip_inline_comment(line):
-    in_q = False
-    esc = False
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if in_q:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_q = False
-            i += 1
-            continue
-        if ch == '"':
-            in_q = True
-            i += 1
-            continue
-        if ch == ";":
-            return line[:i]
-        if ch == "/" and i + 1 < n and line[i + 1] == "/":
-            return line[:i]
-        i += 1
-    return line
-
-
 def _parse_gameexe_ini_configs(txt):
     m = {}
     if not txt:
         return m
     for raw in txt.splitlines():
-        line = _gei_strip_inline_comment(raw).strip()
+        line = raw.strip()
         if not line:
             continue
         if "=" not in line:
@@ -1667,6 +1639,26 @@ def compare_gameexe_dat(p1, p2):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
+    import glob
+
+    def _has_angou_dat(d):
+        try:
+            if not d or (not os.path.isdir(d)):
+                return False
+            for pp in glob.glob(os.path.join(d, "暗号*.dat")):
+                if os.path.isfile(pp):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    d1 = os.path.dirname(os.path.abspath(p1)) or "."
+    d2 = os.path.dirname(os.path.abspath(p2)) or "."
+    if not (_has_angou_dat(d1) and _has_angou_dat(d2)):
+        sys.stderr.write(
+            "An 暗号*.dat file must exist in the same directory as both Gameexe.dat files.\n"
+        )
+        return 1
     try:
         _, t1 = _gei_decode_txt(p1)
         _, t2 = _gei_decode_txt(p2)
