@@ -1001,7 +1001,7 @@ def _add_gap_sections(secs, used, total):
 
 def _print_sections(secs, total):
     secs = [s for s in secs if s[1] > s[0]]
-    secs.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
+    secs.sort(key=lambda t: (t[0], -t[1], t[2], t[3]))
     print("==== Structure (ranges) ====")
     print(
         "%3s  %-10s  %-10s  %10s  %-*s"

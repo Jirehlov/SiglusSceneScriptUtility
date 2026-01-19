@@ -60,10 +60,10 @@ def _glob_sorted_rel(base, pattern):
 
 def _make_original_source_rel_list(scn_path):
     out = []
-    out += _glob_sorted_rel(scn_path, "**/Gameexe*.ini")
-    out += _glob_sorted_rel(scn_path, "**/暗号*.dat")
-    out += _glob_sorted_rel(scn_path, "**/*.inc")
-    out += _glob_sorted_rel(scn_path, "**/*.ss")
+    out += _glob_sorted_rel(scn_path, "Gameexe*.ini")
+    out += _glob_sorted_rel(scn_path, "暗号*.dat")
+    out += _glob_sorted_rel(scn_path, "*.inc")
+    out += _glob_sorted_rel(scn_path, "*.ss")
     return out
 
 
