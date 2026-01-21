@@ -613,7 +613,8 @@ def find_shuffle_seed_parallel(
     # Fallback (very slow): ProcessPool scan.
     t0 = time.time()
     last = t0
-    total = 2**32
+    limit = 2**32
+    total = limit - seed0
     sys.stderr.write(
         f"{prefix} seed scan (slow python): workers={workers} chunk={chunk} start={seed0}\n"
     )
@@ -631,20 +632,29 @@ def find_shuffle_seed_parallel(
         return f"{h:02}:{m:02}:{ss:02}"
 
     def _scan_bits():
-        cur = seed0
         done = 0
         nonlocal last
         with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
             while done < total:
                 futs = []
+                base = seed0 + done
+                if base >= limit:
+                    break
+                scheduled = 0
                 for w in range(workers):
-                    st = (cur + w * chunk) & 0xFFFFFFFF
+                    st = base + w * chunk
+                    if st >= limit:
+                        break
+                    count = min(chunk, limit - st)
                     futs.append(
                         ex.submit(
                             _seed_chunk_worker,
-                            (st, chunk, n, target),
+                            (st, count, n, target),
                         )
                     )
+                    scheduled += count
+                if not futs:
+                    break
 
                 found = None
                 for fut in concurrent.futures.as_completed(futs):
@@ -661,7 +671,7 @@ def find_shuffle_seed_parallel(
                             pass
                     return found
 
-                done += workers * chunk
+                done += scheduled
                 now = time.time()
                 if now - last >= progress_iv:
                     elapsed = now - t0
@@ -669,14 +679,12 @@ def find_shuffle_seed_parallel(
                         elapsed = 1e-9
                     rate = done / elapsed
                     eta = (total - done) / rate if rate > 0 else float("inf")
-                    next_seed = (seed0 + (done & 0xFFFFFFFF)) & 0xFFFFFFFF
+                    next_seed = min(seed0 + done, limit - 1)
                     sys.stderr.write(
                         f"{prefix} next_seed={next_seed} elapsed={elapsed:.1f}s rate~{rate:.0f}/s ETA={_fmt_eta(eta)}\n"
                     )
                     sys.stderr.flush()
                     last = now
-
-                cur = (cur + workers * chunk) & 0xFFFFFFFF
         return None
 
     r = _scan_bits()

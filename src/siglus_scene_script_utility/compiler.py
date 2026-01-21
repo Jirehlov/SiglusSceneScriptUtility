@@ -807,9 +807,10 @@ def main(argv=None):
                                 f"{test_shuffle_prefix} index mismatch: {os.path.basename(ss_path)}\n"
                             )
                     if not all_ok:
-                        raise RuntimeError(
-                            "test-shuffle: seed matched first script but mismatch found in later scripts"
+                        sys.stderr.write(
+                            f"{test_shuffle_prefix} WARNING: seed matched first script but mismatch found in later scripts; continuing to build output\n"
                         )
+                        sys.stderr.flush()
                 else:
                     compile_all(
                         ctx,

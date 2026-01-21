@@ -219,7 +219,7 @@ fn fmt_hms(secs: f64) -> String {
 
 /// Fast parallel scan for --test-shuffle (first file only).
 ///
-/// This scans the full u32 space starting at seed0 (wrapping) and returns
+/// This scans the u32 space from seed0 up to 0xFFFFFFFF and returns
 /// the first seed whose shuffle produces a string-index table matching
 /// `target_idx`.
 ///
@@ -265,7 +265,8 @@ fn find_shuffle_seed_first(
     let done_attempts = Arc::new(AtomicU64::new(0));
     let active = Arc::new(AtomicU64::new(w as u64));
 
-    let total: u64 = 1u64 << 32;
+    let limit: u64 = 1u64 << 32;
+    let total: u64 = limit - (seed0 as u64);
     let t0 = Instant::now();
 
     let mut handles = Vec::with_capacity(w);
@@ -300,7 +301,7 @@ fn find_shuffle_seed_first(
                             break;
                         }
                         buf.copy_from_slice(&base);
-                        let seed = seed0.wrapping_add(a as u32);
+                        let seed = seed0.saturating_add(a as u32);
                         let _ = shuffle_inplace_vec(seed, &mut buf, &params);
 
                         // Build (ofs,len) table for this permutation.
@@ -371,7 +372,7 @@ fn find_shuffle_seed_first(
             } else {
                 f64::INFINITY
             };
-            let next_seed = seed0.wrapping_add(done as u32);
+            let next_seed = (seed0 as u64 + done).min(limit - 1);
             eprintln!(
                 "{} next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
                 prefix,
