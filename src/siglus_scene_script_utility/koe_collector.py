@@ -12,6 +12,47 @@ _MSGBACK_RE = re.compile(r"\$\$ADD_MSGBACK\s*\(", flags=re.IGNORECASE)
 _QSTR_RE = re.compile(r'"([^"]*)"')
 
 
+def _parse_mes_line(line: str):
+    """Parse a @mes(...) line and return (name, text) if it looks like dialogue.
+
+    Many decompiled .ss scripts place @KOE(...) on its own line, and then put the
+    speaker/text on the next @mes(...) line. The original collector only supported
+    an *inline* style where KOE(...) and dialogue appear on the same line.
+
+    We treat a line as dialogue only when we can find a quoted string (「」/『』/")
+    to avoid accidentally pairing KOE with narration lines.
+    """
+    low = line.lower()
+    if "@mes" not in low:
+        return None
+    # speaker
+    i1 = line.find("【")
+    i2 = line.find("】", i1 + 1) if i1 >= 0 else -1
+    name = line[i1 + 1 : i2].strip() if i1 >= 0 and i2 >= 0 else ""
+    after = line[i2 + 1 :] if i2 >= 0 else line
+
+    oq, cq = "", ""
+    p = after.find("「")
+    if p >= 0:
+        oq, cq = "「", "」"
+    else:
+        p = after.find("『")
+        if p >= 0:
+            oq, cq = "『", "』"
+        else:
+            p = after.find('"')
+            if p >= 0:
+                oq, cq = '"', '"'
+    if not oq:
+        return None
+    q1 = p
+    q2 = after.find(cq, q1 + 1)
+    if q2 < 0:
+        return None
+    text = after[q1 + 1 : q2]
+    return name, text
+
+
 def _eprint(msg: str):
     try:
         sys.stderr.write(msg + "\n")
@@ -150,11 +191,34 @@ def _collect_records(script_root: str):
         src = bn[:-4] if bn.lower().endswith(".txt") else os.path.splitext(bn)[0]
         s = _decode_script(p)
         msg_map = {}
+        pending_koe = []
         for ln in s.splitlines():
             _scan_add_msgback(ln, msg_map)
+
+            # 1) inline style: KOE(...) and dialogue on the same line
             r = _parse_koe_line(ln)
             if r:
                 out.append((r[0], r[1], r[2], src))
+
+            # 2) standalone style: @KOE(...) on its own line, dialogue on next @mes
+            # If this line has a KOE(...) but no obvious dialogue, queue it.
+            if (not r) and _COORD_RE.search(ln):
+                # avoid queueing lines that already contain dialogue-ish markers
+                if "【" not in ln and (
+                    "「" not in ln and "『" not in ln and '"' not in ln
+                ):
+                    # allow multiple in one line, though usually it's just one
+                    for m in _COORD_RE.finditer(ln):
+                        pending_koe.append(m.group(0))
+
+            # If we have queued KOE(s), try to consume them on a dialogue line.
+            if pending_koe:
+                rr = _parse_mes_line(ln)
+                if rr:
+                    name, text = rr
+                    coord_s = pending_koe.pop(0)
+                    out.append((coord_s, name, text, src))
+
             for rr in _parse_exkoe_lines(ln, msg_map):
                 out.append((rr[0], rr[1], rr[2], src))
     return out
