@@ -80,6 +80,12 @@ def _usage(out=None):
     out.write(f"  {p} -g --a <input_g00>\n")
     out.write(f"  {p} -g --x <input_g00|input_dir> <output_dir>\n")
     out.write(
+        f"  {p} -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [input_g00[:cutNNN]]\n"
+    )
+    out.write(
+        "    note: you can select a type2 cut via suffix :cutNNN (e.g. foo.g00:cut002)\n"
+    )
+    out.write(
         f"  {p} -g --c [--type N] <input_png|input_jpeg|input_dir> [output_g00|output_dir]\n"
     )
     out.write(

@@ -1,6 +1,7 @@
 import os
 import struct
 import sys
+import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
@@ -175,6 +176,148 @@ def blit(
                 dv[di + 3] = a + (da * ia) // 255
             di += 4
             si += 4
+
+
+def _read_u16le(b: bytes, off: int) -> int:
+    if off + 2 > len(b):
+        raise ValueError("short for u16")
+    return b[off] | (b[off + 1] << 8)
+
+
+def _g00_xy(p: Path):
+    head = p.read_bytes()[:31]
+    if len(head) < 31:
+        raise ValueError("g00 too short for coord")
+    return _read_u16le(head, 25), _read_u16le(head, 29)
+
+
+_G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNORECASE)
+
+
+def _parse_g00_spec(s: str):
+    """Parse g00 spec: 'file.g00' or 'file.g00:cut002'.
+    Only a trailing ':cutNNN' is treated as a cut selector, so Windows paths like 'C:\\...' are safe.
+    Returns (Path, cut_index|None, label_for_output).
+    """
+    m = _G00_SPEC_RE.match(s)
+    if not m:
+        raise ValueError(f"bad g00 spec: {s}")
+    p = Path(m.group("path"))
+    cut_s = m.group("cut")
+    cut = int(cut_s, 10) if cut_s is not None else None
+    label = p.stem
+    if cut is not None:
+        label = f"{label}_cut{cut:03d}"
+    return p, cut, label
+
+
+def _decode_g00_main_image_pil(p: Path, cut_index=None):
+    """Decode a single representative image from a .g00 as a PIL RGBA image (straight alpha)."""
+    need_pil()
+    d = p.read_bytes()
+    if not d:
+        raise ValueError("empty")
+    t = d[0]
+    off = 1
+    if t in (0, 1):
+        w, h = struct.unpack_from("<HH", d, off)
+        off += 4
+        pay = d[off:]
+        if t == 0:
+            bgra = lzss32(pay)
+        else:
+            bgra = type1_bgra(lzss(pay), w, h)
+        return Image.frombytes("RGBA", (w, h), bgra, "raw", "BGRA")
+
+    if t == 2:
+        # Compose cut canvas using Pillow's correct alpha compositing (avoids premul seams).
+        w, h = struct.unpack_from("<HH", d, off)
+        off += 4
+        cut_cnt = struct.unpack_from("<i", d, off)[0]
+        off += 4
+        off += 24 * max(cut_cnt, 0)
+        unp = lzss(d[off:])
+        cuts = cuts_from_unp(unp)
+        if not cuts:
+            raise ValueError("type2 no cuts")
+        if cut_index is None:
+            ci, o, s = cuts[0]
+        else:
+            sel = None
+            for _ci, _o, _s in cuts:
+                if _ci == int(cut_index):
+                    sel = (_ci, _o, _s)
+                    break
+            if sel is None:
+                raise ValueError(f"type2 cut not found: cut{int(cut_index):03d}")
+            ci, o, s = sel
+        blk = unp[o : o + s]
+        if len(blk) < C.G00_CUT_SZ:
+            raise ValueError("cut block short")
+        blk_mv = memoryview(blk)
+        ct, cc, x, y, dx, dy, cx, cy, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
+        canvas = Image.new("RGBA", (cw, ch), (0, 0, 0, 0))
+        pos = C.G00_CUT_SZ
+        for _ in range(cc):
+            if pos + C.G00_CHIP_SZ > len(blk):
+                break
+            px, py, ctype, xl, yl = struct.unpack_from("<HHB x HH", blk, pos)
+            pos += C.G00_CHIP_SZ
+            n = xl * yl * 4
+            if pos + n > len(blk):
+                break
+            chip_mv = blk_mv[pos : pos + n]
+            pos += n
+            # frombuffer avoids an extra bytes copy compared to slicing bytes
+            chip_im = Image.frombuffer("RGBA", (xl, yl), chip_mv, "raw", "BGRA", 0, 1)
+            canvas.alpha_composite(chip_im, dest=(px, py))
+        return canvas
+
+    if t == 3:
+        # JPEG xor -> RGBA
+        from io import BytesIO
+
+        w, h = struct.unpack_from("<HH", d, off)
+        off += 4
+        pay = d[off:]
+        jpg = de_xor(pay)
+        im = Image.open(BytesIO(jpg))
+        return im.convert("RGBA")
+
+    raise ValueError(f"unsupported type for merge: {t}")
+
+
+def merge_g00_files(g00_paths):
+    """Merge 2-3 .g00 into one PNG using per-file coord fields.
+    Inputs may be specified as "file.g00" or "file.g00:cutNNN".
+    Layer order: args order (1st is base, later ones overlay).
+    Output: next to the first g00, name = stem1+stem2(+stem3).png
+    """
+    if len(g00_paths) not in (2, 3):
+        raise ValueError("need 2-3 input g00")
+    specs = [_parse_g00_spec(x) for x in g00_paths]
+    ps = [p for (p, _cut, _lab) in specs]
+    for p in ps:
+        if not p.is_file():
+            raise ValueError(f"missing file: {p}")
+
+    base_path, base_cut, _base_lab = specs[0]
+    base_xy = _g00_xy(base_path)
+    base_img = _decode_g00_main_image_pil(base_path, base_cut)
+    bw, bh = base_img.size
+
+    for p, cut, _lab in specs[1:]:
+        xy = _g00_xy(p)
+        src_img = _decode_g00_main_image_pil(p, cut)
+        dx = int(xy[0]) - int(base_xy[0])
+        dy = int(xy[1]) - int(base_xy[1])
+        base_img.alpha_composite(src_img, dest=(dx, dy))
+
+    out_dir = base_path.parent
+    out_name = "+".join([lab for (_p, _c, lab) in specs]) + ".png"
+    out_path = out_dir / out_name
+    base_img.save(out_path, "PNG")
+    return out_path
 
 
 def cut_to_png(blk: bytes, p: Path) -> bool:
@@ -964,6 +1107,17 @@ def main(argv=None):
         out_arg = rest[1] if len(rest) == 2 else None
         try:
             return run_compose(inp, out_arg, type_expect)
+        except Exception as e:
+            print(f"[!] {e}", file=sys.stderr)
+            return 1
+    if args[0] == "--m":
+        # Merge 2-3 g00 by coord fields, output next to the first g00.
+        if len(args) not in (3, 4):
+            return 2
+        try:
+            out_p = merge_g00_files(args[1:])
+            print(f"Merge: {out_p}")
+            return 0
         except Exception as e:
             print(f"[!] {e}", file=sys.stderr)
             return 1
