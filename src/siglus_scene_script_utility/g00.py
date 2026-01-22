@@ -130,6 +130,18 @@ def cuts_from_unp(unp: bytes):
     return r
 
 
+def _type2_unp_and_cuts(d: bytes, off: int):
+    w, h = struct.unpack_from("<HH", d, off)
+    off += 4
+    cut_cnt = struct.unpack_from("<i", d, off)[0]
+    off += 4
+    off += 24 * max(cut_cnt, 0)
+    comp_off = off
+    unp = lzss(d[comp_off:])
+    cuts = cuts_from_unp(unp)
+    return w, h, cut_cnt, comp_off, unp, cuts
+
+
 def blit(
     dst: bytearray, dw: int, dh: int, src: bytes, sw: int, sh: int, dx: int, dy: int
 ):
@@ -231,13 +243,7 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
 
     if t == 2:
         # Compose cut canvas using Pillow's correct alpha compositing (avoids premul seams).
-        w, h = struct.unpack_from("<HH", d, off)
-        off += 4
-        cut_cnt = struct.unpack_from("<i", d, off)[0]
-        off += 4
-        off += 24 * max(cut_cnt, 0)
-        unp = lzss(d[off:])
-        cuts = cuts_from_unp(unp)
+        _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, off)
         if not cuts:
             raise ValueError("type2 no cuts")
         if cut_index is None:
@@ -324,21 +330,8 @@ def cut_to_png(blk: bytes, p: Path) -> bool:
     if p.exists():
         return False
     need_pil()
-    ct, cc, x, y, dx, dy, cx, cy, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
-    canvas = bytearray(cw * ch * 4)
-    pos = C.G00_CUT_SZ
-    for _ in range(cc):
-        if pos + C.G00_CHIP_SZ > len(blk):
-            break
-        px, py, ctype, xl, yl = struct.unpack_from("<HHB x HH", blk, pos)
-        pos += C.G00_CHIP_SZ
-        n = xl * yl * 4
-        if pos + n > len(blk):
-            break
-        chip = blk[pos : pos + n]
-        pos += n
-        blit(canvas, cw, ch, chip, xl, yl, px, py)
-    Image.frombytes("RGBA", (cw, ch), bytes(canvas), "raw", "BGRA").save(p, "PNG")
+    canvas, cw, ch = _cut_canvas_bgra(blk)
+    Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA").save(p, "PNG")
     return True
 
 
@@ -372,13 +365,7 @@ def extract_one(path_s: str, out_s: str):
             return ("ok", 1, 0)
     if t == 2:
         need_pil()
-        w, h = struct.unpack_from("<HH", d, off)
-        off += 4
-        cut_cnt = struct.unpack_from("<i", d, off)[0]
-        off += 4
-        off += 24 * max(cut_cnt, 0)
-        unp = lzss(d[off:])
-        cuts = cuts_from_unp(unp)
+        _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, off)
         if not cuts:
             raise ValueError("type2 no cuts")
         single = len(cuts) == 1
@@ -424,17 +411,11 @@ def analyze_one(p: str):
             print("JPEG(sig):", de_xor(d[off : off + 2]).hex(), "(expect ffd8)")
         return
     if t == 2:
-        w, h = struct.unpack_from("<HH", d, off)
-        off += 4
-        cut_cnt = struct.unpack_from("<i", d, off)[0]
-        off += 4
+        w, h, cut_cnt, comp_off, unp, cuts = _type2_unp_and_cuts(d, off)
         print("Canvas:", f"{w}x{h}")
         print("CutCnt:", cut_cnt)
-        off += 24 * max(cut_cnt, 0)
-        arc, org = struct.unpack_from("<II", d, off)
+        arc, org = struct.unpack_from("<II", d, comp_off)
         print(f"LZSS: arc={arc} org={org}")
-        unp = lzss(d[off:])
-        cuts = cuts_from_unp(unp)
         print(
             "CutTableCnt:",
             struct.unpack_from("<I", unp, 0)[0] if len(unp) >= 4 else 0,
@@ -843,15 +824,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
 
     if t == 2:
         # allow multiple updates
-        bw, bh = struct.unpack_from("<HH", base_bytes, 1)
-        off = 1 + 4
-        cut_cnt = struct.unpack_from("<i", base_bytes, off)[0]
-        off += 4
-        off += 24 * max(cut_cnt, 0)
-        base_comp = base_bytes[off:]
-        unp = lzss(base_comp)
-        # parse cut entries
-        cuts = cuts_from_unp(unp)
+        bw, bh, cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
         if not cuts:
             raise ValueError("type2 no cuts")
         # map ci -> (o,s)
