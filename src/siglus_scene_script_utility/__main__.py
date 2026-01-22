@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g) [args]\n")
     out.write("\n")
     out.write("Options:\n")
     out.write(
@@ -27,6 +27,7 @@ def _usage(out=None):
     out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
     out.write("  -e, --exec      Execute at a #z label\n")
     out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
+    out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -74,13 +75,26 @@ def _usage(out=None):
     out.write("\n")
     out.write("Textmap mode:\n")
     out.write(f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n")
+    out.write("\n")
+    out.write("G00 mode:\n")
+    out.write(f"  {p} -g --a <input_g00>\n")
+    out.write(f"  {p} -g --x <input_g00|input_dir> <output_dir>\n")
+    out.write(
+        f"  {p} -g --c [--type N] <input_png|input_jpeg|input_dir> [output_g00|output_dir]\n"
+    )
+    out.write(
+        "    note: base <name>.g00 must already exist at the OUTPUT location (in-place overwrite)\n"
+    )
+    out.write(
+        "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"
+    )
 
 
 def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -150,6 +164,14 @@ def main(argv=None):
         from . import textmap
 
         rc = textmap.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-g", "--g00"):
+        from . import g00
+
+        rc = g00.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc

@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility
 
-This utility aims to reproduce SiglusEngine's scene script compilation bit-for-bit, along with other related features.
+This utility aims to reproduce SiglusEngine's scene script compilation bit-for-bit, along with other related (and unrelated) features.
 
 ## Installation
 

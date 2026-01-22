@@ -2476,3 +2476,21 @@ DBS_TILE = bytes(
         255,
     ]
 )
+# ============================================================================
+# .g00 image extraction
+# ============================================================================
+# XOR table for type=3 payload (.jpeg) decryption (cycle length: 256 bytes)
+G00_XOR_T = bytes.fromhex(
+    """450c85c07514e55d8b55ecc05b8bc38b81ff0000040085ff6a0076b043007649
+008b7de88b75a1e00c85c0c0757830440085ff7637811dd0ff000075448bb043
+45f88d55fc52007668000004006a438bb143006a05ff50ffd3a1e0040056152c
+440085c07409c3a15f5e338be55de030040081c6000081ef0400853044000000
+5dc38b55f88d5e5b4dfc51c4045f8be54300ebd88b45ff15e883c05756522cb1
+01008b7de88900e845f48b20506a4728005053ff1534e46ab143000c8b45006a
+8b4dec89088a85c045f0848b45107405f528010083c4526a08894583c22000e8
+e8f4fbffff8b8b5d450c83c074c5f853c40885c0755630448b1dd0f0a1e00083"""
+)
+
+# type=2 cut/chip header sizes
+G00_CUT_SZ = 116
+G00_CHIP_SZ = 92
