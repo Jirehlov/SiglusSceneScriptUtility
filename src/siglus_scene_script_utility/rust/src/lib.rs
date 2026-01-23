@@ -4,10 +4,10 @@ mod nwa;
 mod tile;
 mod xor;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
-use pyo3::exceptions::PyValueError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -59,7 +59,7 @@ fn md5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
 /// Returns the decoded little-endian PCM bytes (length = header.original_size).
 #[pyfunction]
 fn nwa_decode_pcm(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result = nwa::decode_pcm(data).map_err(|e| PyValueError::new_err(e))?;
+    let result = nwa::decode_pcm(data).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &result).into())
 }
 

@@ -34,7 +34,12 @@ fn read_u32_le(b: &[u8], off: usize) -> Result<u32, String> {
     if off + 4 > b.len() {
         return Err("NWA header truncated".into());
     }
-    Ok(u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]))
+    Ok(u32::from_le_bytes([
+        b[off],
+        b[off + 1],
+        b[off + 2],
+        b[off + 3],
+    ]))
 }
 
 #[inline]
@@ -120,9 +125,9 @@ fn apply_delta(br: &mut BitReader<'_>, nowsmp: &mut i32, nbits: u8, sign_bit: u3
     let mut code = br.get(nbits);
     if (code & sign_bit) != 0 {
         code &= sign_bit - 1;
-        *nowsmp -= ((code as i32) << (shift as i32));
+        *nowsmp -= (code as i32) << (shift as i32);
     } else {
-        *nowsmp += ((code as i32) << (shift as i32));
+        *nowsmp += (code as i32) << (shift as i32);
     }
 }
 
@@ -201,16 +206,11 @@ fn remap_pack_mod(pack_mod: i32) -> u8 {
         1 => 1,
         2 => 0,
         v if v < 0 => 0,
-        v => (v as u8),
+        v => v as u8,
     }
 }
 
-fn unpack_unit_16_into(
-    chunk: &[u8],
-    src_smp_cnt: usize,
-    header: &NwaHeader,
-    dst: &mut [u8],
-) {
+fn unpack_unit_16_into(chunk: &[u8], src_smp_cnt: usize, header: &NwaHeader, dst: &mut [u8]) {
     let write_cnt = dst.len().min(src_smp_cnt.saturating_mul(2));
     if write_cnt == 0 {
         return;
