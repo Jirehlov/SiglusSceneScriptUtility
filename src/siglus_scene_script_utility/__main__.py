@@ -95,7 +95,7 @@ def _usage(out=None):
     out.write(
         "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"
     )
-
+    out.write("\n")
     out.write("Sound mode:\n")
     out.write(
         f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
