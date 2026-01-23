@@ -34,7 +34,12 @@ fn read_u32_le(b: &[u8], off: usize) -> Result<u32, String> {
     if off + 4 > b.len() {
         return Err("NWA header truncated".into());
     }
-    Ok(u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]]))
+    Ok(u32::from_le_bytes([
+        b[off],
+        b[off + 1],
+        b[off + 2],
+        b[off + 3],
+    ]))
 }
 
 #[inline]
@@ -120,9 +125,9 @@ fn apply_delta(br: &mut BitReader<'_>, nowsmp: &mut i32, nbits: u8, sign_bit: u3
     let mut code = br.get(nbits);
     if (code & sign_bit) != 0 {
         code &= sign_bit - 1;
-        *nowsmp -= ((code as i32) << (shift as i32));
+        *nowsmp -= (code as i32) << (shift as i32);
     } else {
-        *nowsmp += ((code as i32) << (shift as i32));
+        *nowsmp += (code as i32) << (shift as i32);
     }
 }
 
@@ -201,16 +206,11 @@ fn remap_pack_mod(pack_mod: i32) -> u8 {
         1 => 1,
         2 => 0,
         v if v < 0 => 0,
-        v => (v as u8),
+        v => v as u8,
     }
 }
 
-fn unpack_unit_16_into(
-    chunk: &[u8],
-    src_smp_cnt: usize,
-    header: &NwaHeader,
-    dst: &mut [u8],
-) {
+fn unpack_unit_16_into(chunk: &[u8], src_smp_cnt: usize, header: &NwaHeader, dst: &mut [u8]) {
     let write_cnt = dst.len().min(src_smp_cnt.saturating_mul(2));
     if write_cnt == 0 {
         return;
@@ -281,14 +281,13 @@ fn unpack_unit_16_into(
     let mut nowsmp_r = read_i16_le_or0(chunk, 2);
     let mut br = BitReader::new(chunk, 4);
     let mut zero_cnt: usize = 0;
-    let mut nowsmp: i32 = 0;
 
     for i in 0..src_smp_cnt {
-        if (i & 1) == 0 {
-            nowsmp = nowsmp_l;
+        let nowsmp: &mut i32 = if (i & 1) == 0 {
+            &mut nowsmp_l
         } else {
-            nowsmp = nowsmp_r;
-        }
+            &mut nowsmp_r
+        };
 
         if zero_cnt != 0 {
             zero_cnt -= 1;
@@ -308,21 +307,21 @@ fn unpack_unit_16_into(
                             zero_cnt = z as usize;
                         }
                     }
-                    1 => apply_by_mod(&mut br, &mut nowsmp, m, 1),
-                    2 => apply_by_mod(&mut br, &mut nowsmp, m, 2),
-                    _ => apply_by_mod(&mut br, &mut nowsmp, m, 3),
+                    1 => apply_by_mod(&mut br, nowsmp, m, 1),
+                    2 => apply_by_mod(&mut br, nowsmp, m, 2),
+                    _ => apply_by_mod(&mut br, nowsmp, m, 3),
                 }
             } else {
                 match mod_code {
-                    4 => apply_by_mod(&mut br, &mut nowsmp, m, 4),
-                    5 => apply_by_mod(&mut br, &mut nowsmp, m, 5),
-                    6 => apply_by_mod(&mut br, &mut nowsmp, m, 6),
+                    4 => apply_by_mod(&mut br, nowsmp, m, 4),
+                    5 => apply_by_mod(&mut br, nowsmp, m, 5),
+                    6 => apply_by_mod(&mut br, nowsmp, m, 6),
                     _ => {
                         let b = br.get(1);
                         if b == 0 {
-                            apply_by_mod(&mut br, &mut nowsmp, m, 7)
+                            apply_by_mod(&mut br, nowsmp, m, 7)
                         } else {
-                            nowsmp = 0;
+                            *nowsmp = 0;
                         }
                     }
                 }
@@ -332,21 +331,17 @@ fn unpack_unit_16_into(
         if out_i + 2 > write_cnt {
             break;
         }
-        let s = (nowsmp as i16).to_le_bytes();
+        let s = (*nowsmp as i16).to_le_bytes();
         dst[out_i] = s[0];
         dst[out_i + 1] = s[1];
         out_i += 2;
-
-        if (i & 1) == 0 {
-            nowsmp_l = nowsmp;
-        } else {
-            nowsmp_r = nowsmp;
-        }
     }
 }
 
 pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
     let h = parse_header(data)?;
+
+    let _ = (h.samples_per_sec, h.pack_size, h.sample_cnt);
 
     if h.bits_per_sample != 16 {
         return Err(format!(
