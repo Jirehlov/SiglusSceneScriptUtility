@@ -566,9 +566,177 @@ def _read_first_line_guess_enc(path: str) -> str:
     return t.strip("\r\n")
 
 
+def _read_first_line_guess_enc_bytes(b: bytes) -> str:
+    if not b:
+        return ""
+    for enc in ("utf-8-sig", "utf-8", "cp932"):
+        try:
+            t = b.decode(enc, "strict")
+            break
+        except Exception:
+            t = None
+    if t is None:
+        t = b.decode("cp932", "ignore")
+    i = t.find("\n")
+    if i >= 0:
+        t = t[:i]
+    return t.strip("\r\n")
+
+
+def _compute_exe_el_from_scene_pck(os_dir: str):
+    """Fallback: try to locate 暗号*.dat inside Scene.pck (in-memory) and derive exe_el.
+
+    This is used when 暗号*.dat is not present on disk.
+    """
+    try:
+        pck = os.path.join(os_dir or ".", "Scene.pck")
+        if not os.path.isfile(pck):
+            return b""
+        dat = rd(pck, 1)
+        hdr = _parse_pack_header(dat)
+        if not hdr:
+            return b""
+        orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
+        if orig_hsz <= 0:
+            return b""
+        scn_data_idx = _read_i32_pairs(
+            dat, hdr.get("scn_data_index_list_ofs", 0), hdr.get("scn_data_index_cnt", 0)
+        )
+        blob_end = hdr.get("scn_data_list_ofs", 0) + max(
+            [a + b for a, b in scn_data_idx], default=0
+        )
+        pos = int(blob_end)
+        if pos < 0 or pos + orig_hsz > len(dat):
+            return b""
+        ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+        size_list_enc = dat[pos : pos + orig_hsz]
+        size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
+        if not size_bytes or (len(size_bytes) % 4) != 0:
+            return b""
+        sizes = list(struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes))
+        pos += orig_hsz
+        cands = []
+        for sz in sizes:
+            sz = int(sz) & 0xFFFFFFFF
+            if sz <= 0 or pos + sz > len(dat):
+                break
+            enc_blob = dat[pos : pos + sz]
+            raw, name = source_angou_decrypt(enc_blob, ctx)
+            nm = os.path.basename(name or "")
+            if nm.startswith("暗号") and nm.lower().endswith(".dat"):
+                cands.append((name or nm, raw))
+            pos += sz
+        if not cands:
+            return b""
+        cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
+        s = _read_first_line_guess_enc_bytes(cands[0][1])
+        if not s:
+            return b""
+        mb = s.encode("cp932", "ignore")
+        if len(mb) < 8:
+            return b""
+        return compiler.exe_angou_element(mb)
+    except Exception:
+        return b""
+
+
+def _iter_exe_el_candidates(os_dir: str):
+    """Yield possible exe_el keys derived from 暗号*.dat on disk or inside Scene.pck.
+
+    Used by -x/--gei to try multiple candidates when decoding Gameexe.dat.
+    """
+    seen = set()
+
+    # Prefer current directory hits first, then recursive.
+    paths = []
+    try:
+        if os_dir and os.path.isdir(os_dir):
+            for p in glob.glob(os.path.join(os_dir, "暗号*.dat")):
+                if os.path.isfile(p) and p not in paths:
+                    paths.append(p)
+            for p in glob.glob(os.path.join(os_dir, "**", "暗号*.dat"), recursive=True):
+                if os.path.isfile(p) and p not in paths:
+                    paths.append(p)
+    except Exception:
+        paths = []
+
+    paths.sort(key=lambda x: (x.count(os.sep), len(x), x.lower()))
+    for p in paths:
+        try:
+            s0 = _read_first_line_guess_enc(p)
+            if not s0:
+                continue
+            mb = s0.encode("cp932", "ignore")
+            if len(mb) < 8:
+                continue
+            el = compiler.exe_angou_element(mb)
+            if el and el not in seen:
+                seen.add(el)
+                yield el
+        except Exception:
+            continue
+
+    # Fallback: try to locate 暗号*.dat inside Scene.pck (in-memory).
+    try:
+        pck = os.path.join(os_dir or ".", "Scene.pck")
+        if not os.path.isfile(pck):
+            return
+        dat = rd(pck, 1)
+        hdr = _parse_pack_header(dat)
+        if not hdr:
+            return
+        orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
+        if orig_hsz <= 0:
+            return
+        scn_data_idx = _read_i32_pairs(
+            dat, hdr.get("scn_data_index_list_ofs", 0), hdr.get("scn_data_index_cnt", 0)
+        )
+        blob_end = hdr.get("scn_data_list_ofs", 0) + max(
+            [a + b for a, b in scn_data_idx], default=0
+        )
+        pos = int(blob_end)
+        if pos < 0 or pos + orig_hsz > len(dat):
+            return
+        ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+        size_list_enc = dat[pos : pos + orig_hsz]
+        size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
+        if not size_bytes or (len(size_bytes) % 4) != 0:
+            return
+        sizes = list(struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes))
+        pos += orig_hsz
+        cands = []
+        for sz in sizes:
+            sz = int(sz) & 0xFFFFFFFF
+            if sz <= 0 or pos + sz > len(dat):
+                break
+            enc_blob = dat[pos : pos + sz]
+            raw, name = source_angou_decrypt(enc_blob, ctx)
+            nm = os.path.basename(name or "")
+            if nm.startswith("暗号") and nm.lower().endswith(".dat"):
+                cands.append((name or nm, raw))
+            pos += sz
+        cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
+        for _name, raw in cands:
+            s0 = _read_first_line_guess_enc_bytes(raw)
+            if not s0:
+                continue
+            mb = s0.encode("cp932", "ignore")
+            if len(mb) < 8:
+                continue
+            el = compiler.exe_angou_element(mb)
+            if el and el not in seen:
+                seen.add(el)
+                yield el
+    except Exception:
+        return
+
+
 def _compute_exe_el(os_dir: str):
     p = _find_angou_dat(os_dir)
     if not p:
+        el = _compute_exe_el_from_scene_pck(os_dir)
+        if el:
+            return el
         return b""
     s = _read_first_line_guess_enc(p)
     if not s:
@@ -745,14 +913,20 @@ def main(argv=None):
     if len(args) != 2:
         return 2
     if gei:
-        exe_el = _compute_exe_el(os.path.dirname(os.path.abspath(args[0])))
-        try:
-            out_path = GEI.restore_gameexe_ini(args[0], args[1], exe_el=exe_el)
-        except Exception as e:
-            sys.stderr.write(str(e) + "\n")
-            return 1
-        sys.stdout.write("Wrote: %s\n" % out_path)
-        return 0
+        os_dir = os.path.dirname(os.path.abspath(args[0]))
+        cands = list(_iter_exe_el_candidates(os_dir))
+        if not cands:
+            cands = [b""]
+        last_err = None
+        for exe_el in cands:
+            try:
+                out_path = GEI.restore_gameexe_ini(args[0], args[1], exe_el=exe_el)
+                sys.stdout.write("Wrote: %s\n" % out_path)
+                return 0
+            except Exception as e:
+                last_err = e
+        sys.stderr.write(str(last_err) + "\n")
+        return 1
     return extract_pck(args[0], args[1], dat_txt)
 
 

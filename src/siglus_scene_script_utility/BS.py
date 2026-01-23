@@ -295,12 +295,6 @@ class BinaryStream:
     def push_i32(s, v):
         s.buf.extend(struct.pack("<i", int(v)))
 
-    def write_i32_at(s, ofs, v):
-        s.buf[ofs : ofs + 4] = struct.pack("<i", int(v))
-
-    def write_u8_at(s, ofs, v):
-        s.buf[ofs : ofs + 1] = struct.pack("<B", int(v) & 0xFF)
-
 
 def _build_scn_dat(piad, plad, psad, out_scn):
     b = bytearray(b"\0" * 132)

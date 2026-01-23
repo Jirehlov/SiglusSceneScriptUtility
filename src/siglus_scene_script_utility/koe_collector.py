@@ -2,8 +2,109 @@ import csv
 import os
 import re
 import sys
+from dataclasses import dataclass
+from typing import List, Optional, Tuple, Union
 
-from . import koe_extract
+from . import sound
+
+
+@dataclass(frozen=True)
+class KOECoord:
+    koe_no: int
+    chara_no: int = -1
+
+
+def parse_koe_coord(value: str) -> KOECoord:
+    s = value.strip()
+    m = re.fullmatch(r"KOE\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)", s, flags=re.IGNORECASE)
+    if m:
+        koe = int(m.group(1))
+        ch = int(m.group(2)) if m.group(2) is not None else -1
+        return KOECoord(koe, ch)
+    s2 = re.sub(r"\s+", "", s)
+    if "," in s2:
+        a, b = s2.split(",", 1)
+        return KOECoord(int(a), int(b))
+    if ":" in s2:
+        a, b = s2.split(":", 1)
+        return KOECoord(int(a), int(b))
+    if re.fullmatch(r"\d+", s2):
+        return KOECoord(int(s2), -1)
+    raise ValueError(f"Invalid KOE coordinate: {value!r}")
+
+
+def format_koe_coord(coord: Union[KOECoord, Tuple[int, int]]) -> str:
+    if isinstance(coord, tuple):
+        coord = KOECoord(coord[0], coord[1])
+    if coord.chara_no >= 0:
+        return f"KOE({coord.koe_no:09d},{coord.chara_no:03d})"
+    return f"KOE({coord.koe_no:09d})"
+
+
+def koe_no_to_scene_line(koe_no: int) -> Tuple[int, int]:
+    if koe_no < 0:
+        raise ValueError("koe_no must be non-negative")
+    scn_no = koe_no // 100000
+    line_no = koe_no % 100000
+    return scn_no, line_no
+
+
+def sanitize_filename(name: str) -> str:
+    return re.sub(r'[<>:"/\\\\|?*]+', "_", name)
+
+
+def _candidate_ovk_paths(voice_dir: str, scn_no: int, chara_no: int) -> List[str]:
+    zname = f"z{scn_no:04d}.ovk"
+    cands = []
+    cands.append(os.path.join(voice_dir, "koe", zname))
+    cands.append(os.path.join(voice_dir, zname))
+    if chara_no >= 0:
+        cands.append(os.path.join(voice_dir, "koe", f"{chara_no:03d}", zname))
+        cands.append(os.path.join(voice_dir, f"{chara_no:03d}", zname))
+    return cands
+
+
+def find_ovk_path(voice_dir: str, koe_no: int, chara_no: int = -1) -> str:
+    scn_no, _ = koe_no_to_scene_line(koe_no)
+    for p in _candidate_ovk_paths(voice_dir, scn_no, chara_no):
+        if os.path.isfile(p):
+            return p
+    target = f"z{scn_no:04d}.ovk".lower()
+    for root, _, files in os.walk(voice_dir):
+        for fn in files:
+            if fn.lower() == target:
+                return os.path.join(root, fn)
+    raise FileNotFoundError(f"OVK not found for scene {scn_no:04d} under {voice_dir!r}")
+
+
+def _coerce_coord(coord: Union[KOECoord, Tuple[int, int], str]) -> KOECoord:
+    if isinstance(coord, str):
+        return parse_koe_coord(coord)
+    if isinstance(coord, tuple):
+        return KOECoord(coord[0], coord[1])
+    return coord
+
+
+def extract_koe_to_ogg(
+    coord: Union[KOECoord, Tuple[int, int], str],
+    voice_dir: str,
+    out_dir: Optional[str] = None,
+    export: bool = False,
+) -> Tuple[bytes, str, str]:
+    coord_obj = _coerce_coord(coord)
+    scn_no, line_no = koe_no_to_scene_line(coord_obj.koe_no)
+    ovk_path = find_ovk_path(voice_dir, coord_obj.koe_no, coord_obj.chara_no)
+    ogg_bytes = sound.extract_ogg_bytes_from_ovk(ovk_path, line_no)
+    out_path = ""
+    if export:
+        if out_dir is None:
+            raise ValueError("out_dir is required when export=True")
+        os.makedirs(out_dir, exist_ok=True)
+        name = sanitize_filename(format_koe_coord(coord_obj)) + ".ogg"
+        out_path = os.path.join(out_dir, name)
+        with open(out_path, "wb") as w:
+            w.write(ogg_bytes)
+    return ogg_bytes, ovk_path, out_path
 
 
 _COORD_RE = re.compile(r"\bKOE\(\s*\d+\s*(?:,\s*\d+\s*)?\)", flags=re.IGNORECASE)
@@ -242,8 +343,8 @@ def main(argv=None):
     by_chara = {}
     for coord_s, name, text, src in records:
         try:
-            coord = koe_extract.parse_koe_coord(coord_s)
-            coord_key = koe_extract.format_koe_coord(coord)
+            coord = parse_koe_coord(coord_s)
+            coord_key = format_koe_coord(coord)
         except Exception:
             continue
         k = name if name else "UNKNOWN"
@@ -261,18 +362,18 @@ def main(argv=None):
     missing = 0
     failed = 0
     for name, items in by_chara.items():
-        safe = koe_extract.sanitize_filename(name if name else "UNKNOWN")
+        safe = sanitize_filename(name if name else "UNKNOWN")
         char_dir = os.path.join(out_dir, safe)
         os.makedirs(char_dir, exist_ok=True)
         for coord_key in items.keys():
             done += 1
-            ogg_name = koe_extract.sanitize_filename(coord_key) + ".ogg"
+            ogg_name = sanitize_filename(coord_key) + ".ogg"
             out_path = os.path.join(char_dir, ogg_name)
             if os.path.isfile(out_path):
                 skipped += 1
             else:
                 try:
-                    koe_extract.extract_koe_to_ogg(
+                    extract_koe_to_ogg(
                         coord_key, voice_dir, out_dir=char_dir, export=True
                     )
                     ok += 1
@@ -291,7 +392,7 @@ def main(argv=None):
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, lineterminator="\r\n")
             for coord_key, (text, src) in items.items():
-                w.writerow([koe_extract.sanitize_filename(coord_key), text, src])
+                w.writerow([sanitize_filename(coord_key), text, src])
     _eprint(f"done ok={ok} skipped={skipped} missing={missing} failed={failed}")
     return 0
 

@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s) [args]\n")
     out.write("\n")
     out.write("Options:\n")
     out.write(
@@ -28,6 +28,7 @@ def _usage(out=None):
     out.write("  -e, --exec      Execute at a #z label\n")
     out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
+    out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -68,7 +69,7 @@ def _usage(out=None):
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
-    out.write(f"  {p} -k <ss_dir> <ovk_dir> <output_dir>\n")
+    out.write(f"  {p} -k <ss_dir> <voice_dir> <output_dir>\n")
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
@@ -95,12 +96,18 @@ def _usage(out=None):
         "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"
     )
 
+    out.write("Sound mode:\n")
+    out.write(
+        f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
+    )
+    out.write(f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n")
+
 
 def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -178,6 +185,14 @@ def main(argv=None):
         from . import g00
 
         rc = g00.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-s", "--sound"):
+        from . import sound_tool
+
+        rc = sound_tool.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc

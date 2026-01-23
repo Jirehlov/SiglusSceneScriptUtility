@@ -1,11 +1,13 @@
 mod lzss;
 mod md5;
+mod nwa;
 mod tile;
 mod xor;
 
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
+use pyo3::exceptions::PyValueError;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -49,6 +51,15 @@ fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) ->
 #[pyfunction]
 fn md5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = md5::digest(data);
+    Ok(PyBytes::new(py, &result).into())
+}
+
+/// NWA decompression (16-bit PCM)
+///
+/// Returns the decoded little-endian PCM bytes (length = header.original_size).
+#[pyfunction]
+fn nwa_decode_pcm(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let result = nwa::decode_pcm(data).map_err(|e| PyValueError::new_err(e))?;
     Ok(PyBytes::new(py, &result).into())
 }
 
@@ -413,6 +424,7 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(xor_cycle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(md5_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(nwa_decode_pcm, m)?)?;
     m.add_function(wrap_pyfunction!(tile_copy, m)?)?;
     m.add_function(wrap_pyfunction!(msvcrand_shuffle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(find_shuffle_seed_first, m)?)?;

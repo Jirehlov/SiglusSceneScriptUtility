@@ -247,10 +247,11 @@ def _apply_map(text: str, entries, rows):
     return text, len(changes)
 
 
-def _usage(out=None):
+def _hint_help(out=None):
     if out is None:
         out = sys.stderr
-    out.write("usage: -m [--apply] <path_to_ss|path_to_dir>\n")
+    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
+    out.write(f"hint: run '{p} --help' for command help")
 
 
 def _iter_ss_files(root: str):
@@ -306,7 +307,7 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     if not argv or argv[0] in ("-h", "--help", "help"):
-        _usage(sys.stdout)
+        _hint_help(sys.stdout)
         return 0
     apply_mode = False
     args = []
@@ -316,7 +317,8 @@ def main(argv=None):
         else:
             args.append(a)
     if len(args) != 1:
-        _usage()
+        _eprint("textmap: expected exactly 1 path argument")
+        _hint_help()
         return 2
     ss_path = args[0]
     if os.path.isdir(ss_path):
