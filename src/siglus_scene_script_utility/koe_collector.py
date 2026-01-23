@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
 from . import sound
+from .common import eprint
 
 
 @dataclass(frozen=True)
@@ -152,20 +153,6 @@ def _parse_mes_line(line: str):
         return None
     text = after[q1 + 1 : q2]
     return name, text
-
-
-def _eprint(msg: str):
-    try:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        try:
-            sys.stderr.buffer.write(
-                (msg + "\n").encode("utf-8", errors="backslashreplace")
-            )
-            sys.stderr.flush()
-        except Exception:
-            pass
 
 
 def _decode_script(path: str) -> str:
@@ -336,7 +323,7 @@ def main(argv=None):
     os.makedirs(out_dir, exist_ok=True)
     try:
         if os.listdir(out_dir):
-            _eprint("note: output is not empty; existing .ogg will be skipped")
+            eprint("note: output is not empty; existing .ogg will be skipped")
     except Exception:
         pass
     records = _collect_records(script_root)
@@ -355,7 +342,7 @@ def main(argv=None):
         if coord_key not in d:
             d[coord_key] = (text, src)
     total = sum(len(v) for v in by_chara.values())
-    _eprint(f"KOE collect: chars={len(by_chara)} total={total}")
+    eprint(f"KOE collect: chars={len(by_chara)} total={total}")
     done = 0
     ok = 0
     skipped = 0
@@ -383,9 +370,9 @@ def main(argv=None):
                         missing += 1
                     else:
                         failed += 1
-                    _eprint(f"{safe}\t{coord_key}\t{e}")
+                    eprint(f"{safe}\t{coord_key}\t{e}")
             if done == 1 or done % 200 == 0 or done == total:
-                _eprint(
+                eprint(
                     f"progress {done}/{total} ok={ok} skipped={skipped} missing={missing} failed={failed}"
                 )
         csv_path = os.path.join(out_dir, safe + ".csv")
@@ -393,7 +380,7 @@ def main(argv=None):
             w = csv.writer(f, lineterminator="\r\n")
             for coord_key, (text, src) in items.items():
                 w.writerow([sanitize_filename(coord_key), text, src])
-    _eprint(f"done ok={ok} skipped={skipped} missing={missing} failed={failed}")
+    eprint(f"done ok={ok} skipped={skipped} missing={missing} failed={failed}")
     return 0
 
 

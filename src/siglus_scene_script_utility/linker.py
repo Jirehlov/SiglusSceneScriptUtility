@@ -5,6 +5,7 @@ import glob
 from . import const as C
 from .CA import rd, wr, _rt
 from .IA import IncAnalyzer
+from .common import log_stage, record_stage_time, set_stage_time
 
 
 def _enc_w(s):
@@ -15,33 +16,6 @@ def _ensure_dir_for_file(p):
     d = os.path.dirname(p)
     if d:
         os.makedirs(d, exist_ok=True)
-
-
-def _log_stage(stage, file_path):
-    name = os.path.basename(file_path) if file_path else ""
-    print(f"{stage}: {name}")
-
-
-def _record_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(timings.get(stage, 0.0)) + float(elapsed)
-    except Exception:
-        pass
-
-
-def _set_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(elapsed)
-    except Exception:
-        pass
 
 
 def _rel_win(base, path):
@@ -194,7 +168,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             result = parallel_lzss_compress(
                 ctx, scn_names, bs_dir, lzss_mode, max_workers
             )
-            _set_stage_time(ctx, "LZSS", time.time() - start)
+            set_stage_time(ctx, "LZSS", time.time() - start)
             return result
         except ImportError:
             # Fall back to serial if parallel module not available
@@ -223,8 +197,8 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             )
             # Keep behavior identical: record timing only for newly-built cache
             if built_new:
-                _record_stage_time(ctx, "LZSS", time.time() - t)
-            _log_stage("LZSS", nm + ".ss")
+                record_stage_time(ctx, "LZSS", time.time() - t)
+            log_stage("LZSS", nm + ".ss")
             lzss_list.append(lz)
         else:
             dat = rd(dat_path, 1)
@@ -390,7 +364,7 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
             sizes, chunks = parallel_source_encrypt(
                 ctx, rel_list, scn_path, tmp_path, skip, max_workers
             )
-            _set_stage_time(ctx, "OS", time.time() - start)
+            set_stage_time(ctx, "OS", time.time() - start)
             if not sizes:
                 return (0, [])
             size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
@@ -410,14 +384,14 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         if not os.path.isfile(src_path):
             continue
         start = time.time()
-        _log_stage("OS", rel)
+        log_stage("OS", rel)
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
         enc_blob, _ = _m.source_angou_encrypt_with_cache(src_path, rel, cache_path, ctx)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
         (not skip) and chunks.append(enc_blob)
-        _record_stage_time(ctx, "OS", time.time() - start)
+        record_stage_time(ctx, "OS", time.time() - start)
     if not sizes:
         return (0, [])
     size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)

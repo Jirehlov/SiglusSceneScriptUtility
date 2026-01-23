@@ -5,6 +5,8 @@ import re
 import subprocess
 import tempfile
 
+from .common import eprint
+
 try:
     # Package import (preferred)
     from . import sound
@@ -13,20 +15,6 @@ except Exception:  # pragma: no cover
     # Direct script import fallback
     import sound  # type: ignore
     import extract  # type: ignore
-
-
-def _eprint(msg: str) -> None:
-    try:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        try:
-            sys.stderr.buffer.write(
-                (msg + "\n").encode("utf-8", errors="backslashreplace")
-            )
-            sys.stderr.flush()
-        except Exception:
-            pass
 
 
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
@@ -49,7 +37,7 @@ def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
 def _hint_help() -> None:
     # Keep CLI help text centralized in the package entry point (__main__.py).
     p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
-    _eprint(f"hint: run '{p} --help' for command help")
+    eprint(f"hint: run '{p} --help' for command help")
 
 
 def _iter_audio_files(inp: str):
@@ -94,7 +82,7 @@ def _analyze_one(path: str) -> int:
         with open(path, "rb") as f:
             data = f.read(header_struct.size)
         if len(data) < header_struct.size:
-            _eprint("error: NWA header truncated")
+            eprint("error: NWA header truncated")
             return 1
         fields = header_struct.unpack_from(data, 0)
         channels = int(fields[0])
@@ -139,7 +127,7 @@ def _analyze_one(path: str) -> int:
         with open(path, "rb") as f:
             cnt_b = f.read(4)
             if len(cnt_b) != 4:
-                _eprint("error: OVK header truncated")
+                eprint("error: OVK header truncated")
                 return 1
             cnt = struct.unpack("<I", cnt_b)[0]
             print(_fmt_kv("entry_count", cnt))
@@ -147,7 +135,7 @@ def _analyze_one(path: str) -> int:
                 return 0
             table = f.read(entry_struct.size * cnt)
             if len(table) != entry_struct.size * cnt:
-                _eprint("error: OVK table truncated")
+                eprint("error: OVK table truncated")
                 return 1
         for i in range(cnt):
             size_, offset_, no_, smp_cnt_ = entry_struct.unpack_from(
@@ -185,11 +173,11 @@ def _analyze_one(path: str) -> int:
             )
             print(_fmt_kv("decoded_size_bytes", len(ogg)))
         except Exception as e:
-            _eprint(f"error: OWP decode failed: {e}")
+            eprint(f"error: OWP decode failed: {e}")
             return 1
         return 0
 
-    _eprint("error: unsupported file type (expected .nwa/.ovk/.owp)")
+    eprint("error: unsupported file type (expected .nwa/.ovk/.owp)")
     return 1
 
 
@@ -341,7 +329,7 @@ def _extract_one(
                 raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
             start_pos, end_pos, rep_pos = trim_table[key]
             # "only export one loop": [repeat_pos, end_pos] (or EOF when end_pos == -1)
-            _eprint(
+            eprint(
                 f"trim {base_name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
             )
             ogg = _ffmpeg_trim_ogg_bytes(
@@ -396,26 +384,26 @@ def main(argv=None) -> int:
         argv = [a for a in argv if a != "--a"]
 
     if do_x and do_a:
-        _eprint("error: choose only one of --x or --a")
+        eprint("error: choose only one of --x or --a")
         _hint_help()
         return 2
 
     if not do_x and not do_a:
-        _eprint("error: missing flag: specify --x (extract) or --a (analyze)")
+        eprint("error: missing flag: specify --x (extract) or --a (analyze)")
         _hint_help()
         return 2
 
     if do_a:
         if "--trim" in argv:
-            _eprint("error: --trim is only valid with --x")
+            eprint("error: --trim is only valid with --x")
             return 2
         if len(argv) != 1:
-            _eprint("error: expected 1 input file for --a")
+            eprint("error: expected 1 input file for --a")
             _hint_help()
             return 2
         inp = argv[0]
         if not os.path.isfile(inp):
-            _eprint(f"input not found: {inp}")
+            eprint(f"input not found: {inp}")
             return 1
         return _analyze_one(inp)
 
@@ -424,14 +412,14 @@ def main(argv=None) -> int:
     if "--trim" in argv:
         i = argv.index("--trim")
         if i + 1 >= len(argv):
-            _eprint("error: --trim expects a path")
+            eprint("error: --trim expects a path")
             _hint_help()
             return 2
         trim_path = argv[i + 1]
         del argv[i : i + 2]
 
     if len(argv) != 2:
-        _eprint("error: expected <input> <output_dir> for --x")
+        eprint("error: expected <input> <output_dir> for --x")
         _hint_help()
         return 2
 
@@ -439,7 +427,7 @@ def main(argv=None) -> int:
 
     src_is_dir = os.path.isdir(inp)
     if not src_is_dir and not os.path.isfile(inp):
-        _eprint(f"input not found: {inp}")
+        eprint(f"input not found: {inp}")
         return 1
 
     trim_table = None
@@ -449,16 +437,16 @@ def main(argv=None) -> int:
     if trim_path:
         ffmpeg_path = shutil.which("ffmpeg") or ""
         if not ffmpeg_path:
-            _eprint("ffmpeg not found in PATH")
+            eprint("ffmpeg not found in PATH")
             return 1
         if not os.path.isfile(trim_path):
-            _eprint(f"Gameexe.dat not found: {trim_path}")
+            eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
 
         gei_txt = _load_gameexe_ini_text(trim_path)
         trim_table = _parse_bgm_table(gei_txt)
         if not trim_table:
-            _eprint("error: no #BGM.* entries found in Gameexe.dat")
+            eprint("error: no #BGM.* entries found in Gameexe.dat")
             return 1
 
         tmp_dir = os.path.join(out_root, ".tmp_ffmpeg")
@@ -475,12 +463,12 @@ def main(argv=None) -> int:
     failed = 0
 
     if total == 0:
-        _eprint("no supported audio files found")
+        eprint("no supported audio files found")
         _cleanup_tmp_dir(tmp_dir, out_root)
         return 0
 
     for idx, src_path in enumerate(files, 1):
-        _eprint(f"[{idx}/{total}] processing: {src_path}")
+        eprint(f"[{idx}/{total}] processing: {src_path}")
         try:
             if src_is_dir:
                 rel = os.path.relpath(src_path, inp)
@@ -496,12 +484,12 @@ def main(argv=None) -> int:
                 tmp_dir=tmp_dir,
             )
             wrote += n
-            _eprint(f"[{idx}/{total}] done: wrote {n}")
+            eprint(f"[{idx}/{total}] done: wrote {n}")
         except Exception as e:
             failed += 1
-            _eprint(f"[{idx}/{total}] failed: {src_path}\t{e}")
+            eprint(f"[{idx}/{total}] failed: {src_path}\t{e}")
 
-    _eprint(f"done total={total} wrote={wrote} failed={failed}")
+    eprint(f"done total={total} wrote={wrote} failed={failed}")
     exit_code = 0 if failed == 0 else 1
     _cleanup_tmp_dir(tmp_dir, out_root)
     return exit_code

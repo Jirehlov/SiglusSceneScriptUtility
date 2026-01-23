@@ -9,6 +9,7 @@ from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
 from .MA import MA
+from .common import log_stage, record_stage_time, set_stage_time
 
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1
@@ -125,33 +126,6 @@ def _copy_ia_data(base):
     }
 
 
-def _log_stage(stage, file_path):
-    name = os.path.basename(file_path) if file_path else ""
-    print(f"{stage}: {name}")
-
-
-def _record_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(timings.get(stage, 0.0)) + float(elapsed)
-    except Exception:
-        pass
-
-
-def _set_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(elapsed)
-    except Exception:
-        pass
-
-
 def build_ia_data(ctx):
     sp = ctx.get("scn_path") or ""
     inc_list = ctx.get("inc_list") or []
@@ -181,7 +155,7 @@ def build_ia_data(ctx):
     start = time.time()
     for inc in inc_list:
         inc_path = inc if os.path.isabs(inc) else os.path.join(sp, inc)
-        _log_stage("IA", inc_path)
+        log_stage("IA", inc_path)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
         txt = rd(inc_path, 0, enc=enc)
@@ -205,7 +179,7 @@ def build_ia_data(ctx):
                 0,
                 enc=enc,
             )
-    _record_stage_time(ctx, "IA", time.time() - start)
+    record_stage_time(ctx, "IA", time.time() - start)
     return iad
 
 
@@ -1734,12 +1708,12 @@ def compile_one_pipeline(
     # CA
     ca = CharacterAnalizer()
     if log:
-        _log_stage("CA", ss_path)
+        log_stage("CA", ss_path)
     t = time.time()
     if not ca.analize_file(scn, iad, pcad):
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
     if record_time:
-        _record_stage_time(ctx, "CA", time.time() - t)
+        record_stage_time(ctx, "CA", time.time() - t)
 
     tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
     if test_check and isinstance(ctx, dict) and ctx.get("test_check"):
@@ -1747,11 +1721,11 @@ def compile_one_pipeline(
 
     # LA
     if log:
-        _log_stage("LA", ss_path)
+        log_stage("LA", ss_path)
     t = time.time()
     lad, err = la_analize(pcad)
     if record_time:
-        _record_stage_time(ctx, "LA", time.time() - t)
+        record_stage_time(ctx, "LA", time.time() - t)
     if err:
         raise RuntimeError(fmt_err("UNK_ERROR", err.get("line", 0)))
     if stop_after == "la":
@@ -1759,12 +1733,12 @@ def compile_one_pipeline(
 
     # SA
     if log:
-        _log_stage("SA", ss_path)
+        log_stage("SA", ss_path)
     t = time.time()
     sa = SA(iad, lad)
     ok, sad = sa.analize()
     if record_time:
-        _record_stage_time(ctx, "SA", time.time() - t)
+        record_stage_time(ctx, "SA", time.time() - t)
     if not ok:
         raise RuntimeError(
             fmt_err(
@@ -1777,13 +1751,13 @@ def compile_one_pipeline(
 
     # MA
     if log:
-        _log_stage("MA", ss_path)
+        log_stage("MA", ss_path)
     while True:
         t = time.time()
         ma = MA(iad, lad, sad)
         ok, mad = ma.analize()
         if record_time:
-            _record_stage_time(ctx, "MA", time.time() - t)
+            record_stage_time(ctx, "MA", time.time() - t)
         if ok:
             break
         code = ma.last.get("type") or "UNK_ERROR"
@@ -1809,7 +1783,7 @@ def compile_one_pipeline(
 
     # BS
     if log:
-        _log_stage("BS", ss_path)
+        log_stage("BS", ss_path)
     t = time.time()
     bs = BS()
     bsd = {}
@@ -1818,7 +1792,7 @@ def compile_one_pipeline(
     ):
         raise RuntimeError(fmt_err(bs.get_error_code(), bs.get_error_line()))
     if record_time:
-        _record_stage_time(ctx, "BS", time.time() - t)
+        record_stage_time(ctx, "BS", time.time() - t)
     return {"nm": nm, "fname": fname, "out_scn": bsd.get("out_scn", b"")}
 
 
@@ -1876,7 +1850,7 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
 
             start = time.time()
             parallel_compile(ctx, ss_files, stop_after, max_workers)
-            _set_stage_time(ctx, "Compiling", time.time() - start)
+            set_stage_time(ctx, "Compiling", time.time() - start)
             return
         except ImportError:
             # Fall back to serial if parallel module not available

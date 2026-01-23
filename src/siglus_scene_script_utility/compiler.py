@@ -23,6 +23,7 @@ from .native_ops import (
     md5_digest,
     tile_copy,
 )
+from .common import record_stage_time
 
 
 def exe_angou_element(angou_bytes: bytes) -> bytes:
@@ -357,17 +358,6 @@ def _init_stats(ctx):
     stats.setdefault("outputs", [])
 
 
-def _record_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(timings.get(stage, 0.0)) + float(elapsed)
-    except Exception:
-        pass
-
-
 def _record_output(ctx, path, label=None):
     if (not isinstance(ctx, dict)) or (not path) or (not os.path.isfile(path)):
         return
@@ -607,7 +597,7 @@ def main(argv=None):
     try:
         t = time.time()
         ge_path = write_gameexe_dat(ctx)
-        _record_stage_time(ctx, "GEI", time.time() - t)
+        record_stage_time(ctx, "GEI", time.time() - t)
         _record_output(ctx, ge_path, "Gameexe.dat")
         if not a.gei:
             angou_hdr = os.path.join(tmp, "EXE_ANGOU.h")

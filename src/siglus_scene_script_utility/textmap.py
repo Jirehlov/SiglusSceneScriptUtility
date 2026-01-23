@@ -6,18 +6,7 @@ from . import CA
 from . import BS
 from . import LA
 from . import const as C
-
-
-def _eprint(msg: str):
-    try:
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        try:
-            sys.stderr.buffer.write((msg + "\n").encode("utf-8", errors="replace"))
-            sys.stderr.flush()
-        except Exception:
-            pass
+from .common import eprint
 
 
 def _read_text(path: str):
@@ -99,7 +88,10 @@ def _locate_tokens(source_text: str, tokens):
     for token in tokens:
         line_no = int(token["line"] or 0)
         if line_no <= 0 or line_no > len(line_spans):
-            _eprint(f"textmap: invalid line for token {token['index']}: {line_no}")
+            eprint(
+                f"textmap: invalid line for token {token['index']}: {line_no}",
+                errors="replace",
+            )
             continue
         line_start, line_end, line_text = line_spans[line_no - 1]
         cursor = cursors.get(line_no, 0)
@@ -190,7 +182,10 @@ def _apply_map(text: str, entries, rows):
         if line > 0 and order > 0:
             entry = line_order_map.get((line, order))
             if entry is None:
-                _eprint(f"textmap: missing entry at line {line} order {order}")
+                eprint(
+                    f"textmap: missing entry at line {line} order {order}",
+                    errors="replace",
+                )
                 continue
         if entry is None:
             try:
@@ -198,7 +193,7 @@ def _apply_map(text: str, entries, rows):
             except Exception:
                 continue
             if idx <= 0 or idx > len(entries):
-                _eprint(f"textmap: index {idx} out of range")
+                eprint(f"textmap: index {idx} out of range", errors="replace")
                 continue
             entry = entries[idx - 1]
         original = row.get("original", entry["text"])
@@ -208,9 +203,10 @@ def _apply_map(text: str, entries, rows):
         if replacement == original:
             continue
         if entry["text"] != original:
-            _eprint(
+            eprint(
                 "textmap: skip index %d (text mismatch: '%s' vs '%s')"
-                % (int(entry.get("index", 0) or 0), entry["text"], original)
+                % (int(entry.get("index", 0) or 0), entry["text"], original),
+                errors="replace",
             )
             continue
         if (
@@ -224,16 +220,20 @@ def _apply_map(text: str, entries, rows):
         line_no = int(entry.get("line", 0) or 0)
         start_pos = int(entry.get("start", 0) or 0)
         if line_no <= 0 or line_no > len(lines):
-            _eprint(f"textmap: invalid line for entry {entry.get('index', 0)}")
+            eprint(
+                f"textmap: invalid line for entry {entry.get('index', 0)}",
+                errors="replace",
+            )
             continue
         line_text = lines[line_no - 1]
         line_start = line_offsets[line_no - 1]
         rel_start = max(0, start_pos - line_start)
         rel_found = line_text.find(original, rel_start)
         if rel_found < 0:
-            _eprint(
+            eprint(
                 "textmap: original not found at line %d order %d"
-                % (line_no, int(entry.get("order", 0) or 0))
+                % (line_no, int(entry.get("order", 0) or 0)),
+                errors="replace",
             )
             continue
         abs_start = line_start + rel_found
@@ -265,7 +265,7 @@ def _iter_ss_files(root: str):
 
 def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     if not os.path.exists(ss_path):
-        _eprint(f"textmap: file not found: {ss_path}")
+        eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
     text, encoding = _read_text(ss_path)
     ctx = {
@@ -287,17 +287,17 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         print(csv_path)
         return 0
     if not os.path.exists(csv_path):
-        _eprint(f"textmap: map file not found: {csv_path}")
+        eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
     rows = _read_map(csv_path)
     updated, count = _apply_map(text, entries, rows)
     if count == 0:
-        _eprint("textmap: no changes to apply")
+        eprint("textmap: no changes to apply", errors="replace")
         return 0
     try:
         _write_text(ss_path, updated, encoding)
     except UnicodeEncodeError:
-        _eprint("textmap: encode failed, falling back to utf-8")
+        eprint("textmap: encode failed, falling back to utf-8", errors="replace")
         _write_text(ss_path, updated, "utf-8")
     print(f"textmap: applied {count} changes")
     return 0
@@ -317,14 +317,14 @@ def main(argv=None):
         else:
             args.append(a)
     if len(args) != 1:
-        _eprint("textmap: expected exactly 1 path argument")
+        eprint("textmap: expected exactly 1 path argument", errors="replace")
         _hint_help()
         return 2
     ss_path = args[0]
     if os.path.isdir(ss_path):
         ss_files = _iter_ss_files(ss_path)
         if not ss_files:
-            _eprint(f"textmap: no .ss files found in: {ss_path}")
+            eprint(f"textmap: no .ss files found in: {ss_path}", errors="replace")
             return 1
         iad_cache = {}
         errors = 0
