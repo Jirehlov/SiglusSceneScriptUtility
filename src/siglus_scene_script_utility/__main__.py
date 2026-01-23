@@ -63,7 +63,7 @@ def _usage(out=None):
     out.write("    --apply        Apply .dbs CSV back to .dbs\n")
     out.write("\n")
     out.write("Analyze mode:\n")
-    out.write(f"  {p} -a [--dat-txt] <input_file> [input_file_2]\n")
+    out.write(f"  {p} -a [--dat-txt] <input_file.(pck|dat|dbs|gan)> [input_file_2]\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --dat-txt      Write .dat disassembly to __DATDIR__\n")
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
