@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
     out.write("\n")
     out.write("Options:\n")
     out.write(
@@ -29,6 +29,7 @@ def _usage(out=None):
     out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
+    out.write("  -v, --video     Extract/analyze .omv videos\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -101,13 +102,17 @@ def _usage(out=None):
         f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
     )
     out.write(f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n")
+    out.write("\n")
+    out.write("Video mode:\n")
+    out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
+    out.write(f"  {p} -v --a <input_file.omv>\n")
 
 
 def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -193,6 +198,14 @@ def main(argv=None):
         from . import sound_tool
 
         rc = sound_tool.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-v", "--video"):
+        from . import video_tool
+
+        rc = video_tool.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
