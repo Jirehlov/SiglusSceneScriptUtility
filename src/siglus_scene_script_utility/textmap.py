@@ -74,7 +74,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
     return tokens
 
 
-def _locate_tokens(source_text: str, tokens):
+def _locate_tokens(source_text: str, tokens, filename: str = ""):
     lines = source_text.splitlines(keepends=True)
     line_spans = []
     pos = 0
@@ -89,7 +89,7 @@ def _locate_tokens(source_text: str, tokens):
         line_no = int(token["line"] or 0)
         if line_no <= 0 or line_no > len(line_spans):
             eprint(
-                f"textmap: invalid line for token {token['index']}: {line_no}",
+                f"textmap: {filename}: invalid line for token {token['index']}: {line_no}",
                 errors="replace",
             )
             continue
@@ -158,7 +158,7 @@ def _read_map(csv_path: str):
         return list(csv.DictReader(f))
 
 
-def _apply_map(text: str, entries, rows):
+def _apply_map(text: str, entries, rows, filename: str = ""):
     changes = []
     line_order_map = {}
     for entry in entries:
@@ -183,7 +183,7 @@ def _apply_map(text: str, entries, rows):
             entry = line_order_map.get((line, order))
             if entry is None:
                 eprint(
-                    f"textmap: missing entry at line {line} order {order}",
+                    f"textmap: {filename}: missing entry at line {line} order {order}",
                     errors="replace",
                 )
                 continue
@@ -193,7 +193,9 @@ def _apply_map(text: str, entries, rows):
             except Exception:
                 continue
             if idx <= 0 or idx > len(entries):
-                eprint(f"textmap: index {idx} out of range", errors="replace")
+                eprint(
+                    f"textmap: {filename}: index {idx} out of range", errors="replace"
+                )
                 continue
             entry = entries[idx - 1]
         original = row.get("original", entry["text"])
@@ -204,8 +206,8 @@ def _apply_map(text: str, entries, rows):
             continue
         if entry["text"] != original:
             eprint(
-                "textmap: skip index %d (text mismatch: '%s' vs '%s')"
-                % (int(entry.get("index", 0) or 0), entry["text"], original),
+                "textmap: %s: skip index %d (text mismatch: '%s' vs '%s')"
+                % (filename, int(entry.get("index", 0) or 0), entry["text"], original),
                 errors="replace",
             )
             continue
@@ -221,7 +223,7 @@ def _apply_map(text: str, entries, rows):
         start_pos = int(entry.get("start", 0) or 0)
         if line_no <= 0 or line_no > len(lines):
             eprint(
-                f"textmap: invalid line for entry {entry.get('index', 0)}",
+                f"textmap: {filename}: invalid line for entry {entry.get('index', 0)}",
                 errors="replace",
             )
             continue
@@ -231,13 +233,29 @@ def _apply_map(text: str, entries, rows):
         rel_found = line_text.find(original, rel_start)
         if rel_found < 0:
             eprint(
-                "textmap: original not found at line %d order %d"
-                % (line_no, int(entry.get("order", 0) or 0)),
+                "textmap: %s: original not found at line %d order %d"
+                % (filename, line_no, int(entry.get("order", 0) or 0)),
                 errors="replace",
             )
             continue
-        abs_start = line_start + rel_found
-        abs_end = abs_start + len(original)
+        rel_end = rel_found + len(original)
+        rel_left = rel_found
+        rel_right = rel_end
+        if (
+            rel_left > 0
+            and rel_right < len(line_text)
+            and line_text[rel_left - 1] == '"'
+            and line_text[rel_right] == '"'
+        ):
+            while rel_left > 0 and line_text[rel_left - 1] == '"':
+                rel_left -= 1
+            while rel_right < len(line_text) and line_text[rel_right] == '"':
+                rel_right += 1
+            abs_start = line_start + rel_left
+            abs_end = line_start + rel_right
+        else:
+            abs_start = line_start + rel_found
+            abs_end = abs_start + len(original)
         changes.append((abs_start, abs_end, replacement))
     if not changes:
         return text, 0
@@ -245,6 +263,31 @@ def _apply_map(text: str, entries, rows):
     for start, end, repl in changes:
         text = text[:start] + repl + text[end:]
     return text, len(changes)
+
+
+def _fix_brackets_content(text: str):
+    if '"' not in text and " " not in text:
+        return text, 0, 0
+    out = []
+    in_bracket = False
+    fixed_quotes = 0
+    fixed_spaces = 0
+    for ch in text:
+        if not in_bracket:
+            out.append(ch)
+            if ch == "【":
+                in_bracket = True
+            continue
+        if ch == "】":
+            in_bracket = False
+            out.append(ch)
+        elif ch == '"':
+            fixed_quotes += 1
+        elif ch == " ":
+            fixed_spaces += 1
+        else:
+            out.append(ch)
+    return "".join(out), fixed_quotes, fixed_spaces
 
 
 def _hint_help(out=None):
@@ -264,6 +307,7 @@ def _iter_ss_files(root: str):
 
 
 def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
+    fname = os.path.basename(ss_path)
     if not os.path.exists(ss_path):
         eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
@@ -280,7 +324,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
             iad_base = BS.build_ia_data(ctx)
             iad_cache[key] = iad_base
     tokens = _collect_tokens(text, ctx, iad_base=iad_base)
-    entries = _locate_tokens(text, tokens)
+    entries = _locate_tokens(text, tokens, filename=fname)
     csv_path = _csv_path_for_ss(ss_path)
     if not apply_mode:
         _write_map(csv_path, entries)
@@ -290,16 +334,53 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
     rows = _read_map(csv_path)
-    updated, count = _apply_map(text, entries, rows)
+    updated, count = _apply_map(text, entries, rows, filename=fname)
     if count == 0:
-        eprint("textmap: no changes to apply", errors="replace")
+        eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0
+
+    out_encoding = encoding
     try:
-        _write_text(ss_path, updated, encoding)
+        _write_text(ss_path, updated, out_encoding)
     except UnicodeEncodeError:
-        eprint("textmap: encode failed, falling back to utf-8", errors="replace")
-        _write_text(ss_path, updated, "utf-8")
-    print(f"textmap: applied {count} changes")
+        eprint(
+            f"textmap: {fname}: encode failed, falling back to utf-8", errors="replace"
+        )
+        out_encoding = "utf-8"
+        _write_text(ss_path, updated, out_encoding)
+
+    written_text, _written_enc = _read_text(ss_path)
+    fixed_text, fixed_quote_count, fixed_space_count = _fix_brackets_content(
+        written_text
+    )
+    fixed_total = fixed_quote_count + fixed_space_count
+    if fixed_total:
+        try:
+            _write_text(ss_path, fixed_text, out_encoding)
+        except UnicodeEncodeError:
+            eprint(
+                f"textmap: {fname}: encode failed during post-fix, falling back to utf-8",
+                errors="replace",
+            )
+            out_encoding = "utf-8"
+            _write_text(ss_path, fixed_text, out_encoding)
+        if fixed_quote_count:
+            eprint(
+                f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside 【】",
+                errors="replace",
+            )
+        if fixed_space_count:
+            eprint(
+                f"textmap: {fname}: removed {fixed_space_count} space(s) inside 【】",
+                errors="replace",
+            )
+
+    if fixed_total:
+        print(
+            f"textmap: applied {count} changes, fixed {fixed_quote_count} bracket quote(s), removed {fixed_space_count} bracket space(s)"
+        )
+    else:
+        print(f"textmap: applied {count} changes")
     return 0
 
 
