@@ -1,9 +1,6 @@
 import struct
 from . import const as C
 
-NAME_W = 40
-MAX_LIST_PREVIEW = 8
-
 
 def hx(x):
     try:

@@ -1613,10 +1613,6 @@ class BS:
         return 1
 
 
-def get_error_atom(s):
-    return s.last_error.get("atom")
-
-
 def get_error_line(s):
     return int((s.last_error.get("atom") or {}).get("line", 0) or 0)
 
@@ -1861,7 +1857,6 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
         compile_one(ctx, p, stop_after)
 
 
-BS.get_error_atom = get_error_atom
 BS.get_error_line = get_error_line
 BS.get_error_code = get_error_code
 BS.get_error_str = get_error_str
