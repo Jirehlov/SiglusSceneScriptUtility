@@ -13,7 +13,6 @@ from .BS import (
     set_shuffle_seed,
     build_ia_data,
 )
-from . import CA
 from .CA import rd, wr, _parse_code
 from .GEI import write_gameexe_dat
 from .linker import link_pack
@@ -514,7 +513,6 @@ def main(argv=None):
             os.makedirs(tmp, exist_ok=True)
     ini, inc, ss = _scan_dir(inp)
     charset = _norm_charset(a.charset) if getattr(a, "charset", None) else ""
-    CA.U = charset
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False
     ctx = {
@@ -531,6 +529,7 @@ def main(argv=None):
         "ini_list": ini,
         "utf8": bool(use_utf8),
         "charset": enc,
+        "charset_force": charset,
         "lzss_level": a.lzss_level,
         "test_check": bool(a.debug),
         "lzss_mode": (not a.no_angou),
@@ -552,11 +551,7 @@ def main(argv=None):
     angou_path = os.path.join(inp, "暗号.dat")
     if (not a.no_angou) and os.path.isfile(angou_path):
         try:
-            angou_content = (
-                rd(angou_path, 0, enc="utf-8" if use_utf8 else "cp932")
-                .splitlines()[0]
-                .strip("\r\n")
-            )
+            angou_content = rd(angou_path, 0, enc=charset).splitlines()[0].strip("\r\n")
         except Exception:
             angou_content = ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:

@@ -24,7 +24,7 @@ def _compile_one_process(
         from .MA import MA
         from .BS import BS, _copy_ia_data
 
-        scn = rd(ss_path, 0, enc=enc)
+        scn = rd(ss_path, 0, enc=(enc or ""))
 
         iad = _copy_ia_data(ia_data)
         pcad = {}
@@ -87,8 +87,7 @@ def parallel_compile(
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
-    utf8 = ctx.get("utf8", False)
-    enc = "utf-8" if utf8 else "cp932"
+    enc = ctx.get("charset_force") or ""
     stop = stop_after or ctx.get("stop_after", "bs")
 
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)

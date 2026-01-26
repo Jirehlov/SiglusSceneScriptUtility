@@ -51,7 +51,6 @@ def _make_original_source_rel_list(scn_path):
 def _build_inc_data(ctx):
     scn_path = ctx.get("scn_path") or ""
     inc_list = ctx.get("inc_list") or []
-    enc = "utf-8" if ctx.get("utf8") else "cp932"
     iad = {
         "replace_tree": _rt(),
         "name_set": set(ctx.get("defined_names") or []),
@@ -67,7 +66,7 @@ def _build_inc_data(ctx):
         inc_path = inc if os.path.isabs(inc) else os.path.join(scn_path, inc)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = rd(inc_path, 0, enc=enc)
+        txt = rd(inc_path, 0, enc=(ctx.get("charset_force") or ""))
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
         if not ia.step1():
@@ -110,9 +109,9 @@ def _xor_cycle_inplace(buf, code, start=0):
     _xor_cycle_inplace_native(buf, code, st)
 
 
-def _read_first_line(path, enc):
+def _read_first_line(path, force_charset=""):
     try:
-        txt = rd(path, 0, enc=enc)
+        txt = rd(path, 0, enc=(force_charset or ""))
     except Exception:
         return ""
     i = txt.find("\n")
@@ -125,10 +124,11 @@ def _resolve_exe_angou(ctx):
     if (not ctx.get("exe_angou_mode")) or (not ctx.get("lzss_mode", True)):
         return (False, b"")
     scn_path = ctx.get("scn_path") or ""
-    enc = "utf-8" if ctx.get("utf8") else "cp932"
     angou_str = ctx.get("exe_angou_str")
     if (not angou_str) and scn_path:
-        angou_str = _read_first_line(os.path.join(scn_path, "暗号.dat"), enc)
+        angou_str = _read_first_line(
+            os.path.join(scn_path, "暗号.dat"), ctx.get("charset_force") or ""
+        )
     if not angou_str:
         return (False, b"")
     mb = angou_str.encode("cp932", "ignore")

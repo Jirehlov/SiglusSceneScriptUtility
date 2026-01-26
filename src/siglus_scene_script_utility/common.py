@@ -6,6 +6,97 @@ import hashlib
 from . import const as C
 
 
+def norm_charset(cs: str) -> str:
+    s = str(cs or "").strip().lower()
+    if s in (
+        "jis",
+        "sjis",
+        "shift_jis",
+        "shift-jis",
+        "cp932",
+        "ms932",
+        "windows-932",
+        "windows932",
+    ):
+        return "cp932"
+    if s in ("utf8", "utf-8", "utf_8", "utf8-sig", "utf-8-sig"):
+        return "utf-8"
+    return ""
+
+
+def decode_text_auto(data: bytes, force_charset: str = ""):
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("data must be bytes")
+    b = bytes(data)
+    had_bom = b.startswith(b"\xef\xbb\xbf")
+
+    def _d8():
+        e = "utf-8-sig" if had_bom else "utf-8"
+        return b.decode(e, "strict")
+
+    def _d9():
+        return b.decode("cp932", "strict")
+
+    def _fix(t: str) -> str:
+        return t.replace("\r\n", "\n").replace("\r", "\n")
+
+    cs = norm_charset(force_charset)
+    if cs:
+        try:
+            if cs == "cp932":
+                return _fix(_d9()), "cp932", had_bom
+            return _fix(_d8()), "utf-8", had_bom
+        except UnicodeDecodeError:
+            pass
+
+    t8 = t9 = None
+    try:
+        t8 = _d8()
+    except UnicodeDecodeError:
+        pass
+    try:
+        t9 = _d9()
+    except UnicodeDecodeError:
+        pass
+
+    if t8 is None and t9 is None:
+        return _fix(b.decode("utf-8", "strict")), "utf-8", had_bom
+    if t8 is None:
+        return _fix(t9), "cp932", had_bom
+    if t9 is None:
+        return _fix(t8), "utf-8", had_bom
+    if had_bom:
+        return _fix(t8), "utf-8", had_bom
+    try:
+        t8.encode("cp932")
+    except UnicodeEncodeError:
+        return _fix(t8), "utf-8", had_bom
+
+    def _p(t: str) -> int:
+        r = 0
+        for ch in t:
+            o = ord(ch)
+            if o < 32 and ch not in "\n\t":
+                r += 2
+            elif 0x80 <= o <= 0x9F:
+                r += 2
+            elif 0xFF61 <= o <= 0xFF9F:
+                r += 1
+            elif 0xE000 <= o <= 0xF8FF:
+                r += 2
+        return r
+
+    if _p(t8) <= _p(t9):
+        return _fix(t8), "utf-8", had_bom
+    return _fix(t9), "cp932", had_bom
+
+
+def read_text_auto(path: str, force_charset: str = "") -> str:
+    with open(path, "rb") as f:
+        data = f.read()
+    return decode_text_auto(data, force_charset=force_charset)[0]
+
+
 def log_stage(stage, file_path):
     name = os.path.basename(file_path) if file_path else ""
     print(f"{stage}: {name}")

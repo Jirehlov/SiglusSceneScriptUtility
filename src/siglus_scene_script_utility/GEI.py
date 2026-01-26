@@ -7,8 +7,8 @@ from .common import exe_angou_element
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
 
-def _read_text(p, utf8):
-    return rd(p, 0)
+def _read_text(p, utf8, force_charset=""):
+    return rd(p, 0, enc=force_charset)
 
 
 class IniFileAnalizer:
@@ -195,7 +195,11 @@ def write_gameexe_dat(ctx):
     gameexe_dat = ctx.get("gameexe_dat") or "Gameexe.dat"
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
     gei_path = os.path.join(scn, gameexe_ini)
-    gei = _read_text(gei_path, utf8) if os.path.exists(gei_path) else ""
+    gei = (
+        _read_text(gei_path, utf8, (ctx.get("charset_force") or ""))
+        if os.path.exists(gei_path)
+        else ""
+    )
     ged = ""
     if gei:
         a = IniFileAnalizer()

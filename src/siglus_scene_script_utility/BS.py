@@ -169,7 +169,9 @@ def build_ia_data(ctx):
         log_stage("IA", inc_path)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = rd(inc_path, 0, enc=enc)
+        txt = rd(
+            inc_path, 0, enc=(ctx.get("charset_force") if isinstance(ctx, dict) else "")
+        )
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
         if not ia.step1():
@@ -1676,7 +1678,9 @@ def compile_one_pipeline(
         return f"{code} at {fname}:{int(line or 0)}"
 
     enc = "utf-8" if (isinstance(ctx, dict) and ctx.get("utf8")) else "cp932"
-    scn = rd(ss_path, 0, enc=enc)
+    scn = rd(
+        ss_path, 0, enc=(ctx.get("charset_force") if isinstance(ctx, dict) else "")
+    )
 
     base = ia_data
     if not isinstance(base, dict) and isinstance(ctx, dict):

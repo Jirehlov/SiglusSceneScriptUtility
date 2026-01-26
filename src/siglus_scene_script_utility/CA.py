@@ -5,84 +5,13 @@ from functools import lru_cache
 from . import const as C
 
 
-U = ""
-
-
-def rd(p, b=1, enc="utf-8"):
+def rd(p, b=1, enc=""):
     if b:
         return open(p, "rb").read()
+    from .common import decode_text_auto
+
     x = open(p, "rb").read()
-
-    def _n(cs):
-        s = str(cs or "").strip().lower()
-        if s in (
-            "jis",
-            "sjis",
-            "shift_jis",
-            "shift-jis",
-            "cp932",
-            "ms932",
-            "windows-932",
-            "windows932",
-        ):
-            return "cp932"
-        if s in ("utf8", "utf-8", "utf_8", "utf8-sig", "utf-8-sig"):
-            return "utf-8"
-        return ""
-
-    def _d8():
-        e = "utf-8-sig" if x.startswith(b"\xef\xbb\xbf") else "utf-8"
-        return x.decode(e, "strict")
-
-    def _d9():
-        return x.decode("cp932", "strict")
-
-    def _fix(t):
-        return t.replace("\r\n", "\n").replace("\r", "\n")
-
-    cs = _n(U)
-    if cs:
-        try:
-            return _fix(_d9() if cs == "cp932" else _d8())
-        except UnicodeDecodeError:
-            pass
-    t8 = t9 = None
-    try:
-        t8 = _d8()
-    except UnicodeDecodeError:
-        pass
-    try:
-        t9 = _d9()
-    except UnicodeDecodeError:
-        pass
-    if t8 is None and t9 is None:
-        return x.decode("utf-8", "strict")
-    if t8 is None:
-        return _fix(t9)
-    if t9 is None:
-        return _fix(t8)
-    if x.startswith(b"\xef\xbb\xbf"):
-        return _fix(t8)
-    try:
-        t8.encode("cp932")
-    except UnicodeEncodeError:
-        return _fix(t8)
-
-    def _p(t):
-        r = 0
-        for ch in t:
-            o = ord(ch)
-            if o < 32 and ch not in "\n\t":
-                r += 2
-            elif 0x80 <= o <= 0x9F:
-                r += 2
-            elif 0xFF61 <= o <= 0xFF9F:
-                r += 1
-            elif 0xE000 <= o <= 0xF8FF:
-                r += 2
-        return r
-
-    return _fix(t8 if _p(t8) <= _p(t9) else t9)
+    return decode_text_auto(x, force_charset=enc)[0]
 
 
 def wr(p, d, b=1, enc="utf-8"):

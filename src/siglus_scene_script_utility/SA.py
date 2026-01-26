@@ -1330,13 +1330,9 @@ class SA:
 
 
 def _sa_read(p):
-    b = open(p, "rb").read()
-    for e in ("utf-8-sig", "cp932", "utf-16", "utf-16le", "utf-16be"):
-        try:
-            return b.decode(e)
-        except Exception:
-            pass
-    return b.decode("latin1", "ignore")
+    from .common import read_text_auto
+
+    return read_text_auto(p)
 
 
 def _sa_diff(a, b, p=""):

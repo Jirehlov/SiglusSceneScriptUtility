@@ -6,17 +6,31 @@ from . import CA
 from . import BS
 from . import LA
 from . import const as C
-from .common import eprint, hint_help as _hint_help
+from .common import eprint, hint_help as _hint_help, decode_text_auto
 
 
 def _read_text(path: str):
     data = open(path, "rb").read()
-    if data.startswith(b"\xef\xbb\xbf"):
-        return data.decode("utf-8-sig"), "utf-8-sig"
-    try:
-        return data.decode("utf-8"), "utf-8"
-    except UnicodeDecodeError:
-        return data.decode("cp932"), "cp932"
+
+    if b"\r\n" in data:
+        newline = "\r\n"
+    elif b"\r" in data:
+        newline = "\r"
+    elif b"\n" in data:
+        newline = "\n"
+    else:
+        newline = "\n"
+
+    text, chosen, had_bom = decode_text_auto(data)
+
+    encoding = "utf-8-sig" if had_bom else chosen
+    return text, encoding, newline
+
+
+def _align_newlines(text: str, newline: str) -> str:
+    if newline and newline != "\n":
+        return text.replace("\n", newline)
+    return text
 
 
 def _write_text(path: str, text: str, encoding: str):
@@ -304,7 +318,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     if not os.path.exists(ss_path):
         eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
-    text, encoding = _read_text(ss_path)
+    text, encoding, newline = _read_text(ss_path)
     ctx = {
         "scn_path": os.path.dirname(os.path.abspath(ss_path)),
         "utf8": bool(encoding.startswith("utf-8")),
@@ -334,29 +348,29 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
 
     out_encoding = encoding
     try:
-        _write_text(ss_path, updated, out_encoding)
+        _write_text(ss_path, _align_newlines(updated, newline), out_encoding)
     except UnicodeEncodeError:
         eprint(
             f"textmap: {fname}: encode failed, falling back to utf-8", errors="replace"
         )
         out_encoding = "utf-8"
-        _write_text(ss_path, updated, out_encoding)
+        _write_text(ss_path, _align_newlines(updated, newline), out_encoding)
 
-    written_text, _written_enc = _read_text(ss_path)
+    written_text, _written_enc, _nl2 = _read_text(ss_path)
     fixed_text, fixed_quote_count, fixed_space_count = _fix_brackets_content(
         written_text
     )
     fixed_total = fixed_quote_count + fixed_space_count
     if fixed_total:
         try:
-            _write_text(ss_path, fixed_text, out_encoding)
+            _write_text(ss_path, _align_newlines(fixed_text, newline), out_encoding)
         except UnicodeEncodeError:
             eprint(
                 f"textmap: {fname}: encode failed during post-fix, falling back to utf-8",
                 errors="replace",
             )
             out_encoding = "utf-8"
-            _write_text(ss_path, fixed_text, out_encoding)
+            _write_text(ss_path, _align_newlines(fixed_text, newline), out_encoding)
         if fixed_quote_count:
             eprint(
                 f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside 【】",
