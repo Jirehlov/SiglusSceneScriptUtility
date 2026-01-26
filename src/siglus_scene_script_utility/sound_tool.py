@@ -6,13 +6,8 @@ import subprocess
 import tempfile
 
 from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
-
-try:
-    from . import sound
-    from . import extract
-except Exception:
-    import sound
-    import extract
+from . import sound
+from . import extract
 
 
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:

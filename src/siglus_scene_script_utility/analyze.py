@@ -9,7 +9,6 @@ from . import dbs
 from . import gan
 
 SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan")
-_write_dat_disassembly = dat._write_dat_disassembly
 
 
 def _detect_type(path, blob):

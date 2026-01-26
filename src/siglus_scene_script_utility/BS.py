@@ -1637,23 +1637,6 @@ def get_error_code(s):
     return "UNK_ERROR"
 
 
-def get_error_str(s):
-    t = int(s.last_error.get("type", 0) or 0)
-    if t == TNMSERR_BS_ILLEGAL_DEFAULT_ARG:
-        return "Unsupported default argument type."
-    if t == TNMSERR_BS_CONTINUE_NO_LOOP:
-        return "continue can only be used inside a loop."
-    if t == TNMSERR_BS_BREAK_NO_LOOP:
-        return "break can only be used inside a loop."
-    if t == TNMSERR_BS_NEED_REFERENCE:
-        return "A reference (l-value) is required."
-    if t == TNMSERR_BS_NEED_VALUE:
-        return "A value (r-value) is required."
-    if s.es:
-        return s.es
-    return "Binary save: unknown error."
-
-
 def find_ss(ctx, only=None):
     if only:
         return [absp(x) for x in only]
@@ -1827,4 +1810,3 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
 
 BS.get_error_line = get_error_line
 BS.get_error_code = get_error_code
-BS.get_error_str = get_error_str

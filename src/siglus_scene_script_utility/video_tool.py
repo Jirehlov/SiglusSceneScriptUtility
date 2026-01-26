@@ -2,11 +2,7 @@ import os
 import sys
 
 from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
-
-try:
-    from . import video
-except Exception:
-    import video
+from . import video
 
 
 def _iter_video_files(inp: str):

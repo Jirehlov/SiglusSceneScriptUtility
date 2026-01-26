@@ -333,24 +333,6 @@ def _init_stats(ctx):
         return
     stats = ctx.setdefault("stats", {})
     stats.setdefault("stage_time", {})
-    stats.setdefault("outputs", [])
-
-
-def _record_output(ctx, path, label=None):
-    if (not isinstance(ctx, dict)) or (not path) or (not os.path.isfile(path)):
-        return
-    _init_stats(ctx)
-    try:
-        ctx["stats"]["outputs"].append(
-            {
-                "label": label or "",
-                "path": path,
-                "size": os.path.getsize(path),
-                "md5": hashlib.md5(read_bytes(path)).hexdigest(),
-            }
-        )
-    except Exception:
-        pass
 
 
 def _record_angou(ctx, content):
@@ -364,7 +346,6 @@ def _print_summary(ctx):
     if not isinstance(stats, dict):
         return
     timings = stats.get("stage_time") or {}
-    _outputs = stats.get("outputs") or []
     angou = stats.get("angou_content", "")
     if timings:
         print("=== Stage Timings ===")
@@ -569,13 +550,9 @@ def main(argv=None):
     ok = False
     try:
         t = time.time()
-        ge_path = write_gameexe_dat(ctx)
+        write_gameexe_dat(ctx)
         record_stage_time(ctx, "GEI", time.time() - t)
-        _record_output(ctx, ge_path, "Gameexe.dat")
         if not a.gei:
-            angou_hdr = os.path.join(tmp, "EXE_ANGOU.h")
-            if os.path.isfile(angou_hdr):
-                _record_output(ctx, angou_hdr, "EXE_ANGOU.h")
             compile_list = ss
             md5_path = ""
             cur_inc = {}
@@ -773,8 +750,7 @@ def main(argv=None):
                         max_workers=a.max_workers,
                         parallel=a.parallel,
                     )
-            pp = link_pack(ctx)
-            _record_output(ctx, pp, ctx.get("scene_pck"))
+            link_pack(ctx)
             if md5_path:
                 write_text(
                     md5_path,

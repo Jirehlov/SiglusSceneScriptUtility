@@ -163,8 +163,6 @@ def _pck_sections(blob, preview=False):
                 else ("scene#%d" % i)
             )
             sec(a, b, "D", nm + ".dat")
-    elif item_cnt:
-        pass
     tail_start = scn_data_end if scn_data_end > 0 else 0
     os_hsz = int(h.get("original_source_header_size", 0) or 0)
     if os_hsz > 0 and tail_start >= 0 and tail_start + os_hsz <= n:
@@ -892,9 +890,9 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
                 "Warning: scn_data_exe_angou_mod=1 but 暗号*.dat not found/invalid under output folder; scene data may remain encrypted.\n"
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
-    A = None
+    D = None
     if dat_txt:
-        from . import analyze as A
+        from . import dat as D
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
             continue
@@ -918,8 +916,8 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         out_name = os.path.basename(rel) or rel
         out_path = _unique_outpath(bs_dir, out_name)
         write_bytes(out_path, out_dat)
-        if A:
-            A._write_dat_disassembly(
+        if D:
+            D._write_dat_disassembly(
                 out_path, out_dat, os.path.dirname(out_path) or bs_dir
             )
         ok_cnt += 1
