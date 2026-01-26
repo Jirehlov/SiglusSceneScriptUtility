@@ -148,23 +148,9 @@ def _get_scene_names(ctx):
 
 
 def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True):
-    """
-    Load scene data files and optionally compress them with LZSS.
-
-    Args:
-        ctx: Context dictionary containing paths and settings
-        scn_names: List of scene names (without extension)
-        lzss_mode: Whether to perform LZSS compression
-        max_workers: Maximum parallel workers (None for auto)
-        parallel: If True, use parallel compression (default: True)
-
-    Returns:
-        Tuple of (enc_names, dat_list, lzss_list)
-    """
     tmp = ctx.get("tmp_path") or ""
     bs_dir = os.path.join(tmp, "bs")
 
-    # Try parallel loading if enabled
     if parallel and lzss_mode and len(scn_names) > 1:
         try:
             from .parallel import parallel_lzss_compress
@@ -176,10 +162,8 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             set_stage_time(ctx, "LZSS", time.time() - start)
             return result
         except ImportError:
-            # Fall back to serial if parallel module not available
             pass
 
-    # Serial loading
     from . import compiler as _m
 
     enc_names = []
@@ -194,13 +178,13 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
         enc_names.append(nm)
         if lzss_mode:
             lz_path = os.path.join(bs_dir, nm + ".lzss")
-            # Shared helper keeps serial/parallel cache behavior aligned
+
             lzss_level = ctx.get("lzss_level", 17)
             t = time.time()
             dat, lz, built_new = _m.load_dat_and_lzss(
                 dat_path, lz_path, easy_code, lzss_level
             )
-            # Keep behavior identical: record timing only for newly-built cache
+
             if built_new:
                 record_stage_time(ctx, "LZSS", time.time() - t)
             log_stage("LZSS", nm + ".ss")
@@ -323,18 +307,6 @@ def _build_pack_bytes(
 
 
 def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=True):
-    """
-    Build encrypted chunks for original source files.
-
-    Args:
-        ctx: Context dictionary containing paths and settings
-        lzss_mode: Whether LZSS mode is enabled
-        max_workers: Maximum parallel workers (None for auto)
-        parallel: If True, use parallel encryption (default: True)
-
-    Returns:
-        Tuple of (header_size, chunks_list)
-    """
     if not lzss_mode:
         return (0, [])
     if not ctx.get("source_angou"):
@@ -353,7 +325,6 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
     if not rel_list:
         return (0, [])
 
-    # Try parallel encryption if enabled
     if parallel and len(rel_list) > 1:
         try:
             from .parallel import parallel_source_encrypt
@@ -371,10 +342,8 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
             )
             return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
         except ImportError:
-            # Fall back to serial if parallel module not available
             pass
 
-    # Serial encryption
     sizes = []
     chunks = []
     for rel in rel_list:

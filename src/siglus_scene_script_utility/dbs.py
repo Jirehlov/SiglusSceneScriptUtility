@@ -11,14 +11,13 @@ from .common import _sha1
 
 
 def _looks_like_dbs(blob):
-    """Heuristic detection for .dbs (Siglus TNM database)."""
     if (not blob) or len(blob) < 12:
         return False
     try:
         m_type = struct.unpack_from("<i", blob, 0)[0]
     except Exception:
         return False
-    # m_type is usually 0 (mbcs) or non-zero (utf16), but keep it permissive.
+
     if m_type < -16 or m_type > 16:
         return False
     try:
@@ -34,11 +33,6 @@ def _looks_like_dbs(blob):
 
 
 def _xor32_inplace(barr, code):
-    """XOR each little-endian DWORD in barr with code (in-place).
-
-    Mirrors engine: tnm_database_set_xor_32(DWORD* src, int data_size, DWORD xor_code)
-    Note: only processes floor(len/4) DWORDs; tail bytes (if any) are left as-is.
-    """
     if not barr:
         return
     n = (len(barr) // 4) * 4
@@ -49,17 +43,6 @@ def _xor32_inplace(barr, code):
 
 
 def _dbs_unpack(blob):
-    """Return (m_type, expanded_bytes).
-
-    Mirrors engine C_elm_database::load_dbs + tnm_database_expand:
-
-      - read m_type (int32)
-      - XOR packed stream with XORCODE[2]
-      - LZSS unpack
-      - split by TILE mask into A/B maps, XORCODE[0]/[1], and merge back
-
-    This produces the real dbs payload that starts with Stnm_database_header.
-    """
     if not blob or len(blob) < 12:
         return 0, b""
     m_type = struct.unpack_from("<i", blob, 0)[0]
@@ -72,7 +55,7 @@ def _dbs_unpack(blob):
         return m_type, b""
 
     unpack_size = len(unpack_data)
-    # engine uses: yl = unpack_size / MAP_WIDTH / 4 (integer division)
+
     yl = unpack_size // (C.DBS_MAP_WIDTH * 4)
     if yl <= 0:
         return m_type, b""
@@ -80,7 +63,6 @@ def _dbs_unpack(blob):
     temp_a = bytearray(unpack_size)
     temp_b = bytearray(unpack_size)
 
-    # extract masked maps
     tile_copy(
         temp_a,
         bytes(unpack_data),
@@ -108,11 +90,9 @@ def _dbs_unpack(blob):
         128,
     )
 
-    # xor each map
     _xor32_inplace(temp_a, C.DBS_XOR32_CODE_A)
     _xor32_inplace(temp_b, C.DBS_XOR32_CODE_B)
 
-    # merge back
     dst = bytearray(unpack_size)
     tile_copy(
         dst,
@@ -157,9 +137,9 @@ def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
         end = sblob.find(b"\x00", ofs)
         if end < 0:
             end = len(sblob)
-        # Engine uses MBSTR_to_TSTR; most Siglus builds are Shift-JIS.
+
         return sblob[ofs:end].decode("shift_jis", errors="replace")
-    # UTF-16LE null-terminated
+
     end = ofs
     while end + 1 < len(sblob):
         if sblob[end] == 0 and sblob[end + 1] == 0:
@@ -169,7 +149,6 @@ def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
 
 
 def _parse_dbs(m_type: int, data: bytes):
-    """Parse expanded dbs payload (after XOR+LZSS)."""
     if (not data) or len(data) < 28:
         raise ValueError("dbs expanded data too small")
 
@@ -191,14 +170,12 @@ def _parse_dbs(m_type: int, data: bytes):
         raise ValueError("dbs row/col count too large")
 
     def _try_scale(scale: int):
-        # Offsets may be stored in bytes (scale=1). Some variants might store DWORD offsets (scale=4).
         data_size = int(raw_data_size)
         row_ofs = int(raw_row_ofs) * scale
         col_ofs = int(raw_col_ofs) * scale
         data_ofs = int(raw_data_ofs) * scale
         str_ofs = int(raw_str_ofs) * scale
 
-        # data_size: treat <=0 as "whole buffer", clamp to buffer.
         if data_size <= 0:
             data_size = len(data)
         else:
@@ -206,7 +183,6 @@ def _parse_dbs(m_type: int, data: bytes):
         if data_size > len(data):
             data_size = len(data)
 
-        # basic range checks
         if not (
             0 <= row_ofs <= len(data)
             and 0 <= col_ofs <= len(data)
@@ -217,16 +193,14 @@ def _parse_dbs(m_type: int, data: bytes):
         if not (0 <= str_ofs <= data_size <= len(data)):
             return None
 
-        # expected region sizes
         row_hdr_sz = row_cnt * 4
         col_hdr_sz = col_cnt * 8
         cell_cnt = row_cnt * col_cnt
-        # guard overflow
+
         if cell_cnt < 0 or cell_cnt > 1_000_000_000:
             return None
         dt_sz = cell_cnt * 4
 
-        # sanity: offsets should be in ascending order in typical files; allow equal (0-sized) but not reversed.
         if not (row_ofs <= col_ofs <= data_ofs <= str_ofs):
             return None
 
@@ -247,18 +221,15 @@ def _parse_dbs(m_type: int, data: bytes):
 
     data_size, row_ofs, col_ofs, data_ofs, str_ofs, dt_sz, ofs_scale = chosen
 
-    # row header
     row_calls = []
     if row_cnt:
         row_calls = list(struct.unpack_from("<%di" % row_cnt, data, row_ofs))
 
-    # column header
     col_headers = []
     for i in range(col_cnt):
         call_no, data_type = struct.unpack_from("<2i", data, col_ofs + i * 8)
         col_headers.append((int(call_no), int(data_type)))
 
-    # data table
     str_blob = data[str_ofs:data_size] if str_ofs < data_size else b""
 
     return {
@@ -313,7 +284,6 @@ def _analyze_dbs(path, blob: bytes) -> int:
         "    data_offset=%d  str_offset=%d" % (info["data_offset"], info["str_offset"])
     )
 
-    # preview row / column headers
     rows = info["row_calls"]
     cols = info["col_headers"]
 
@@ -335,7 +305,6 @@ def _analyze_dbs(path, blob: bytes) -> int:
     if len(cols) > C.MAX_LIST_PREVIEW:
         print("  ... (%d more)" % (len(cols) - C.MAX_LIST_PREVIEW))
 
-    # preview a few string cells (first row)
     if info["row_cnt"] and info["col_cnt"]:
         print("")
         print("first-row cell preview:")
@@ -350,7 +319,6 @@ def _analyze_dbs(path, blob: bytes) -> int:
                 sv = _dbs_get_str(m_type, sblob, int(v))
                 print("  col_call_no=%d  S[%d] -> %s" % (cn, int(v), repr(sv)))
             else:
-                # treat as signed for readability
                 iv = struct.unpack("<i", struct.pack("<I", v))[0]
                 print("  col_call_no=%d  V -> %d" % (cn, iv))
             shown += 1
@@ -380,7 +348,7 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
         s2 = _parse_dbs(t2, u2)
     except Exception as e:
         print("  parse failed: %s" % (e,))
-        # fallback: raw diff of unpacked bytes
+
         lim = min(len(u1), len(u2), 1024 * 1024)
         first = None
         for i in range(lim):
@@ -393,7 +361,6 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
             print("  first_diff_offset=%d" % first)
         return 0
 
-    # header diffs
     def _hd(k):
         return (k, s1.get(k), s2.get(k))
 
@@ -416,7 +383,6 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
         for k, a, b in diffs:
             print("  %s: %r -> %r" % (k, a, b))
 
-    # row/col header diffs (by content)
     r1 = s1["row_calls"]
     r2 = s2["row_calls"]
     c1 = s1["col_headers"]
@@ -460,7 +426,6 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
         if (not only1) and (not only2) and (not typechg):
             print("  (same set, different order)")
 
-    # cell diffs (only when layout matches exactly)
     if (
         (s1["row_cnt"] == s2["row_cnt"])
         and (s1["col_cnt"] == s2["col_cnt"])
@@ -511,7 +476,6 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
         if total > limit:
             print("  note: table is large; scan was capped")
     else:
-        # fallback: first differing byte in unpacked stream (cap 1MB)
         lim = min(len(u1), len(u2), 1024 * 1024)
         first = None
         for i in range(lim):
@@ -536,11 +500,7 @@ def compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
     return _compare_dbs(p1, p2, b1, b2)
 
 
-# --- DBS CSV export/apply (moved from extract.py) ------------------------
-
-
 def _iter_dbs_files(path: str):
-    """Yield .dbs files under path (file or directory)."""
     if not path:
         return
     if os.path.isdir(path):
@@ -554,19 +514,17 @@ def _iter_dbs_files(path: str):
 
 
 def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> str:
-    """Convert a dbs cell value to a csv field string."""
     try:
         _, dt = info["col_headers"][col_idx]
     except Exception:
         dt = 0
     ch = chr(dt & 0xFF) if 32 <= (dt & 0xFF) <= 126 else ""
     if ch == "S":
-        # String offset relative to p_str
         try:
             return _dbs_get_str(m_type, info.get("str_blob") or b"", int(raw_val))
         except Exception:
             return ""
-    # Treat non-string as signed int32 for readability
+
     try:
         v = int(raw_val) & 0xFFFFFFFF
         if v >= 0x80000000:
@@ -577,13 +535,10 @@ def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> st
 
 
 def export_dbs_to_csv(path: str) -> int:
-    """Export .dbs file(s) to .csv next to source (name.dbs.csv)."""
-
     if not path:
         sys.stderr.write("dbs export: missing path\\n")
         return 2
 
-    # Validate input: exporting expects a .dbs file or a directory containing .dbs files.
     if not os.path.isdir(path):
         if not os.path.exists(path):
             sys.stderr.write("dbs export: file not found: %s\\n" % path)
@@ -612,7 +567,6 @@ def export_dbs_to_csv(path: str) -> int:
             data_ofs = int(info.get("data_offset") or 0)
             data_blob = info.get("data_blob") or expanded
 
-            # Build header row: row_call_no + per-column call_no (and type char)
             header = ["row_call_no"]
             for call_no, dt in info.get("col_headers") or []:
                 ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
@@ -625,7 +579,6 @@ def export_dbs_to_csv(path: str) -> int:
                 w = csv.writer(f, lineterminator="\r\n")
                 w.writerow(header)
 
-                # Stream rows to avoid holding huge tables in memory.
                 row_calls = info.get("row_calls") or []
                 for r in range(row_cnt):
                     row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
@@ -655,7 +608,6 @@ def export_dbs_to_csv(path: str) -> int:
 
 
 def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
-    """Pack expanded dbs payload to on-disk .dbs bytes."""
     if not expanded:
         return struct.pack("<i", int(m_type))
     unpack_size = len(expanded)
@@ -749,7 +701,6 @@ def apply_dbs_csv(path: str) -> int:
         sys.stderr.write("dbs apply: missing path\\n")
         return 2
 
-    # Validate input: apply expects a .dbs file or a directory containing .dbs files.
     if not os.path.isdir(path):
         if not os.path.exists(path):
             sys.stderr.write("dbs apply: file not found: %s\\n" % path)

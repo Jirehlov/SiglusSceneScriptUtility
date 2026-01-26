@@ -8,24 +8,21 @@ import tempfile
 from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
 
 try:
-    # Package import (preferred)
     from . import sound
     from . import extract
-except Exception:  # pragma: no cover
-    # Direct script import fallback
-    import sound  # type: ignore
-    import extract  # type: ignore
+except Exception:
+    import sound
+    import extract
 
 
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
-    """Remove the dedicated ffmpeg temp directory under output root."""
     if not tmp_dir:
         return
     try:
         if os.path.isdir(tmp_dir) and os.path.basename(tmp_dir) == ".tmp_ffmpeg":
             out_abs = os.path.abspath(out_root)
             tmp_abs = os.path.abspath(tmp_dir)
-            # Safety: only delete if it is inside out_root
+
             if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
                 out_abs + os.sep
             ):
@@ -54,7 +51,6 @@ def _write_file(path: str, data: bytes) -> None:
 
 
 def _analyze_one(path: str) -> int:
-    """Analyze one .nwa/.ovk/.owp and print basic metadata to stdout."""
     ext = os.path.splitext(path)[1].lower()
     try:
         st = os.stat(path)
@@ -113,7 +109,7 @@ def _analyze_one(path: str) -> int:
     if ext == ".ovk":
         import struct
 
-        entry_struct = struct.Struct("<IIii")  # size, offset, no, smp_cnt
+        entry_struct = struct.Struct("<IIii")
         with open(path, "rb") as f:
             cnt_b = f.read(4)
             if len(cnt_b) != 4:
@@ -138,25 +134,22 @@ def _analyze_one(path: str) -> int:
         return 0
 
     if ext == ".owp":
-        # Report whether it looks like plain OGG or XOR-obfuscated, and output decoded size.
         try:
             with open(path, "rb") as f:
                 head = f.read(4)
             is_ogg = head == b"OggS"
             xor_key = None
             if not is_ogg and len(head) == 4:
-                # Common OWP key (0x39) check
                 if bytes((b ^ 0x39) for b in head) == b"OggS":
                     xor_key = "0x39"
                 else:
-                    # heuristic: key = first_byte ^ 'O'
                     key = head[0] ^ ord("O")
                     if bytes((head[j] ^ key) for j in range(4)) == b"OggS":
                         xor_key = hex(key)
             print(_fmt_kv("looks_like_ogg", bool(is_ogg)))
             if xor_key is not None:
                 print(_fmt_kv("xor_key_candidate", xor_key))
-            # Validate by decoding header (full decode) only if not too large? Keep simple.
+
             ogg = sound.decode_owp_to_ogg_bytes(path)
             print(
                 _fmt_kv("decoded_magic", ogg[:4].decode("latin1", "backslashreplace"))
@@ -178,11 +171,6 @@ _BGM_RE = re.compile(
 
 
 def _parse_bgm_table(gameexe_ini_text: str):
-    """
-    Parse lines like:
-      #BGM.000 = "BGM01A", "M01A", 60000, 6792000, 132000
-    Returns: dict[lower(file_name)] -> (start, end, repeat)
-    """
     table = {}
     for raw_line in (gameexe_ini_text or "").splitlines():
         line = raw_line.strip()
@@ -205,8 +193,6 @@ def _parse_bgm_table(gameexe_ini_text: str):
 
 
 def _load_gameexe_ini_text(gameexe_dat_path: str) -> str:
-    # Reuse extract.py --gei logic (equivalent to: siglus-tool -x --gei ...).
-    # This avoids duplicating the exe_el candidate search in sound_tool.py.
     tmp_dir = tempfile.mkdtemp(prefix="siglus_gei_")
     try:
         rc = extract.main(["--gei", gameexe_dat_path, tmp_dir])
@@ -214,7 +200,6 @@ def _load_gameexe_ini_text(gameexe_dat_path: str) -> str:
             raise RuntimeError("Failed to decode Gameexe.dat payload")
         ini_path = os.path.join(tmp_dir, "Gameexe.ini")
         if not os.path.isfile(ini_path):
-            # Fallback: case-insensitive search
             try:
                 for fn in os.listdir(tmp_dir):
                     if fn.lower() == "gameexe.ini":
@@ -318,7 +303,7 @@ def _extract_one(
             if key not in trim_table:
                 raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
             start_pos, end_pos, rep_pos = trim_table[key]
-            # "only export one loop": [repeat_pos, end_pos] (or EOF when end_pos == -1)
+
             eprint(
                 f"trim {base_name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
             )
@@ -397,7 +382,6 @@ def main(argv=None) -> int:
             return 1
         return _analyze_one(inp)
 
-    # --x (extract/decode)
     trim_path = ""
     if "--trim" in argv:
         i = argv.index("--trim")

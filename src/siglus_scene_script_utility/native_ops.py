@@ -1,16 +1,3 @@
-"""
-Native function implementations with Rust binding support.
-
-This module provides performance-critical functions with optional Rust acceleration.
-When the siglus_native module is available, it uses Rust implementations for:
-- LZSS compression/decompression
-- XOR cycle operations
-- MD5 digest computation
-- Tile copy operations
-
-Falls back to pure Python implementations if Rust bindings are not available.
-"""
-
 import os
 import struct
 import math
@@ -22,7 +9,7 @@ def _legacy_mode_enabled() -> bool:
 
 
 _LEGACY_MODE = _legacy_mode_enabled()
-# Try to import native Rust implementations
+
 try:
     if _LEGACY_MODE:
         raise ImportError("Legacy mode requested")
@@ -45,21 +32,13 @@ except (ImportError, AttributeError):
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
 
-
-# True only if the Rust backend provides the seed scanner
 HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
     _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
 )
 
 
 def is_native_available() -> bool:
-    """Check if native Rust bindings are available."""
     return _USE_NATIVE
-
-
-# ============================================================================
-# Pure Python implementations (fallback)
-# ============================================================================
 
 
 class _LzssTree:
@@ -146,7 +125,7 @@ class _LzssTreeFind:
         self.src_cnt = src_cnt
         self.window_size = window_size
         self.look_ahead_size = look_ahead_size
-        # Clamp level to valid range (2-17)
+
         self.max_match_len = max(2, min(level, look_ahead_size))
         self.src_index = 0
         self.match_target = 0
@@ -163,7 +142,7 @@ class _LzssTreeFind:
             self.tree.connect(self.window_top)
             target = self.tree.get_root_big()
             self.match_size = 0
-            matching_loop_cnt = self.max_match_len  # Use level-based max match length
+            matching_loop_cnt = self.max_match_len
             src_left = self.src_cnt - self.src_index
             if src_left == 0:
                 return
@@ -197,13 +176,6 @@ class _LzssTreeFind:
 
 
 def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
-    """
-    Pure Python LZSS compression.
-
-    Args:
-        src: Source data to compress
-        level: Compression level (2-17). Higher = better compression but slower.
-    """
     if not src:
         return b""
     INDEX_BITS = 12
@@ -264,7 +236,6 @@ def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
 
 
 def _py_lzss_unpack(src: bytes) -> bytes:
-    """Pure Python LZSS decompression."""
     if not src or len(src) < 8:
         return b""
     _, org = struct.unpack_from("<II", src, 0)
@@ -296,7 +267,6 @@ def _py_lzss_unpack(src: bytes) -> bytes:
 
 
 def _py_xor_cycle_inplace(b, code, st=0):
-    """Pure Python XOR cycle operation."""
     if not code:
         return
     n = len(code)
@@ -311,7 +281,6 @@ _MD5_K = tuple(int(abs(math.sin(i + 1)) * (1 << 32)) & 0xFFFFFFFF for i in range
 
 
 def _py_md5_digest(data: bytes) -> bytes:
-    """Pure Python MD5 digest computation."""
     if data is None:
         data = b""
     total = len(data)
@@ -375,7 +344,6 @@ def _py_md5_digest(data: bytes) -> bytes:
 
 
 def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
-    """Pure Python tile copy operation."""
     if not d or not s:
         return
     x0 = ((-repx) % tx) if repx <= 0 else ((tx - (repx % tx)) % tx)
@@ -389,42 +357,24 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
                 d[i : i + 4] = s[i : i + 4]
 
 
-# ============================================================================
-# Public API - uses native when available, falls back to pure Python
-# ============================================================================
-
-
 def lzss_pack(src: bytes, level: int = 17) -> bytes:
-    """
-    LZSS compression. Uses Rust when available.
-
-    Args:
-        src: Source data to compress
-        level: Compression level (2-17). Higher = better compression but slower.
-               Default is 17 (best compression).
-
-    Returns:
-        Compressed data
-    """
     if _USE_NATIVE:
         if level == 17:
             return _native_lzss_pack(src)
         elif _native_lzss_pack_level is not None:
             return _native_lzss_pack_level(src, level)
         else:
-            return _native_lzss_pack(src)  # Fallback if level function not available
+            return _native_lzss_pack(src)
     return _py_lzss_pack(src, level)
 
 
 def lzss_unpack(src: bytes) -> bytes:
-    """LZSS decompression. Uses Rust when available."""
     if _USE_NATIVE:
         return _native_lzss_unpack(src)
     return _py_lzss_unpack(src)
 
 
 def xor_cycle_inplace(b, code, st=0):
-    """XOR cycle operation (in-place). Uses Rust when available."""
     if _USE_NATIVE and isinstance(b, bytearray):
         _native_xor_cycle_inplace(
             b, bytes(code) if not isinstance(code, bytes) else code, st
@@ -434,23 +384,20 @@ def xor_cycle_inplace(b, code, st=0):
 
 
 def md5_digest(data: bytes) -> bytes:
-    """MD5 digest computation. Uses Rust when available."""
     if _USE_NATIVE:
         return _native_md5_digest(data if data else b"")
     return _py_md5_digest(data)
 
 
 def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
-    """Tile copy with mask. Uses Rust when available."""
     if _USE_NATIVE:
-        # Convert memoryview to bytearray for Rust
         d_arr = bytearray(d) if isinstance(d, memoryview) else d
         s_bytes = bytes(s) if isinstance(s, memoryview) else s
         t_bytes = bytes(t) if not isinstance(t, bytes) else t
         _native_tile_copy(
             d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim
         )
-        # Copy back if it was a memoryview
+
         if isinstance(d, memoryview):
             d[:] = d_arr
     else:
@@ -458,15 +405,6 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
 
 
 def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
-    """Pure Python MSVC rand() compatible shuffle (in-place).
-
-    Args:
-        state: Initial PRNG state (u32).
-        a: Python list to shuffle in-place.
-
-    Returns:
-        Updated PRNG state (u32).
-    """
     s = int(state) & 0xFFFFFFFF
     n = len(a)
     if n < 2:
@@ -493,16 +431,10 @@ def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
 
 
 def msvcrand_shuffle_inplace(state: int, a) -> int:
-    """MSVC rand() compatible shuffle (in-place).
-
-    Uses Rust acceleration by default when available.
-    Returns the updated PRNG state.
-    """
     if _USE_NATIVE and _native_msvcrand_shuffle_inplace is not None:
         try:
             return int(_native_msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
         except Exception:
-            # Fallback to pure Python on any unexpected native error
             return _py_msvcrand_shuffle_inplace(state, a)
     return _py_msvcrand_shuffle_inplace(state, a)
 
@@ -515,15 +447,9 @@ def find_shuffle_seed_first(
     chunk=None,
     progress_iv=None,
 ):
-    """Native-accelerated scan for --test-shuffle.
-
-    Scans the full u32 space starting at seed0 (wrapping). Returns int seed or None.
-    """
     if not (_USE_NATIVE and _native_find_shuffle_seed_first is not None):
         return None
     try:
-        # Keep the raw (ofs,len) pairs. Order-only targets can be ambiguous when
-        # multiple entries share the same offset (common when len==0).
         pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
         return _native_find_shuffle_seed_first(
             pairs,

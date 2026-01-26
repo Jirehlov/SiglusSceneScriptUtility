@@ -108,9 +108,6 @@ def xor_cycle_inplace(b, code, st=0):
     _xor_cycle_inplace(b, code, st)
 
 
-# NOTE: LZSS implementation unified in native_ops (with optional Rust acceleration).
-
-
 def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b"", base: bytes = None):
     dat = rd(gameexe_dat_path, 1)
     if not dat or len(dat) < 8:

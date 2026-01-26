@@ -201,7 +201,6 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
-# --test-shuffle helpers (fast order check + parallel seed scan)
 DAT_HDR_SZ = 132
 
 
@@ -234,12 +233,6 @@ def _order_from_idx(idx):
 
 
 def _read_scn_dat_idx_pairs(path):
-    """Read the raw (ofs_u16, len_u16) table in original index order.
-
-    This is the canonical, non-ambiguous representation of the string table
-    layout stored in .dat. Using only the sorted order can be ambiguous when
-    multiple entries share the same ofs (common when len==0).
-    """
     _, _, idx = _read_scn_dat_str_index(path)
     return [(int(ofs), int(ln)) for (ofs, ln) in idx]
 
@@ -381,7 +374,6 @@ def _print_summary(ctx):
 def main(argv=None):
     import argparse
 
-    # --test-shuffle: brute-force shuffle seed (15-bit MSVC rand())
     test_shuffle = False
     test_seed0 = 0
     test_seed0_given = False
@@ -395,7 +387,6 @@ def main(argv=None):
         argv.pop(i)
         test_shuffle = True
 
-        # optional seed token
         if (
             i < len(argv)
             and _is_int_token(argv[i])
@@ -472,9 +463,6 @@ def main(argv=None):
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
 
-    # Apply user-provided initial shuffle seed.
-    # - Normal compile: affects the produced .dat string table order.
-    # - --test-shuffle: used as the scan starting point when seed0 is not given.
     user_seed = None
     if getattr(a, "set_shuffle", None) is not None:
         try:
@@ -663,7 +651,6 @@ def main(argv=None):
                                 except Exception:
                                     pass
             if test_shuffle:
-                # Always test against all scripts (ignore incremental build cache)
                 compile_list = ss
             if compile_list:
                 if test_shuffle:
@@ -675,7 +662,6 @@ def main(argv=None):
                     ):
                         ctx["ia_data"] = build_ia_data(ctx)
 
-                    # Always test against all scripts (ignore incremental build cache)
                     compile_list = ss
                     if not compile_list:
                         raise RuntimeError("test-shuffle: no .ss files")
@@ -686,7 +672,6 @@ def main(argv=None):
                     if not os.path.isfile(exp_first):
                         raise FileNotFoundError(f"expected dat not found: {exp_first}")
 
-                    # compile once (seed doesn't matter for pool equality)
                     set_shuffle_seed(0)
                     compile_one(ctx, first_ss, "bs")
                     my_first = os.path.join(bs_dir, first_nm + ".dat")
@@ -701,7 +686,7 @@ def main(argv=None):
                         sys.stderr.write(
                             f"{test_shuffle_prefix} pool mismatch: not the same string pool -> skip brute force\n"
                         )
-                        # print a few examples to help debugging
+
                         only_my = list((pool_my - pool_off).elements())[:8]
                         only_off = list((pool_off - pool_my).elements())[:8]
                         if only_my:
@@ -714,10 +699,6 @@ def main(argv=None):
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         return 1
 
-                    # Read expected targets in EXACT compile order.
-                    # Use the raw (ofs,len) index table rather than an inferred
-                    # "order" because order becomes ambiguous when multiple
-                    # entries share the same offset (common when len==0).
                     targets = []
                     for ss_path in compile_list:
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
@@ -728,9 +709,6 @@ def main(argv=None):
                             )
                         targets.append(_read_scn_dat_idx_pairs(exp_dat))
 
-                    # Brute-force seed ONLY for the first script.
-                    # Once we have a seed that matches the first file, use it as the initial
-                    # seed and compile sequentially.
                     seed0 = int(test_seed0) & 0xFFFFFFFF
                     try:
                         from .native_ops import is_native_available
@@ -757,7 +735,6 @@ def main(argv=None):
                     )
                     sys.stderr.flush()
 
-                    # compile with the discovered seed, in the same order as normal -c
                     set_shuffle_seed(seed)
                     all_ok = True
                     for i, ss_path in enumerate(compile_list):

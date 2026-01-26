@@ -1,13 +1,3 @@
-"""Sound decoding helpers.
-
-Supported inputs:
-  - .ovk (Siglus KOE pack) -> extract to .ogg (one file may contain multiple entries)
-  - .owp (XOR-obfuscated OGG) -> decode to .ogg
-  - .nwa (compressed PCM) -> decode to .wav (PCM 16-bit)
-
-All functions operate on bytes / file paths and are suitable for use as a library.
-"""
-
 from __future__ import annotations
 
 import struct
@@ -20,21 +10,18 @@ from .common import read_u32_le_from_file
 
 try:
     from .native_ops import _legacy_mode_enabled
-except Exception:  # pragma: no cover
-    from native_ops import _legacy_mode_enabled  # type: ignore
+except Exception:
+    from native_ops import _legacy_mode_enabled
 
 _LEGACY_MODE = _legacy_mode_enabled()
 
-# Optional Rust acceleration (same style as native_ops.py)
 try:
     if _LEGACY_MODE:
         raise ImportError("Legacy mode requested")
     try:
-        # Package import (preferred)
-        from . import native_accel  # type: ignore
-    except Exception:  # pragma: no cover
-        # Direct script import fallback
-        import native_accel  # type: ignore
+        from . import native_accel
+    except Exception:
+        import native_accel
 
     _native_nwa_decode_pcm = getattr(native_accel, "nwa_decode_pcm", None)
     _USE_NATIVE_NWA = _native_nwa_decode_pcm is not None
@@ -43,17 +30,7 @@ except Exception:
     _USE_NATIVE_NWA = False
 
 
-# -----------------------------
-# OGG helpers
-# -----------------------------
-
-
 def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
-    """Try to decode XOR-obfuscated OGG data.
-
-    Some Siglus resources XOR each byte with a single-byte key. We detect this by
-    checking whether XORing the first byte can produce the magic 'OggS'.
-    """
     if len(data) >= 4 and data[:4] == b"OggS":
         return data
     if len(data) >= 4:
@@ -68,23 +45,16 @@ def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
 
 
 def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
-    """Decode a .owp file into raw OGG bytes."""
     b = open(path, "rb").read()
     if len(b) >= 4 and b[:4] == b"OggS":
         return b
     out = bytes((x ^ key) for x in b)
     if len(out) < 4 or out[:4] != b"OggS":
-        # fall back to heuristic auto-xor (some projects use a dynamic key even in .owp)
         out2 = _xor_decrypt_ogg_auto(b)
         if len(out2) >= 4 and out2[:4] == b"OggS":
             return out2
         raise ValueError("OWP decode failed: output is not OggS")
     return out
-
-
-# -----------------------------
-# OVK helpers
-# -----------------------------
 
 
 @dataclass(frozen=True)
@@ -94,11 +64,10 @@ class OVKEntry:
     size: int
 
 
-_OVK_ENTRY_STRUCT = struct.Struct("<IIii")  # size, offset, no, smp_cnt
+_OVK_ENTRY_STRUCT = struct.Struct("<IIii")
 
 
 def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
-    """Return OVK table entries (without reading payloads)."""
     with open(ovk_path, "rb") as f:
         cnt = read_u32_le_from_file(f, strict=True)
         if cnt == 0:
@@ -116,7 +85,6 @@ def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
 
 
 def extract_ogg_bytes_from_ovk_entry(ovk_path: str, entry_no: int) -> bytes:
-    """Extract one entry from an OVK as OGG bytes."""
     entries = read_ovk_table(ovk_path)
     for e in entries:
         if e.entry_no == entry_no:
@@ -133,12 +101,10 @@ def extract_ogg_bytes_from_ovk_entry(ovk_path: str, entry_no: int) -> bytes:
 
 
 def extract_ogg_bytes_from_ovk(ovk_path: str, entry_no: int) -> bytes:
-    """Backward-compatible alias for extracting an OVK entry by entry number."""
     return extract_ogg_bytes_from_ovk_entry(ovk_path, entry_no)
 
 
 def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
-    """Iterate all entries in an OVK as (entry_no, ogg_bytes)."""
     entries = read_ovk_table(ovk_path)
     with open(ovk_path, "rb") as f:
         for e in entries:
@@ -148,16 +114,11 @@ def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
                 raise EOFError("Unexpected EOF while reading ovk chunk")
             chunk = _xor_decrypt_ogg_auto(chunk)
             if len(chunk) < 4 or chunk[:4] != b"OggS":
-                # keep behavior strict: caller expects OGG
                 raise ValueError(
                     f"OVK entry is not OggS after decryption attempt (entry_no={e.entry_no})"
                 )
             yield e.entry_no, chunk
 
-
-# -----------------------------
-# NWA helpers
-# -----------------------------
 
 _NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")
 
@@ -188,7 +149,6 @@ class _BitReader:
         self.bit_pos = bit_pos
 
     def get(self, nbits: int) -> int:
-        # Mimic: mod_code = ((*(WORD*)sp) >> bit_ind) & mask; then advance bit_ind.
         data = self._data
         bp = self.byte_pos
         bit = self.bit_pos
@@ -216,8 +176,6 @@ def _int16_le(b: bytes, off: int) -> int:
 
 
 def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> bytes:
-    """Decode one NWA unit (16-bit) into PCM bytes."""
-
     def _s16(v: int) -> int:
         v &= 0xFFFF
         if v >= 0x8000:
@@ -237,7 +195,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
         elif pack_mod == 2:
             pack_mod = 0
 
-        # pack_mod: 0..5 => MOD: 3..8
         mod = 3 + pack_mod
 
         def apply_delta(nbits: int, sign_bit: int, shift: int):
@@ -291,7 +248,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             out.byteswap()
         return out.tobytes()
 
-    # stereo (interleaved L,R samples)
     nowsmp_l = _int16_le(data, 0)
     nowsmp_r = _int16_le(data, 2)
     br = _BitReader(data, byte_pos=4, bit_pos=0)
@@ -319,7 +275,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             nowsmp += code << shift
 
     for i in range(src_smp_cnt):
-        # choose channel state
         if (i & 1) == 0:
             nowsmp = nowsmp_l
         else:
@@ -360,7 +315,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
 
         out[i] = _s16(nowsmp)
 
-        # store back
         if (i & 1) == 0:
             nowsmp_l = nowsmp
         else:
@@ -372,7 +326,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
 
 
 def _apply_by_mod(mod: int, apply_delta, br: _BitReader, which: int):
-    # which: 1..7 maps to DATA1..DATA7
     if mod == 3:
         if which == 1:
             apply_delta(3, 0x04, 5)
@@ -453,7 +406,7 @@ def _apply_by_mod(mod: int, apply_delta, br: _BitReader, which: int):
         else:
             apply_delta(8, 0x80, 9)
         return
-    # mod == 8
+
     if which == 1:
         apply_delta(8, 0x80, 2)
     elif which == 2:
@@ -491,12 +444,6 @@ def _parse_nwa_header(data: bytes) -> NWAHeader:
 
 
 def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
-    """Decode an NWA blob into raw PCM bytes and return (pcm, header).
-
-    Speed notes:
-      - Avoid per-unit slice copies by using memoryview.
-      - Preallocate output buffer to reduce join overhead.
-    """
     h = _parse_nwa_header(data)
 
     if h.bits_per_sample != 16:
@@ -510,7 +457,6 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
 
-    # Fast path: Rust accelerated decoder (if available and not in legacy mode)
     if _USE_NATIVE_NWA and _native_nwa_decode_pcm is not None:
         pcm = _native_nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):
@@ -530,7 +476,7 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
     offsets = struct.unpack_from(f"<{h.unit_cnt}I", data, table_off)
     mv = memoryview(data)
 
-    out = bytearray(h.original_size)  # zero-filled
+    out = bytearray(h.original_size)
     dst = 0
 
     for unit_no in range(h.unit_cnt):
@@ -562,21 +508,21 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
     byte_rate = rate * block_align
     data_size = len(pcm)
     riff_size = 36 + data_size
-    # RIFF header
+
     out = bytearray()
     out += b"RIFF"
     out += struct.pack("<I", riff_size)
     out += b"WAVE"
-    # fmt chunk
+
     out += b"fmt "
     out += struct.pack("<I", 16)
-    out += struct.pack("<H", 1)  # PCM
+    out += struct.pack("<H", 1)
     out += struct.pack("<H", channels)
     out += struct.pack("<I", rate)
     out += struct.pack("<I", byte_rate)
     out += struct.pack("<H", block_align)
     out += struct.pack("<H", bits)
-    # data chunk
+
     out += b"data"
     out += struct.pack("<I", data_size)
     out += pcm
@@ -584,7 +530,6 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
 
 
 def decode_nwa_to_wav_bytes(path: str) -> bytes:
-    """Decode a .nwa file to a standard PCM WAV."""
     data = open(path, "rb").read()
     pcm, h = decode_nwa_to_pcm_bytes(data)
     return _build_wav(pcm, h.channels, h.bits_per_sample, h.samples_per_sec)

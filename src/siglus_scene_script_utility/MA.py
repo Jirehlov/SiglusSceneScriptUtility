@@ -185,9 +185,7 @@ class FormTable:
     def add(s, fc, e):
         bucket = s.f.setdefault(fc, {})
         nm = e.get("name")
-        # Keep the *first* binding for duplicate call-scope properties.
-        # This matches the legacy C++ behavior and prevents later duplicate
-        # `property` declarations from rebinding name->slot inside a command.
+
         if nm in bucket:
             if (
                 fc == C.FM_CALL

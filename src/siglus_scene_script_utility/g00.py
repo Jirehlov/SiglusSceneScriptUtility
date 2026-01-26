@@ -14,7 +14,6 @@ try:
 except Exception:
     Image = None
 
-# --- CLI helpers (compose logging) ---
 _G00_TYPE_DESC = {
     0: "type0 (LZSS32 BGRA)",
     1: "type1 (LZSS paletted)",
@@ -202,10 +201,6 @@ _G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNOR
 
 
 def _parse_g00_spec(s: str):
-    """Parse g00 spec: 'file.g00' or 'file.g00:cut002'.
-    Only a trailing ':cutNNN' is treated as a cut selector, so Windows paths like 'C:\\...' are safe.
-    Returns (Path, cut_index|None, label_for_output).
-    """
     m = _G00_SPEC_RE.match(s)
     if not m:
         raise ValueError(f"bad g00 spec: {s}")
@@ -219,7 +214,6 @@ def _parse_g00_spec(s: str):
 
 
 def _decode_g00_main_image_pil(p: Path, cut_index=None):
-    """Decode a single representative image from a .g00 as a PIL RGBA image (straight alpha)."""
     need_pil()
     d = p.read_bytes()
     if not d:
@@ -237,7 +231,6 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
         return Image.frombytes("RGBA", (w, h), bgra, "raw", "BGRA")
 
     if t == 2:
-        # Compose cut canvas using Pillow's correct alpha compositing (avoids premul seams).
         _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, off)
         if not cuts:
             raise ValueError("type2 no cuts")
@@ -269,13 +262,12 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
                 break
             chip_mv = blk_mv[pos : pos + n]
             pos += n
-            # frombuffer avoids an extra bytes copy compared to slicing bytes
+
             chip_im = Image.frombuffer("RGBA", (xl, yl), chip_mv, "raw", "BGRA", 0, 1)
             canvas.alpha_composite(chip_im, dest=(px, py))
         return canvas
 
     if t == 3:
-        # JPEG xor -> RGBA
         from io import BytesIO
 
         w, h = struct.unpack_from("<HH", d, off)
@@ -289,11 +281,6 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
 
 
 def merge_g00_files(g00_paths):
-    """Merge 2-3 .g00 into one PNG using per-file coord fields.
-    Inputs may be specified as "file.g00" or "file.g00:cutNNN".
-    Layer order: args order (1st is base, later ones overlay).
-    Output: next to the first g00, name = stem1+stem2(+stem3).png
-    """
     if len(g00_paths) not in (2, 3):
         raise ValueError("need 2-3 input g00")
     specs = [_parse_g00_spec(x) for x in g00_paths]
@@ -480,11 +467,6 @@ def run_extract(inp, out_dir):
 
 
 def _img_base_and_cut(p: Path):
-    """
-    Parse image filename:
-      foo.png        -> ("foo", None)
-      foo_cut003.png -> ("foo", 3)
-    """
     stem = p.stem
     m = None
     try:
@@ -506,7 +488,7 @@ def _is_image_file(p: Path) -> bool:
 def _load_image_bgra(p: Path):
     need_pil()
     img = Image.open(p)
-    # always decode to RGBA then convert to BGRA bytes
+
     rgba = img.convert("RGBA")
     w, h = rgba.size
     bgra = rgba.tobytes("raw", "BGRA")
@@ -514,26 +496,20 @@ def _load_image_bgra(p: Path):
 
 
 def _lzss32_pack(bgra: bytes) -> bytes:
-    """
-    Fast LZSS32 encoder for G00 type0.
-
-    This produces a valid LZSS32 stream that roundtrips via lzss32(), but does
-    not attempt to perfectly match the original compressor's bitstream.
-    """
     if not bgra:
         return b""
     if (len(bgra) & 3) != 0:
         raise ValueError("lzss32: bgra not aligned")
     mv = memoryview(bgra)
-    # type0 literals imply alpha=255; enforce for safety
+
     for i in range(3, len(bgra), 4):
         if mv[i] != 255:
             raise ValueError("type0 requires alpha=255 for all pixels")
 
     org = len(bgra)
     n_px = org // 4
-    WIN_PX = 4095  # 12-bit offset
-    MAX_PX = 16  # 4-bit length -> 1..16 pixels
+    WIN_PX = 4095
+    MAX_PX = 16
 
     def key2(px_i: int):
         o = px_i * 4
@@ -541,7 +517,6 @@ def _lzss32_pack(bgra: bytes) -> bytes:
             return mv[o : o + 8].tobytes()
         return None
 
-    # Map 2-pixel key -> last position (pixel index)
     last_pos = {}
 
     out = bytearray(b"\0" * 8)
@@ -576,12 +551,10 @@ def _lzss32_pack(bgra: bytes) -> bytes:
                         best_off = off_px
 
         if best_len:
-            # backref
             v = (best_off << 4) | (best_len - 1)
             out.extend(struct.pack("<H", v))
             step = best_len
         else:
-            # literal: store BGR (A is implicit 255)
             flags |= 1 << bit
             o = i * 4
             out.append(mv[o])
@@ -589,7 +562,6 @@ def _lzss32_pack(bgra: bytes) -> bytes:
             out.append(mv[o + 2])
             step = 1
 
-        # update last_pos for covered pixels
         for k_i in range(i, min(i + step, n_px)):
             kk = key2(k_i)
             if kk is not None:
@@ -604,7 +576,6 @@ def _lzss32_pack(bgra: bytes) -> bytes:
             flag_pos = len(out)
             out.append(0)
 
-    # finalize last flags byte
     out[flag_pos] = flags & 0xFF
     arc = len(out)
     struct.pack_into("<II", out, 0, arc, org)
@@ -612,10 +583,6 @@ def _lzss32_pack(bgra: bytes) -> bytes:
 
 
 def _cut_canvas_bgra(blk: bytes):
-    """
-    Return (bgra_bytes, cw, ch) for a type2 cut block, using the same blending
-    logic as extract.
-    """
     if len(blk) < C.G00_CUT_SZ:
         raise ValueError("cut block short")
     ct, cc, x, y, dx, dy, cx, cy, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
@@ -636,13 +603,6 @@ def _cut_canvas_bgra(blk: bytes):
 
 
 def _unpremultiply_for_blit_over_zero(bgra_canvas: bytes) -> bytes:
-    """
-    The type2 extractor composes chips onto a zero canvas using:
-      out = floor(src * a / 255) for RGB when dst is zero.
-    The extracted PNG thus contains premultiplied RGB values.
-    To store the PNG back as a single chip (so re-extract matches), compute a
-    src RGB such that floor(src*a/255) == canvas_rgb.
-    """
     mv = memoryview(bgra_canvas)
     out = bytearray(len(bgra_canvas))
     for i in range(0, len(bgra_canvas), 4):
@@ -662,8 +622,7 @@ def _unpremultiply_for_blit_over_zero(bgra_canvas: bytes) -> bytes:
             out[i + 2] = r
             out[i + 3] = 255
             continue
-        # choose maximum src that still floors back to the same premultiplied value
-        # src <= ((val+1)*255 - 1) / a
+
         out[i] = min(255, ((int(b) + 1) * 255 - 1) // a)
         out[i + 1] = min(255, ((int(g) + 1) * 255 - 1) // a)
         out[i + 2] = min(255, ((int(r) + 1) * 255 - 1) // a)
@@ -672,12 +631,6 @@ def _unpremultiply_for_blit_over_zero(bgra_canvas: bytes) -> bytes:
 
 
 def _resolve_out_base(inp: Path, out_arg, base_name: str, dir_input: bool):
-    """
-    Resolve base .g00 path at output location (must exist).
-    Returns (base_path, out_path).
-    - base_path: the existing .g00 we read/patch from output location
-    - out_path: where we write (same as base_path)
-    """
     if out_arg is None:
         out_dir = inp.parent if not dir_input else inp
         base = out_dir / f"{base_name}.g00"
@@ -686,7 +639,6 @@ def _resolve_out_base(inp: Path, out_arg, base_name: str, dir_input: bool):
     outp = Path(out_arg)
 
     if dir_input:
-        # must be directory
         if outp.exists() and outp.is_file():
             raise ValueError("output must be a directory when input is a directory")
         if outp.suffix.lower() == ".g00":
@@ -695,22 +647,18 @@ def _resolve_out_base(inp: Path, out_arg, base_name: str, dir_input: bool):
         base = outp / f"{base_name}.g00"
         return base, base
 
-    # file input: out can be file or dir
     if outp.exists() and outp.is_dir():
         base = outp / f"{base_name}.g00"
         return base, base
     if outp.suffix.lower() == ".g00" or (outp.exists() and outp.is_file()):
         return outp, outp
-    # treat as directory path
+
     outp.mkdir(parents=True, exist_ok=True)
     base = outp / f"{base_name}.g00"
     return base, base
 
 
 def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=None):
-    """
-    updates: list of tuples (img_path: Path, cut_idx)
-    """
     if not base_bytes:
         raise ValueError("empty base g00")
     t = base_bytes[0]
@@ -720,7 +668,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         report["type_desc"] = _G00_TYPE_DESC.get(t, f"type{t}")
     if type_expect is not None and t != type_expect:
         raise ValueError(f"base type={t} != --type {type_expect}")
-    # types 0/1/3 must be single update (no cut idx)
+
     if t in (0, 1, 3):
         if len(updates) != 1 or updates[0][1] is not None:
             raise ValueError("this g00 type expects a single image (no _cut###)")
@@ -744,7 +692,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             ]
             report["changed"] = base_bgra != bgra
         if base_bgra == bgra:
-            return base_bytes  # exact inverse: keep original bytes
+            return base_bytes
         comp = _lzss32_pack(bgra)
         return bytes([0]) + struct.pack("<HH", w, h) + comp
 
@@ -791,7 +739,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             report["changed"] = base_bgra != bgra
         if base_bgra == bgra:
             return base_bytes
-        # rebuild indices using existing palette only (no quantization)
+
         if len(unp) < 2:
             raise ValueError("type1 short")
         pc = struct.unpack_from("<H", unp, 0)[0]
@@ -802,7 +750,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         pal = list(struct.unpack_from(f"<{pc}I", unp, 2))
         idx = bytearray(n)
         pal_map = {v: i for i, v in enumerate(pal)}
-        # bgra is bytes; interpret per pixel as uint32 little-endian
+
         mv = memoryview(bgra)
         for i in range(n):
             v = struct.unpack_from("<I", mv, i * 4)[0]
@@ -818,14 +766,13 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         return bytes([1]) + struct.pack("<HH", w, h) + comp
 
     if t == 2:
-        # allow multiple updates
         bw, bh, cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
         if not cuts:
             raise ValueError("type2 no cuts")
-        # map ci -> (o,s)
+
         cut_map = {ci: (o, s) for ci, o, s in cuts}
         single = len(cuts) == 1
-        # prepare resolved updates: assign cut idx if None
+
         resolved = []
         for img_p, ci in updates:
             if ci is None:
@@ -835,7 +782,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             if ci not in cut_map:
                 raise ValueError(f"type2 cut not found: {ci}")
             resolved.append((img_p, ci))
-        # detect unchanged
+
         changed = False
         upd_rep = []
         for img_p, ci in resolved:
@@ -868,39 +815,39 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             report["changed"] = changed
         if not changed:
             return base_bytes
-        # build replacement blocks
+
         repl = {}
         for img_p, ci in resolved:
             o, s = cut_map[ci]
             blk = unp[o : o + s]
             canvas, cw, ch = _cut_canvas_bgra(blk)
             bgra, w, h = _load_image_bgra(img_p)
-            # convert extracted (premultiplied) canvas back to chip pixels
+
             chip_pixels = _unpremultiply_for_blit_over_zero(bgra)
-            # new cut header (inherit all unknown bytes, only cc changes)
+
             if len(blk) < C.G00_CUT_SZ:
                 raise ValueError("cut block short")
             new_hdr = bytearray(blk[: C.G00_CUT_SZ])
-            struct.pack_into("<H", new_hdr, 2, 1)  # cc=1
-            # inherit first chip header if present, else zero
+            struct.pack_into("<H", new_hdr, 2, 1)
+
             if len(blk) >= C.G00_CUT_SZ + C.G00_CHIP_SZ:
                 chip_hdr = bytearray(blk[C.G00_CUT_SZ : C.G00_CUT_SZ + C.G00_CHIP_SZ])
             else:
                 chip_hdr = bytearray(b"\0" * C.G00_CHIP_SZ)
-            # px, py, ctype, xl, yl at the beginning
+
             struct.pack_into("<HH", chip_hdr, 0, 0, 0)
             struct.pack_into("<HH", chip_hdr, 6, cw, ch)
-            # (keep ctype and other unknown bytes)
+
             nb = bytes(new_hdr) + bytes(chip_hdr) + chip_pixels
             repl[ci] = nb
-        # relocate blocks + update cut table inside unp
+
         if len(unp) < 4:
             raise ValueError("type2 unp short")
         table_cnt = struct.unpack_from("<I", unp, 0)[0]
         table_end = 4 + table_cnt * 8
         if table_end > len(unp):
             raise ValueError("type2 unp table short")
-        # parse all entries (not only "valid")
+
         entries = []
         for ci in range(table_cnt):
             o, s = struct.unpack_from("<II", unp, 4 + ci * 8)
@@ -925,7 +872,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             new_os[ci] = (new_off, new_sz)
             cur = o + s
         out.extend(unp[cur:])
-        # update table
+
         for ci in range(table_cnt):
             o0, s0 = struct.unpack_from("<II", unp, 4 + ci * 8)
             if not (o0 and s0 and o0 + s0 <= len(unp)):
@@ -976,16 +923,15 @@ def run_compose(inp: str, out_arg, type_expect):
         out_path.write_bytes(new_bytes)
         return 0
 
-    # directory input
     imgs = [p for p in sorted(ip.iterdir()) if p.is_file() and _is_image_file(p)]
     if not imgs:
         return 2
-    # group by base name
+
     groups = {}
     for p in imgs:
         base_name, cut_idx = _img_base_and_cut(p)
         groups.setdefault(base_name, []).append((p, cut_idx))
-    # resolve output dir
+
     if out_arg is None:
         out_dir = ip
     else:
@@ -997,7 +943,6 @@ def run_compose(inp: str, out_arg, type_expect):
         out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Compose: {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)")
 
-    # apply per g00
     total = changed = same = 0
     for base_name, ups in groups.items():
         base_path = out_dir / f"{base_name}.g00"
@@ -1057,7 +1002,6 @@ def main(argv=None):
         return run_extract(args[1], args[2])
 
     if args[0] == "--c":
-        # Compose images back into existing .g00 in the *output location* (overwrite).
         type_expect = None
         i = 1
         while i < len(args) and args[i] in ("--type", "--t"):
@@ -1079,7 +1023,6 @@ def main(argv=None):
             print(f"[!] {e}", file=sys.stderr)
             return 1
     if args[0] == "--m":
-        # Merge 2-3 g00 by coord fields, output next to the first g00.
         if len(args) not in (3, 4):
             return 2
         try:

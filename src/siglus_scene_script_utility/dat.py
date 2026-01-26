@@ -3,7 +3,6 @@ import re
 import struct
 import sys
 
-
 from . import const as C
 from . import disam
 from . import extract
@@ -20,7 +19,6 @@ from .common import (
     _print_sections,
     _diff_kv,
 )
-
 
 DAT_TXT_OUT_DIR = None
 

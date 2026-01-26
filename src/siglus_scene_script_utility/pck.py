@@ -22,7 +22,6 @@ from .common import (
     exe_angou_element,
 )
 
-
 MAX_SCENE_LIST = 2000
 
 

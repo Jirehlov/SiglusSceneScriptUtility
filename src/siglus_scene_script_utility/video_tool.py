@@ -4,11 +4,9 @@ import sys
 from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
 
 try:
-    # Package import (preferred)
     from . import video
-except Exception:  # pragma: no cover
-    # Direct script import fallback
-    import video  # type: ignore
+except Exception:
+    import video
 
 
 def _iter_video_files(inp: str):
@@ -89,7 +87,6 @@ def main(argv=None) -> int:
             return 1
         return _analyze_one(inp)
 
-    # --x
     if len(argv) != 2:
         eprint("error: expected <input> <output_dir> for --x")
         _hint_help()

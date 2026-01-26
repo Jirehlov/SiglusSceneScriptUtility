@@ -25,7 +25,7 @@ def _gan_read_i32(blob, ofs):
 def _gan_decode_mb(b):
     if not b:
         return ""
-    # Engine uses MBSTR_to_TSTR; most Siglus builds are Shift-JIS.
+
     try:
         return b.decode("shift_jis", errors="replace")
     except Exception:
@@ -119,7 +119,6 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 out["errors"].append("invalid set_cnt %r at %s" % (set_cnt, hx(ofs0)))
                 break
             for si in range(set_cnt):
-                # PAT_COUNT
                 ofs1 = ofs
                 c2, ofs = _gan_read_i32(blob, ofs)
                 if c2 is None:
@@ -193,7 +192,6 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 out["sets"].append(s)
             continue
 
-        # Unknown top-level instruction: cannot safely skip payload.
         _add_ins(ofs0, code)
         out["warnings"].append("unknown top-level code %r at %s" % (code, hx(ofs0)))
         break
@@ -232,7 +230,7 @@ def gan(path, blob):
                 "set[%d]: pat_count=%d total_time=%d"
                 % (i, len(pats), int(s.get("total_time") or 0))
             )
-            # Preview first few patterns
+
             for j, p in enumerate(pats[: C.MAX_LIST_PREVIEW]):
                 print(
                     "  pat[%d]: pat_no=%d x=%d y=%d wait=%d tr=%d z=%d keika=%d"
@@ -259,7 +257,6 @@ def gan(path, blob):
         arg = ins.get("arg")
         extra = ins.get("extra")
         if code is None:
-            # header pseudo-ins
             print("%s: %s %r" % (hx(ofs), name, arg))
             continue
         if extra is not None:

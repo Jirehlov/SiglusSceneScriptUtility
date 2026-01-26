@@ -1,14 +1,12 @@
 import os
 import sys
 
-
 from .common import hx, _fmt_ts, _read_file, _sha1
 
 from . import pck
 from . import dat
 from . import dbs
 from . import gan
-
 
 SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan")
 _write_dat_disassembly = dat._write_dat_disassembly
