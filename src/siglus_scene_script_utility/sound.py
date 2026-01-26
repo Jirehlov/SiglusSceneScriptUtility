@@ -16,6 +16,8 @@ from array import array
 from dataclasses import dataclass
 from typing import Iterator, List, Tuple
 
+from .common import read_u32_le_from_file
+
 try:
     from .native_ops import _legacy_mode_enabled
 except Exception:  # pragma: no cover
@@ -95,17 +97,10 @@ class OVKEntry:
 _OVK_ENTRY_STRUCT = struct.Struct("<IIii")  # size, offset, no, smp_cnt
 
 
-def _read_u32_le(f) -> int:
-    b = f.read(4)
-    if len(b) != 4:
-        raise EOFError("Unexpected EOF while reading u32")
-    return struct.unpack("<I", b)[0]
-
-
 def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
     """Return OVK table entries (without reading payloads)."""
     with open(ovk_path, "rb") as f:
-        cnt = _read_u32_le(f)
+        cnt = read_u32_le_from_file(f, strict=True)
         if cnt == 0:
             return []
         table = f.read(_OVK_ENTRY_STRUCT.size * cnt)

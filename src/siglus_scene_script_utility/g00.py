@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import const as C
 from .native_ops import lzss_unpack, lzss_pack
+from .common import read_u16_le
 
 try:
     from PIL import Image
@@ -190,17 +191,11 @@ def blit(
             si += 4
 
 
-def _read_u16le(b: bytes, off: int) -> int:
-    if off + 2 > len(b):
-        raise ValueError("short for u16")
-    return b[off] | (b[off + 1] << 8)
-
-
 def _g00_xy(p: Path):
     head = p.read_bytes()[:31]
     if len(head) < 31:
         raise ValueError("g00 too short for coord")
-    return _read_u16le(head, 25), _read_u16le(head, 29)
+    return read_u16_le(head, 25, strict=True), read_u16_le(head, 29, strict=True)
 
 
 _G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNORECASE)

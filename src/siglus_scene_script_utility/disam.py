@@ -1,19 +1,5 @@
-import struct
 from . import const as C
-from .common import hx
-
-
-def _safe_i32(buf, ofs):
-    try:
-        ofs = int(ofs)
-    except Exception:
-        return None
-    if ofs < 0 or ofs + 4 > len(buf):
-        return None
-    try:
-        return struct.unpack_from("<i", buf, ofs)[0]
-    except Exception:
-        return None
+from .common import hx, read_i32_le
 
 
 def _invert_form_code_map():
@@ -505,7 +491,7 @@ def disassemble_scn_bytes(
         return scn[p]
 
     def read_i32(p):
-        v = _safe_i32(scn, p)
+        v = read_i32_le(scn, p, default=None)
         return v
 
     def _emit_db(ofs, data, note=None):

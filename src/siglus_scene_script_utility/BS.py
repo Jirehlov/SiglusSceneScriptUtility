@@ -9,7 +9,14 @@ from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
 from .MA import MA
-from .common import log_stage, record_stage_time, set_stage_time
+from .common import (
+    log_stage,
+    record_stage_time,
+    set_stage_time,
+    write_u16_le,
+    write_i32_le,
+    write_i32_le_array,
+)
 
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1
@@ -215,19 +222,6 @@ def _u16(t):
     return [b[i] | (b[i + 1] << 8) for i in range(0, len(b), 2)]
 
 
-def _w_u16(b, v):
-    b.extend(struct.pack("<H", int(v) & 0xFFFF))
-
-
-def _w_i32(b, v):
-    b.extend(struct.pack("<i", int(v)))
-
-
-def _w_i32_array(b, arr):
-    for v in arr:
-        _w_i32(b, v)
-
-
 def _w_idx(b, a):
     for o, s in a:
         b.extend(struct.pack("<ii", int(o), int(s)))
@@ -310,34 +304,34 @@ def _build_scn_dat(piad, plad, psad, out_scn):
     for orig in order:
         k = (28807 * orig) & 0xFFFFFFFF
         for w in u16_map[orig]:
-            _w_u16(b, (w ^ k) & 0xFFFF)
+            write_u16_le(b, (w ^ k) & 0xFFFF)
     scn = bytes(out_scn.get("scn_bytes") or b"")
     sec("scn_ofs", "scn_size", len(b), len(scn))
     b.extend(scn)
     label_list = list(out_scn.get("label_list") or [])
     sec("label_list_ofs", "label_cnt", len(b), len(label_list))
-    _w_i32_array(b, label_list)
+    write_i32_le_array(b, label_list)
     z_label_list = list(out_scn.get("z_label_list") or [])
     sec("z_label_list_ofs", "z_label_cnt", len(b), len(z_label_list))
-    _w_i32_array(b, z_label_list)
+    write_i32_le_array(b, z_label_list)
     cmd_label_list = list(out_scn.get("cmd_label_list") or [])
     sec("cmd_label_list_ofs", "cmd_label_cnt", len(b), len(cmd_label_list))
     for it in cmd_label_list:
         if isinstance(it, dict):
-            _w_i32(b, it.get("cmd_id", 0))
-            _w_i32(b, it.get("offset", 0))
+            write_i32_le(b, it.get("cmd_id", 0))
+            write_i32_le(b, it.get("offset", 0))
         else:
-            _w_i32(b, it[0])
-            _w_i32(b, it[1])
+            write_i32_le(b, it[0])
+            write_i32_le(b, it[1])
     scn_prop_list = list(out_scn.get("scn_prop_list") or [])
     sec("scn_prop_list_ofs", "scn_prop_cnt", len(b), len(scn_prop_list))
     for it in scn_prop_list:
         if isinstance(it, dict):
-            _w_i32(b, _fc(it.get("form", -1)))
-            _w_i32(b, int(it.get("size", 0) or 0))
+            write_i32_le(b, _fc(it.get("form", -1)))
+            write_i32_le(b, int(it.get("size", 0) or 0))
         else:
-            _w_i32(b, _fc(it[0]))
-            _w_i32(b, int(it[1]))
+            write_i32_le(b, _fc(it[0]))
+            write_i32_le(b, int(it[1]))
     scn_prop_name_list = list(out_scn.get("scn_prop_name_list") or [])
     scn_prop_name_index_list = list(out_scn.get("scn_prop_name_index_list") or [])
     if len(scn_prop_name_index_list) != len(scn_prop_name_list):
@@ -355,7 +349,7 @@ def _build_scn_dat(piad, plad, psad, out_scn):
     scn_cmd_list = list(out_scn.get("scn_cmd_list") or [])
     sec("scn_cmd_list_ofs", "scn_cmd_cnt", len(b), len(scn_cmd_list))
     for it in scn_cmd_list:
-        _w_i32(b, int((it.get("offset", 0) if isinstance(it, dict) else it) or 0))
+        write_i32_le(b, int((it.get("offset", 0) if isinstance(it, dict) else it) or 0))
     scn_cmd_name_list = list(out_scn.get("scn_cmd_name_list") or [])
     scn_cmd_name_index_list = list(out_scn.get("scn_cmd_name_index_list") or [])
     if len(scn_cmd_name_index_list) != len(scn_cmd_name_list):
@@ -391,11 +385,13 @@ def _build_scn_dat(piad, plad, psad, out_scn):
         _w_utf16_raw(b, s0)
     namae_list = list(out_scn.get("namae_list") or [])
     sec("namae_list_ofs", "namae_cnt", len(b), len(namae_list))
-    _w_i32_array(b, namae_list)
+    write_i32_le_array(b, namae_list)
     read_flag_list = list(out_scn.get("read_flag_list") or [])
     sec("read_flag_list_ofs", "read_flag_cnt", len(b), len(read_flag_list))
     for it in read_flag_list:
-        _w_i32(b, int((it.get("line_no", 0) if isinstance(it, dict) else it) or 0))
+        write_i32_le(
+            b, int((it.get("line_no", 0) if isinstance(it, dict) else it) or 0)
+        )
     b[0:132] = struct.pack("<" + "i" * 33, *[int(h.get(k, 0)) for k in C._FIELDS])
     return bytes(b)
 

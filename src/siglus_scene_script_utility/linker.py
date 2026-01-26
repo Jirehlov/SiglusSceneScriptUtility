@@ -5,7 +5,7 @@ import glob
 from . import const as C
 from .CA import rd, wr, _rt
 from .IA import IncAnalyzer
-from .common import log_stage, record_stage_time, set_stage_time
+from .common import log_stage, record_stage_time, set_stage_time, pack_i32_pairs
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
@@ -230,13 +230,6 @@ def _build_index_list_for_blobs(blobs):
     return idx, bytes(blob)
 
 
-def _pack_i32_pairs(pairs):
-    out = bytearray()
-    for a, b in pairs:
-        out.extend(struct.pack("<ii", int(a), int(b)))
-    return bytes(out)
-
-
 def _to_int_form(value):
     if isinstance(value, str):
         if value in C._FORM_CODE:
@@ -295,21 +288,21 @@ def _build_pack_bytes(
 
     hdr["inc_prop_list_ofs"] = _push(inc_prop_blob)
     hdr["inc_prop_cnt"] = len(inc_prop_list)
-    hdr["inc_prop_name_index_list_ofs"] = _push(_pack_i32_pairs(inc_prop_idx))
+    hdr["inc_prop_name_index_list_ofs"] = _push(pack_i32_pairs(inc_prop_idx))
     hdr["inc_prop_name_index_cnt"] = len(inc_prop_idx)
     hdr["inc_prop_name_list_ofs"] = _push(inc_prop_name_blob)
     hdr["inc_prop_name_cnt"] = len(inc_prop_name_list)
     hdr["inc_cmd_list_ofs"] = _push(inc_cmd_blob)
     hdr["inc_cmd_cnt"] = len(inc_cmd_list)
-    hdr["inc_cmd_name_index_list_ofs"] = _push(_pack_i32_pairs(inc_cmd_idx))
+    hdr["inc_cmd_name_index_list_ofs"] = _push(pack_i32_pairs(inc_cmd_idx))
     hdr["inc_cmd_name_index_cnt"] = len(inc_cmd_idx)
     hdr["inc_cmd_name_list_ofs"] = _push(inc_cmd_name_blob)
     hdr["inc_cmd_name_cnt"] = len(inc_cmd_name_list)
-    hdr["scn_name_index_list_ofs"] = _push(_pack_i32_pairs(scn_name_idx))
+    hdr["scn_name_index_list_ofs"] = _push(pack_i32_pairs(scn_name_idx))
     hdr["scn_name_index_cnt"] = len(scn_name_idx)
     hdr["scn_name_list_ofs"] = _push(scn_name_blob)
     hdr["scn_name_cnt"] = len(scn_name_list)
-    hdr["scn_data_index_list_ofs"] = _push(_pack_i32_pairs(scn_data_idx))
+    hdr["scn_data_index_list_ofs"] = _push(pack_i32_pairs(scn_data_idx))
     hdr["scn_data_index_cnt"] = len(scn_data_idx)
     hdr["scn_data_list_ofs"] = _push(scn_data_blob)
     hdr["scn_data_cnt"] = len(scn_data_list)

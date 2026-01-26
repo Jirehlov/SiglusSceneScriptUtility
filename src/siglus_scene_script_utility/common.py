@@ -47,6 +47,101 @@ def eprint(msg: str, errors: str = "backslashreplace") -> None:
 
 
 # ============================================================================
+# Binary helpers (little-endian)
+# ============================================================================
+#
+# Unified semantics:
+# - strict=False (default): return `default` on any failure (bad offset, out-of-range, unpack errors)
+# - strict=True: raise ValueError for invalid offsets/ranges; propagate the original error via exception chaining
+#
+# Note: these helpers accept any buffer type supported by struct.unpack_from (bytes/bytearray/memoryview).
+
+_U16_LE = struct.Struct("<H")
+_U32_LE = struct.Struct("<I")
+_I32_LE = struct.Struct("<i")
+_I32_PAIR_LE = struct.Struct("<ii")
+
+
+def _read_struct_le(st: struct.Struct, buf, off, *, strict: bool, default):
+    try:
+        off_i = int(off)
+    except Exception as exc:
+        if strict:
+            raise ValueError(f"invalid offset: {off!r}") from exc
+        return False, default, off
+    if off_i < 0:
+        if strict:
+            raise ValueError(f"negative offset: {off_i}")
+        return False, default, off_i
+    try:
+        return True, st.unpack_from(buf, off_i)[0], off_i
+    except Exception as exc:
+        if strict:
+            try:
+                blen = len(buf)
+            except Exception:
+                blen = "???"
+            raise ValueError(
+                f"buffer too small for {st.size} bytes at offset {off_i} (len={blen})"
+            ) from exc
+        return False, default, off_i
+
+
+def read_u16_le(buf, off, *, strict: bool = False, default=None):
+    _ok, v, _ = _read_struct_le(_U16_LE, buf, off, strict=strict, default=default)
+    return v
+
+
+def read_u32_le(buf, off, *, strict: bool = False, default=None):
+    _ok, v, _ = _read_struct_le(_U32_LE, buf, off, strict=strict, default=default)
+    return v
+
+
+def read_i32_le(buf, off, *, strict: bool = False, default=None):
+    _ok, v, _ = _read_struct_le(_I32_LE, buf, off, strict=strict, default=default)
+    return v
+
+
+def read_i32_le_advancing(buf, off, *, strict: bool = False, default=None):
+    ok, v, off_i = _read_struct_le(_I32_LE, buf, off, strict=strict, default=default)
+    return v, (off_i + 4 if ok else off_i)
+
+
+def write_u16_le(out: bytearray, v) -> None:
+    out.extend(_U16_LE.pack(int(v) & 0xFFFF))
+
+
+def write_i32_le(out: bytearray, v) -> None:
+    out.extend(_I32_LE.pack(int(v)))
+
+
+def write_i32_le_array(out: bytearray, arr) -> None:
+    for v in arr or []:
+        write_i32_le(out, v)
+
+
+def pack_i32_pairs(pairs) -> bytes:
+    out = bytearray()
+    for a, b in pairs or []:
+        out.extend(_I32_PAIR_LE.pack(int(a), int(b)))
+    return bytes(out)
+
+
+def read_u32_le_from_file(f, *, strict: bool = True, default=None):
+    """Read one u32 (little-endian) from a file object.
+
+    strict=True (default): raise EOFError on short reads.
+    strict=False: return `default` on short reads.
+    """
+    b = f.read(4)
+    if len(b) != 4:
+        if strict:
+            raise EOFError("Unexpected EOF while reading u32")
+        return default
+    return read_u32_le(b, 0, strict=True)
+
+
+# ============================================================================
 # Common helpers for analyzers
 # ============================================================================
 

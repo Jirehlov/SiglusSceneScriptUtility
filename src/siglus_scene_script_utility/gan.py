@@ -1,7 +1,5 @@
-import struct
-
 from . import const as C
-from .common import hx
+from .common import hx, read_i32_le_advancing
 
 _GAN_CODE_VERSION = 10000
 _GAN_VERSION_10000 = 10000
@@ -21,9 +19,7 @@ _GAN_OPS = {
 
 
 def _gan_read_i32(blob, ofs):
-    if ofs + 4 > len(blob):
-        return None, ofs
-    return struct.unpack_from("<i", blob, ofs)[0], ofs + 4
+    return read_i32_le_advancing(blob, ofs, default=None)
 
 
 def _gan_decode_mb(b):
