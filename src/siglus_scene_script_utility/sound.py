@@ -10,18 +10,16 @@ All functions operate on bytes / file paths and are suitable for use as a librar
 
 from __future__ import annotations
 
-import os
 import struct
 import sys
 from array import array
 from dataclasses import dataclass
 from typing import Iterator, List, Tuple
 
-
-def _legacy_mode_enabled() -> bool:
-    value = os.environ.get("SIGLUS_SSU_LEGACY", "")
-    return value.lower() in {"1", "true", "yes", "on"}
-
+try:
+    from .native_ops import _legacy_mode_enabled
+except Exception:  # pragma: no cover
+    from native_ops import _legacy_mode_enabled  # type: ignore
 
 _LEGACY_MODE = _legacy_mode_enabled()
 

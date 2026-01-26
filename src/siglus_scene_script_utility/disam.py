@@ -1,17 +1,6 @@
 import struct
 from . import const as C
-
-
-def hx(x):
-    try:
-        v = int(x)
-    except Exception:
-        return "-"
-    if v < 0:
-        return "-"
-    if v <= 0xFFFFFFFF:
-        return "0x%08X" % v
-    return "0x%X" % v
+from .common import hx
 
 
 def _safe_i32(buf, ofs):

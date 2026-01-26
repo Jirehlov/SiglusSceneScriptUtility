@@ -4,7 +4,7 @@ from . import const as C
 from .CA import rd, wr
 
 
-from .native_ops import lzss_pack, lzss_unpack
+from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
 
 def _read_text(p, utf8):
@@ -105,9 +105,7 @@ class IniFileAnalizer:
 def xor_cycle_inplace(b, code, st=0):
     if not code:
         raise ValueError("xor_cycle_inplace: missing code")
-    n = len(code)
-    for i in range(len(b)):
-        b[i] ^= code[(st + i) % n]
+    _xor_cycle_inplace(b, code, st)
 
 
 # NOTE: LZSS implementation unified in native_ops (with optional Rust acceleration).

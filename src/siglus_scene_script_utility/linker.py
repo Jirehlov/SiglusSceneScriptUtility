@@ -6,6 +6,7 @@ from . import const as C
 from .CA import rd, wr, _rt
 from .IA import IncAnalyzer
 from .common import log_stage, record_stage_time, set_stage_time
+from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
 def _enc_w(s):
@@ -100,8 +101,7 @@ def _xor_cycle_inplace(buf, code, start=0):
         return
     n = len(code)
     st = int(start) % n
-    for i in range(len(buf)):
-        buf[i] ^= code[(st + i) % n]
+    _xor_cycle_inplace_native(buf, code, st)
 
 
 def _read_first_line(path, enc):
