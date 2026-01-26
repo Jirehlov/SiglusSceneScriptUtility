@@ -18,13 +18,14 @@ def _compile_one_process(
     nm = os.path.splitext(fname)[0]
 
     try:
-        from .CA import rd, wr, CharacterAnalizer
+        from .CA import CharacterAnalizer
+        from .common import read_text_auto, write_bytes
         from .LA import la_analize
         from .SA import SA
         from .MA import MA
         from .BS import BS, _copy_ia_data
 
-        scn = rd(ss_path, 0, enc=(enc or ""))
+        scn = read_text_auto(ss_path, force_charset=(enc or ""))
 
         iad = _copy_ia_data(ia_data)
         pcad = {}
@@ -65,7 +66,7 @@ def _compile_one_process(
             return (fname, f"{bs.get_error_code()} at {fname}:{bs.get_error_line()}")
 
         out_path = os.path.join(tmp_path, "bs", nm + ".dat")
-        wr(out_path, bsd["out_scn"], 1)
+        write_bytes(out_path, bsd["out_scn"])
 
         return (fname, None)
 
@@ -132,13 +133,13 @@ def _lzss_compress_task(
     nm, dat_path, lz_path, easy_code, lzss_level = args
 
     try:
-        from .CA import rd, wr
+        from .common import read_bytes, write_bytes
         from . import compiler as _m
         from .native_ops import xor_cycle_inplace
 
         if not os.path.isfile(dat_path):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
-        dat = rd(dat_path, 1)
+        dat = read_bytes(dat_path)
 
         if not easy_code:
             raise RuntimeError("ctx.easy_angou_code is not set")
@@ -146,7 +147,7 @@ def _lzss_compress_task(
         b = bytearray(lz)
         xor_cycle_inplace(b, easy_code, 0)
         lz = bytes(b)
-        wr(lz_path, lz, 1)
+        write_bytes(lz_path, lz)
 
         return (nm, dat, lz, None)
 
@@ -161,7 +162,7 @@ def parallel_lzss_compress(
     lzss_mode: bool,
     max_workers: Optional[int] = None,
 ) -> Tuple[List[str], List[bytes], List[bytes]]:
-    from .CA import rd
+    from .common import read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
 
@@ -172,7 +173,7 @@ def parallel_lzss_compress(
             dat_path = os.path.join(bs_dir, nm + ".dat")
             if not os.path.isfile(dat_path):
                 raise FileNotFoundError(f"scene dat not found: {dat_path}")
-            dat = rd(dat_path, 1)
+            dat = read_bytes(dat_path)
             dat_list.append(dat)
             enc_names.append(nm)
         return (enc_names, dat_list, [])
@@ -233,7 +234,7 @@ def _source_encrypt_task(
     rel, src_path, cache_path, source_angou, skip, lzss_level = args
 
     try:
-        from .CA import rd, wr
+        from .common import read_bytes, write_bytes
         from . import compiler as _m
 
         if not os.path.isfile(src_path):
@@ -241,13 +242,13 @@ def _source_encrypt_task(
 
         ctx = {"source_angou": source_angou, "lzss_level": lzss_level}
 
-        raw = rd(src_path, 1)
+        raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         if cache_path:
             cache_dir = os.path.dirname(cache_path)
             if cache_dir:
                 os.makedirs(cache_dir, exist_ok=True)
-            wr(cache_path, enc_blob, 1)
+            write_bytes(cache_path, enc_blob)
 
         size = len(enc_blob) & 0xFFFFFFFF
         chunk = enc_blob if not skip else b""

@@ -13,7 +13,6 @@ from .BS import (
     set_shuffle_seed,
     build_ia_data,
 )
-from .CA import rd, wr, _parse_code
 from .GEI import write_gameexe_dat
 from .linker import link_pack
 from .native_ops import (
@@ -22,7 +21,13 @@ from .native_ops import (
     md5_digest,
     tile_copy,
 )
-from .common import record_stage_time
+from .common import (
+    record_stage_time,
+    read_bytes,
+    read_text_auto,
+    write_text,
+    parse_code,
+)
 
 
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
@@ -31,11 +36,11 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
         raise ValueError(
             "source_angou_encrypt requires ctx['source_angou'] (dict with codes and header_size)"
         )
-    eg = _parse_code(sa.get("easy_code"))
-    mg = _parse_code(sa.get("mask_code"))
-    gg = _parse_code(sa.get("gomi_code"))
-    lg = _parse_code(sa.get("last_code"))
-    ng = _parse_code(sa.get("name_code"))
+    eg = parse_code(sa.get("easy_code"))
+    mg = parse_code(sa.get("mask_code"))
+    gg = parse_code(sa.get("gomi_code"))
+    lg = parse_code(sa.get("last_code"))
+    ng = parse_code(sa.get("name_code"))
     missing_codes = [
         n
         for n, v in (
@@ -204,7 +209,7 @@ DAT_HDR_SZ = 132
 
 
 def _read_scn_dat_header_bytes(path):
-    b = rd(path, 1)
+    b = read_bytes(path)
     if len(b) < DAT_HDR_SZ:
         raise ValueError("bad dat header")
     vals = struct.unpack_from("<" + "i" * 33, b, 0)
@@ -341,7 +346,7 @@ def _record_output(ctx, path, label=None):
                 "label": label or "",
                 "path": path,
                 "size": os.path.getsize(path),
-                "md5": hashlib.md5(rd(path, 1)).hexdigest(),
+                "md5": hashlib.md5(read_bytes(path)).hexdigest(),
             }
         )
     except Exception:
@@ -551,7 +556,11 @@ def main(argv=None):
     angou_path = os.path.join(inp, "暗号.dat")
     if (not a.no_angou) and os.path.isfile(angou_path):
         try:
-            angou_content = rd(angou_path, 0, enc=charset).splitlines()[0].strip("\r\n")
+            angou_content = (
+                read_text_auto(angou_path, force_charset=charset)
+                .splitlines()[0]
+                .strip("\r\n")
+            )
         except Exception:
             angou_content = ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
@@ -594,7 +603,9 @@ def main(argv=None):
                 old = None
                 if os.path.isfile(md5_path):
                     try:
-                        old = json.loads(rd(md5_path, 0, enc="utf-8"))
+                        old = json.loads(
+                            read_text_auto(md5_path, force_charset="utf-8")
+                        )
                     except Exception:
                         old = None
                 full_compile = False
@@ -765,14 +776,13 @@ def main(argv=None):
             pp = link_pack(ctx)
             _record_output(ctx, pp, ctx.get("scene_pck"))
             if md5_path:
-                wr(
+                write_text(
                     md5_path,
                     json.dumps(
                         {"inc": cur_inc, "ss": cur_ss},
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
-                    0,
                     enc="utf-8",
                 )
         ok = True

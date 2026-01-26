@@ -6,7 +6,6 @@ import time
 import glob
 
 from . import const as C
-from .CA import rd, wr, _parse_code
 from .native_ops import lzss_unpack
 from . import compiler
 from .common import (
@@ -20,6 +19,9 @@ from .common import (
     _print_sections,
     _diff_kv,
     exe_angou_element,
+    read_bytes,
+    write_bytes,
+    parse_code,
 )
 
 MAX_SCENE_LIST = 2000
@@ -529,11 +531,11 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
     if not sa:
         raise RuntimeError("source_angou: missing ctx.source_angou")
-    eg = _parse_code(sa.get("easy_code"))
-    mg = _parse_code(sa.get("mask_code"))
-    gg = _parse_code(sa.get("gomi_code"))
-    lg = _parse_code(sa.get("last_code"))
-    ng = _parse_code(sa.get("name_code"))
+    eg = parse_code(sa.get("easy_code"))
+    mg = parse_code(sa.get("mask_code"))
+    gg = parse_code(sa.get("gomi_code"))
+    lg = parse_code(sa.get("last_code"))
+    ng = parse_code(sa.get("name_code"))
     hs = int(sa.get("header_size") or 0)
     if not all([eg, mg, gg, lg, ng]) or hs <= 0:
         raise RuntimeError("source_angou: missing codes/params")
@@ -617,7 +619,7 @@ def _find_angou_dat(os_dir: str) -> str:
 
 
 def _read_first_line_guess_enc(path: str) -> str:
-    b = rd(path, 1)
+    b = read_bytes(path)
     for enc in ("utf-8-sig", "utf-8", "cp932"):
         try:
             t = b.decode(enc, "strict")
@@ -654,7 +656,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         pck = os.path.join(os_dir or ".", "Scene.pck")
         if not os.path.isfile(pck):
             return b""
-        dat = rd(pck, 1)
+        dat = read_bytes(pck)
         hdr = _parse_pack_header(dat)
         if not hdr:
             return b""
@@ -737,7 +739,7 @@ def _iter_exe_el_candidates(os_dir: str):
         pck = os.path.join(os_dir or ".", "Scene.pck")
         if not os.path.isfile(pck):
             return
-        dat = rd(pck, 1)
+        dat = read_bytes(pck)
         hdr = _parse_pack_header(dat)
         if not hdr:
             return
@@ -807,7 +809,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
     ok_cnt = 0
-    dat = rd(input_pck, 1)
+    dat = read_bytes(input_pck)
     hdr = _parse_pack_header(dat)
     if not hdr:
         sys.stderr.write("Invalid pck: header too small\n")
@@ -878,7 +880,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
                     rel = "unknown.bin"
                 out_name = os.path.basename(rel) or rel
                 out_path = _unique_outpath(os_dir, out_name)
-                wr(out_path, raw, 1)
+                write_bytes(out_path, raw)
                 pos += sz
         except Exception as e:
             sys.stderr.write("Warning: failed to extract original sources: %s\n" % e)
@@ -915,7 +917,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
         out_name = os.path.basename(rel) or rel
         out_path = _unique_outpath(bs_dir, out_name)
-        wr(out_path, out_dat, 1)
+        write_bytes(out_path, out_dat)
         if A:
             A._write_dat_disassembly(
                 out_path, out_dat, os.path.dirname(out_path) or bs_dir

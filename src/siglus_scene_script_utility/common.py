@@ -2,6 +2,7 @@ import os
 import sys
 import struct
 import hashlib
+import re
 
 from . import const as C
 
@@ -95,6 +96,42 @@ def read_text_auto(path: str, force_charset: str = "") -> str:
     with open(path, "rb") as f:
         data = f.read()
     return decode_text_auto(data, force_charset=force_charset)[0]
+
+
+def read_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def write_bytes(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(data)
+
+
+def write_text(path: str, text: str, enc: str = "utf-8") -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding=enc, newline="\r\n") as f:
+        f.write(text)
+
+
+def parse_code(v):
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray)):
+        return bytes(v)
+    if isinstance(v, list):
+        return bytes(int(x) & 255 for x in v)
+    if isinstance(v, int):
+        return bytes([int(v) & 255])
+    if isinstance(v, str):
+        if v.startswith("@"):
+            return read_bytes(v[1:])
+        s = re.sub(r"[^0-9a-fA-F]", "", v)
+        if s and len(s) % 2 == 0:
+            return bytes.fromhex(s)
+        return v.encode("latin1", "ignore")
+    raise TypeError(f"Unsupported code type: {type(v).__name__}")
 
 
 def log_stage(stage, file_path):

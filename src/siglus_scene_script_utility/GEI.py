@@ -1,14 +1,19 @@
 import os
 import struct
 from . import const as C
-from .CA import rd, wr
-from .common import exe_angou_element
+from .common import (
+    exe_angou_element,
+    read_bytes,
+    read_text_auto,
+    write_text,
+    write_bytes,
+)
 
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
 
 def _read_text(p, utf8, force_charset=""):
-    return rd(p, 0, enc=force_charset)
+    return read_text_auto(p, force_charset=force_charset)
 
 
 class IniFileAnalizer:
@@ -109,7 +114,7 @@ def xor_cycle_inplace(b, code, st=0):
 
 
 def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b"", base: bytes = None):
-    dat = rd(gameexe_dat_path, 1)
+    dat = read_bytes(gameexe_dat_path)
     if not dat or len(dat) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
     hdr0, mode = struct.unpack_from("<ii", dat, 0)
@@ -169,7 +174,7 @@ def restore_gameexe_ini(
         raise RuntimeError("Failed to decode Gameexe.dat payload")
     out_dir = os.path.abspath(output_dir or ".")
     out_path = os.path.join(out_dir, output_name)
-    wr(out_path, txt, 0, enc="utf-8")
+    write_text(out_path, txt, enc="utf-8")
     return out_path
 
 
@@ -236,9 +241,9 @@ def write_gameexe_dat(ctx):
             dat_angou.extend(lz2)
         dat_out = dat_angou
     p = os.path.join(out, gameexe_dat)
-    wr(p, bytes(dat_out), 1)
+    write_bytes(p, bytes(dat_out))
     if out_noangou:
-        wr(os.path.join(out_noangou, gameexe_dat), bytes(dat_noangou), 1)
+        write_bytes(os.path.join(out_noangou, gameexe_dat), bytes(dat_noangou))
     if mode and tmp and len(el) == 16:
         lines = [
             f"#define\tKN_EXE_ANGOU_DATA{i:02d}A\t0x{el[C.EXE_ANGOU_A_IDX[i]]:02X}"
@@ -250,5 +255,5 @@ def write_gameexe_dat(ctx):
             for i in range(8)
         ]
         lines.append("")
-        wr(os.path.join(tmp, "EXE_ANGOU.h"), "\n".join(lines), 0, enc="cp932")
+        write_text(os.path.join(tmp, "EXE_ANGOU.h"), "\n".join(lines), enc="cp932")
     return p

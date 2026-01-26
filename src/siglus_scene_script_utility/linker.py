@@ -3,7 +3,7 @@ import struct
 import time
 import glob
 from . import const as C
-from .CA import rd, wr, _rt
+from .CA import _rt
 from .IA import IncAnalyzer
 from .common import (
     log_stage,
@@ -11,6 +11,9 @@ from .common import (
     set_stage_time,
     pack_i32_pairs,
     exe_angou_element,
+    read_text_auto,
+    read_bytes,
+    write_bytes,
 )
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
@@ -66,7 +69,7 @@ def _build_inc_data(ctx):
         inc_path = inc if os.path.isabs(inc) else os.path.join(scn_path, inc)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = rd(inc_path, 0, enc=(ctx.get("charset_force") or ""))
+        txt = read_text_auto(inc_path, force_charset=(ctx.get("charset_force") or ""))
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
         if not ia.step1():
@@ -111,7 +114,7 @@ def _xor_cycle_inplace(buf, code, start=0):
 
 def _read_first_line(path, force_charset=""):
     try:
-        txt = rd(path, 0, enc=(force_charset or ""))
+        txt = read_text_auto(path, force_charset=(force_charset or ""))
     except Exception:
         return ""
     i = txt.find("\n")
@@ -183,17 +186,17 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             t = time.time()
             if not easy_code:
                 raise RuntimeError("ctx.easy_angou_code is not set")
-            dat = rd(dat_path, 1)
+            dat = read_bytes(dat_path)
             lz = _m.lzss_pack(dat, level=lzss_level)
             b = bytearray(lz)
             _xor_cycle_inplace(b, easy_code, 0)
             lz = bytes(b)
-            wr(lz_path, lz, 1)
+            write_bytes(lz_path, lz)
             record_stage_time(ctx, "LZSS", time.time() - t)
             log_stage("LZSS", nm + ".ss")
             lzss_list.append(lz)
         else:
-            dat = rd(dat_path, 1)
+            dat = read_bytes(dat_path)
         dat_list.append(dat)
     return enc_names, dat_list, lzss_list
 
@@ -358,13 +361,13 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
-        raw = rd(src_path, 1)
+        raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         if cache_path:
             cache_dir = os.path.dirname(cache_path)
             if cache_dir:
                 os.makedirs(cache_dir, exist_ok=True)
-            wr(cache_path, enc_blob, 1)
+            write_bytes(cache_path, enc_blob)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
         (not skip) and chunks.append(enc_blob)
         record_stage_time(ctx, "OS", time.time() - start)
@@ -449,11 +452,11 @@ def link_pack(ctx):
     if exe_on and out_path_noangou:
         p = os.path.join(out_path_noangou, scene_pck)
         _ensure_dir_for_file(p)
-        wr(p, pack_no, 1)
+        write_bytes(p, pack_no)
     if not exe_on:
         p = os.path.join(out_path, scene_pck)
         _ensure_dir_for_file(p)
-        wr(p, pack_no, 1)
+        write_bytes(p, pack_no)
         return p
     ang = []
     for blob in noangou_scene_data:
@@ -473,5 +476,5 @@ def link_pack(ctx):
     )
     p = os.path.join(out_path, scene_pck)
     _ensure_dir_for_file(p)
-    wr(p, pack_a, 1)
+    write_bytes(p, pack_a)
     return p

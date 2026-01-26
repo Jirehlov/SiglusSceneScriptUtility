@@ -4,7 +4,7 @@ import struct
 import copy
 import time
 from . import const as C
-from .CA import rd, wr, _rt, CharacterAnalizer
+from .CA import _rt, CharacterAnalizer
 from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
@@ -16,6 +16,9 @@ from .common import (
     write_u16_le,
     write_i32_le,
     write_i32_le_array,
+    read_text_auto,
+    write_text,
+    write_bytes,
 )
 
 TNMSERR_BS_NONE = 0
@@ -169,8 +172,9 @@ def build_ia_data(ctx):
         log_stage("IA", inc_path)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = rd(
-            inc_path, 0, enc=(ctx.get("charset_force") if isinstance(ctx, dict) else "")
+        txt = read_text_auto(
+            inc_path,
+            force_charset=(ctx.get("charset_force") if isinstance(ctx, dict) else ""),
         )
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
@@ -182,14 +186,13 @@ def build_ia_data(ctx):
         if not ia.step2():
             raise RuntimeError(f"{name} line({ia.el}): {ia.es}")
         if ctx.get("test_check"):
-            wr(
+            write_text(
                 os.path.join(
                     ctx.get("tmp_path") or ".",
                     "inc",
                     os.path.splitext(name)[0] + ".txt",
                 ),
                 "OK",
-                0,
                 enc=enc,
             )
     record_stage_time(ctx, "IA", time.time() - start)
@@ -1678,8 +1681,9 @@ def compile_one_pipeline(
         return f"{code} at {fname}:{int(line or 0)}"
 
     enc = "utf-8" if (isinstance(ctx, dict) and ctx.get("utf8")) else "cp932"
-    scn = rd(
-        ss_path, 0, enc=(ctx.get("charset_force") if isinstance(ctx, dict) else "")
+    scn = read_text_auto(
+        ss_path,
+        force_charset=(ctx.get("charset_force") if isinstance(ctx, dict) else ""),
     )
 
     base = ia_data
@@ -1704,7 +1708,9 @@ def compile_one_pipeline(
 
     tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
     if test_check and isinstance(ctx, dict) and ctx.get("test_check"):
-        wr(os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), 0, enc=enc)
+        write_text(
+            os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), enc=enc
+        )
 
     if log:
         log_stage("LA", ss_path)
@@ -1793,7 +1799,7 @@ def compile_one(ctx, ss_path, stop_after=None):
     if not res:
         return
     tmp = ctx.get("tmp_path") or "."
-    wr(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"], 1)
+    write_bytes(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"])
 
 
 def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=False):

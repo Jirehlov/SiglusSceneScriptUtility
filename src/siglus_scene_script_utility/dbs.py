@@ -5,9 +5,8 @@ import sys
 import csv
 
 from . import const as C
-from .CA import rd, wr
 from .native_ops import lzss_pack, lzss_unpack, tile_copy
-from .common import _sha1
+from .common import _sha1, read_bytes, write_bytes
 
 
 def _looks_like_dbs(blob):
@@ -558,7 +557,7 @@ def export_dbs_to_csv(path: str) -> int:
         any_found = True
         out_fp = fp + ".csv"
         try:
-            blob = rd(fp)
+            blob = read_bytes(fp)
             m_type, expanded = _dbs_unpack(blob)
             info = _parse_dbs(m_type, expanded)
 
@@ -724,7 +723,7 @@ def apply_dbs_csv(path: str) -> int:
             sys.stderr.write("dbs apply: missing csv: %s\n" % csv_path)
             continue
         try:
-            blob = rd(fp)
+            blob = read_bytes(fp)
             m_type, expanded = _dbs_unpack(blob)
             info = _parse_dbs(m_type, expanded)
             row_cnt = int(info.get("row_cnt") or 0)
@@ -823,7 +822,7 @@ def apply_dbs_csv(path: str) -> int:
                 if pad:
                     new_expanded += b"\x00" * pad
             out_blob = _dbs_pack(m_type, new_expanded)
-            wr(fp, out_blob, 1)
+            write_bytes(fp, out_blob)
             sys.stdout.write("Applied: %s\n" % fp)
         except Exception as e:
             err = 1

@@ -1,44 +1,6 @@
-import os
-import re
 import unicodedata
 from functools import lru_cache
 from . import const as C
-
-
-def rd(p, b=1, enc=""):
-    if b:
-        return open(p, "rb").read()
-    from .common import decode_text_auto
-
-    x = open(p, "rb").read()
-    return decode_text_auto(x, force_charset=enc)[0]
-
-
-def wr(p, d, b=1, enc="utf-8"):
-    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
-    if b:
-        open(p, "wb").write(d)
-    else:
-        open(p, "w", encoding=enc, newline="\r\n").write(d)
-
-
-def _parse_code(v):
-    if v is None:
-        return None
-    if isinstance(v, (bytes, bytearray)):
-        return bytes(v)
-    if isinstance(v, list):
-        return bytes(int(x) & 255 for x in v)
-    if isinstance(v, int):
-        return bytes([v & 255])
-    if isinstance(v, str):
-        if v.startswith("@"):
-            return rd(v[1:], 1)
-        s = re.sub(r"[^0-9a-fA-F]", "", v)
-        if s and len(s) % 2 == 0:
-            return bytes.fromhex(s)
-        return v.encode("latin1", "ignore")
-    raise TypeError(f"Unsupported code type: {type(v).__name__}")
 
 
 def _isalpha(c):
