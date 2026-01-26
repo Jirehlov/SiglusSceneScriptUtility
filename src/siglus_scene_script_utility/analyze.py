@@ -4,14 +4,14 @@ import sys
 
 from .common import hx, _fmt_ts, _read_file, _sha1
 
-from . import analyze_pck
-from . import analyze_dat
-from . import analyze_dbs
-from . import analyze_gan
+from . import pck
+from . import dat
+from . import dbs
+from . import gan
 
 
 SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan")
-_write_dat_disassembly = analyze_dat._write_dat_disassembly
+_write_dat_disassembly = dat._write_dat_disassembly
 
 
 def _detect_type(path, blob):
@@ -24,11 +24,11 @@ def _detect_type(path, blob):
         return "dbs"
     if ext == ".gan":
         return "gan"
-    if analyze_pck._looks_like_pck(blob):
+    if pck._looks_like_pck(blob):
         return "pck"
-    if analyze_dat._looks_like_dat(blob):
+    if dat._looks_like_dat(blob):
         return "dat"
-    if analyze_dbs._looks_like_dbs(blob):
+    if dbs._looks_like_dbs(blob):
         return "dbs"
     return "bin"
 
@@ -52,13 +52,13 @@ def analyze_file(path):
         print("only .pck, .dat, .dbs and .gan are supported.")
         return 1
     if ftype == "gan":
-        return analyze_gan.analyze_gan(path, blob)
+        return gan.gan(path, blob)
     if ftype == "pck":
-        return analyze_pck.analyze_pck(path, blob)
+        return pck.pck(path, blob)
     if ftype == "dbs":
-        return analyze_dbs.analyze_dbs(path, blob)
+        return dbs.dbs(path, blob)
     if ftype == "dat":
-        return analyze_dat.analyze_dat(path, blob)
+        return dat.dat(path, blob)
     return 0
 
 
@@ -92,13 +92,13 @@ def compare_files(p1, p2):
         analyze_file(p2)
         return 0
     if t1 == "gan":
-        return analyze_gan.compare_gan(p1, p2, b1, b2)
+        return gan.compare_gan(p1, p2, b1, b2)
     if t1 == "dbs":
-        return analyze_dbs.compare_dbs(p1, p2, b1, b2)
+        return dbs.compare_dbs(p1, p2, b1, b2)
     if t1 == "pck":
-        return analyze_pck.compare_pck(p1, p2, b1, b2)
+        return pck.compare_pck(p1, p2, b1, b2)
     if t1 == "dat":
-        return analyze_dat.compare_dat(p1, p2, b1, b2)
+        return dat.compare_dat(p1, p2, b1, b2)
     print("No structural comparer for this type; comparing sha1 only.")
     return 0
 
@@ -115,12 +115,12 @@ def main(argv=None):
         gei = True
     if "--dat-txt" in args:
         args.remove("--dat-txt")
-        analyze_dat.DAT_TXT_OUT_DIR = "__DATDIR__"
+        dat.DAT_TXT_OUT_DIR = "__DATDIR__"
     if gei:
         if len(args) == 1:
-            return analyze_dat.analyze_gameexe_dat(args[0])
+            return dat.analyze_gameexe_dat(args[0])
         if len(args) == 2:
-            return analyze_dat.compare_gameexe_dat(args[0], args[1])
+            return dat.compare_gameexe_dat(args[0], args[1])
         return 2
     if len(args) == 1:
         return analyze_file(args[0])

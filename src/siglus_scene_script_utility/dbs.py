@@ -524,7 +524,7 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
     return 0
 
 
-def analyze_dbs(path, blob: bytes) -> int:
+def dbs(path, blob: bytes) -> int:
     return _analyze_dbs(path, blob)
 
 

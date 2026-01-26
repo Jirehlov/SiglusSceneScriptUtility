@@ -242,7 +242,7 @@ def _pck_original_sources(blob, h, scn_data_end):
     return out
 
 
-def analyze_pck(path, blob: bytes) -> int:
+def pck(path, blob: bytes) -> int:
     if len(blob) < getattr(C, "_PACK_HDR_SIZE", 0):
         print("too small for pck header")
         return 1

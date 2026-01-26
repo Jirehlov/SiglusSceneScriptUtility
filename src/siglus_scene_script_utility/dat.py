@@ -471,7 +471,7 @@ def _dat_sections(blob):
     return secs, meta
 
 
-def analyze_dat(path, blob: bytes) -> int:
+def dat(path, blob: bytes) -> int:
     if len(blob) < getattr(C, "_SCN_HDR_SIZE", 0):
         print("too small for dat header")
         return 1

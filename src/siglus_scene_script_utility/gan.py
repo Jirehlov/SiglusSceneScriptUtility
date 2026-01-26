@@ -207,7 +207,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
     return out
 
 
-def analyze_gan(path, blob):
+def gan(path, blob):
     g = _gan_parse(blob, want_disasm=True)
     print("==== GAN Meta ====")
     print("code_version: %r" % (g.get("code_version"),))
