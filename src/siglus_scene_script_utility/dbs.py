@@ -1,8 +1,12 @@
 import struct
 
+import os
+import sys
+import csv
 
 from . import const as C
-from .native_ops import lzss_unpack, tile_copy
+from .CA import rd, wr
+from .native_ops import lzss_pack, lzss_unpack, tile_copy
 from .common import _sha1
 
 
@@ -530,3 +534,354 @@ def dbs(path, blob: bytes) -> int:
 
 def compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
     return _compare_dbs(p1, p2, b1, b2)
+
+
+# --- DBS CSV export/apply (moved from extract.py) ------------------------
+
+
+def _iter_dbs_files(path: str):
+    """Yield .dbs files under path (file or directory)."""
+    if not path:
+        return
+    if os.path.isdir(path):
+        for root, _dirs, files in os.walk(path):
+            for fn in files:
+                if fn.lower().endswith(".dbs"):
+                    yield os.path.join(root, fn)
+    else:
+        if path.lower().endswith(".dbs") and os.path.isfile(path):
+            yield path
+
+
+def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> str:
+    """Convert a dbs cell value to a csv field string."""
+    try:
+        _, dt = info["col_headers"][col_idx]
+    except Exception:
+        dt = 0
+    ch = chr(dt & 0xFF) if 32 <= (dt & 0xFF) <= 126 else ""
+    if ch == "S":
+        # String offset relative to p_str
+        try:
+            return _dbs_get_str(m_type, info.get("str_blob") or b"", int(raw_val))
+        except Exception:
+            return ""
+    # Treat non-string as signed int32 for readability
+    try:
+        v = int(raw_val) & 0xFFFFFFFF
+        if v >= 0x80000000:
+            v -= 0x100000000
+        return str(v)
+    except Exception:
+        return str(raw_val)
+
+
+def export_dbs_to_csv(path: str) -> int:
+    """Export .dbs file(s) to .csv next to source (name.dbs.csv)."""
+
+    if not path:
+        sys.stderr.write("dbs export: missing path\\n")
+        return 2
+
+    # Validate input: exporting expects a .dbs file or a directory containing .dbs files.
+    if not os.path.isdir(path):
+        if not os.path.exists(path):
+            sys.stderr.write("dbs export: file not found: %s\\n" % path)
+            return 1
+        if not os.path.isfile(path):
+            sys.stderr.write("dbs export: not a file: %s\\n" % path)
+            return 1
+        if not path.lower().endswith(".dbs"):
+            sys.stderr.write(
+                "dbs export: expected a .dbs file (or directory), got: %s\n" % path
+            )
+            return 2
+
+    err = 0
+    any_found = False
+    for fp in _iter_dbs_files(path):
+        any_found = True
+        out_fp = fp + ".csv"
+        try:
+            blob = rd(fp)
+            m_type, expanded = _dbs_unpack(blob)
+            info = _parse_dbs(m_type, expanded)
+
+            row_cnt = int(info.get("row_cnt") or 0)
+            col_cnt = int(info.get("col_cnt") or 0)
+            data_ofs = int(info.get("data_offset") or 0)
+            data_blob = info.get("data_blob") or expanded
+
+            # Build header row: row_call_no + per-column call_no (and type char)
+            header = ["row_call_no"]
+            for call_no, dt in info.get("col_headers") or []:
+                ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
+                if ch:
+                    header.append("%d(%s)" % (int(call_no), ch))
+                else:
+                    header.append("%d" % int(call_no))
+
+            with open(out_fp, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f, lineterminator="\r\n")
+                w.writerow(header)
+
+                # Stream rows to avoid holding huge tables in memory.
+                row_calls = info.get("row_calls") or []
+                for r in range(row_cnt):
+                    row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
+                    base = data_ofs + (r * col_cnt * 4)
+                    for c in range(col_cnt):
+                        try:
+                            raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[
+                                0
+                            ]
+                        except Exception:
+                            raw_val = 0
+                        row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
+                    w.writerow(row)
+
+            sys.stdout.write("Wrote: %s\n" % out_fp)
+        except Exception as e:
+            err = 1
+            sys.stderr.write("dbs export failed: %s: %s\n" % (fp, e))
+
+    if not any_found:
+        if os.path.isdir(path):
+            sys.stderr.write("dbs export: no .dbs found under: %s\\n" % path)
+        else:
+            sys.stderr.write("dbs export: no .dbs found: %s\\n" % path)
+        return 1
+    return err
+
+
+def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
+    """Pack expanded dbs payload to on-disk .dbs bytes."""
+    if not expanded:
+        return struct.pack("<i", int(m_type))
+    unpack_size = len(expanded)
+    yl = unpack_size // (C.DBS_MAP_WIDTH * 4)
+    if yl <= 0:
+        return struct.pack("<i", int(m_type))
+    temp_a = bytearray(unpack_size)
+    temp_b = bytearray(unpack_size)
+    tile_copy(
+        temp_a,
+        bytes(expanded),
+        C.DBS_MAP_WIDTH,
+        yl,
+        C.DBS_TILE,
+        C.DBS_TILE_WIDTH,
+        C.DBS_TILE_HEIGHT,
+        0,
+        0,
+        0,
+        128,
+    )
+    tile_copy(
+        temp_b,
+        bytes(expanded),
+        C.DBS_MAP_WIDTH,
+        yl,
+        C.DBS_TILE,
+        C.DBS_TILE_WIDTH,
+        C.DBS_TILE_HEIGHT,
+        0,
+        0,
+        1,
+        128,
+    )
+    _xor32_inplace(temp_a, C.DBS_XOR32_CODE_A)
+    _xor32_inplace(temp_b, C.DBS_XOR32_CODE_B)
+    merged = bytearray(unpack_size)
+    tile_copy(
+        merged,
+        bytes(temp_a),
+        C.DBS_MAP_WIDTH,
+        yl,
+        C.DBS_TILE,
+        C.DBS_TILE_WIDTH,
+        C.DBS_TILE_HEIGHT,
+        0,
+        0,
+        0,
+        128,
+    )
+    tile_copy(
+        merged,
+        bytes(temp_b),
+        C.DBS_MAP_WIDTH,
+        yl,
+        C.DBS_TILE,
+        C.DBS_TILE_WIDTH,
+        C.DBS_TILE_HEIGHT,
+        0,
+        0,
+        1,
+        128,
+    )
+    packed = bytearray(lzss_pack(bytes(merged)))
+    _xor32_inplace(packed, C.DBS_XOR32_CODE)
+    return struct.pack("<i", int(m_type)) + bytes(packed)
+
+
+def _dbs_read_csv_rows(csv_path: str):
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.reader(f)
+        rows = []
+        for i, row in enumerate(reader):
+            if i == 0 and row:
+                head = row[0].strip().lower()
+                if head == "row_call_no":
+                    continue
+            rows.append(row)
+    return rows
+
+
+def _dbs_encode_text(m_type: int, text: str) -> bytes:
+    s = "" if text is None else str(text)
+    if int(m_type) == 0:
+        return s.encode("shift_jis", errors="replace") + b"\x00"
+    return s.encode("utf-16le", errors="replace") + b"\x00\x00"
+
+
+def apply_dbs_csv(path: str) -> int:
+    if not path:
+        sys.stderr.write("dbs apply: missing path\\n")
+        return 2
+
+    # Validate input: apply expects a .dbs file or a directory containing .dbs files.
+    if not os.path.isdir(path):
+        if not os.path.exists(path):
+            sys.stderr.write("dbs apply: file not found: %s\\n" % path)
+            return 1
+        if not os.path.isfile(path):
+            sys.stderr.write("dbs apply: not a file: %s\\n" % path)
+            return 1
+        if not path.lower().endswith(".dbs"):
+            sys.stderr.write(
+                "dbs apply: expected a .dbs file (or directory), got: %s\\n" % path
+            )
+            return 2
+
+    err = 0
+    any_found = False
+    for fp in _iter_dbs_files(path):
+        any_found = True
+        csv_path = fp + ".csv"
+        if not os.path.isfile(csv_path):
+            err = 1
+            sys.stderr.write("dbs apply: missing csv: %s\n" % csv_path)
+            continue
+        try:
+            blob = rd(fp)
+            m_type, expanded = _dbs_unpack(blob)
+            info = _parse_dbs(m_type, expanded)
+            row_cnt = int(info.get("row_cnt") or 0)
+            col_cnt = int(info.get("col_cnt") or 0)
+            row_ofs = int(info.get("row_header_offset") or 0)
+            col_ofs = int(info.get("column_header_offset") or 0)
+            data_ofs = int(info.get("data_offset") or 0)
+            str_ofs = int(info.get("str_offset") or 0)
+            offset_scale = int(info.get("offset_scale") or 1)
+            col_headers = info.get("col_headers") or []
+            data_blob = info.get("data_blob") or expanded
+            row_calls = list(info.get("row_calls") or [])
+
+            rows = _dbs_read_csv_rows(csv_path)
+
+            new_str_blob = bytearray()
+            prefix = bytearray(data_blob[:str_ofs])
+
+            for r in range(row_cnt):
+                row = rows[r] if r < len(rows) else None
+                if row and len(row) > 0 and row[0] != "":
+                    try:
+                        row_calls[r] = int(row[0], 0)
+                    except Exception:
+                        pass
+                base = data_ofs + (r * col_cnt * 4)
+                for c in range(col_cnt):
+                    cell_raw = 0
+                    try:
+                        cell_raw = struct.unpack_from("<I", data_blob, base + c * 4)[0]
+                    except Exception:
+                        cell_raw = 0
+                    cell_val = None
+                    if row and (c + 1) < len(row):
+                        cell_val = row[c + 1]
+                    try:
+                        _, dt = col_headers[c]
+                    except Exception:
+                        dt = 0
+                    ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
+                    if ch == "S":
+                        if cell_val is None:
+                            cell_val = _dbs_get_str(
+                                m_type, info.get("str_blob") or b"", int(cell_raw)
+                            )
+                        ofs = len(new_str_blob)
+                        new_str_blob.extend(_dbs_encode_text(m_type, cell_val))
+                        struct.pack_into("<I", prefix, base + c * 4, int(ofs))
+                    else:
+                        if cell_val is None or cell_val == "":
+                            struct.pack_into("<I", prefix, base + c * 4, int(cell_raw))
+                            continue
+                        try:
+                            v = int(cell_val, 0)
+                        except Exception:
+                            v = int(cell_raw)
+                        struct.pack_into(
+                            "<I", prefix, base + c * 4, int(v) & 0xFFFFFFFF
+                        )
+
+            for r in range(row_cnt):
+                v = row_calls[r] if r < len(row_calls) else r
+                struct.pack_into("<i", prefix, row_ofs + r * 4, int(v))
+
+            new_data_size = str_ofs + len(new_str_blob)
+            if offset_scale > 1:
+                pad = (-new_data_size) % offset_scale
+                if pad:
+                    new_str_blob.extend(b"\x00" * pad)
+                    new_data_size += pad
+
+            raw_data_size = int(new_data_size // max(offset_scale, 1))
+            raw_row_ofs = int(row_ofs // max(offset_scale, 1))
+            raw_col_ofs = int(col_ofs // max(offset_scale, 1))
+            raw_data_ofs = int(data_ofs // max(offset_scale, 1))
+            raw_str_ofs = int(str_ofs // max(offset_scale, 1))
+            struct.pack_into(
+                "<7i",
+                prefix,
+                0,
+                raw_data_size,
+                row_cnt,
+                col_cnt,
+                raw_row_ofs,
+                raw_col_ofs,
+                raw_data_ofs,
+                raw_str_ofs,
+            )
+
+            new_expanded = bytes(prefix) + bytes(new_str_blob)
+            if len(new_expanded) < len(expanded):
+                new_expanded += expanded[len(new_expanded) :]
+            align = int(C.DBS_MAP_WIDTH * 4)
+            if align > 0:
+                pad = (-len(new_expanded)) % align
+                if pad:
+                    new_expanded += b"\x00" * pad
+            out_blob = _dbs_pack(m_type, new_expanded)
+            wr(fp, out_blob, 1)
+            sys.stdout.write("Applied: %s\n" % fp)
+        except Exception as e:
+            err = 1
+            sys.stderr.write("dbs apply failed: %s: %s\n" % (fp, e))
+
+    if not any_found:
+        if os.path.isdir(path):
+            sys.stderr.write("dbs apply: no .dbs found under: %s\\n" % path)
+        else:
+            sys.stderr.write("dbs apply: no .dbs found: %s\\n" % path)
+        return 1
+    return err
