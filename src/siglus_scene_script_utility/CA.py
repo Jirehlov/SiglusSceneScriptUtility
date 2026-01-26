@@ -5,10 +5,6 @@ from functools import lru_cache
 from . import const as C
 
 
-def absp(p):
-    return os.path.abspath(os.path.expanduser(p)) if p else p
-
-
 U = ""
 
 

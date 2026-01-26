@@ -4,7 +4,7 @@ import struct
 import copy
 import time
 from . import const as C
-from .CA import absp, rd, wr, _rt, CharacterAnalizer
+from .CA import rd, wr, _rt, CharacterAnalizer
 from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
@@ -24,6 +24,10 @@ TNMSERR_BS_CONTINUE_NO_LOOP = 2
 TNMSERR_BS_BREAK_NO_LOOP = 3
 TNMSERR_BS_NEED_REFERENCE = 4
 TNMSERR_BS_NEED_VALUE = 5
+
+
+def absp(p):
+    return os.path.abspath(os.path.expanduser(p)) if p else p
 
 
 def is_value(form):

@@ -118,13 +118,4 @@ uv run python tests/benchmark.py
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.
 
-Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle, which is expected but not guaranteed to be there. Some known seeds are as follows,
-
-| PCK | initial seed |
-| --- | --- |
-| [augment_protocol_hZTHqv8A_DL](https://www.virustotal.com/gui/file/1e5d5d094e19df0e7b160022fd34ab8fb25d4af7882935692bc0182c0ad21dc8) | 1769178361 |
-| [prima02_Vwm4NjRVFPnf_Tr](https://www.virustotal.com/gui/file/968e8c2d2952ef671e9736de383361b393ea161d5948ae15c72ffb5a1ea7edde) | 1556068939 |
-| [prima01_wM5fRc2F_TR](https://www.virustotal.com/gui/file/17b401045e582e6a28217286de1fead6373d54f05d55b0a74862bbf68de397e4) | 2145250021 |
-| [LOOPERSPLUS_aR7#Wm9@Tq](https://www.virustotal.com/gui/file/41583cc1f18c2dd3dd5295925eb96d355727966de34b97c6c044a8072a987393) | 124576116 |
-
-In rare [cases](https://www.virustotal.com/gui/file/65fe798ef89a8b019556b2cf87301355a97bb68aa9e1d9cfda42a8dd09b55e3a), simply an initial seed can't fully reproduce the shuffle. We don't know why.
+Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle, which is expected but not guaranteed to be there. In rare cases, simply an initial seed can't fully reproduce the shuffle. My guess for the reason of this is that it's a result of incremental compilation (we have this, too, the --tmp option), which made the file order different.

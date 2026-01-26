@@ -181,12 +181,15 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
 
             lzss_level = ctx.get("lzss_level", 17)
             t = time.time()
-            dat, lz, built_new = _m.load_dat_and_lzss(
-                dat_path, lz_path, easy_code, lzss_level
-            )
-
-            if built_new:
-                record_stage_time(ctx, "LZSS", time.time() - t)
+            if not easy_code:
+                raise RuntimeError("ctx.easy_angou_code is not set")
+            dat = rd(dat_path, 1)
+            lz = _m.lzss_pack(dat, level=lzss_level)
+            b = bytearray(lz)
+            _xor_cycle_inplace(b, easy_code, 0)
+            lz = bytes(b)
+            wr(lz_path, lz, 1)
+            record_stage_time(ctx, "LZSS", time.time() - t)
             log_stage("LZSS", nm + ".ss")
             lzss_list.append(lz)
         else:
@@ -355,7 +358,13 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
-        enc_blob, _ = _m.source_angou_encrypt_with_cache(src_path, rel, cache_path, ctx)
+        raw = rd(src_path, 1)
+        enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
+        if cache_path:
+            cache_dir = os.path.dirname(cache_path)
+            if cache_dir:
+                os.makedirs(cache_dir, exist_ok=True)
+            wr(cache_path, enc_blob, 1)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
         (not skip) and chunks.append(enc_blob)
         record_stage_time(ctx, "OS", time.time() - start)

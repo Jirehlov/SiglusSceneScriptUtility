@@ -141,17 +141,13 @@ def _lzss_compress_task(
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         dat = rd(dat_path, 1)
 
-        if os.path.isfile(lz_path):
-            lz = rd(lz_path, 1)
-        else:
-            if not easy_code:
-                raise RuntimeError("missing .lzss and ctx.easy_angou_code is not set")
-            lz = _m.lzss_pack(dat, level=lzss_level)
-            b = bytearray(lz)
-            xor_cycle_inplace(b, easy_code, 0)
-            lz = bytes(b)
-
-            wr(lz_path, lz, 1)
+        if not easy_code:
+            raise RuntimeError("ctx.easy_angou_code is not set")
+        lz = _m.lzss_pack(dat, level=lzss_level)
+        b = bytearray(lz)
+        xor_cycle_inplace(b, easy_code, 0)
+        lz = bytes(b)
+        wr(lz_path, lz, 1)
 
         return (nm, dat, lz, None)
 
@@ -246,24 +242,13 @@ def _source_encrypt_task(
 
         ctx = {"source_angou": source_angou, "lzss_level": lzss_level}
 
-        use_cache = False
-        if cache_path and os.path.isfile(cache_path):
-            try:
-                if os.path.getmtime(cache_path) >= os.path.getmtime(src_path):
-                    use_cache = True
-            except Exception:
-                use_cache = False
-
-        if use_cache:
-            enc_blob = rd(cache_path, 1)
-        else:
-            raw = rd(src_path, 1)
-            enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-            if cache_path:
-                cache_dir = os.path.dirname(cache_path)
-                if cache_dir:
-                    os.makedirs(cache_dir, exist_ok=True)
-                wr(cache_path, enc_blob, 1)
+        raw = rd(src_path, 1)
+        enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
+        if cache_path:
+            cache_dir = os.path.dirname(cache_path)
+            if cache_dir:
+                os.makedirs(cache_dir, exist_ok=True)
+            wr(cache_path, enc_blob, 1)
 
         size = len(enc_blob) & 0xFFFFFFFF
         chunk = enc_blob if not skip else b""
