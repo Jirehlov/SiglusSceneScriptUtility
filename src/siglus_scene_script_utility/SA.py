@@ -3,10 +3,6 @@ from . import const as C
 from .CA import get_form_code_by_name
 
 
-def create_elm_code(o, g, c):
-    return (int(o) << 24) | (int(g) << 16) | (int(c) & 0xFFFF)
-
-
 def N(ln, **k):
     d = {"node_line": ln, "node_form": 0, "node_type": 0, "node_sub_type": 0}
     d.update(k)
@@ -347,7 +343,7 @@ class SA:
                     C.FM_SCENE,
                     {
                         "type": C.ET_COMMAND,
-                        "code": create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
+                        "code": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
                         "name": name,
                         "form": n["form_code"],
                         "size": 0,

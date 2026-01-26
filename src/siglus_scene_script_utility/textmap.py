@@ -6,7 +6,7 @@ from . import CA
 from . import BS
 from . import LA
 from . import const as C
-from .common import eprint
+from .common import eprint, hint_help as _hint_help
 
 
 def _read_text(path: str):
@@ -288,13 +288,6 @@ def _fix_brackets_content(text: str):
         else:
             out.append(ch)
     return "".join(out), fixed_quotes, fixed_spaces
-
-
-def _hint_help(out=None):
-    if out is None:
-        out = sys.stderr
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
-    out.write(f"hint: run '{p} --help' for command help")
 
 
 def _iter_ss_files(root: str):

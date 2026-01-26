@@ -5,7 +5,13 @@ import glob
 from . import const as C
 from .CA import rd, wr, _rt
 from .IA import IncAnalyzer
-from .common import log_stage, record_stage_time, set_stage_time, pack_i32_pairs
+from .common import (
+    log_stage,
+    record_stage_time,
+    set_stage_time,
+    pack_i32_pairs,
+    exe_angou_element,
+)
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
@@ -128,9 +134,8 @@ def _resolve_exe_angou(ctx):
     mb = angou_str.encode("cp932", "ignore")
     if len(mb) < 8:
         return (False, b"")
-    from . import compiler as _m
 
-    return (True, _m.exe_angou_element(mb))
+    return (True, exe_angou_element(mb))
 
 
 def _get_scene_names(ctx):

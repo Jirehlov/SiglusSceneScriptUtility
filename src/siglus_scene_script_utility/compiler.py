@@ -26,25 +26,6 @@ from .native_ops import (
 from .common import record_stage_time
 
 
-def exe_angou_element(angou_bytes: bytes) -> bytes:
-    r = bytearray(C.EXE_ORG)
-    if not angou_bytes:
-        return bytes(r)
-    n = len(angou_bytes)
-    m = len(r)
-    cnt = m if n < m else n
-    a = b = 0
-    for _ in range(cnt):
-        r[b] ^= angou_bytes[a]
-        a += 1
-        b += 1
-        if a == n:
-            a = 0
-        if b == m:
-            b = 0
-    return bytes(r)
-
-
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
     if not sa:

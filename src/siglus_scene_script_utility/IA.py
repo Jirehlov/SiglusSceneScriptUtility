@@ -7,7 +7,7 @@ from .CA import (
     _iszen,
     _rt_add,
 )
-from .MA import FormTable, create_elm_code
+from .MA import FormTable
 
 
 class IncAnalyzer:
@@ -678,7 +678,7 @@ class IncAnalyzer:
                 self.pf,
                 {
                     "type": C.ET_PROPERTY,
-                    "code": create_elm_code(C.ELM_OWNER_USER_PROP, 0, int(pid)),
+                    "code": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, int(pid)),
                     "name": name,
                     "form": form,
                     "size": int(size or 0),
@@ -747,7 +747,7 @@ class IncAnalyzer:
                 self.pf,
                 {
                     "type": C.ET_COMMAND,
-                    "code": create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
+                    "code": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
                     "name": name,
                     "form": form,
                     "size": 0,

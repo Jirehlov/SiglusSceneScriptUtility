@@ -19,6 +19,7 @@ from .common import (
     _add_gap_sections,
     _print_sections,
     _diff_kv,
+    exe_angou_element,
 )
 
 
@@ -498,25 +499,6 @@ def _parse_pack_header(dat: bytes) -> dict:
     return {k: int(v) for k, v in zip(C._PACK_HDR_FIELDS, vals)}
 
 
-def _read_utf16le_strings(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
-    out = []
-    if blob_ofs <= 0 or blob_ofs + blob_bytes > len(dat):
-        return out
-    blob = dat[blob_ofs : blob_ofs + blob_bytes]
-    for ch_ofs, ch_len in idx_pairs:
-        bo = int(ch_ofs) * 2
-        bl = int(ch_len) * 2
-        if bo < 0 or bl < 0 or bo + bl > len(blob):
-            out.append("")
-            continue
-        try:
-            s = blob[bo : bo + bl].decode("utf-16le", "surrogatepass")
-        except Exception:
-            s = ""
-        out.append(s)
-    return out
-
-
 def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
     out = []
     if blob_ofs <= 0 or blob_ofs + blob_bytes > len(dat):
@@ -716,7 +698,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         mb = s.encode("cp932", "ignore")
         if len(mb) < 8:
             return b""
-        return compiler.exe_angou_element(mb)
+        return exe_angou_element(mb)
     except Exception:
         return b""
 
@@ -745,7 +727,7 @@ def _iter_exe_el_candidates(os_dir: str):
             mb = s0.encode("cp932", "ignore")
             if len(mb) < 8:
                 continue
-            el = compiler.exe_angou_element(mb)
+            el = exe_angou_element(mb)
             if el and el not in seen:
                 seen.add(el)
                 yield el
@@ -798,7 +780,7 @@ def _iter_exe_el_candidates(os_dir: str):
             mb = s0.encode("cp932", "ignore")
             if len(mb) < 8:
                 continue
-            el = compiler.exe_angou_element(mb)
+            el = exe_angou_element(mb)
             if el and el not in seen:
                 seen.add(el)
                 yield el
@@ -819,7 +801,7 @@ def _compute_exe_el(os_dir: str):
     mb = s.encode("cp932", "ignore")
     if len(mb) < 8:
         return b""
-    return compiler.exe_angou_element(mb)
+    return exe_angou_element(mb)
 
 
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
@@ -835,8 +817,19 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         dat, hdr.get("scn_name_index_list_ofs", 0), hdr.get("scn_name_index_cnt", 0)
     )
     scn_name_blob_len = max([a + b for a, b in scn_name_idx], default=0) * 2
-    scn_names = _read_utf16le_strings(
-        dat, scn_name_idx, hdr.get("scn_name_list_ofs", 0), scn_name_blob_len
+    scn_names = _decode_utf16le_strings(
+        dat,
+        scn_name_idx,
+        hdr.get("scn_name_list_ofs", 0),
+        hdr.get("scn_name_list_ofs", 0) + scn_name_blob_len,
+        errors="surrogatepass",
+        strip_null=False,
+        default="",
+        on_error="append_default",
+        on_decode_error="append_default",
+        min_blob_ofs=1,
+        allow_empty_blob=True,
+        strict_blob_end=True,
     )
     scn_data_idx = _read_i32_pairs(
         dat, hdr.get("scn_data_index_list_ofs", 0), hdr.get("scn_data_index_cnt", 0)

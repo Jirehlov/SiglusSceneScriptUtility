@@ -5,7 +5,7 @@ import re
 import subprocess
 import tempfile
 
-from .common import eprint
+from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
 
 try:
     # Package import (preferred)
@@ -34,12 +34,6 @@ def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
         pass
 
 
-def _hint_help() -> None:
-    # Keep CLI help text centralized in the package entry point (__main__.py).
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
-    eprint(f"hint: run '{p} --help' for command help")
-
-
 def _iter_audio_files(inp: str):
     if os.path.isfile(inp):
         yield inp
@@ -57,10 +51,6 @@ def _write_file(path: str, data: bytes) -> None:
         os.makedirs(d, exist_ok=True)
     with open(path, "wb") as f:
         f.write(data)
-
-
-def _fmt_kv(k: str, v) -> str:
-    return f"{k}: {v}"
 
 
 def _analyze_one(path: str) -> int:

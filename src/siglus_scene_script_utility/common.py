@@ -237,36 +237,115 @@ def _max_pair_end(pairs):
     return m
 
 
-def _decode_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
+def _decode_utf16le_strings(
+    dat,
+    idx_pairs,
+    blob_ofs,
+    blob_end,
+    *,
+    errors: str = "replace",
+    strip_null: bool = True,
+    default: str = "",
+    on_error: str = "skip",
+    on_decode_error: str = "append_default",
+    min_blob_ofs: int = 0,
+    allow_empty_blob: bool = False,
+    strict_blob_end: bool = False,
+):
+    """Decode UTF-16LE strings stored in a shared blob.
+
+    Parameters
+    ----------
+    dat : bytes-like
+        Full file/blob bytes.
+    idx_pairs : iterable[(ofs_u16, len_u16)]
+        String offsets/lengths in *u16 units*, relative to `blob_ofs`.
+    blob_ofs, blob_end : int
+        Absolute byte offsets in `dat` for the strings blob, where `blob_end` is exclusive.
+    errors : str
+        Decode error strategy passed to `.decode()`.
+    strip_null : bool
+        If True, removes embedded '\x00' after decode (legacy behavior).
+    default : str
+        Fallback string used for error cases when appending a placeholder.
+    on_error : {'skip','append_default','raise'}
+        Behavior for invalid pairs / out-of-range entries.
+    on_decode_error : {'skip','append_default','raise'}
+        Behavior for decode exceptions.
+    min_blob_ofs : int
+        Minimum allowed `blob_ofs` (e.g., 1 to treat 0 as "absent", matching some pack formats).
+    allow_empty_blob : bool
+        If True, allows `blob_end == blob_ofs` (empty blob); otherwise treated as invalid.
+    strict_blob_end : bool
+        If True, reject blobs where `blob_end > len(dat)` (instead of clamping), matching some legacy callers.
+
+    Notes
+    -----
+    Defaults preserve the previous `common._decode_utf16le_strings` behavior:
+    - invalid pairs/ranges are skipped
+    - decode exceptions append an empty string
+    """
     out = []
     if not idx_pairs:
         return out
+
     try:
         blob_ofs = int(blob_ofs)
         blob_end = int(blob_end)
+        min_blob_ofs = int(min_blob_ofs)
     except Exception:
         return out
-    if blob_ofs < 0 or blob_end <= blob_ofs or blob_ofs > len(dat):
+
+    if blob_ofs < min_blob_ofs or blob_ofs < 0:
         return out
+    if blob_ofs > len(dat):
+        return out
+    if blob_end < blob_ofs or ((not allow_empty_blob) and blob_end <= blob_ofs):
+        return out
+    if strict_blob_end and blob_end > len(dat):
+        return out
+
+    # Preserve legacy behavior: clamp blob_end unless strict.
     blob_end = max(0, min(blob_end, len(dat)))
+    if blob_end < blob_ofs:
+        return out
+
+    def _handle(kind: str, si: int, exc, mode: str):
+        if mode == "raise":
+            msg = f"utf16le decode failed ({kind}) at index {si}"
+            raise ValueError(msg) from exc
+        if mode == "append_default":
+            out.append(default)
+        # mode == 'skip' -> do nothing
+
     for si, (ofs_u16, ln_u16) in enumerate(idx_pairs or []):
         try:
             o = int(ofs_u16)
             ln = int(ln_u16)
-        except Exception:
+        except Exception as exc:
+            _handle("bad-pair", si, exc, on_error)
             continue
+
         if o < 0 or ln <= 0:
+            _handle("bad-range", si, None, on_error)
             continue
+
         a = blob_ofs + o * 2
         b = a + ln * 2
         if a < 0 or b > blob_end:
+            _handle("out-of-range", si, None, on_error)
             continue
+
         try:
-            s = dat[a:b].decode("utf-16le", errors="replace")
-        except Exception:
-            s = ""
-        s = s.replace("\x00", "")
+            s = dat[a:b].decode("utf-16le", errors=errors)
+        except Exception as exc:
+            _handle("decode-error", si, exc, on_decode_error)
+            continue
+
+        if strip_null and s:
+            s = s.replace("\x00", "")
         out.append(s)
+
     return out
 
 
@@ -318,6 +397,57 @@ def _print_sections(secs, total):
     pct = (un / total * 100.0) if total else 0.0
     print("")
     print("coverage: %d/%d bytes  unused: %d (%.2f%%)" % (cov, total, un, pct))
+
+
+# ============================================================================
+# Small shared CLI helpers
+# ============================================================================
+
+
+def hint_help(out=None) -> None:
+    """Print a standard hint to run '<prog> --help' for command help.
+
+    - If `out` is None: prints to stderr via `eprint()` (includes trailing newline).
+    - If `out` is a stream: writes to that stream without forcing a newline (to preserve legacy callers).
+    """
+    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
+    msg = f"hint: run '{p} --help' for command help"
+    if out is None:
+        eprint(msg)
+        return
+    try:
+        out.write(msg)
+    except Exception:
+        eprint(msg)
+
+
+def fmt_kv(k: str, v) -> str:
+    return f"{k}: {v}"
+
+
+# ============================================================================
+# Shared Siglus helpers
+# ============================================================================
+
+
+def exe_angou_element(angou_bytes: bytes) -> bytes:
+    """Derive EXE angou element bytes from 暗号*.dat bytes."""
+    r = bytearray(C.EXE_ORG)
+    if not angou_bytes:
+        return bytes(r)
+    n = len(angou_bytes)
+    m = len(r)
+    cnt = m if n < m else n
+    a = b = 0
+    for _ in range(cnt):
+        r[b] ^= angou_bytes[a]
+        a += 1
+        b += 1
+        if a == n:
+            a = 0
+        if b == m:
+            b = 0
+    return bytes(r)
 
 
 def _diff_kv(k, a, b):

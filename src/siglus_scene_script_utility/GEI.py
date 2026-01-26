@@ -2,7 +2,7 @@ import os
 import struct
 from . import const as C
 from .CA import rd, wr
-
+from .common import exe_angou_element
 
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
@@ -174,25 +174,6 @@ def restore_gameexe_ini(
     out_path = os.path.join(out_dir, output_name)
     wr(out_path, txt, 0, enc="utf-8")
     return out_path
-
-
-def exe_angou_element(angou_bytes):
-    r = bytearray(C.EXE_ORG)
-    if not angou_bytes:
-        return bytes(r)
-    n = len(angou_bytes)
-    m = len(r)
-    cnt = m if n < m else n
-    a = b = 0
-    for _ in range(cnt):
-        r[b] ^= angou_bytes[a]
-        a += 1
-        b += 1
-        if a == n:
-            a = 0
-        if b == m:
-            b = 0
-    return bytes(r)
 
 
 def _load_angou_first_line(ctx):

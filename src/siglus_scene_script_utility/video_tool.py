@@ -1,7 +1,7 @@
 import os
 import sys
 
-from .common import eprint
+from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
 
 try:
     # Package import (preferred)
@@ -9,12 +9,6 @@ try:
 except Exception:  # pragma: no cover
     # Direct script import fallback
     import video  # type: ignore
-
-
-def _hint_help() -> None:
-    # Keep CLI help text centralized in the package entry point (__main__.py).
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
-    eprint(f"hint: run '{p} --help' for command help")
 
 
 def _iter_video_files(inp: str):
@@ -25,10 +19,6 @@ def _iter_video_files(inp: str):
         for fn in files:
             if fn.lower().endswith(".omv"):
                 yield os.path.join(base_dir, fn)
-
-
-def _fmt_kv(k: str, v) -> str:
-    return f"{k}: {v}"
 
 
 def _analyze_one(path: str) -> int:

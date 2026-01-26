@@ -2,10 +2,6 @@ import copy
 from . import const as C
 
 
-def create_elm_code(o, g, c):
-    return (int(o) << 24) | (int(g) << 16) | (int(c) & 0xFFFF)
-
-
 def _form_name(f):
     if isinstance(f, str):
         return f
@@ -155,7 +151,7 @@ class FormTable:
                 am = _parse_arg_spec(args)
             info = {
                 "type": et,
-                "code": create_elm_code(owner, group, int(code)),
+                "code": C.create_elm_code(owner, group, int(code)),
                 "name": name,
                 "form": form or C.FM_INT,
                 "size": size,
@@ -450,7 +446,7 @@ class MA:
         sz = 0
         e = {
             "type": C.ET_PROPERTY,
-            "code": create_elm_code(
+            "code": C.create_elm_code(
                 C.ELM_OWNER_CALL_PROP, 0, int(s.psad.get("cur_call_prop_cnt", 0))
             ),
             "name": name,
