@@ -92,28 +92,6 @@ cd src/siglus_scene_script_utility/rust
 cargo fmt
 ```
 
-### Testing
-
-Run the test suite using `pytest`:
-
-```bash
-uv run pytest
-```
-
-**Rust:**
-```bash
-cd src/siglus_scene_script_utility/rust
-cargo test
-```
-
-### Benchmarks
-
-Run the benchmark script to measure performance improvements:
-
-```bash
-uv run python tests/benchmark.py
-```
-
 ## Tips
 
 If you type something in a .ss file that would break tokenization, wrap it in double quotes so it's treated as a literal.

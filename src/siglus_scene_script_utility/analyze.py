@@ -7,8 +7,9 @@ from . import pck
 from . import dat
 from . import dbs
 from . import gan
+from . import sav
 
-SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan")
+SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan", "sav")
 
 
 def _detect_type(path, blob):
@@ -21,12 +22,16 @@ def _detect_type(path, blob):
         return "dbs"
     if ext == ".gan":
         return "gan"
+    if ext == ".sav":
+        return "sav"
     if pck._looks_like_pck(blob):
         return "pck"
     if dat._looks_like_dat(blob):
         return "dat"
     if dbs._looks_like_dbs(blob):
         return "dbs"
+    if sav._looks_like_sav(blob):
+        return "sav"
     return "bin"
 
 
@@ -46,7 +51,7 @@ def analyze_file(path):
     print("")
     if ftype not in SUPPORTED_TYPES:
         print("unsupported file type for -a mode: %s" % ftype)
-        print("only .pck, .dat, .dbs and .gan are supported.")
+        print("only .pck, .dat, .dbs, .gan and .sav are supported.")
         return 1
     if ftype == "gan":
         return gan.gan(blob)
@@ -56,6 +61,8 @@ def analyze_file(path):
         return dbs.dbs(blob)
     if ftype == "dat":
         return dat.dat(path, blob)
+    if ftype == "sav":
+        return sav.sav(blob)
     return 0
 
 
@@ -77,7 +84,7 @@ def compare_files(p1, p2):
     print("")
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print("unsupported file type for -a mode (type1=%s type2=%s)" % (t1, t2))
-        print("only .pck, .dat, .dbs and .gan are supported.")
+        print("only .pck, .dat, .dbs, .gan and .sav are supported.")
         return 1
     if t1 != t2:
         print("Different types; structural compare is skipped.")
@@ -96,6 +103,8 @@ def compare_files(p1, p2):
         return pck.compare_pck(b1, b2)
     if t1 == "dat":
         return dat.compare_dat(p1, p2, b1, b2)
+    if t1 == "sav":
+        return sav.compare_sav(b1, b2)
     print("No structural comparer for this type; comparing sha1 only.")
     return 0
 
