@@ -5,7 +5,7 @@ import sys
 
 from . import const as C
 from . import disam
-from . import extract
+from . import pck
 from .common import (
     hx,
     _fmt_ts,
@@ -533,7 +533,7 @@ def _gei_decode_txt(path):
     _, mode = struct.unpack_from("<ii", blob, 0)
     exe_el = b""
     if int(mode) != 0:
-        exe_el = extract._compute_exe_el(os.path.dirname(os.path.abspath(path)))
+        exe_el = pck._compute_exe_el(os.path.dirname(os.path.abspath(path)))
     from . import GEI
 
     info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
@@ -582,7 +582,7 @@ def analyze_gameexe_dat(path):
     payload_size = max(0, len(blob) - 8)
     exe_el = b""
     if int(mode) != 0:
-        exe_el = extract._compute_exe_el(os.path.dirname(os.path.abspath(path)))
+        exe_el = pck._compute_exe_el(os.path.dirname(os.path.abspath(path)))
     from . import GEI
 
     info = None

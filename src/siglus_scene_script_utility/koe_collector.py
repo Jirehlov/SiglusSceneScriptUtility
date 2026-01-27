@@ -337,7 +337,8 @@ def main(argv=None):
         safe = sanitize_filename(name if name else "UNKNOWN")
         char_dir = os.path.join(out_dir, safe)
         os.makedirs(char_dir, exist_ok=True)
-        for coord_key in items.keys():
+        missing_coords = set()
+        for coord_key in list(items.keys()):
             done += 1
             ogg_name = sanitize_filename(coord_key) + ".ogg"
             out_path = os.path.join(char_dir, ogg_name)
@@ -353,6 +354,7 @@ def main(argv=None):
                     msg = str(e)
                     if isinstance(e, KeyError) and "Entry not found" in msg:
                         missing += 1
+                        missing_coords.add(coord_key)
                     else:
                         failed += 1
                     eprint(f"{safe}\t{coord_key}\t{e}")
@@ -364,6 +366,8 @@ def main(argv=None):
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, lineterminator="\r\n")
             for coord_key, (text, src) in items.items():
+                if coord_key in missing_coords:
+                    continue
                 w.writerow([sanitize_filename(coord_key), text, src])
     eprint(f"done ok={ok} skipped={skipped} missing={missing} failed={failed}")
     return 0

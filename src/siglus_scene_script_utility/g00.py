@@ -280,9 +280,9 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
     raise ValueError(f"unsupported type for merge: {t}")
 
 
-def merge_g00_files(g00_paths):
-    if len(g00_paths) not in (2, 3):
-        raise ValueError("need 2-3 input g00")
+def merge_g00_files(g00_paths, output_dir=None):
+    if len(g00_paths) < 2:
+        raise ValueError("need >=2 input g00")
     specs = [_parse_g00_spec(x) for x in g00_paths]
     ps = [p for (p, _cut, _lab) in specs]
     for p in ps:
@@ -300,8 +300,11 @@ def merge_g00_files(g00_paths):
         dx = int(xy[0]) - int(base_xy[0])
         dy = int(xy[1]) - int(base_xy[1])
         base_img.alpha_composite(src_img, dest=(dx, dy))
-
-    out_dir = base_path.parent
+    if output_dir:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = Path.cwd()
     out_name = "+".join([lab for (_p, _c, lab) in specs]) + ".png"
     out_path = out_dir / out_name
     base_img.save(out_path, "PNG")
@@ -823,22 +826,48 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             canvas, cw, ch = _cut_canvas_bgra(blk)
             bgra, w, h = _load_image_bgra(img_p)
 
-            chip_pixels = _unpremultiply_for_blit_over_zero(bgra)
+            chip_pixels_canvas = _unpremultiply_for_blit_over_zero(bgra)
 
             if len(blk) < C.G00_CUT_SZ:
                 raise ValueError("cut block short")
-            new_hdr = bytearray(blk[: C.G00_CUT_SZ])
-            struct.pack_into("<H", new_hdr, 2, 1)
+            ct, cc, x0, y0, dx0, dy0, cx0, cy0, cw0, ch0 = struct.unpack_from(
+                "<B x H 8i", blk, 0
+            )
+            if (cw0, ch0) != (cw, ch):
+                raise ValueError("cut header size mismatch")
 
-            if len(blk) >= C.G00_CUT_SZ + C.G00_CHIP_SZ:
-                chip_hdr = bytearray(blk[C.G00_CUT_SZ : C.G00_CUT_SZ + C.G00_CHIP_SZ])
-            else:
-                chip_hdr = bytearray(b"\0" * C.G00_CHIP_SZ)
+            pos = C.G00_CUT_SZ
+            chips = []
+            rects = []
+            for _ in range(cc):
+                if pos + C.G00_CHIP_SZ > len(blk):
+                    raise ValueError("cut block chip header short")
+                hdr = blk[pos : pos + C.G00_CHIP_SZ]
+                pos += C.G00_CHIP_SZ
 
-            struct.pack_into("<HH", chip_hdr, 0, 0, 0)
-            struct.pack_into("<HH", chip_hdr, 6, cw, ch)
-
-            nb = bytes(new_hdr) + bytes(chip_hdr) + chip_pixels
+                px, py, ctype, xl, yl = struct.unpack_from("<HHB x HH", hdr, 0)
+                if xl <= 0 or yl <= 0:
+                    raise ValueError("bad chip size")
+                rects.append((px, py, xl, yl))
+                n = xl * yl * 4
+                if pos + n > len(blk):
+                    raise ValueError("cut block chip data short")
+                pos += n
+                chips.append((hdr, px, py, xl, yl))
+            mv = memoryview(chip_pixels_canvas)
+            parts = [blk[: C.G00_CUT_SZ]]
+            for hdr, px, py, xl, yl in chips:
+                if px + xl > cw or py + yl > ch:
+                    raise ValueError("chip rect out of bounds")
+                cd = bytearray(xl * yl * 4)
+                row_bytes = xl * 4
+                for ry in range(yl):
+                    so = ((py + ry) * cw + px) * 4
+                    do = ry * row_bytes
+                    cd[do : do + row_bytes] = mv[so : so + row_bytes]
+                parts.append(hdr)
+                parts.append(bytes(cd))
+            nb = b"".join(parts)
             repl[ci] = nb
 
         if len(unp) < 4:
@@ -1023,10 +1052,28 @@ def main(argv=None):
             print(f"[!] {e}", file=sys.stderr)
             return 1
     if args[0] == "--m":
-        if len(args) not in (3, 4):
+        if len(args) < 2:
+            return 2
+        rest = args[1:]
+        layers = []
+        output_dir = None
+        i = 0
+        while i < len(rest):
+            a = rest[i]
+            if a in ("--o", "-o", "--output", "--output-dir"):
+                if i + 1 >= len(rest):
+                    return 2
+                if output_dir is not None:
+                    return 2
+                output_dir = rest[i + 1]
+                i += 2
+                continue
+            layers.append(a)
+            i += 1
+        if len(layers) < 2:
             return 2
         try:
-            out_p = merge_g00_files(args[1:])
+            out_p = merge_g00_files(layers, output_dir=output_dir)
             print(f"Merge: {out_p}")
             return 0
         except Exception as e:
