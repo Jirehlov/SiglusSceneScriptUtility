@@ -232,10 +232,6 @@ def _read_scn_dat_str_index(path):
     return b, h, idx
 
 
-def _order_from_idx(idx):
-    return sorted(range(len(idx)), key=lambda o: int(idx[o][0]))
-
-
 def _read_scn_dat_idx_pairs(path):
     _, _, idx = _read_scn_dat_str_index(path)
     return [(int(ofs), int(ln)) for (ofs, ln) in idx]
@@ -243,7 +239,7 @@ def _read_scn_dat_idx_pairs(path):
 
 def _read_scn_dat_str_pool(path):
     b, h, idx = _read_scn_dat_str_index(path)
-    order = _order_from_idx(idx)
+    order = sorted(range(len(idx)), key=lambda o: int(idx[o][0]))
     base = int(h.get("str_list_ofs", 0) or 0)
     out = []
     for orig in order:

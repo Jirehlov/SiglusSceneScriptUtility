@@ -248,7 +248,7 @@ def _parse_dbs(m_type: int, data: bytes):
     }
 
 
-def _analyze_dbs(blob: bytes) -> int:
+def dbs(blob: bytes) -> int:
     if not blob or len(blob) < 12:
         print("too small for dbs")
         return 1
@@ -326,7 +326,7 @@ def _analyze_dbs(blob: bytes) -> int:
     return 0
 
 
-def _compare_dbs(b1: bytes, b2: bytes) -> int:
+def compare_dbs(b1: bytes, b2: bytes) -> int:
     try:
         t1, u1 = _dbs_unpack(b1)
         t2, u2 = _dbs_unpack(b2)
@@ -489,14 +489,6 @@ def _compare_dbs(b1: bytes, b2: bytes) -> int:
             print("  first_diff_offset=%d" % first)
 
     return 0
-
-
-def dbs(blob: bytes) -> int:
-    return _analyze_dbs(blob)
-
-
-def compare_dbs(b1: bytes, b2: bytes) -> int:
-    return _compare_dbs(b1, b2)
 
 
 def _iter_dbs_files(path: str):

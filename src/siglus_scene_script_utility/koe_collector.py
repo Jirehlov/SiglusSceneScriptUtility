@@ -95,7 +95,7 @@ def extract_koe_to_ogg(
     coord_obj = _coerce_coord(coord)
     scn_no, line_no = koe_no_to_scene_line(coord_obj.koe_no)
     ovk_path = find_ovk_path(voice_dir, coord_obj.koe_no, coord_obj.chara_no)
-    ogg_bytes = sound.extract_ogg_bytes_from_ovk(ovk_path, line_no)
+    ogg_bytes = sound.extract_ogg_bytes_from_ovk_entry(ovk_path, line_no)
     out_path = ""
     if export:
         if out_dir is None:

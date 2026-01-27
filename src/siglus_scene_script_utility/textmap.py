@@ -136,10 +136,6 @@ def _locate_tokens(source_text: str, tokens, filename: str = ""):
     return out
 
 
-def _csv_path_for_ss(ss_path: str) -> str:
-    return ss_path + ".csv"
-
-
 def _write_map(csv_path: str, entries):
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -332,7 +328,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
             iad_cache[key] = iad_base
     tokens = _collect_tokens(text, ctx, iad_base=iad_base)
     entries = _locate_tokens(text, tokens, filename=fname)
-    csv_path = _csv_path_for_ss(ss_path)
+    csv_path = ss_path + ".csv"
     if not apply_mode:
         _write_map(csv_path, entries)
         print(csv_path)

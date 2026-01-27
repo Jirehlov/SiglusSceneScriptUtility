@@ -2,10 +2,6 @@ from . import const as C
 from .CA import _iszen
 
 
-def _tostr_moji(c):
-    return c
-
-
 def la_analize(pcad):
     s = pcad["scn_text"] + ("\0" * 256)
     cur_id = 0
@@ -289,7 +285,7 @@ def la_analize(pcad):
             a["type"] = C.LA_T["CLOSE_BRACE"]
             i += 1
         else:
-            return err(cur_line, "Invalid character: '" + _tostr_moji(c) + "'")
+            return err(cur_line, "Invalid character: '" + c + "'")
         if a["type"] != C.LA_T["NONE"]:
             atom_list.append(a)
     atom_list.append(

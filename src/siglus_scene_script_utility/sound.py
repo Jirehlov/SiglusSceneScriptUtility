@@ -100,10 +100,6 @@ def extract_ogg_bytes_from_ovk_entry(ovk_path: str, entry_no: int) -> bytes:
     raise KeyError(f"Entry not found: entry_no={entry_no}")
 
 
-def extract_ogg_bytes_from_ovk(ovk_path: str, entry_no: int) -> bytes:
-    return extract_ogg_bytes_from_ovk_entry(ovk_path, entry_no)
-
-
 def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
     entries = read_ovk_table(ovk_path)
     with open(ovk_path, "rb") as f:

@@ -12,10 +12,6 @@ from .common import (
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
 
-def _read_text(p, utf8, force_charset=""):
-    return read_text_auto(p, force_charset=force_charset)
-
-
 class IniFileAnalizer:
     def __init__(self):
         self._el = 0
@@ -180,12 +176,13 @@ def restore_gameexe_ini(
 
 def _load_angou_first_line(ctx):
     scn = ctx.get("scn_path") or ""
-    utf8 = bool(ctx.get("utf8"))
     p = os.path.join(scn, "暗号.dat")
     if not os.path.exists(p):
         return ""
     try:
-        return _read_text(p, utf8).split("\n", 1)[0]
+        return read_text_auto(p, force_charset=(ctx.get("charset_force") or "")).split(
+            "\n", 1
+        )[0]
     except FileNotFoundError:
         return ""
 
@@ -195,13 +192,13 @@ def write_gameexe_dat(ctx):
     out = ctx.get("out_path") or "."
     out_noangou = ctx.get("out_path_noangou") or ""
     tmp = ctx.get("tmp_path") or ""
-    utf8 = bool(ctx.get("utf8"))
     gameexe_ini = ctx.get("gameexe_ini") or "Gameexe.ini"
     gameexe_dat = ctx.get("gameexe_dat") or "Gameexe.dat"
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
+    charset_force = ctx.get("charset_force") or ""
     gei_path = os.path.join(scn, gameexe_ini)
     gei = (
-        _read_text(gei_path, utf8, (ctx.get("charset_force") or ""))
+        read_text_auto(gei_path, force_charset=charset_force)
         if os.path.exists(gei_path)
         else ""
     )

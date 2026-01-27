@@ -49,10 +49,6 @@ def is_value(form):
     )
 
 
-def is_reference(form):
-    return not is_value(form)
-
-
 def dereference(form):
     if isinstance(form, str):
         if form == C.FM_INTREF:
@@ -1326,7 +1322,7 @@ class BS:
                 return False
             if get_elm_owner((el or {}).get("element_code", 0)) == int(
                 C.ELM_OWNER_CALL_PROP
-            ) and is_reference((el or {}).get("node_form")):
+            ) and not is_value((el or {}).get("node_form")):
                 s.scn_push_u8(C.CD_PROPERTY)
                 s.add_out_txt("CD_PROPERTY")
         return True

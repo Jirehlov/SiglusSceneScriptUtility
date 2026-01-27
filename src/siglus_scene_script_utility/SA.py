@@ -1,6 +1,7 @@
 import json
 from . import const as C
 from .CA import get_form_code_by_name
+from .common import read_text_auto
 
 
 def N(ln, **k):
@@ -1329,12 +1330,6 @@ class SA:
         }
 
 
-def _sa_read(p):
-    from .common import read_text_auto
-
-    return read_text_auto(p)
-
-
 def _sa_diff(a, b, p=""):
     r = []
     if type(a) is not type(b):
@@ -1379,7 +1374,7 @@ def sa_test(path, ref_json=None, out_json=None):
     }
     pcad = {}
     ca = CharacterAnalizer()
-    if not ca.analize_file(_sa_read(path), iad, pcad):
+    if not ca.analize_file(read_text_auto(path), iad, pcad):
         return 0, {
             "stage": "CA",
             "line": ca.get_error_line(),

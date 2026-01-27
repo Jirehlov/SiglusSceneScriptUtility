@@ -18,18 +18,10 @@ from .common import (
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
-def _enc_w(s):
-    return (s or "").encode("utf-16le", "surrogatepass")
-
-
 def _ensure_dir_for_file(p):
     d = os.path.dirname(p)
     if d:
         os.makedirs(d, exist_ok=True)
-
-
-def _rel_win(base, path):
-    return os.path.relpath(path, base).replace("/", "\\")
 
 
 def _glob_sorted_rel(base, pattern):
@@ -37,7 +29,7 @@ def _glob_sorted_rel(base, pattern):
     rels = []
     for p in hits:
         if os.path.isfile(p):
-            rels.append(_rel_win(base, p))
+            rels.append(os.path.relpath(p, base).replace("/", "\\"))
     rels.sort(key=lambda x: x.lower())
     return rels
 
@@ -208,7 +200,7 @@ def _build_index_list_for_strings(strs):
     for s in strs:
         s = s or ""
         idx.append((ofs_chars, len(s)))
-        blob.extend(_enc_w(s))
+        blob.extend((s or "").encode("utf-16le", "surrogatepass"))
         ofs_chars += len(s)
     return idx, bytes(blob)
 
