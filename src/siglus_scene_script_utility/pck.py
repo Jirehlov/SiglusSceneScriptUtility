@@ -248,7 +248,7 @@ def _pck_original_sources(blob, h, scn_data_end):
     return out
 
 
-def pck(path, blob: bytes) -> int:
+def pck(blob: bytes) -> int:
     if len(blob) < getattr(C, "_PACK_HDR_SIZE", 0):
         print("too small for pck header")
         return 1
@@ -302,7 +302,7 @@ def pck(path, blob: bytes) -> int:
     return 0
 
 
-def compare_pck(p1, p2, b1: bytes, b2: bytes) -> int:
+def compare_pck(b1: bytes, b2: bytes) -> int:
     s1, m1 = _pck_sections(b1, preview=False)
     s2, m2 = _pck_sections(b2, preview=False)
     h1 = m1.get("header") or {}

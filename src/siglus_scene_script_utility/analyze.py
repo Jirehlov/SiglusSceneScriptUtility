@@ -49,11 +49,11 @@ def analyze_file(path):
         print("only .pck, .dat, .dbs and .gan are supported.")
         return 1
     if ftype == "gan":
-        return gan.gan(path, blob)
+        return gan.gan(blob)
     if ftype == "pck":
-        return pck.pck(path, blob)
+        return pck.pck(blob)
     if ftype == "dbs":
-        return dbs.dbs(path, blob)
+        return dbs.dbs(blob)
     if ftype == "dat":
         return dat.dat(path, blob)
     return 0
@@ -89,11 +89,11 @@ def compare_files(p1, p2):
         analyze_file(p2)
         return 0
     if t1 == "gan":
-        return gan.compare_gan(p1, p2, b1, b2)
+        return gan.compare_gan(b1, b2)
     if t1 == "dbs":
-        return dbs.compare_dbs(p1, p2, b1, b2)
+        return dbs.compare_dbs(b1, b2)
     if t1 == "pck":
-        return pck.compare_pck(p1, p2, b1, b2)
+        return pck.compare_pck(b1, b2)
     if t1 == "dat":
         return dat.compare_dat(p1, p2, b1, b2)
     print("No structural comparer for this type; comparing sha1 only.")

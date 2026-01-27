@@ -9,8 +9,6 @@ export_dbs_to_csv = dbs.export_dbs_to_csv
 apply_dbs_csv = dbs.apply_dbs_csv
 extract_pck = pck.extract_pck
 _iter_exe_el_candidates = pck._iter_exe_el_candidates
-source_angou_decrypt = pck.source_angou_decrypt
-_parse_pack_header = pck._parse_pack_header
 
 
 def main(argv=None):

@@ -248,7 +248,7 @@ def _parse_dbs(m_type: int, data: bytes):
     }
 
 
-def _analyze_dbs(path, blob: bytes) -> int:
+def _analyze_dbs(blob: bytes) -> int:
     if not blob or len(blob) < 12:
         print("too small for dbs")
         return 1
@@ -326,7 +326,7 @@ def _analyze_dbs(path, blob: bytes) -> int:
     return 0
 
 
-def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
+def _compare_dbs(b1: bytes, b2: bytes) -> int:
     try:
         t1, u1 = _dbs_unpack(b1)
         t2, u2 = _dbs_unpack(b2)
@@ -491,12 +491,12 @@ def _compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
     return 0
 
 
-def dbs(path, blob: bytes) -> int:
-    return _analyze_dbs(path, blob)
+def dbs(blob: bytes) -> int:
+    return _analyze_dbs(blob)
 
 
-def compare_dbs(p1, p2, b1: bytes, b2: bytes) -> int:
-    return _compare_dbs(p1, p2, b1, b2)
+def compare_dbs(b1: bytes, b2: bytes) -> int:
+    return _compare_dbs(b1, b2)
 
 
 def _iter_dbs_files(path: str):

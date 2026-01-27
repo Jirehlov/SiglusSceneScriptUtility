@@ -223,22 +223,22 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
                                     z = br.get(8)
                             zero_cnt = z
                     elif mod_code == 1:
-                        _apply_by_mod(mod, apply_delta, br, which=1)
+                        _apply_by_mod(mod, apply_delta, which=1)
                     elif mod_code == 2:
-                        _apply_by_mod(mod, apply_delta, br, which=2)
+                        _apply_by_mod(mod, apply_delta, which=2)
                     else:
-                        _apply_by_mod(mod, apply_delta, br, which=3)
+                        _apply_by_mod(mod, apply_delta, which=3)
                 else:
                     if mod_code == 4:
-                        _apply_by_mod(mod, apply_delta, br, which=4)
+                        _apply_by_mod(mod, apply_delta, which=4)
                     elif mod_code == 5:
-                        _apply_by_mod(mod, apply_delta, br, which=5)
+                        _apply_by_mod(mod, apply_delta, which=5)
                     elif mod_code == 6:
-                        _apply_by_mod(mod, apply_delta, br, which=6)
+                        _apply_by_mod(mod, apply_delta, which=6)
                     else:
                         b = br.get(1)
                         if b == 0:
-                            _apply_by_mod(mod, apply_delta, br, which=7)
+                            _apply_by_mod(mod, apply_delta, which=7)
                         else:
                             nowsmp = 0
 
@@ -294,22 +294,22 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
                                 z = br.get(8)
                         zero_cnt = z
                 elif mod_code == 1:
-                    _apply_by_mod(mod, apply_delta, br, which=1)
+                    _apply_by_mod(mod, apply_delta, which=1)
                 elif mod_code == 2:
-                    _apply_by_mod(mod, apply_delta, br, which=2)
+                    _apply_by_mod(mod, apply_delta, which=2)
                 else:
-                    _apply_by_mod(mod, apply_delta, br, which=3)
+                    _apply_by_mod(mod, apply_delta, which=3)
             else:
                 if mod_code == 4:
-                    _apply_by_mod(mod, apply_delta, br, which=4)
+                    _apply_by_mod(mod, apply_delta, which=4)
                 elif mod_code == 5:
-                    _apply_by_mod(mod, apply_delta, br, which=5)
+                    _apply_by_mod(mod, apply_delta, which=5)
                 elif mod_code == 6:
-                    _apply_by_mod(mod, apply_delta, br, which=6)
+                    _apply_by_mod(mod, apply_delta, which=6)
                 else:
                     b = br.get(1)
                     if b == 0:
-                        _apply_by_mod(mod, apply_delta, br, which=7)
+                        _apply_by_mod(mod, apply_delta, which=7)
                     else:
                         nowsmp = 0
 
@@ -325,7 +325,7 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
     return out.tobytes()
 
 
-def _apply_by_mod(mod: int, apply_delta, br: _BitReader, which: int):
+def _apply_by_mod(mod: int, apply_delta, which: int):
     if mod == 3:
         if which == 1:
             apply_delta(3, 0x04, 5)

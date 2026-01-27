@@ -273,7 +273,7 @@ class BinaryStream:
         s.buf.extend(struct.pack("<i", int(v)))
 
 
-def _build_scn_dat(piad, plad, psad, out_scn):
+def _build_scn_dat(plad, out_scn):
     b = bytearray(b"\0" * 132)
     h = {"header_size": 132}
 
@@ -627,7 +627,7 @@ class BS:
         if nt == C.NT_S_NAME:
             return s.bs_name(node.get("name"))
         if nt == C.NT_S_EOF:
-            return s.bs_eof(node.get("eof"))
+            return s.bs_eof()
         s.es = "Unknown sentence node_type"
         return False
 
@@ -1112,7 +1112,7 @@ class BS:
             s.out_scn.get("namae_list", []).append(opt)
         return True
 
-    def bs_eof(s, eof):
+    def bs_eof(s):
         s.scn_push_u8(C.CD_EOF)
         s.add_out_txt("CD_EOF")
         return True
@@ -1607,7 +1607,7 @@ class BS:
                 if not s.bs_ss(root):
                     return 0
             out_scn["scn_bytes"] = out_scn["scn"].to_bytes()
-            out = _build_scn_dat(piad, plad, psad, out_scn)
+            out = _build_scn_dat(plad, out_scn)
         except Exception as e:
             s.es = str(e)
             return 0

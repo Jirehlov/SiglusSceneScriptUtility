@@ -281,7 +281,7 @@ class MA:
             else {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
         )
 
-    def _is_sel_cmd(s, parent_form, element_code, element_name):
+    def _is_sel_cmd(s, parent_form, element_code):
         return bool(
             getattr(C, "is_global_sel_command", lambda pf, ec: False)(
                 parent_form, element_code
@@ -766,7 +766,7 @@ class MA:
             return 0
         nt = n.get("node_type")
         if nt == C.NT_EXP_SIMPLE:
-            if not s.ma_smp_exp(n.get("smp_exp"), sel, True):
+            if not s.ma_smp_exp(n.get("smp_exp"), sel):
                 return 0
             n["node_form"] = (n.get("smp_exp") or {}).get("node_form")
             n["tmp_form"] = n["node_form"]
@@ -776,7 +776,6 @@ class MA:
                 return 0
             n["node_form"] = s.check_operate_1(
                 (n.get("exp_1") or {}).get("node_form"),
-                (n.get("opr") or {}).get("atom", {}).get("opt"),
             )
             n["tmp_form"] = n["node_form"]
             if n["node_form"] == C.FM_VOID:
@@ -811,7 +810,7 @@ class MA:
         n["node_form"] = C.FM_LIST
         return 1
 
-    def ma_smp_exp(s, n, sel, conv_literal=False):
+    def ma_smp_exp(s, n, sel):
         if not isinstance(n, dict):
             return 0
         nt = n.get("node_type")
@@ -831,7 +830,7 @@ class MA:
             n["node_form"] = (n.get("Goto") or {}).get("node_form")
             return 1
         if nt == C.NT_SMP_ELM_EXP:
-            if not s.ma_elm_exp(n.get("elm_exp"), sel, conv_literal):
+            if not s.ma_elm_exp(n.get("elm_exp"), sel):
                 return 0
             n["node_form"] = (n.get("elm_exp") or {}).get("node_form")
             return 1
@@ -845,22 +844,22 @@ class MA:
     def ma_left(s, n):
         if not isinstance(n, dict):
             return 0
-        if not s.ma_elm_list(n.get("elm_list"), None, False):
+        if not s.ma_elm_list(n.get("elm_list"), None):
             return 0
         n["element_type"] = (n.get("elm_list") or {}).get("element_type")
         n["node_form"] = (n.get("elm_list") or {}).get("node_form")
         return 1
 
-    def ma_elm_exp(s, n, sel, conv_literal=False):
+    def ma_elm_exp(s, n, sel):
         if not isinstance(n, dict):
             return 0
-        if not s.ma_elm_list(n.get("elm_list"), sel, conv_literal):
+        if not s.ma_elm_list(n.get("elm_list"), sel):
             return 0
         n["element_type"] = (n.get("elm_list") or {}).get("element_type")
         n["node_form"] = (n.get("elm_list") or {}).get("node_form")
         return 1
 
-    def ma_elm_list(s, n, sel, conv_literal=False):
+    def ma_elm_list(s, n, sel):
         if not isinstance(n, dict):
             return 0
         u = s.plad.get("unknown_list", [])
@@ -993,9 +992,7 @@ class MA:
                         (n.get("name") or {}).get("atom"),
                     )
                 n["arg_list_id"] = aid
-                if sel is not None and s._is_sel_cmd(
-                    parent, n.get("element_code", 0), name
-                ):
+                if sel is not None and s._is_sel_cmd(parent, n.get("element_code", 0)):
                     sel[0] = True
             return 1
         if n.get("node_type") == C.NT_ELM_ARRAY:
@@ -1190,7 +1187,7 @@ class MA:
             n["node_form"] = C.FM_VOID
         return 1
 
-    def check_operate_1(s, rf, op):
+    def check_operate_1(s, rf):
         return C.FM_INT if rf in (C.FM_INT, C.FM_INTREF) else C.FM_VOID
 
     def check_operate_2(s, lf, rf, op):

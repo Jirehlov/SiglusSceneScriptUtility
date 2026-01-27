@@ -201,7 +201,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
     return out
 
 
-def gan(path, blob):
+def gan(blob):
     g = _gan_parse(blob, want_disasm=True)
     print("==== GAN Meta ====")
     print("code_version: %r" % (g.get("code_version"),))
@@ -268,7 +268,7 @@ def gan(path, blob):
     return 0
 
 
-def compare_gan(p1, p2, b1, b2):
+def compare_gan(b1, b2):
     g1 = _gan_parse(b1, want_disasm=False)
     g2 = _gan_parse(b2, want_disasm=False)
     if (not g1.get("ok")) or (not g2.get("ok")):
