@@ -115,7 +115,7 @@ def _build_system_element_map():
     return elm_map, elm_multi
 
 
-def _escape_preview(s, limit=80):
+def _escape_preview(s):
     if s is None:
         return ""
     try:
@@ -128,8 +128,6 @@ def _escape_preview(s, limit=80):
         .replace("\n", "\\n")
         .replace("\t", "\\t")
     )
-    if len(t) > limit:
-        return t[: limit - 1] + "…"
     return t
 
 
@@ -403,13 +401,13 @@ def disassemble_scn_bytes(
                         "ef_",
                     )
                 ):
-                    parts.append('"%s"' % _escape_preview(s, 120))
+                    parts.append('"%s"' % _escape_preview(s))
                     continue
             v = _get_int(a)
             if v is not None:
                 parts.append(str(v))
         if not parts:
-            parts = ['"%s"' % _escape_preview(res, 120)]
+            parts = ['"%s"' % _escape_preview(res)]
         return "%s(%s)" % (tag, ", ".join(parts))
 
     def _sig_exact_match(sig, call_sig):
@@ -825,7 +823,7 @@ def disassemble_scn_bytes(
             if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
-                    txt = ' ; "%s"' % _escape_preview(str_list[int(sid)], 120)
+                    txt = ' ; "%s"' % _escape_preview(str_list[int(sid)])
             out.append("%08X: %s read_flag=%d%s" % (ofs, opname, int(rf), txt))
             stack_pop()
             continue
@@ -834,7 +832,7 @@ def disassemble_scn_bytes(
             if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
-                    nm = ' "%s"' % _escape_preview(str_list[int(sid)], 120)
+                    nm = ' "%s"' % _escape_preview(str_list[int(sid)])
             out.append("%08X: %s%s" % (ofs, opname, nm))
             stack_pop()
             continue
