@@ -35,7 +35,7 @@ def _detect_type(path, blob):
     return "bin"
 
 
-def analyze_file(path):
+def analyze_file(path, readall=False):
     if not os.path.exists(path):
         sys.stderr.write("not found: %s\n" % path)
         return 2
@@ -62,7 +62,21 @@ def analyze_file(path):
     if ftype == "dat":
         return dat.dat(path, blob)
     if ftype == "sav":
-        return sav.sav(blob)
+        if readall:
+            try:
+                nb = sav.readall(blob)
+            except Exception as e:
+                print(f"readall_error: {e!s}")
+                return 1
+            try:
+                with open(path, "wb") as f:
+                    f.write(nb)
+                blob = nb
+                print(f"readall_written: {path}")
+            except Exception as e:
+                print(f"write_error: {e!s}")
+                return 1
+        return sav.sav(blob, path=path)
     return 0
 
 
@@ -122,6 +136,11 @@ def main(argv=None):
     if "--dat-txt" in args:
         args.remove("--dat-txt")
         dat.DAT_TXT_OUT_DIR = "__DATDIR__"
+
+    readall = False
+    if "--readall" in args:
+        args.remove("--readall")
+        readall = True
     if gei:
         if len(args) == 1:
             return dat.analyze_gameexe_dat(args[0])
@@ -129,8 +148,10 @@ def main(argv=None):
             return dat.compare_gameexe_dat(args[0], args[1])
         return 2
     if len(args) == 1:
-        return analyze_file(args[0])
+        return analyze_file(args[0], readall=readall)
     if len(args) == 2:
+        if readall:
+            return 2
         return compare_files(args[0], args[1])
     return 2
 

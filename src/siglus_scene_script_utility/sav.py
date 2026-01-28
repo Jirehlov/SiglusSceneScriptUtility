@@ -1,7 +1,8 @@
+import os
 import struct
 
 from . import const as C
-from .native_ops import xor_cycle_inplace, lzss_unpack
+from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
 from .common import _sha1, _dn
 
 
@@ -54,6 +55,27 @@ def _dump_payload_full(prefix, v):
         print(f"{prefix}: ")
         return
     print(f"{prefix}: {v!s}")
+
+
+def _dump_payload_full_lines(prefix, v, out):
+    if isinstance(v, dict):
+        for kk in sorted(v.keys()):
+            np = f"{kk}" if not prefix else f"{prefix}.{kk}"
+            _dump_payload_full_lines(np, v.get(kk), out)
+        return
+    if isinstance(v, (list, tuple)):
+        lst = list(v)
+        out.append(f"{prefix}_cnt: {len(lst)}")
+        for i, e in enumerate(lst):
+            _dump_payload_full_lines(f"{prefix}[{i}]", e, out)
+        return
+    if isinstance(v, bytes):
+        out.append(f"{prefix}: {v.hex()}")
+        return
+    if v is None:
+        out.append(f"{prefix}: ")
+        return
+    out.append(f"{prefix}: {v!s}")
 
 
 def _tid_ok(y, mo, d, h, mi, s, ms):
@@ -816,7 +838,55 @@ def _looks_like_sav(blob):
     return _detect_kind(blob) is not None
 
 
-def sav(blob):
+def readall(blob):
+    if (not blob) or len(blob) < 24:
+        raise ValueError("read.sav: too small")
+    major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
+    if int(major) != 1:
+        raise ValueError("not read.sav")
+    if int(data_size) <= 0 or int(data_size) > (len(blob) - 16):
+        raise ValueError("read.sav: bad data_size")
+    enc = bytearray(blob[16 : 16 + int(data_size)])
+    xor_cycle_inplace(enc, C.TPC, 0)
+    unpacked = lzss_unpack(bytes(enc))
+    u = bytearray(unpacked)
+    mv = memoryview(u)
+    q = 0
+    for _ in range(int(scn_cnt)):
+        if q + 4 > len(mv):
+            raise ValueError("read.sav: truncated (name_len)")
+        L = struct.unpack_from("<i", mv, q)[0]
+        q += 4
+        if int(L) < 0 or int(L) > 0x100000:
+            raise ValueError("read.sav: bad name_len")
+        nb = int(L) * 2
+        if q + nb > len(mv):
+            raise ValueError("read.sav: truncated (name)")
+        q += nb
+        if q + 4 > len(mv):
+            raise ValueError("read.sav: truncated (flag_cnt)")
+        cnt = struct.unpack_from("<i", mv, q)[0]
+        q += 4
+        if int(cnt) < 0 or int(cnt) > 0x20000000:
+            raise ValueError("read.sav: bad flag_cnt")
+        if q + int(cnt) > len(mv):
+            raise ValueError("read.sav: truncated (flags)")
+        if int(cnt) > 0:
+            mv[q : q + int(cnt)] = b"\x01" * int(cnt)
+        q += int(cnt)
+    packed = lzss_pack(bytes(u))
+    enc2 = bytearray(packed)
+    xor_cycle_inplace(enc2, C.TPC, 0)
+    tail = blob[16 + int(data_size) :]
+    out = bytearray()
+    out.extend(struct.pack("<4i", int(major), int(minor), len(enc2), int(scn_cnt)))
+    out.extend(enc2)
+    if tail:
+        out.extend(tail)
+    return bytes(out)
+
+
+def sav(blob, path=None):
     k = _detect_kind(blob)
     if k is None:
         raise ValueError("not a .sav")
@@ -874,7 +944,17 @@ def sav(blob):
             print(f"cg_table_cnt: {len(p.get('cg_table') or [])}")
             print(f"bgm_table_cnt: {len(p.get('bgm_table') or [])}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
-            _dump_payload_full("", p)
+            if path:
+                pp = str(path)
+                txt = os.path.splitext(pp)[0] + ".txt"
+                out = []
+                _dump_payload_full_lines("", p, out)
+                data = "\r\n".join(out) + "\r\n"
+                with open(txt, "wb") as f:
+                    f.write(data.encode("utf-8"))
+                print(f"payload_txt: {txt}")
+            else:
+                _dump_payload_full("", p)
         else:
             print(f"screen_size_mode: {p.get('screen_size_mode')}")
             print(f"all_sound_user_volume: {p.get('all_sound_user_volume')}")
@@ -882,7 +962,17 @@ def sav(blob):
             print(f"koe_mode: {p.get('koe_mode')}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
             print(f"object_disp_flag_cnt: {len(p.get('object_disp_flag') or [])}")
-            _dump_payload_full("", p)
+            if path:
+                pp = str(path)
+                txt = os.path.splitext(pp)[0] + ".txt"
+                out = []
+                _dump_payload_full_lines("", p, out)
+                data = "\r\n".join(out) + "\r\n"
+                with open(txt, "wb") as f:
+                    f.write(data.encode("utf-8"))
+                print(f"payload_txt: {txt}")
+            else:
+                _dump_payload_full("", p)
         return 0
 
     if k["kind"] == "local":
@@ -892,7 +982,6 @@ def sav(blob):
         print(
             f"time: {k['year']:04d}-{k['month']:02d}-{k['day']:02d} (w={k['weekday']}) {k['hour']:02d}:{k['minute']:02d}:{k['second']:02d}.{k['millisecond']:03d}"
         )
-        print(f"append_dir: {_dn(k['append_dir'], w)}")
         print(f"append_name: {_dn(k['append_name'], w)}")
         print(f"title: {_dn(k['title'], w)}")
         print(f"message: {_dn(k['message'], w)}")

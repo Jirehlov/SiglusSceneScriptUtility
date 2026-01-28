@@ -65,11 +65,13 @@ def _usage(out=None):
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(
-        f"  {p} -a [--dat-txt] <input_file.(pck|dat|dbs|gan|sav)> [input_file_2]\n"
+        f"  {p} -a [--dat-txt] [--readall] <input_file.(pck|dat|dbs|gan|sav)> [input_file_2]\n"
     )
-    out.write("    .sav          Only read.sav is supported\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --dat-txt      Write .dat disassembly to __DATDIR__\n")
+    out.write(
+        "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
+    )
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
