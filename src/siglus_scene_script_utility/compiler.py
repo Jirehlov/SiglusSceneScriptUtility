@@ -14,7 +14,6 @@ from .BS import (
     build_ia_data,
 )
 from .GEI import write_gameexe_dat
-from .dat import _looks_like_dat
 from .linker import link_pack
 from .native_ops import (
     lzss_pack,
@@ -669,6 +668,8 @@ def main(argv=None):
                         b = read_bytes(fp)
                     except Exception:
                         continue
+                    from .dat import _looks_like_dat
+
                     if _looks_like_dat(b):
                         dats.append(fp)
                 dats.sort(key=lambda x: os.path.basename(x).lower())
