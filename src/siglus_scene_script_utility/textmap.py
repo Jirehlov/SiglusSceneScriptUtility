@@ -6,7 +6,16 @@ from . import CA
 from . import BS
 from . import LA
 from . import const as C
-from .common import eprint, hint_help as _hint_help, decode_text_auto
+from . import dat as DAT
+from .common import (
+    eprint,
+    hint_help as _hint_help,
+    decode_text_auto,
+    _read_i32_pairs,
+    _read_i32_list,
+    _max_pair_end,
+    _decode_utf16le_strings,
+)
 
 
 def _read_text(path: str):
@@ -309,6 +318,219 @@ def _iter_ss_files(root: str):
     return sorted(ss_files)
 
 
+def _parse_scn_dat(blob: bytes):
+    if not DAT._looks_like_dat(blob):
+        return None
+    try:
+        _, meta = DAT._dat_sections(blob)
+        h = meta.get("header") or {}
+    except Exception:
+        return None
+    idx_pairs = _read_i32_pairs(
+        blob, h.get("str_index_list_ofs", 0), h.get("str_index_cnt", 0)
+    )
+    if int(h.get("str_index_cnt", 0) or 0) and not idx_pairs:
+        return None
+    str_blob_end = int(meta.get("str_blob_end", 0) or 0)
+    if str_blob_end <= 0:
+        str_blob_end = int(h.get("str_list_ofs", 0) or 0) + _max_pair_end(idx_pairs) * 2
+    str_list = (
+        DAT._decode_xor_utf16le_strings(
+            blob, idx_pairs, h.get("str_list_ofs", 0), str_blob_end
+        )
+        if idx_pairs
+        else []
+    )
+    order = sorted(
+        range(len(idx_pairs)),
+        key=lambda i: (int((idx_pairs[i] or (0, 0))[0] or 0), i),
+    )
+    so = int(h.get("scn_ofs", 0) or 0)
+    ss = int(h.get("scn_size", 0) or 0)
+    scn_bytes = b""
+    if so >= 0 and ss > 0 and so + ss <= len(blob):
+        scn_bytes = blob[so : so + ss]
+    out_scn = {"scn_bytes": scn_bytes, "str_sort_index": order}
+    out_scn["label_list"] = _read_i32_list(
+        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0)
+    )
+    out_scn["z_label_list"] = _read_i32_list(
+        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
+    )
+    out_scn["cmd_label_list"] = _read_i32_pairs(
+        blob, h.get("cmd_label_list_ofs", 0), h.get("cmd_label_cnt", 0)
+    )
+    out_scn["scn_prop_list"] = _read_i32_pairs(
+        blob, h.get("scn_prop_list_ofs", 0), h.get("scn_prop_cnt", 0)
+    )
+
+    spn_idx = _read_i32_pairs(
+        blob,
+        h.get("scn_prop_name_index_list_ofs", 0),
+        h.get("scn_prop_name_index_cnt", 0),
+    )
+    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + _max_pair_end(spn_idx) * 2
+    spn_list = (
+        _decode_utf16le_strings(
+            blob,
+            spn_idx,
+            h.get("scn_prop_name_list_ofs", 0),
+            spn_end,
+            allow_empty_blob=True,
+        )
+        if spn_idx
+        else []
+    )
+    out_scn["scn_prop_name_index_list"] = spn_idx
+    out_scn["scn_prop_name_list"] = spn_list
+
+    out_scn["scn_cmd_list"] = _read_i32_list(
+        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0)
+    )
+
+    scn_idx = _read_i32_pairs(
+        blob,
+        h.get("scn_cmd_name_index_list_ofs", 0),
+        h.get("scn_cmd_name_index_cnt", 0),
+    )
+    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + _max_pair_end(scn_idx) * 2
+    scn_list = (
+        _decode_utf16le_strings(
+            blob,
+            scn_idx,
+            h.get("scn_cmd_name_list_ofs", 0),
+            scn_end,
+            allow_empty_blob=True,
+        )
+        if scn_idx
+        else []
+    )
+    out_scn["scn_cmd_name_index_list"] = scn_idx
+    out_scn["scn_cmd_name_list"] = scn_list
+
+    cpn_idx = _read_i32_pairs(
+        blob,
+        h.get("call_prop_name_index_list_ofs", 0),
+        h.get("call_prop_name_index_cnt", 0),
+    )
+    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + _max_pair_end(cpn_idx) * 2
+    cpn_list = (
+        _decode_utf16le_strings(
+            blob,
+            cpn_idx,
+            h.get("call_prop_name_list_ofs", 0),
+            cpn_end,
+            allow_empty_blob=True,
+        )
+        if cpn_idx
+        else []
+    )
+    out_scn["call_prop_name_index_list"] = cpn_idx
+    out_scn["call_prop_name_list"] = cpn_list
+
+    out_scn["namae_list"] = _read_i32_list(
+        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0)
+    )
+    out_scn["read_flag_list"] = _read_i32_list(
+        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+    )
+    return str_list, out_scn
+
+
+def _write_disam_map(csv_path: str, str_list):
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["index", "original", "replacement"])
+        for i, s in enumerate(str_list or []):
+            w.writerow([i, s, s])
+
+
+def _read_disam_map(csv_path: str):
+    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def _apply_disam_map(str_list, rows, filename: str = ""):
+    changes = 0
+    for row in rows or []:
+        try:
+            idx = int(row.get("index", ""))
+        except Exception:
+            continue
+        if idx < 0 or idx >= len(str_list):
+            eprint(f"textmap: {filename}: index {idx} out of range", errors="replace")
+            continue
+        original = row.get("original", str_list[idx])
+        replacement = row.get("replacement")
+        if replacement is None:
+            replacement = original
+        if replacement == original:
+            continue
+        if str_list[idx] != original:
+            eprint(
+                "textmap: %s: skip index %d (text mismatch: '%s' vs '%s')"
+                % (filename, idx, str_list[idx], original),
+                errors="replace",
+            )
+            continue
+        str_list[idx] = replacement
+        changes += 1
+    return str_list, changes
+
+
+def _iter_dat_files(root: str):
+    dat_files = []
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            if name.lower().endswith(".dat"):
+                dat_files.append(os.path.join(dirpath, name))
+    return sorted(dat_files)
+
+
+def _process_dat(dat_path: str, apply_mode: bool) -> int:
+    fname = os.path.basename(dat_path)
+    if not os.path.exists(dat_path):
+        eprint(f"textmap: file not found: {dat_path}", errors="replace")
+        return 1
+    try:
+        blob = open(dat_path, "rb").read()
+    except Exception:
+        eprint(f"textmap: failed to read: {dat_path}", errors="replace")
+        return 1
+    parsed = _parse_scn_dat(blob)
+    if not parsed:
+        eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
+        return 1
+    str_list, out_scn = parsed
+    csv_path = dat_path + ".csv"
+    if not apply_mode:
+        _write_disam_map(csv_path, str_list)
+        print(csv_path)
+        return 0
+    if not os.path.exists(csv_path):
+        eprint(f"textmap: map file not found: {csv_path}", errors="replace")
+        return 1
+    rows = _read_disam_map(csv_path)
+    updated_list, count = _apply_disam_map(list(str_list), rows, filename=fname)
+    if count == 0:
+        eprint(f"textmap: {fname}: no changes to apply", errors="replace")
+        return 0
+    try:
+        out_bytes = BS._build_scn_dat({"str_list": updated_list}, out_scn)
+    except Exception:
+        eprint(f"textmap: {fname}: rebuild failed", errors="replace")
+        return 1
+    try:
+        with open(dat_path, "wb") as f:
+            f.write(out_bytes)
+    except Exception:
+        eprint(f"textmap: {fname}: write failed", errors="replace")
+        return 1
+    print(f"textmap: applied {count} changes")
+    return 0
+
+
 def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     fname = os.path.basename(ss_path)
     if not os.path.exists(ss_path):
@@ -393,18 +615,57 @@ def main(argv=None):
     if not argv or argv[0] in ("-h", "--help", "help"):
         _hint_help(sys.stdout)
         return 0
+
     apply_mode = False
+    disam_mode = False
+    disam_apply_mode = False
     args = []
     for a in argv:
         if a in ("--apply", "-a"):
             apply_mode = True
+        elif a == "--disam":
+            disam_mode = True
+        elif a == "--disam-apply":
+            disam_apply_mode = True
         else:
             args.append(a)
+
+    if apply_mode and (disam_mode or disam_apply_mode):
+        eprint(
+            "textmap: --apply cannot be used with --disam/--disam-apply",
+            errors="replace",
+        )
+        _hint_help()
+        return 2
+    if disam_mode and disam_apply_mode:
+        eprint(
+            "textmap: --disam and --disam-apply are mutually exclusive",
+            errors="replace",
+        )
+        _hint_help()
+        return 2
+
     if len(args) != 1:
         eprint("textmap: expected exactly 1 path argument", errors="replace")
         _hint_help()
         return 2
     ss_path = args[0]
+
+    if disam_mode or disam_apply_mode:
+        dat_path = ss_path
+        if os.path.isdir(dat_path):
+            dat_files = _iter_dat_files(dat_path)
+            if not dat_files:
+                eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
+                return 1
+            errors = 0
+            for file_path in dat_files:
+                rc = _process_dat(file_path, disam_apply_mode)
+                if rc != 0:
+                    errors += 1
+            return 1 if errors else 0
+        return _process_dat(dat_path, disam_apply_mode)
+
     if os.path.isdir(ss_path):
         ss_files = _iter_ss_files(ss_path)
         if not ss_files:

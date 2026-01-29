@@ -28,14 +28,6 @@ def _zstr_a(b):
     return s
 
 
-def _fmt_val(v, w=80):
-    if v is None:
-        return ""
-    if isinstance(v, str):
-        return _dn(v, w)
-    return v
-
-
 def _dump_payload_full(prefix, v):
     if isinstance(v, dict):
         for kk in sorted(v.keys()):

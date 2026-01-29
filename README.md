@@ -70,7 +70,18 @@ uv run siglus-ssu -m /path/to/translation_work --apply
 
 What if there's only `.dat` files seen from the `Scene.pck`?
 
-Well, it's rare. You can do your translation on `.dat` files with other siglus tools, which have been available for ages.
+Well, it's rare. You can also extract strings from `.dat` files to `.csv` files,
+```bash
+uv run siglus-ssu -m /path/to/translation_work --disam
+```
+and apply the changes back to `.dat` files,
+```bash
+uv run siglus-ssu -m /path/to/translation_work --disam-apply
+```
+and repack them back to `Scene.pck`.
+```bash
+uv run siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck --dat-repack
+```
 
 You may also want to extract `.g00` images,
 ```bash

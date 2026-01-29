@@ -14,6 +14,7 @@ from .BS import (
     build_ia_data,
 )
 from .GEI import write_gameexe_dat
+from .dat import _looks_like_dat
 from .linker import link_pack
 from .native_ops import (
     lzss_pack,
@@ -380,6 +381,26 @@ def main(argv=None):
             test_seed0_given = True
             argv.pop(i)
 
+    dat_repack = "--dat-repack" in argv
+    if dat_repack:
+        if test_shuffle:
+            sys.stderr.write(
+                "sse: error: --dat-repack is not compatible with --test-shuffle\n"
+            )
+            return 2
+        allowed = {"--dat-repack", "--no-os"}
+        bad = []
+        for t in argv:
+            s = str(t)
+            if s.startswith("-") and s not in allowed:
+                bad.append(s)
+        if bad:
+            bad = sorted(set(bad))
+            sys.stderr.write(
+                f"sse: error: --dat-repack only supports being used alone or with --no-os (got: {', '.join(bad)})\n"
+            )
+            return 2
+
     test_shuffle_prefix = "[test-shuffle]"
 
     class _ArgParser(argparse.ArgumentParser):
@@ -407,6 +428,11 @@ def main(argv=None):
         "--no-os",
         action="store_true",
         help="Skip OS stage (do not pack source files into pck).",
+    )
+    ap.add_argument(
+        "--dat-repack",
+        action="store_true",
+        help="Repack existing .dat files in input_dir (skip .ss compilation).",
     )
     ap.add_argument(
         "--no-angou", action="store_true", help="No encrypt/compress (header_size=0)."
@@ -629,6 +655,29 @@ def main(argv=None):
                                     os.remove(lp)
                                 except Exception:
                                     pass
+            if getattr(a, "dat_repack", False):
+                bs_dir = os.path.join(tmp, "bs")
+                os.makedirs(bs_dir, exist_ok=True)
+                dats = []
+                for f in os.listdir(inp):
+                    if not str(f).lower().endswith(".dat"):
+                        continue
+                    fp = os.path.join(inp, f)
+                    if not os.path.isfile(fp):
+                        continue
+                    try:
+                        b = read_bytes(fp)
+                    except Exception:
+                        continue
+                    if _looks_like_dat(b):
+                        dats.append(fp)
+                dats.sort(key=lambda x: os.path.basename(x).lower())
+                if not dats:
+                    raise RuntimeError("--dat-repack: no scene .dat found")
+                ctx["scn_list"] = [os.path.basename(x) for x in dats]
+                for fp in dats:
+                    shutil.copyfile(fp, os.path.join(bs_dir, os.path.basename(fp)))
+                compile_list = []
             if test_shuffle:
                 compile_list = ss
             if compile_list:

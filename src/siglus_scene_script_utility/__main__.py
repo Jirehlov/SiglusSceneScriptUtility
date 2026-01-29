@@ -33,7 +33,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
     )
     out.write(
         f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
@@ -42,6 +42,9 @@ def _usage(out=None):
     out.write("    --debug        Keep temp files (also prints stage timings)\n")
     out.write("    --charset ENC  Force source charset (jis/cp932 or utf8)\n")
     out.write("    --no-os        Skip OS stage (do not pack source files)\n")
+    out.write(
+        "    --dat-repack   Repack existing .dat files in input_dir (skip .ss compilation)\n"
+    )
     out.write("    --no-angou     Disable encryption/compression (header_size=0)\n")
     out.write("    --parallel     Enable parallel compilation\n")
     out.write("    --max-workers  Limit parallel workers (default: auto)\n")
@@ -82,6 +85,11 @@ def _usage(out=None):
     out.write("\n")
     out.write("Textmap mode:\n")
     out.write(f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n")
+    out.write(f"  {p} -m --disam <path_to_dat|path_to_dir>\n")
+    out.write(f"  {p} -m --disam-apply <path_to_dat|path_to_dir>\n")
+    out.write("    --apply        Apply .ss CSV back to .ss\n")
+    out.write("    --disam        Export .dat string list to .dat.csv\n")
+    out.write("    --disam-apply  Apply .dat.csv back to .dat\n")
     out.write("\n")
     out.write("G00 mode:\n")
     out.write(f"  {p} -g --a <input_g00>\n")
