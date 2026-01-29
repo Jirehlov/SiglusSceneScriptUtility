@@ -6,7 +6,7 @@ import time
 import glob
 
 from . import const as C
-from .native_ops import lzss_unpack
+from .native_ops import lzss_unpack, xor_cycle_inplace
 from . import compiler
 from .common import (
     hx,
@@ -19,6 +19,7 @@ from .common import (
     _print_sections,
     _diff_kv,
     exe_angou_element,
+    decode_text_auto,
     read_bytes,
     write_bytes,
     parse_code,
@@ -436,17 +437,6 @@ def compare_pck(b1: bytes, b2: bytes) -> int:
     return 0
 
 
-def _xor_cycle(data: bytes, code: bytes, start: int = 0) -> bytes:
-    if not code:
-        return data
-    b = bytearray(data)
-    n = len(code)
-    st = int(start) % n if n else 0
-    for i in range(len(b)):
-        b[i] ^= code[(st + i) % n]
-    return bytes(b)
-
-
 def _looks_like_lzss(blob: bytes) -> bool:
     if not blob or len(blob) < 8:
         return False
@@ -539,7 +529,11 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
         raise RuntimeError("source_angou: missing codes/params")
     if not enc or len(enc) < hs + 4:
         return (b"", "")
-    dec = _xor_cycle(enc, lg, int(sa.get("last_index", 0)))
+    dec = enc
+    if lg:
+        _b = bytearray(enc)
+        xor_cycle_inplace(_b, lg, int(sa.get("last_index", 0)))
+        dec = bytes(_b)
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
         raise RuntimeError("source_angou: bad version")
@@ -547,7 +541,8 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     name_len = struct.unpack_from("<I", dec, hs)[0]
     p = hs + 4
     nameb = bytearray(dec[p : p + name_len])
-    nameb = _xor_cycle(bytes(nameb), ng, int(sa.get("name_index", 0)))
+    if ng:
+        xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
     try:
         name = nameb.decode("utf-16le", "surrogatepass")
     except Exception:
@@ -598,7 +593,10 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
             raise RuntimeError("source_angou: md5 mismatch")
     except Exception:
         pass
-    lz = _xor_cycle(lz, eg, int(sa.get("easy_index", 0)))
+    if eg:
+        _b = bytearray(lz)
+        xor_cycle_inplace(_b, eg, int(sa.get("easy_index", 0)))
+        lz = bytes(_b)
     raw = lzss_unpack(lz)
     return (raw, name)
 
@@ -614,39 +612,6 @@ def _find_angou_dat(os_dir: str) -> str:
         return ""
     hits.sort(key=lambda x: (len(x), x.lower()))
     return hits[0]
-
-
-def _read_first_line_guess_enc(path: str) -> str:
-    b = read_bytes(path)
-    for enc in ("utf-8-sig", "utf-8", "cp932"):
-        try:
-            t = b.decode(enc, "strict")
-            break
-        except Exception:
-            t = None
-    if t is None:
-        t = b.decode("cp932", "ignore")
-    i = t.find("\n")
-    if i >= 0:
-        t = t[:i]
-    return t.strip("\r\n")
-
-
-def _read_first_line_guess_enc_bytes(b: bytes) -> str:
-    if not b:
-        return ""
-    for enc in ("utf-8-sig", "utf-8", "cp932"):
-        try:
-            t = b.decode(enc, "strict")
-            break
-        except Exception:
-            t = None
-    if t is None:
-        t = b.decode("cp932", "ignore")
-    i = t.find("\n")
-    if i >= 0:
-        t = t[:i]
-    return t.strip("\r\n")
 
 
 def _compute_exe_el_from_scene_pck(os_dir: str):
@@ -691,7 +656,11 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         if not cands:
             return b""
         cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-        s = _read_first_line_guess_enc_bytes(cands[0][1])
+        try:
+            _t, _, _ = decode_text_auto(cands[0][1])
+        except Exception:
+            _t = ""
+        s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
         if not s:
             return b""
         mb = s.encode("cp932", "ignore")
@@ -720,7 +689,11 @@ def _iter_exe_el_candidates(os_dir: str):
     paths.sort(key=lambda x: (x.count(os.sep), len(x), x.lower()))
     for p in paths:
         try:
-            s0 = _read_first_line_guess_enc(p)
+            try:
+                _t, _, _ = decode_text_auto(read_bytes(p))
+            except Exception:
+                _t = ""
+            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
             if not s0:
                 continue
             mb = s0.encode("cp932", "ignore")
@@ -773,7 +746,11 @@ def _iter_exe_el_candidates(os_dir: str):
             pos += sz
         cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
         for _name, raw in cands:
-            s0 = _read_first_line_guess_enc_bytes(raw)
+            try:
+                _t, _, _ = decode_text_auto(raw)
+            except Exception:
+                _t = ""
+            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
             if not s0:
                 continue
             mb = s0.encode("cp932", "ignore")
@@ -794,7 +771,11 @@ def _compute_exe_el(os_dir: str):
         if el:
             return el
         return b""
-    s = _read_first_line_guess_enc(p)
+    try:
+        _t, _, _ = decode_text_auto(read_bytes(p))
+    except Exception:
+        _t = ""
+    s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
     if not s:
         return b""
     mb = s.encode("cp932", "ignore")
@@ -898,9 +879,16 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             continue
         b = blob
         if exe_el:
-            b = _xor_cycle(b, exe_el, 0)
+            _b = bytearray(b)
+            xor_cycle_inplace(_b, exe_el, 0)
+            b = bytes(_b)
         lz = b""
-        cand = _xor_cycle(b, easy_code, 0) if easy_code else b""
+        if easy_code:
+            _b = bytearray(b)
+            xor_cycle_inplace(_b, easy_code, 0)
+            cand = bytes(_b)
+        else:
+            cand = b""
         if cand and _looks_like_lzss(cand):
             lz = cand
         elif _looks_like_lzss(b):
