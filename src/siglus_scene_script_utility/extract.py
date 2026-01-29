@@ -21,14 +21,14 @@ def main(argv=None):
     if "--gei" in args:
         args.remove("--gei")
         gei = True
-    if "--dat-txt" in args:
-        args.remove("--dat-txt")
+    if "--disam" in args:
+        args.remove("--disam")
         dat_txt = True
     if "--apply" in args:
         args.remove("--apply")
         apply_mode = True
     if gei and dat_txt:
-        sys.stderr.write("--dat-txt is not supported with --gei\n")
+        sys.stderr.write("--disam is not supported with --gei\n")
         return 2
     if apply_mode and (gei or dat_txt):
         sys.stderr.write("--apply is only supported for .dbs csv apply\n")

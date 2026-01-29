@@ -55,20 +55,20 @@ def _usage(out=None):
     )
     out.write("\n")
     out.write("Extract mode:\n")
-    out.write(f"  {p} -x [--dat-txt] <input_pck> <output_dir>\n")
+    out.write(f"  {p} -x [--disam] <input_pck> <output_dir>\n")
     out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
     out.write(f"  {p} -x <path_to_dbs|path_to_dir>\n")
     out.write(f"  {p} -x --apply <path_to_dbs|path_to_dir>\n")
-    out.write("    --dat-txt      Dump .dat disassembly when extracting .pck\n")
+    out.write("    --disam      Dump .dat disassembly when extracting .pck\n")
     out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
     out.write("    --apply        Apply .dbs CSV back to .dbs\n")
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(
-        f"  {p} -a [--dat-txt] [--readall] <input_file.(pck|dat|dbs|gan|sav)> [input_file_2]\n"
+        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav)> [input_file_2]\n"
     )
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
-    out.write("    --dat-txt      Write .dat disassembly to __DATDIR__\n")
+    out.write("    --disam      Write .dat disassembly to __DATDIR__\n")
     out.write(
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
     )

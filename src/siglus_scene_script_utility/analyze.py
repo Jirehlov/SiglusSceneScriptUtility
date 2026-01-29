@@ -133,8 +133,8 @@ def main(argv=None):
     if "--gei" in args:
         args.remove("--gei")
         gei = True
-    if "--dat-txt" in args:
-        args.remove("--dat-txt")
+    if "--disam" in args:
+        args.remove("--disam")
         dat.DAT_TXT_OUT_DIR = "__DATDIR__"
 
     readall = False
