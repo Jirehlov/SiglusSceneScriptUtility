@@ -27,7 +27,8 @@ from .common import (
     read_text_auto,
     write_text,
     parse_code,
-    find_angou_dat_path,
+    find_named_path,
+    ANGOU_DAT_NAME,
 )
 
 
@@ -556,7 +557,7 @@ def main(argv=None):
     _init_stats(ctx)
 
     angou_content = None
-    angou_path = find_angou_dat_path(inp, recursive=False)
+    angou_path = find_named_path(inp, ANGOU_DAT_NAME, recursive=False)
     if (not a.no_angou) and angou_path:
         try:
             angou_content = (

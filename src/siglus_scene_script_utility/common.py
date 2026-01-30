@@ -11,19 +11,23 @@ ANGOU_DAT_NAME = "暗号.dat"
 KEY_TXT_NAME = "key.txt"
 
 
-def is_key_txt_filename(name: str) -> bool:
-    return str(name or "").casefold() == KEY_TXT_NAME.casefold()
-
-
-def list_key_txt_paths(base_dir: str, recursive: bool = True):
+def _safe_abspath(p: str) -> str:
     try:
-        base_dir = os.path.abspath(str(base_dir or ""))
+        return os.path.abspath(str(p or ""))
     except Exception:
-        base_dir = str(base_dir or "")
+        return str(p or "")
+
+
+def is_named_filename(name: str, target_name: str) -> bool:
+    return str(name or "").casefold() == str(target_name or "").casefold()
+
+
+def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
+    base_dir = _safe_abspath(base_dir)
     if not base_dir or (not os.path.isdir(base_dir)):
         return []
     out = []
-    p0 = os.path.join(base_dir, KEY_TXT_NAME)
+    p0 = os.path.join(base_dir, target_name)
     if os.path.isfile(p0):
         out.append(p0)
     if recursive:
@@ -32,7 +36,7 @@ def list_key_txt_paths(base_dir: str, recursive: bool = True):
                 if dirpath == base_dir:
                     continue
                 for fn in filenames:
-                    if not is_key_txt_filename(fn):
+                    if not is_named_filename(fn, target_name):
                         continue
                     p = os.path.join(dirpath, fn)
                     if os.path.isfile(p):
@@ -42,10 +46,7 @@ def list_key_txt_paths(base_dir: str, recursive: bool = True):
     seen = set()
     uniq = []
     for p in out:
-        try:
-            ap = os.path.abspath(p)
-        except Exception:
-            ap = str(p)
+        ap = _safe_abspath(p)
         if ap in seen:
             continue
         seen.add(ap)
@@ -62,64 +63,8 @@ def list_key_txt_paths(base_dir: str, recursive: bool = True):
     return uniq
 
 
-def find_key_txt_path(base_dir: str, recursive: bool = True) -> str:
-    hits = list_key_txt_paths(base_dir, recursive=recursive)
-    return hits[0] if hits else ""
-
-
-def is_angou_dat_filename(name: str) -> bool:
-    return str(name or "").casefold() == ANGOU_DAT_NAME.casefold()
-
-
-def list_angou_dat_paths(base_dir: str, recursive: bool = True):
-    try:
-        base_dir = os.path.abspath(str(base_dir or ""))
-    except Exception:
-        base_dir = str(base_dir or "")
-    if not base_dir or (not os.path.isdir(base_dir)):
-        return []
-    out = []
-    p0 = os.path.join(base_dir, ANGOU_DAT_NAME)
-    if os.path.isfile(p0):
-        out.append(p0)
-    if recursive:
-        try:
-            for dirpath, _, filenames in os.walk(base_dir):
-                if dirpath == base_dir:
-                    continue
-                for fn in filenames:
-                    if not is_angou_dat_filename(fn):
-                        continue
-                    p = os.path.join(dirpath, fn)
-                    if os.path.isfile(p):
-                        out.append(p)
-        except Exception:
-            pass
-    seen = set()
-    uniq = []
-    for p in out:
-        try:
-            ap = os.path.abspath(p)
-        except Exception:
-            ap = str(p)
-        if ap in seen:
-            continue
-        seen.add(ap)
-        uniq.append(ap)
-
-    def _k(p: str):
-        try:
-            rel = os.path.relpath(p, base_dir)
-        except Exception:
-            rel = p
-        return (rel.count(os.sep), len(rel), rel.casefold())
-
-    uniq.sort(key=_k)
-    return uniq
-
-
-def find_angou_dat_path(base_dir: str, recursive: bool = True) -> str:
-    hits = list_angou_dat_paths(base_dir, recursive=recursive)
+def find_named_path(base_dir: str, target_name: str, recursive: bool = True) -> str:
+    hits = list_named_paths(base_dir, target_name, recursive=recursive)
     return hits[0] if hits else ""
 
 
@@ -273,7 +218,7 @@ def read_exe_el_key(path: str) -> bytes:
 def find_exe_el(
     base_dir: str, recursive: bool = True, force_charset: str = ""
 ) -> bytes:
-    p = find_angou_dat_path(base_dir, recursive=recursive)
+    p = find_named_path(base_dir, ANGOU_DAT_NAME, recursive=recursive)
     if p:
         try:
             s0 = read_text_auto(p, force_charset=(force_charset or "")).split("\n", 1)[
@@ -288,7 +233,7 @@ def find_exe_el(
                 el = exe_angou_element(mb)
                 if el and len(el) == 16:
                     return el
-    kp = find_key_txt_path(base_dir, recursive=recursive)
+    kp = find_named_path(base_dir, KEY_TXT_NAME, recursive=recursive)
     if kp:
         el = read_exe_el_key(kp)
         if el and len(el) == 16:

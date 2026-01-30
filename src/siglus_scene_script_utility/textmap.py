@@ -18,7 +18,8 @@ from .common import (
     _max_pair_end,
     _decode_utf16le_strings,
     iter_files_by_ext,
-    is_angou_dat_filename,
+    is_named_filename,
+    ANGOU_DAT_NAME,
 )
 
 
@@ -723,7 +724,7 @@ def main(argv=None):
                 [".dat"],
                 exclude_pred=lambda p: (
                     os.path.basename(p).lower() == "gameexe.dat"
-                    or is_angou_dat_filename(os.path.basename(p))
+                    or is_named_filename(os.path.basename(p), ANGOU_DAT_NAME)
                 ),
             )
             if not dat_files:

@@ -59,24 +59,6 @@ and run the game with a specified scene and z-label to see how your translation 
 uv run siglus-ssu -e /path/to/SiglusEngine.exe scene_name z-label
 ```
 
-You can also extract strings to `.csv` files for your co-translators or LLMs,
-```bash
-uv run siglus-ssu -m /path/to/translation_work
-```
-and apply the changes back to `.ss` files.
-```bash
-uv run siglus-ssu -m /path/to/translation_work --apply
-```
-
-You may also want to extract `.g00` images,
-```bash
-uv run siglus-ssu -g --x /path/to/g00 /path/to/g00_extracted
-```
-and apply the changes back.
-```bash
-uv run siglus-ssu -g --c /path/to/g00_extracted /path/to/g00
-```
-
 
 ## Tips
 

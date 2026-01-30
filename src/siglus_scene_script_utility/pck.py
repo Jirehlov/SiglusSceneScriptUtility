@@ -23,9 +23,11 @@ from .common import (
     read_bytes,
     write_bytes,
     parse_code,
-    list_angou_dat_paths,
-    is_angou_dat_filename,
-    find_key_txt_path,
+    list_named_paths,
+    is_named_filename,
+    find_named_path,
+    ANGOU_DAT_NAME,
+    KEY_TXT_NAME,
     read_exe_el_key,
     find_exe_el,
 )
@@ -631,7 +633,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
             enc_blob = dat[pos : pos + sz]
             raw, name = source_angou_decrypt(enc_blob, ctx)
             nm = os.path.basename(name or "")
-            if is_angou_dat_filename(nm):
+            if is_named_filename(nm, ANGOU_DAT_NAME):
                 cands.append((name or nm, raw))
             pos += sz
         if not cands:
@@ -656,7 +658,7 @@ def _iter_exe_el_candidates(os_dir: str):
     seen = set()
     yielded = False
 
-    paths = list_angou_dat_paths(os_dir, recursive=True)
+    paths = list_named_paths(os_dir, ANGOU_DAT_NAME, recursive=True)
     for p in paths:
         try:
             try:
@@ -678,7 +680,7 @@ def _iter_exe_el_candidates(os_dir: str):
             continue
 
     if not yielded:
-        kp = find_key_txt_path(os_dir, recursive=True)
+        kp = find_named_path(os_dir, KEY_TXT_NAME, recursive=True)
         if kp:
             el = read_exe_el_key(kp)
             if el and el not in seen:
@@ -721,7 +723,7 @@ def _iter_exe_el_candidates(os_dir: str):
             enc_blob = dat[pos : pos + sz]
             raw, name = source_angou_decrypt(enc_blob, ctx)
             nm = os.path.basename(name or "")
-            if is_angou_dat_filename(nm):
+            if is_named_filename(nm, ANGOU_DAT_NAME):
                 cands.append((name or nm, raw))
             pos += sz
         cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))

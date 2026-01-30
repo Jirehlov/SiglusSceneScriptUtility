@@ -7,8 +7,9 @@ from .common import (
     read_text_auto,
     write_text,
     write_bytes,
-    find_angou_dat_path,
-    find_key_txt_path,
+    find_named_path,
+    ANGOU_DAT_NAME,
+    KEY_TXT_NAME,
     read_exe_el_key,
 )
 
@@ -179,7 +180,7 @@ def restore_gameexe_ini(
 
 def _load_angou_first_line(ctx):
     scn = ctx.get("scn_path") or ""
-    p = find_angou_dat_path(scn, recursive=False)
+    p = find_named_path(scn, ANGOU_DAT_NAME, recursive=False)
     if not p:
         return ""
     try:
@@ -226,7 +227,7 @@ def write_gameexe_dat(ctx):
                 mode = 1
                 el = exe_angou_element(mb)
     if ctx.get("exe_angou_mode") and (not mode) and scn:
-        kp = find_key_txt_path(scn, recursive=False)
+        kp = find_named_path(scn, KEY_TXT_NAME, recursive=False)
         if kp:
             k = read_exe_el_key(kp)
             if k and len(k) == 16:

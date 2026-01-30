@@ -1,7 +1,7 @@
 import os
 import sys
 
-from .common import hx, _fmt_ts, read_bytes, _sha1
+from .common import hx, _fmt_ts, read_bytes, _sha1, decode_text_auto, exe_angou_element
 
 from . import pck
 from . import dat
@@ -10,6 +10,44 @@ from . import gan
 from . import sav
 
 SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan", "sav")
+
+
+def _fmt_key_txt(el: bytes) -> str:
+    b = bytes(el or b"")
+    if len(b) >= 16:
+        b = b[:16]
+    return ", ".join("0x%02X" % x for x in b)
+
+
+def analyze_angou_dat(path: str) -> int:
+    if not os.path.exists(path):
+        sys.stderr.write("not found: %s\n" % path)
+        return 2
+    blob = read_bytes(path)
+    st = os.stat(path)
+    print("==== Analyze ====")
+    print("file: %s" % path)
+    print("type: angou.dat")
+    print("size: %d bytes (%s)" % (len(blob), hx(len(blob))))
+    print("mtime: %s" % _fmt_ts(st.st_mtime))
+    print("sha1: %s" % _sha1(blob))
+    print("")
+    try:
+        t, _, _ = decode_text_auto(blob)
+    except Exception:
+        try:
+            t = blob.decode("utf-8", "ignore")
+        except Exception:
+            t = ""
+    s0 = str((t or "").split("\n", 1)[0]).strip("\r\n")
+    print("angou: %s" % s0)
+    mb = s0.encode("cp932", "ignore") if s0 else b""
+    exe_el = exe_angou_element(mb) if mb else b""
+    if exe_el:
+        print("key.txt: %s" % _fmt_key_txt(exe_el))
+    else:
+        print("key.txt: ")
+    return 0
 
 
 def _detect_type(path, blob):
@@ -141,6 +179,18 @@ def main(argv=None):
     if "--readall" in args:
         args.remove("--readall")
         readall = True
+
+    angou = False
+    if "--angou" in args:
+        args.remove("--angou")
+        angou = True
+    if angou:
+        if gei or readall:
+            return 2
+        if len(args) != 1:
+            sys.stderr.write("angou.dat compare is not supported\n")
+            return 2
+        return analyze_angou_dat(args[0])
     if gei:
         if len(args) == 1:
             return dat.analyze_gameexe_dat(args[0])

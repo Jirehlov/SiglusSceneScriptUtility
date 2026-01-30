@@ -14,8 +14,9 @@ from .common import (
     read_text_auto,
     read_bytes,
     write_bytes,
-    find_angou_dat_path,
-    find_key_txt_path,
+    find_named_path,
+    ANGOU_DAT_NAME,
+    KEY_TXT_NAME,
     read_exe_el_key,
 )
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
@@ -40,11 +41,11 @@ def _glob_sorted_rel(base, pattern):
 def _make_original_source_rel_list(scn_path):
     out = []
     out += _glob_sorted_rel(scn_path, "Gameexe*.ini")
-    p = find_angou_dat_path(scn_path, recursive=False)
+    p = find_named_path(scn_path, ANGOU_DAT_NAME, recursive=False)
     if p:
         out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
     else:
-        kp = find_key_txt_path(scn_path, recursive=False)
+        kp = find_named_path(scn_path, KEY_TXT_NAME, recursive=False)
         if kp:
             out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
     out += _glob_sorted_rel(scn_path, "*.inc")
@@ -130,11 +131,11 @@ def _resolve_exe_angou(ctx):
     scn_path = ctx.get("scn_path") or ""
     angou_str = ctx.get("exe_angou_str")
     if (not angou_str) and scn_path:
-        p = find_angou_dat_path(scn_path, recursive=False)
+        p = find_named_path(scn_path, ANGOU_DAT_NAME, recursive=False)
         if p:
             angou_str = _read_first_line(p, ctx.get("charset_force") or "")
     if (not angou_str) and scn_path:
-        kp = find_key_txt_path(scn_path, recursive=False)
+        kp = find_named_path(scn_path, KEY_TXT_NAME, recursive=False)
         if kp:
             el = read_exe_el_key(kp)
             if el and len(el) == 16:

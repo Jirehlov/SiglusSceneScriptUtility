@@ -70,11 +70,13 @@ def _usage(out=None):
     out.write(
         f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav)> [input_file_2]\n"
     )
+    out.write(f"  {p} -a <path_to_暗号.dat> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --disam      Write .dat disassembly to __DATDIR__\n")
     out.write(
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
     )
+    out.write("    --angou        Parse as 暗号.dat and print derived exe_el key\n")
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
