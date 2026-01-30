@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
 from . import sound
-from .common import eprint
+from .common import eprint, write_bytes
 
 
 @dataclass(frozen=True)
@@ -313,10 +313,15 @@ def main(argv=None):
         pass
     records = _collect_records(script_root)
     by_chara = {}
+    referenced = {}
     for coord_s, name, text, src in records:
         try:
             coord = parse_koe_coord(coord_s)
             coord_key = format_koe_coord(coord)
+            ovk_path = find_ovk_path(voice_dir, coord.koe_no, coord.chara_no)
+            ovk_key = os.path.abspath(ovk_path)
+            line_no = koe_no_to_scene_line(coord.koe_no)[1]
+            referenced.setdefault(ovk_key, set()).add(line_no)
         except Exception:
             continue
         k = name if name else "UNKNOWN"
@@ -369,7 +374,50 @@ def main(argv=None):
                 if coord_key in missing_coords:
                     continue
                 w.writerow([sanitize_filename(coord_key), text, src])
-    eprint(f"done ok={ok} skipped={skipped} missing={missing} failed={failed}")
+    unref_total = 0
+    unref_skipped = 0
+    unref_failed = 0
+    unref_dir = os.path.join(out_dir, "unreferenced")
+    for root, _, files in os.walk(voice_dir):
+        for fn in files:
+            if not fn.lower().endswith(".ovk"):
+                continue
+            ovk_path = os.path.abspath(os.path.join(root, fn))
+            ref_entries = referenced.get(ovk_path, set())
+            m = re.match(r"z(\d{4})\.ovk$", fn, flags=re.IGNORECASE)
+            scn_no = int(m.group(1)) if m else None
+            try:
+                entries = sound.read_ovk_table(ovk_path)
+            except Exception as e:
+                unref_failed += 1
+                eprint(f"unreferenced\t{fn}\t{e}")
+                continue
+            for entry in entries:
+                if entry.entry_no in ref_entries:
+                    continue
+                if scn_no is not None:
+                    koe_no = scn_no * 100000 + entry.entry_no
+                    coord_key = format_koe_coord(KOECoord(koe_no, -1))
+                    ogg_name = sanitize_filename(coord_key) + ".ogg"
+                else:
+                    ogg_name = f"{os.path.splitext(fn)[0]}_{entry.entry_no}.ogg"
+                out_path = os.path.join(unref_dir, ogg_name)
+                if os.path.isfile(out_path):
+                    unref_skipped += 1
+                    continue
+                try:
+                    ogg_bytes = sound.extract_ogg_bytes_from_ovk_entry(
+                        ovk_path, entry.entry_no
+                    )
+                    write_bytes(out_path, ogg_bytes)
+                    unref_total += 1
+                except Exception as e:
+                    unref_failed += 1
+                    eprint(f"unreferenced\t{fn}\t{entry.entry_no}\t{e}")
+    eprint(
+        f"done ok={ok} skipped={skipped} missing={missing} failed={failed} "
+        f"unreferenced={unref_total} unref_skipped={unref_skipped} unref_failed={unref_failed}"
+    )
     return 0
 
 
