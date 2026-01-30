@@ -3,7 +3,6 @@ import struct
 import os
 import sys
 import time
-import glob
 
 from . import const as C
 from .native_ops import lzss_unpack, xor_cycle_inplace
@@ -23,6 +22,9 @@ from .common import (
     read_bytes,
     write_bytes,
     parse_code,
+    find_angou_dat_path,
+    list_angou_dat_paths,
+    is_angou_dat_filename,
 )
 
 MAX_SCENE_LIST = 2000
@@ -602,16 +604,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
 
 
 def _find_angou_dat(os_dir: str) -> str:
-    if not os_dir or not os.path.isdir(os_dir):
-        return ""
-    hits = []
-    for p in glob.glob(os.path.join(os_dir, "**", "暗号*.dat"), recursive=True):
-        if os.path.isfile(p):
-            hits.append(p)
-    if not hits:
-        return ""
-    hits.sort(key=lambda x: (len(x), x.lower()))
-    return hits[0]
+    return find_angou_dat_path(os_dir, recursive=True)
 
 
 def _compute_exe_el_from_scene_pck(os_dir: str):
@@ -650,7 +643,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
             enc_blob = dat[pos : pos + sz]
             raw, name = source_angou_decrypt(enc_blob, ctx)
             nm = os.path.basename(name or "")
-            if nm.startswith("暗号") and nm.lower().endswith(".dat"):
+            if is_angou_dat_filename(nm):
                 cands.append((name or nm, raw))
             pos += sz
         if not cands:
@@ -674,19 +667,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
 def _iter_exe_el_candidates(os_dir: str):
     seen = set()
 
-    paths = []
-    try:
-        if os_dir and os.path.isdir(os_dir):
-            for p in glob.glob(os.path.join(os_dir, "暗号*.dat")):
-                if os.path.isfile(p) and p not in paths:
-                    paths.append(p)
-            for p in glob.glob(os.path.join(os_dir, "**", "暗号*.dat"), recursive=True):
-                if os.path.isfile(p) and p not in paths:
-                    paths.append(p)
-    except Exception:
-        paths = []
-
-    paths.sort(key=lambda x: (x.count(os.sep), len(x), x.lower()))
+    paths = list_angou_dat_paths(os_dir, recursive=True)
     for p in paths:
         try:
             try:
@@ -741,7 +722,7 @@ def _iter_exe_el_candidates(os_dir: str):
             enc_blob = dat[pos : pos + sz]
             raw, name = source_angou_decrypt(enc_blob, ctx)
             nm = os.path.basename(name or "")
-            if nm.startswith("暗号") and nm.lower().endswith(".dat"):
+            if is_angou_dat_filename(nm):
                 cands.append((name or nm, raw))
             pos += sz
         cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
@@ -868,7 +849,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         exe_el = _compute_exe_el(os_dir)
         if not exe_el:
             sys.stderr.write(
-                "Warning: scn_data_exe_angou_mod=1 but 暗号*.dat not found/invalid under output folder; scene data may remain encrypted.\n"
+                "Warning: scn_data_exe_angou_mod=1 but 暗号.dat not found/invalid under output folder; scene data may remain encrypted.\n"
             )
     easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
     D = None

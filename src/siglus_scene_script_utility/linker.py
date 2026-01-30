@@ -14,6 +14,7 @@ from .common import (
     read_text_auto,
     read_bytes,
     write_bytes,
+    find_angou_dat_path,
 )
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
@@ -37,7 +38,9 @@ def _glob_sorted_rel(base, pattern):
 def _make_original_source_rel_list(scn_path):
     out = []
     out += _glob_sorted_rel(scn_path, "Gameexe*.ini")
-    out += _glob_sorted_rel(scn_path, "暗号*.dat")
+    p = find_angou_dat_path(scn_path, recursive=False)
+    if p:
+        out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
     out += _glob_sorted_rel(scn_path, "*.inc")
     out += _glob_sorted_rel(scn_path, "*.ss")
     return out

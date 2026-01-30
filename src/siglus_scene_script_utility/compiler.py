@@ -27,6 +27,7 @@ from .common import (
     read_text_auto,
     write_text,
     parse_code,
+    find_angou_dat_path,
 )
 
 
@@ -555,8 +556,8 @@ def main(argv=None):
     _init_stats(ctx)
 
     angou_content = None
-    angou_path = os.path.join(inp, "暗号.dat")
-    if (not a.no_angou) and os.path.isfile(angou_path):
+    angou_path = find_angou_dat_path(inp, recursive=False)
+    if (not a.no_angou) and angou_path:
         try:
             angou_content = (
                 read_text_auto(angou_path, force_charset=charset)

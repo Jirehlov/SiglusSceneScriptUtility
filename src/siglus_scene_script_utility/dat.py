@@ -18,6 +18,7 @@ from .common import (
     _add_gap_sections,
     _print_sections,
     _diff_kv,
+    find_angou_dat_path,
 )
 
 DAT_TXT_OUT_DIR = None
@@ -621,26 +622,17 @@ def compare_gameexe_dat(p1, p2):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
-    import glob
-
-    def _has_angou_dat(d):
-        try:
-            if not d or (not os.path.isdir(d)):
-                return False
-            for pp in glob.glob(os.path.join(d, "暗号*.dat")):
-                if os.path.isfile(pp):
-                    return True
-        except Exception:
-            return False
-        return False
-
     d1 = os.path.dirname(os.path.abspath(p1)) or "."
     d2 = os.path.dirname(os.path.abspath(p2)) or "."
-    if not (_has_angou_dat(d1) and _has_angou_dat(d2)):
+    if not (
+        find_angou_dat_path(d1, recursive=False)
+        and find_angou_dat_path(d2, recursive=False)
+    ):
         sys.stderr.write(
-            "An 暗号*.dat file must exist in the same directory as both Gameexe.dat files.\n"
+            "An 暗号.dat file must exist in the same directory as both Gameexe.dat files.\n"
         )
         return 1
+
     try:
         _, t1 = _gei_decode_txt(p1)
         _, t2 = _gei_decode_txt(p2)

@@ -7,6 +7,8 @@ from . import BS
 from . import LA
 from . import const as C
 from . import dat as DAT
+from . import pck
+from .native_ops import lzss_pack, xor_cycle_inplace
 from .common import (
     eprint,
     hint_help as _hint_help,
@@ -15,6 +17,7 @@ from .common import (
     _read_i32_list,
     _max_pair_end,
     _decode_utf16le_strings,
+    is_angou_dat_filename,
 )
 
 
@@ -483,12 +486,87 @@ def _iter_dat_files(root: str):
     dat_files = []
     for dirpath, _, filenames in os.walk(root):
         for name in filenames:
-            if name.lower().endswith(".dat"):
-                dat_files.append(os.path.join(dirpath, name))
+            low = name.lower()
+            if not low.endswith(".dat"):
+                continue
+            if (low == "gameexe.dat") or is_angou_dat_filename(name):
+                continue
+            dat_files.append(os.path.join(dirpath, name))
     return sorted(dat_files)
 
 
-def _process_dat(dat_path: str, apply_mode: bool) -> int:
+def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
+    parsed = _parse_scn_dat(blob)
+    if parsed:
+        return parsed, blob, {"exe": False, "easy": False, "lzss": False}
+    easy_code = getattr(C, "EASY_ANGOU_CODE", b"") or b""
+
+    def _try(b: bytes, used_exe: bool, used_easy: bool, used_lzss: bool):
+        p = _parse_scn_dat(b)
+        if p:
+            return p, b, {"exe": used_exe, "easy": used_easy, "lzss": used_lzss}
+        return None
+
+    def _unpack_if_lzss(b: bytes):
+        if pck._looks_like_lzss(b):
+            try:
+                return pck.lzss_unpack(b)
+            except Exception:
+                return None
+        return None
+
+    for used_exe in (False, True):
+        if used_exe:
+            if not exe_el:
+                continue
+            bt = bytearray(blob)
+            xor_cycle_inplace(bt, exe_el, 0)
+            bx = bytes(bt)
+        else:
+            bx = blob
+        r = _try(bx, used_exe, False, False)
+        if r:
+            return r
+        dec = _unpack_if_lzss(bx)
+        if dec is not None:
+            r = _try(dec, used_exe, False, True)
+            if r:
+                return r
+        if easy_code:
+            bt2 = bytearray(bx)
+            xor_cycle_inplace(bt2, easy_code, 0)
+            by = bytes(bt2)
+            r = _try(by, used_exe, True, False)
+            if r:
+                return r
+            dec2 = _unpack_if_lzss(by)
+            if dec2 is not None:
+                r = _try(dec2, used_exe, True, True)
+                if r:
+                    return r
+    return None, blob, None
+
+
+def _encode_scn_dat(blob: bytes, enc: dict, exe_el: bytes) -> bytes:
+    b = blob
+    if enc and enc.get("lzss"):
+        b = lzss_pack(b, level=17)
+    if enc and enc.get("easy"):
+        code = getattr(C, "EASY_ANGOU_CODE", b"") or b""
+        if code:
+            bt = bytearray(b)
+            xor_cycle_inplace(bt, code, 0)
+            b = bytes(bt)
+    if enc and enc.get("exe"):
+        code = exe_el or b""
+        if code:
+            bt2 = bytearray(b)
+            xor_cycle_inplace(bt2, code, 0)
+            b = bytes(bt2)
+    return b
+
+
+def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
     fname = os.path.basename(dat_path)
     if not os.path.exists(dat_path):
         eprint(f"textmap: file not found: {dat_path}", errors="replace")
@@ -498,7 +576,7 @@ def _process_dat(dat_path: str, apply_mode: bool) -> int:
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1
-    parsed = _parse_scn_dat(blob)
+    parsed, _plain_blob, enc = _parse_scn_dat_with_decrypt(blob, exe_el)
     if not parsed:
         eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
         return 1
@@ -517,10 +595,11 @@ def _process_dat(dat_path: str, apply_mode: bool) -> int:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0
     try:
-        out_bytes = BS._build_scn_dat({"str_list": updated_list}, out_scn)
+        out_bytes_plain = BS._build_scn_dat({"str_list": updated_list}, out_scn)
     except Exception:
         eprint(f"textmap: {fname}: rebuild failed", errors="replace")
         return 1
+    out_bytes = _encode_scn_dat(out_bytes_plain, enc, exe_el)
     try:
         with open(dat_path, "wb") as f:
             f.write(out_bytes)
@@ -653,6 +732,12 @@ def main(argv=None):
 
     if disam_mode or disam_apply_mode:
         dat_path = ss_path
+        base_dir = (
+            os.path.abspath(dat_path)
+            if os.path.isdir(dat_path)
+            else (os.path.dirname(os.path.abspath(dat_path)) or ".")
+        )
+        exe_el = pck._compute_exe_el(base_dir) if base_dir else b""
         if os.path.isdir(dat_path):
             dat_files = _iter_dat_files(dat_path)
             if not dat_files:
@@ -660,11 +745,11 @@ def main(argv=None):
                 return 1
             errors = 0
             for file_path in dat_files:
-                rc = _process_dat(file_path, disam_apply_mode)
+                rc = _process_dat(file_path, disam_apply_mode, exe_el)
                 if rc != 0:
                     errors += 1
             return 1 if errors else 0
-        return _process_dat(dat_path, disam_apply_mode)
+        return _process_dat(dat_path, disam_apply_mode, exe_el)
 
     if os.path.isdir(ss_path):
         ss_files = _iter_ss_files(ss_path)

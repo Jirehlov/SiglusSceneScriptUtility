@@ -6,6 +6,64 @@ import re
 
 from . import const as C
 
+ANGOU_DAT_NAME = "暗号.dat"
+
+
+def is_angou_dat_filename(name: str) -> bool:
+    return str(name or "").casefold() == ANGOU_DAT_NAME.casefold()
+
+
+def list_angou_dat_paths(base_dir: str, recursive: bool = True):
+    try:
+        base_dir = os.path.abspath(str(base_dir or ""))
+    except Exception:
+        base_dir = str(base_dir or "")
+    if not base_dir or (not os.path.isdir(base_dir)):
+        return []
+    out = []
+    p0 = os.path.join(base_dir, ANGOU_DAT_NAME)
+    if os.path.isfile(p0):
+        out.append(p0)
+    if recursive:
+        try:
+            for dirpath, _, filenames in os.walk(base_dir):
+                if dirpath == base_dir:
+                    continue
+                for fn in filenames:
+                    if not is_angou_dat_filename(fn):
+                        continue
+                    p = os.path.join(dirpath, fn)
+                    if os.path.isfile(p):
+                        out.append(p)
+        except Exception:
+            pass
+    seen = set()
+    uniq = []
+    for p in out:
+        try:
+            ap = os.path.abspath(p)
+        except Exception:
+            ap = str(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        uniq.append(ap)
+
+    def _k(p: str):
+        try:
+            rel = os.path.relpath(p, base_dir)
+        except Exception:
+            rel = p
+        return (rel.count(os.sep), len(rel), rel.casefold())
+
+    uniq.sort(key=_k)
+    return uniq
+
+
+def find_angou_dat_path(base_dir: str, recursive: bool = True) -> str:
+    hits = list_angou_dat_paths(base_dir, recursive=recursive)
+    return hits[0] if hits else ""
+
 
 def norm_charset(cs: str) -> str:
     s = str(cs or "").strip().lower()
