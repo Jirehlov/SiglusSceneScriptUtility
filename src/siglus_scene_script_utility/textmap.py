@@ -17,6 +17,7 @@ from .common import (
     _read_i32_list,
     _max_pair_end,
     _decode_utf16le_strings,
+    iter_files_by_ext,
     is_angou_dat_filename,
 )
 
@@ -312,15 +313,6 @@ def _fix_brackets_content(text: str):
     return "".join(out), fixed_quotes, fixed_spaces
 
 
-def _iter_ss_files(root: str):
-    ss_files = []
-    for dirpath, _, filenames in os.walk(root):
-        for name in filenames:
-            if name.lower().endswith(".ss"):
-                ss_files.append(os.path.join(dirpath, name))
-    return sorted(ss_files)
-
-
 def _parse_scn_dat(blob: bytes):
     if not DAT._looks_like_dat(blob):
         return None
@@ -480,19 +472,6 @@ def _apply_disam_map(str_list, rows, filename: str = ""):
         str_list[idx] = replacement
         changes += 1
     return str_list, changes
-
-
-def _iter_dat_files(root: str):
-    dat_files = []
-    for dirpath, _, filenames in os.walk(root):
-        for name in filenames:
-            low = name.lower()
-            if not low.endswith(".dat"):
-                continue
-            if (low == "gameexe.dat") or is_angou_dat_filename(name):
-                continue
-            dat_files.append(os.path.join(dirpath, name))
-    return sorted(dat_files)
 
 
 def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
@@ -739,7 +718,14 @@ def main(argv=None):
         )
         exe_el = pck._compute_exe_el(base_dir) if base_dir else b""
         if os.path.isdir(dat_path):
-            dat_files = _iter_dat_files(dat_path)
+            dat_files = iter_files_by_ext(
+                dat_path,
+                [".dat"],
+                exclude_pred=lambda p: (
+                    os.path.basename(p).lower() == "gameexe.dat"
+                    or is_angou_dat_filename(os.path.basename(p))
+                ),
+            )
             if not dat_files:
                 eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
                 return 1
@@ -752,7 +738,7 @@ def main(argv=None):
         return _process_dat(dat_path, disam_apply_mode, exe_el)
 
     if os.path.isdir(ss_path):
-        ss_files = _iter_ss_files(ss_path)
+        ss_files = iter_files_by_ext(ss_path, [".ss"])
         if not ss_files:
             eprint(f"textmap: no .ss files found in: {ss_path}", errors="replace")
             return 1

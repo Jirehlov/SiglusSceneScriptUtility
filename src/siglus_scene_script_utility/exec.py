@@ -4,13 +4,6 @@ import subprocess
 import datetime
 
 
-def _strip_quotes(s):
-    s = str(s)
-    if len(s) >= 2 and ((s[0] == s[-1] == '"') or (s[0] == s[-1] == "'")):
-        return s[1:-1]
-    return s
-
-
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -18,9 +11,22 @@ def main(argv=None):
     if len(args) != 3:
         return 2
     engine_path, ss_name, zlabel = args
-    engine_path = _strip_quotes(engine_path)
-    ss_name = _strip_quotes(ss_name)
-    zlabel = _strip_quotes(zlabel)
+    engine_path = str(engine_path)
+    if len(engine_path) >= 2 and (
+        (engine_path[0] == engine_path[-1] == '"')
+        or (engine_path[0] == engine_path[-1] == "'")
+    ):
+        engine_path = engine_path[1:-1]
+    ss_name = str(ss_name)
+    if len(ss_name) >= 2 and (
+        (ss_name[0] == ss_name[-1] == '"') or (ss_name[0] == ss_name[-1] == "'")
+    ):
+        ss_name = ss_name[1:-1]
+    zlabel = str(zlabel)
+    if len(zlabel) >= 2 and (
+        (zlabel[0] == zlabel[-1] == '"') or (zlabel[0] == zlabel[-1] == "'")
+    ):
+        zlabel = zlabel[1:-1]
     if os.path.basename(ss_name) != ss_name:
         sys.stderr.write("Invalid scene name: %s\n" % ss_name)
         return 2

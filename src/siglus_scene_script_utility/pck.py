@@ -17,6 +17,7 @@ from .common import (
     _add_gap_sections,
     _print_sections,
     _diff_kv,
+    build_sections,
     exe_angou_element,
     decode_text_auto,
     read_bytes,
@@ -56,26 +57,15 @@ def _looks_like_pck(blob):
 
 def _pck_sections(blob, preview=False):
     n = len(blob)
-    vals = struct.unpack_from("<" + "i" * len(C._PACK_HDR_FIELDS), blob, 0)
-    h = {k: int(v) for k, v in zip(C._PACK_HDR_FIELDS, vals)}
-    hs = h.get("header_size", C._PACK_HDR_SIZE)
-    if hs != 0 and (hs < C._PACK_HDR_SIZE or hs > n):
-        hs = C._PACK_HDR_SIZE
-    used = []
-    secs = []
 
-    def sec(a, b, sym, name):
-        a = max(0, min(int(a), n))
-        b = max(0, min(int(b), n))
-        if b > a:
-            secs.append((a, b, sym, name))
-            used.append((a, b))
+    def _validate_header_size(hs, n, default):
+        if hs != 0 and (hs < default or hs > n):
+            return default
+        return hs
 
-    def sec_fixed(ofs, cnt, esz, sym, name):
-        if cnt <= 0:
-            return
-        sec(ofs, ofs + cnt * esz, sym, name)
-
+    h, hs, used, secs, sec, sec_fixed = build_sections(
+        blob, C._PACK_HDR_FIELDS, C._PACK_HDR_SIZE, _validate_header_size
+    )
     sec(0, hs, "H", "pack_header")
     sec_fixed(
         h.get("inc_prop_list_ofs", 0), h.get("inc_prop_cnt", 0), 8, "P", "inc_prop_list"

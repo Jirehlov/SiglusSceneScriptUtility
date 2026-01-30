@@ -1,18 +1,13 @@
 import os
 import sys
 
-from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
+from .common import (
+    eprint,
+    hint_help as _hint_help,
+    fmt_kv as _fmt_kv,
+    iter_files_by_ext,
+)
 from . import video
-
-
-def _iter_video_files(inp: str):
-    if os.path.isfile(inp):
-        yield inp
-        return
-    for base_dir, _dirs, files in os.walk(inp):
-        for fn in files:
-            if fn.lower().endswith(".omv"):
-                yield os.path.join(base_dir, fn)
 
 
 def _analyze_one(path: str) -> int:
@@ -102,7 +97,7 @@ def main(argv=None) -> int:
             eprint("error: unsupported file type (expected .omv)")
             return 1
 
-    files = list(_iter_video_files(inp)) if src_is_dir else [inp]
+    files = iter_files_by_ext(inp, [".omv"]) if src_is_dir else [inp]
     total = len(files)
     wrote = 0
     failed = 0

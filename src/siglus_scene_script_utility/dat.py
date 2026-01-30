@@ -9,7 +9,6 @@ from . import pck
 from .common import (
     hx,
     _fmt_ts,
-    _read_file,
     _sha1,
     _read_i32_pairs,
     _read_i32_list,
@@ -18,6 +17,8 @@ from .common import (
     _add_gap_sections,
     _print_sections,
     _diff_kv,
+    build_sections,
+    read_bytes,
 )
 
 DAT_TXT_OUT_DIR = None
@@ -310,25 +311,15 @@ def _looks_like_dat(blob):
 
 def _dat_sections(blob):
     n = len(blob)
-    vals = struct.unpack_from("<" + "i" * len(C._SCN_HDR_FIELDS), blob, 0)
-    h = {k: int(v) for k, v in zip(C._SCN_HDR_FIELDS, vals)}
-    hs = h.get("header_size", C._SCN_HDR_SIZE)
-    if hs < C._SCN_HDR_SIZE or hs > n:
-        hs = C._SCN_HDR_SIZE
-    used = []
-    secs = []
 
-    def sec(a, b, sym, name):
-        a = max(0, min(int(a), n))
-        b = max(0, min(int(b), n))
-        if b > a:
-            secs.append((a, b, sym, name))
-            used.append((a, b))
+    def _validate_header_size(hs, n, default):
+        if hs < default or hs > n:
+            return default
+        return hs
 
-    def sec_fixed(ofs, cnt, esz, sym, name):
-        if cnt <= 0:
-            return
-        sec(ofs, ofs + cnt * esz, sym, name)
+    h, hs, used, secs, sec, sec_fixed = build_sections(
+        blob, C._SCN_HDR_FIELDS, C._SCN_HDR_SIZE, _validate_header_size
+    )
 
     sec(0, hs, "H", "scene_header")
     str_idx = _read_i32_pairs(
@@ -527,7 +518,7 @@ def dat(path, blob: bytes) -> int:
 
 
 def _gei_decode_txt(path):
-    blob = _read_file(path)
+    blob = read_bytes(path)
     if not blob or len(blob) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
     _, mode = struct.unpack_from("<ii", blob, 0)
@@ -566,7 +557,7 @@ def analyze_gameexe_dat(path):
     if not os.path.exists(path):
         sys.stderr.write("not found: %s\n" % path)
         return 2
-    blob = _read_file(path)
+    blob = read_bytes(path)
     st = os.stat(path)
     print("==== Analyze ====")
     print("file: %s" % path)
@@ -623,8 +614,8 @@ def compare_gameexe_dat(p1, p2):
         return 2
     d1 = os.path.dirname(os.path.abspath(p1)) or "."
     d2 = os.path.dirname(os.path.abspath(p2)) or "."
-    b1 = _read_file(p1)
-    b2 = _read_file(p2)
+    b1 = read_bytes(p1)
+    b2 = read_bytes(p2)
     if (not b1) or len(b1) < 8 or (not b2) or len(b2) < 8:
         sys.stderr.write("invalid Gameexe.dat: too small\n")
         return 1

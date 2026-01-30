@@ -1,7 +1,7 @@
 import os
 import sys
 
-from .common import hx, _fmt_ts, _read_file, _sha1
+from .common import hx, _fmt_ts, read_bytes, _sha1
 
 from . import pck
 from . import dat
@@ -39,7 +39,7 @@ def analyze_file(path, readall=False):
     if not os.path.exists(path):
         sys.stderr.write("not found: %s\n" % path)
         return 2
-    blob = _read_file(path)
+    blob = read_bytes(path)
     ftype = _detect_type(path, blob)
     st = os.stat(path)
     print("==== Analyze ====")
@@ -84,8 +84,8 @@ def compare_files(p1, p2):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
-    b1 = _read_file(p1)
-    b2 = _read_file(p2)
+    b1 = read_bytes(p1)
+    b2 = read_bytes(p2)
     t1 = _detect_type(p1, b1)
     t2 = _detect_type(p2, b2)
     print("==== Compare ====")

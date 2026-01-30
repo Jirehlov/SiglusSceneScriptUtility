@@ -469,16 +469,67 @@ def _fmt_ts(ts):
     return time.strftime("%Y-%m-%d %H:%M:%S", lt)
 
 
-def _read_file(path):
-    with open(path, "rb") as f:
-        return f.read()
-
-
 def _sha1(b):
     try:
         return hashlib.sha1(b).hexdigest()
     except Exception:
         return ""
+
+
+def build_sections(blob, header_fields, header_size, header_size_validator=None):
+    n = len(blob)
+    vals = struct.unpack_from("<" + "i" * len(header_fields), blob, 0)
+    h = {k: int(v) for k, v in zip(header_fields, vals)}
+    hs = h.get("header_size", header_size)
+    if header_size_validator is not None:
+        hs = header_size_validator(hs, n, header_size)
+    used = []
+    secs = []
+
+    def sec(a, b, sym, name):
+        a = max(0, min(int(a), n))
+        b = max(0, min(int(b), n))
+        if b > a:
+            secs.append((a, b, sym, name))
+            used.append((a, b))
+
+    def sec_fixed(ofs, cnt, esz, sym, name):
+        if cnt <= 0:
+            return
+        sec(ofs, ofs + cnt * esz, sym, name)
+
+    return h, hs, used, secs, sec, sec_fixed
+
+
+def iter_files_by_ext(root: str, extensions, exclude_names=None, exclude_pred=None):
+    ext_set = {ext.lower() for ext in extensions}
+    exclude_set = {name.lower() for name in (exclude_names or [])}
+    out = []
+
+    def should_skip(path):
+        name = os.path.basename(path)
+        if name.lower() in exclude_set:
+            return True
+        if exclude_pred is not None and exclude_pred(path):
+            return True
+        return False
+
+    if os.path.isfile(root):
+        if should_skip(root):
+            return []
+        if os.path.splitext(root)[1].lower() in ext_set:
+            return [root]
+        return []
+
+    for dirpath, _dirs, filenames in os.walk(root):
+        for name in filenames:
+            if os.path.splitext(name)[1].lower() not in ext_set:
+                continue
+            path = os.path.join(dirpath, name)
+            if should_skip(path):
+                continue
+            out.append(path)
+    return sorted(out)
 
 
 def _read_i32_pairs(dat, ofs, cnt):

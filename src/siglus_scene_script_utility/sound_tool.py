@@ -5,7 +5,12 @@ import re
 import subprocess
 import tempfile
 
-from .common import eprint, hint_help as _hint_help, fmt_kv as _fmt_kv
+from .common import (
+    eprint,
+    hint_help as _hint_help,
+    fmt_kv as _fmt_kv,
+    iter_files_by_ext,
+)
 from . import sound
 from . import extract
 
@@ -24,17 +29,6 @@ def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
     except Exception:
         pass
-
-
-def _iter_audio_files(inp: str):
-    if os.path.isfile(inp):
-        yield inp
-        return
-    for base_dir, _dirs, files in os.walk(inp):
-        for fn in files:
-            low = fn.lower()
-            if low.endswith(".owp") or low.endswith(".nwa") or low.endswith(".ovk"):
-                yield os.path.join(base_dir, fn)
 
 
 def _write_file(path: str, data: bytes) -> None:
@@ -426,7 +420,7 @@ def main(argv=None) -> int:
 
     os.makedirs(out_root, exist_ok=True)
 
-    files = list(_iter_audio_files(inp)) if src_is_dir else [inp]
+    files = iter_files_by_ext(inp, [".owp", ".nwa", ".ovk"]) if src_is_dir else [inp]
     total = len(files)
     wrote = 0
     failed = 0
