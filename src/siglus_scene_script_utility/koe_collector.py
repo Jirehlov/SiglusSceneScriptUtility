@@ -125,17 +125,13 @@ def _parse_mes_line(line: str):
     after = line[i2 + 1 :] if i2 >= 0 else line
 
     oq, cq = "", ""
-    p = after.find("「")
-    if p >= 0:
-        oq, cq = "「", "」"
-    else:
-        p = after.find("『")
+    for oq, cq in [("「", "」"), ("『", "』"), ("（", "）"), ('"', '"')]:
+        p = after.find(oq)
         if p >= 0:
-            oq, cq = "『", "』"
-        else:
-            p = after.find('"')
-            if p >= 0:
-                oq, cq = '"', '"'
+            break
+    else:
+        p = -1
+        oq, cq = "", ""
     if not oq:
         return None
     q1 = p
@@ -185,17 +181,13 @@ def _parse_koe_line(line: str):
     after = rest[i2 + 1 :]
     oq = ""
     cq = ""
-    p = after.find("「")
-    if p >= 0:
-        oq, cq = "「", "」"
-    else:
-        p = after.find("『")
+    for oq, cq in [("「", "」"), ("『", "』"), ("（", "）"), ('"', '"')]:
+        p = after.find(oq)
         if p >= 0:
-            oq, cq = "『", "』"
-        else:
-            p = after.find('"')
-            if p >= 0:
-                oq, cq = '"', '"'
+            break
+    else:
+        p = -1
+        oq, cq = "", ""
     if not oq:
         return None
     q1 = p
