@@ -423,14 +423,6 @@ class _SaveStreamReader:
             return int(struct.unpack_from("<Q", self._read(8), 0)[0])
         raise ValueError("bad size_t_size")
 
-    def s_bool(self):
-        n = self.s_bool_size
-        if n == 1:
-            return bool(self.u8())
-        if n == 4:
-            return bool(self.i32())
-        raise ValueError("bad s_bool_size")
-
     def str_u16(self):
         ln = self.i32()
         if ln <= 0:
@@ -444,45 +436,6 @@ class _SaveStreamReader:
 
     def c_size(self):
         return (int(self.i32()), int(self.i32()))
-
-    def argb(self):
-        if self.argb_size == 4:
-            a = self.u8()
-            r = self.u8()
-            g = self.u8()
-            b = self.u8()
-            return (int(a), int(r), int(g), int(b))
-        if self.argb_size == 16:
-            a = self.i32()
-            r = self.i32()
-            g = self.i32()
-            b = self.i32()
-            return (int(a), int(r), int(g), int(b))
-        raise ValueError("bad argb_size")
-
-    def fixed_int_list(self):
-        jump = self.i32()
-        cnt = self.i32()
-        if cnt < 0:
-            raise ValueError("bad cnt")
-        out = []
-        for _ in range(cnt):
-            out.append(int(self.i32()))
-        if jump >= 0 and jump <= len(self.buf):
-            self.seek(jump)
-        return out
-
-    def fixed_str_list(self):
-        jump = self.i32()
-        cnt = self.i32()
-        if cnt < 0:
-            raise ValueError("bad cnt")
-        out = []
-        for _ in range(cnt):
-            out.append(self.str_u16())
-        if jump >= 0 and jump <= len(self.buf):
-            self.seek(jump)
-        return out
 
 
 def _read_fixed_int_list(r):

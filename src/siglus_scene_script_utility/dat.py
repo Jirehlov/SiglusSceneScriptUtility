@@ -18,7 +18,6 @@ from .common import (
     _add_gap_sections,
     _print_sections,
     _diff_kv,
-    find_angou_dat_path,
 )
 
 DAT_TXT_OUT_DIR = None
@@ -624,12 +623,21 @@ def compare_gameexe_dat(p1, p2):
         return 2
     d1 = os.path.dirname(os.path.abspath(p1)) or "."
     d2 = os.path.dirname(os.path.abspath(p2)) or "."
-    if not (
-        find_angou_dat_path(d1, recursive=False)
-        and find_angou_dat_path(d2, recursive=False)
-    ):
+    b1 = _read_file(p1)
+    b2 = _read_file(p2)
+    if (not b1) or len(b1) < 8 or (not b2) or len(b2) < 8:
+        sys.stderr.write("invalid Gameexe.dat: too small\n")
+        return 1
+    _, m1 = struct.unpack_from("<ii", b1, 0)
+    _, m2 = struct.unpack_from("<ii", b2, 0)
+    if int(m1) != 0 and (not pck._compute_exe_el(d1)):
         sys.stderr.write(
-            "An 暗号.dat file must exist in the same directory as both Gameexe.dat files.\n"
+            "Missing exe angou key under first Gameexe.dat folder (need 暗号.dat or key.txt).\n"
+        )
+        return 1
+    if int(m2) != 0 and (not pck._compute_exe_el(d2)):
+        sys.stderr.write(
+            "Missing exe angou key under second Gameexe.dat folder (need 暗号.dat or key.txt).\n"
         )
         return 1
 

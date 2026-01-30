@@ -199,10 +199,6 @@ class _MSVCRand:
     def __init__(s, seed=1):
         s.x = seed & 0xFFFFFFFF
 
-    def rand(s):
-        s.x = (s.x * 214013 + 2531011) & 0xFFFFFFFF
-        return (s.x >> 16) & 0x7FFF
-
     def shuffle(s, a):
         from .native_ops import msvcrand_shuffle_inplace
 

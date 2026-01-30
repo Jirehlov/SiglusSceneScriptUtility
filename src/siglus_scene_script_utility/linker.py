@@ -15,6 +15,8 @@ from .common import (
     read_bytes,
     write_bytes,
     find_angou_dat_path,
+    find_key_txt_path,
+    read_exe_el_key,
 )
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
@@ -41,6 +43,10 @@ def _make_original_source_rel_list(scn_path):
     p = find_angou_dat_path(scn_path, recursive=False)
     if p:
         out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
+    else:
+        kp = find_key_txt_path(scn_path, recursive=False)
+        if kp:
+            out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
     out += _glob_sorted_rel(scn_path, "*.inc")
     out += _glob_sorted_rel(scn_path, "*.ss")
     return out
@@ -124,15 +130,20 @@ def _resolve_exe_angou(ctx):
     scn_path = ctx.get("scn_path") or ""
     angou_str = ctx.get("exe_angou_str")
     if (not angou_str) and scn_path:
-        angou_str = _read_first_line(
-            os.path.join(scn_path, "暗号.dat"), ctx.get("charset_force") or ""
-        )
+        p = find_angou_dat_path(scn_path, recursive=False)
+        if p:
+            angou_str = _read_first_line(p, ctx.get("charset_force") or "")
+    if (not angou_str) and scn_path:
+        kp = find_key_txt_path(scn_path, recursive=False)
+        if kp:
+            el = read_exe_el_key(kp)
+            if el and len(el) == 16:
+                return (True, el)
     if not angou_str:
         return (False, b"")
     mb = angou_str.encode("cp932", "ignore")
     if len(mb) < 8:
         return (False, b"")
-
     return (True, exe_angou_element(mb))
 
 

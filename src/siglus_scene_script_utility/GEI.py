@@ -8,6 +8,8 @@ from .common import (
     write_text,
     write_bytes,
     find_angou_dat_path,
+    find_key_txt_path,
+    read_exe_el_key,
 )
 
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
@@ -165,7 +167,7 @@ def restore_gameexe_ini(
     info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el, base=base)
     if info.get("mode") and not info.get("used_exe_el"):
         raise RuntimeError(
-            "Gameexe.dat is encrypted with exe angou; missing 暗号.dat to derive key"
+            "Gameexe.dat is encrypted with exe angou; missing 暗号.dat/key.txt to derive key"
         )
     if not txt:
         raise RuntimeError("Failed to decode Gameexe.dat payload")
@@ -223,6 +225,14 @@ def write_gameexe_dat(ctx):
             if len(mb) >= 8:
                 mode = 1
                 el = exe_angou_element(mb)
+    if ctx.get("exe_angou_mode") and (not mode) and scn:
+        kp = find_key_txt_path(scn, recursive=False)
+        if kp:
+            k = read_exe_el_key(kp)
+            if k and len(k) == 16:
+                mode = 1
+                el = k
+
     lz = None
     if ged:
         lz = bytearray(lzss_pack(ged.encode("utf-16le")))

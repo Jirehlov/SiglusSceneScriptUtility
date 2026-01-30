@@ -22,9 +22,11 @@ from .common import (
     read_bytes,
     write_bytes,
     parse_code,
-    find_angou_dat_path,
     list_angou_dat_paths,
     is_angou_dat_filename,
+    find_key_txt_path,
+    read_exe_el_key,
+    find_exe_el,
 )
 
 MAX_SCENE_LIST = 2000
@@ -603,10 +605,6 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     return (raw, name)
 
 
-def _find_angou_dat(os_dir: str) -> str:
-    return find_angou_dat_path(os_dir, recursive=True)
-
-
 def _compute_exe_el_from_scene_pck(os_dir: str):
     try:
         pck = os.path.join(os_dir or ".", "Scene.pck")
@@ -666,6 +664,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
 
 def _iter_exe_el_candidates(os_dir: str):
     seen = set()
+    yielded = False
 
     paths = list_angou_dat_paths(os_dir, recursive=True)
     for p in paths:
@@ -683,9 +682,19 @@ def _iter_exe_el_candidates(os_dir: str):
             el = exe_angou_element(mb)
             if el and el not in seen:
                 seen.add(el)
+                yielded = True
                 yield el
         except Exception:
             continue
+
+    if not yielded:
+        kp = find_key_txt_path(os_dir, recursive=True)
+        if kp:
+            el = read_exe_el_key(kp)
+            if el and el not in seen:
+                seen.add(el)
+                yielded = True
+                yield el
 
     try:
         pck = os.path.join(os_dir or ".", "Scene.pck")
@@ -746,23 +755,13 @@ def _iter_exe_el_candidates(os_dir: str):
 
 
 def _compute_exe_el(os_dir: str):
-    p = _find_angou_dat(os_dir)
-    if not p:
-        el = _compute_exe_el_from_scene_pck(os_dir)
-        if el:
-            return el
-        return b""
-    try:
-        _t, _, _ = decode_text_auto(read_bytes(p))
-    except Exception:
-        _t = ""
-    s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-    if not s:
-        return b""
-    mb = s.encode("cp932", "ignore")
-    if len(mb) < 8:
-        return b""
-    return exe_angou_element(mb)
+    el = find_exe_el(os_dir, recursive=True)
+    if el:
+        return el
+    el = _compute_exe_el_from_scene_pck(os_dir)
+    if el:
+        return el
+    return b""
 
 
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:

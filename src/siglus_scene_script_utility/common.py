@@ -8,6 +8,64 @@ from . import const as C
 
 ANGOU_DAT_NAME = "暗号.dat"
 
+KEY_TXT_NAME = "key.txt"
+
+
+def is_key_txt_filename(name: str) -> bool:
+    return str(name or "").casefold() == KEY_TXT_NAME.casefold()
+
+
+def list_key_txt_paths(base_dir: str, recursive: bool = True):
+    try:
+        base_dir = os.path.abspath(str(base_dir or ""))
+    except Exception:
+        base_dir = str(base_dir or "")
+    if not base_dir or (not os.path.isdir(base_dir)):
+        return []
+    out = []
+    p0 = os.path.join(base_dir, KEY_TXT_NAME)
+    if os.path.isfile(p0):
+        out.append(p0)
+    if recursive:
+        try:
+            for dirpath, _, filenames in os.walk(base_dir):
+                if dirpath == base_dir:
+                    continue
+                for fn in filenames:
+                    if not is_key_txt_filename(fn):
+                        continue
+                    p = os.path.join(dirpath, fn)
+                    if os.path.isfile(p):
+                        out.append(p)
+        except Exception:
+            pass
+    seen = set()
+    uniq = []
+    for p in out:
+        try:
+            ap = os.path.abspath(p)
+        except Exception:
+            ap = str(p)
+        if ap in seen:
+            continue
+        seen.add(ap)
+        uniq.append(ap)
+
+    def _k(p: str):
+        try:
+            rel = os.path.relpath(p, base_dir)
+        except Exception:
+            rel = p
+        return (rel.count(os.sep), len(rel), rel.casefold())
+
+    uniq.sort(key=_k)
+    return uniq
+
+
+def find_key_txt_path(base_dir: str, recursive: bool = True) -> str:
+    hits = list_key_txt_paths(base_dir, recursive=recursive)
+    return hits[0] if hits else ""
+
 
 def is_angou_dat_filename(name: str) -> bool:
     return str(name or "").casefold() == ANGOU_DAT_NAME.casefold()
@@ -171,6 +229,71 @@ def write_text(path: str, text: str, enc: str = "utf-8") -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding=enc, newline="\r\n") as f:
         f.write(text)
+
+
+def read_exe_el_key(path: str) -> bytes:
+    try:
+        b = read_bytes(path)
+    except Exception:
+        return b""
+    if len(b) == 16:
+        return bytes(b)
+    try:
+        t, _, _ = decode_text_auto(b)
+    except Exception:
+        try:
+            t = b.decode("utf-8", "ignore")
+        except Exception:
+            t = ""
+    t = str(t or "").strip()
+    if not t:
+        return b""
+    m = re.findall(r"0x([0-9a-fA-F]{2})", t, flags=re.I)
+    if len(m) >= 16:
+        try:
+            return bytes(int(x, 16) & 255 for x in m[:16])
+        except Exception:
+            return b""
+    m = re.findall(r"\b([0-9a-fA-F]{2})\b", t)
+    if len(m) >= 16:
+        try:
+            return bytes(int(x, 16) & 255 for x in m[:16])
+        except Exception:
+            return b""
+    m = re.findall(r"\b(\d{1,3})\b", t)
+    if len(m) >= 16:
+        try:
+            out = bytes(int(x) & 255 for x in m[:16])
+            return out if len(out) == 16 else b""
+        except Exception:
+            return b""
+    return b""
+
+
+def find_exe_el(
+    base_dir: str, recursive: bool = True, force_charset: str = ""
+) -> bytes:
+    p = find_angou_dat_path(base_dir, recursive=recursive)
+    if p:
+        try:
+            s0 = read_text_auto(p, force_charset=(force_charset or "")).split("\n", 1)[
+                0
+            ]
+        except Exception:
+            s0 = ""
+        s0 = str(s0 or "").strip("\r\n")
+        if s0:
+            mb = s0.encode("cp932", "ignore")
+            if len(mb) >= 8:
+                el = exe_angou_element(mb)
+                if el and len(el) == 16:
+                    return el
+    kp = find_key_txt_path(base_dir, recursive=recursive)
+    if kp:
+        el = read_exe_el_key(kp)
+        if el and len(el) == 16:
+            return el
+    return b""
 
 
 def parse_code(v):
