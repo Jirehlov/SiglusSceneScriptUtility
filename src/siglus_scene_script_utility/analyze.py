@@ -8,8 +8,9 @@ from . import dat
 from . import dbs
 from . import gan
 from . import sav
+from . import cgm
 
-SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan", "sav")
+SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan", "sav", "cgm")
 
 
 def _fmt_key_txt(el: bytes) -> str:
@@ -62,6 +63,8 @@ def _detect_type(path, blob):
         return "gan"
     if ext == ".sav":
         return "sav"
+    if ext == ".cgm":
+        return "cgm"
     if pck._looks_like_pck(blob):
         return "pck"
     if dat._looks_like_dat(blob):
@@ -70,6 +73,8 @@ def _detect_type(path, blob):
         return "dbs"
     if sav._looks_like_sav(blob):
         return "sav"
+    if cgm._looks_like_cgm(blob):
+        return "cgm"
     return "bin"
 
 
@@ -89,7 +94,7 @@ def analyze_file(path, readall=False):
     print("")
     if ftype not in SUPPORTED_TYPES:
         print("unsupported file type for -a mode: %s" % ftype)
-        print("only .pck, .dat, .dbs, .gan and .sav are supported.")
+        print("only .pck, .dat, .dbs, .gan, .sav and .cgm are supported.")
         return 1
     if ftype == "gan":
         return gan.gan(blob)
@@ -99,6 +104,8 @@ def analyze_file(path, readall=False):
         return dbs.dbs(blob)
     if ftype == "dat":
         return dat.dat(path, blob)
+    if ftype == "cgm":
+        return cgm.cgm(blob)
     if ftype == "sav":
         if readall:
             try:
@@ -136,7 +143,7 @@ def compare_files(p1, p2):
     print("")
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print("unsupported file type for -a mode (type1=%s type2=%s)" % (t1, t2))
-        print("only .pck, .dat, .dbs, .gan and .sav are supported.")
+        print("only .pck, .dat, .dbs, .gan, .sav and .cgm are supported.")
         return 1
     if t1 != t2:
         print("Different types; structural compare is skipped.")
@@ -157,6 +164,8 @@ def compare_files(p1, p2):
         return dat.compare_dat(p1, p2, b1, b2)
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
+    if t1 == "cgm":
+        return cgm.compare_cgm(b1, b2)
     print("No structural comparer for this type; comparing sha1 only.")
     return 0
 
