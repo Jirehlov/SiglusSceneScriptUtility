@@ -68,7 +68,7 @@ def _usage(out=None):
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(
-        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav|cgm)> [input_file_2]\n"
+        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
     out.write(f"  {p} -a <path_to_暗号.dat> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
