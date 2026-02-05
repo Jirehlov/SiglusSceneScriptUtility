@@ -191,10 +191,16 @@ def blit(
 
 
 def _g00_xy(p: Path):
-    head = p.read_bytes()[:31]
-    if len(head) < 31:
+    d = p.read_bytes()
+    if len(d) < 1:
         raise ValueError("g00 too short for coord")
-    return read_u16_le(head, 25, strict=True), read_u16_le(head, 29, strict=True)
+    t = d[0]
+    if t == 2:
+        head = d[:31]
+        if len(head) < 31:
+            raise ValueError("g00 too short for coord")
+        return read_u16_le(head, 25, strict=True), read_u16_le(head, 29, strict=True)
+    return (0, 0)
 
 
 _G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNORECASE)
@@ -297,8 +303,8 @@ def merge_g00_files(g00_paths, output_dir=None):
     for p, cut, _lab in specs[1:]:
         xy = _g00_xy(p)
         src_img = _decode_g00_main_image_pil(p, cut)
-        dx = int(xy[0]) - int(base_xy[0])
-        dy = int(xy[1]) - int(base_xy[1])
+        dx = int(base_xy[0]) - int(xy[0])
+        dy = int(base_xy[1]) - int(xy[1])
         base_img.alpha_composite(src_img, dest=(dx, dy))
     if output_dir:
         out_dir = Path(output_dir)
