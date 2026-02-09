@@ -35,7 +35,7 @@ from .common import (
 MAX_SCENE_LIST = 2000
 
 
-def _looks_like_pck(blob):
+def _looks_like_siglus_pck(blob):
     if (not blob) or len(blob) < C._PACK_HDR_SIZE:
         return False
     try:
@@ -55,6 +55,96 @@ def _looks_like_pck(blob):
         if o < 0 or o > len(blob):
             return False
     return True
+
+
+def _parse_flix_pck(blob: bytes) -> dict:
+    if (not blob) or len(blob) < 0x20:
+        return {}
+    try:
+        ver, cnt, data_rel, idx_rel = struct.unpack_from("<4I", blob, 0)
+    except Exception:
+        return {}
+    if int(ver) != 1:
+        return {}
+    cnt = int(cnt)
+    if cnt <= 0 or cnt > 200000:
+        return {}
+    base = 0x20
+    idx_abs = base + int(idx_rel)
+    data_abs = base + int(data_rel)
+    if idx_abs < base or data_abs < idx_abs or data_abs > len(blob):
+        return {}
+    if idx_abs + cnt * 16 != data_abs:
+        return {}
+    name_tbl_end = base + cnt * 4
+    if name_tbl_end > idx_abs:
+        return {}
+    try:
+        lens = list(struct.unpack_from("<" + "I" * cnt, blob, base))
+    except Exception:
+        return {}
+    for ln in lens:
+        ln = int(ln) & 0xFFFFFFFF
+        if (ln & 1) != 0 or ln > 0x20000:
+            return {}
+    pos = name_tbl_end
+    names = []
+    for ln in lens:
+        ln = int(ln) & 0xFFFFFFFF
+        if pos + ln > idx_abs:
+            return {}
+        b = blob[pos : pos + ln]
+        try:
+            nm = b.decode("utf-16le", "surrogatepass")
+        except Exception:
+            try:
+                nm = b.decode("utf-16le", "ignore")
+            except Exception:
+                nm = ""
+        names.append(nm)
+        pos += ln
+    if pos < idx_abs:
+        tail = blob[pos:idx_abs]
+        if len(tail) % 2 != 0:
+            return {}
+        if tail and any(
+            tail[i] != 0 or tail[i + 1] != 0 for i in range(0, len(tail), 2)
+        ):
+            return {}
+    entries = []
+    try:
+        for i in range(cnt):
+            off, sz = struct.unpack_from("<QQ", blob, idx_abs + i * 16)
+            off = int(off)
+            sz = int(sz)
+            if off < data_abs or off + sz > len(blob):
+                return {}
+            entries.append((off, sz))
+    except Exception:
+        return {}
+    for i in range(1, len(entries)):
+        if entries[i][0] < entries[i - 1][0]:
+            return {}
+    return {
+        "version": 1,
+        "cnt": cnt,
+        "data_rel": int(data_rel),
+        "idx_rel": int(idx_rel),
+        "base": base,
+        "idx_abs": idx_abs,
+        "data_abs": data_abs,
+        "name_lens": lens,
+        "names": names,
+        "entries": entries,
+    }
+
+
+def _looks_like_flix_pck(blob) -> bool:
+    return bool(_parse_flix_pck(blob))
+
+
+def _looks_like_pck(blob):
+    return _looks_like_siglus_pck(blob) or _looks_like_flix_pck(blob)
 
 
 def _pck_sections(blob, preview=False):
@@ -203,6 +293,58 @@ def _pck_sections(blob, preview=False):
     return secs, meta
 
 
+def _flix_pck_sections(blob, preview=False):
+    n = len(blob)
+    info = _parse_flix_pck(blob)
+    if not info:
+        return [], {"header": {}, "file_names": [], "entries": [], "item_cnt": 0}
+
+    cnt = int(info.get("cnt", 0) or 0)
+    base = int(info.get("base", 0) or 0)
+    idx_abs = int(info.get("idx_abs", 0) or 0)
+    data_abs = int(info.get("data_abs", 0) or 0)
+    names = list(info.get("names") or [])
+    entries = list(info.get("entries") or [])
+    item_cnt = min(len(names), len(entries)) if names else len(entries)
+
+    h = {
+        "header_size": base,
+        "version": int(info.get("version", 0) or 0),
+        "file_cnt": cnt,
+        "data_start_rel": int(info.get("data_rel", 0) or 0),
+        "index_table_rel": int(info.get("idx_rel", 0) or 0),
+    }
+
+    secs = []
+    used = []
+
+    def sec(a, b, sym, name):
+        try:
+            a = int(a)
+            b = int(b)
+        except Exception:
+            return
+        if a < 0 or b < 0 or b <= a or b > n:
+            return
+        secs.append((a, b, sym, name))
+        used.append((a, b))
+
+    sec(0, base, "H", "flix_pack_header")
+    sec(base, base + cnt * 4, "L", "name_len_list")
+    sec(base + cnt * 4, idx_abs, "S", "name_list")
+    sec(idx_abs, data_abs, "I", "index_table")
+
+    if item_cnt and (preview or item_cnt <= MAX_SCENE_LIST):
+        for i in range(item_cnt):
+            off, sz = entries[i]
+            nm = names[i] if i < len(names) and names[i] else ("file#%d" % i)
+            sec(off, off + sz, "D", nm)
+
+    _add_gap_sections(secs, used, n)
+    meta = {"header": h, "file_names": names, "entries": entries, "item_cnt": item_cnt}
+    return secs, meta
+
+
 def _pck_original_sources(blob, h, scn_data_end):
     out = []
     try:
@@ -246,6 +388,35 @@ def _pck_original_sources(blob, h, scn_data_end):
 
 
 def pck(blob: bytes) -> int:
+    if _looks_like_flix_pck(blob) and (not _looks_like_siglus_pck(blob)):
+        secs, meta = _flix_pck_sections(blob, preview=True)
+        h = meta.get("header") or {}
+        print("header:")
+        print("  header_size=%d" % h.get("header_size", 0))
+        print("  version=%d" % h.get("version", 0))
+        print("  data_start_rel=%d" % h.get("data_start_rel", 0))
+        print("  index_table_rel=%d" % h.get("index_table_rel", 0))
+        print("counts:")
+        print("  files=%d" % h.get("file_cnt", 0))
+        fn = meta.get("file_names") or []
+        if fn:
+            pv = fn[: C.MAX_LIST_PREVIEW]
+            print(
+                "file_names (preview): %s"
+                % (
+                    ", ".join([repr(s) for s in pv])
+                    + (" ..." if len(fn) > len(pv) else "")
+                )
+            )
+        if meta.get("item_cnt", 0) > MAX_SCENE_LIST:
+            print(
+                "note: entries=%d (listing omitted; limit=%d)"
+                % (meta.get("item_cnt", 0), MAX_SCENE_LIST)
+            )
+        print("")
+        _print_sections(secs, len(blob))
+        return 0
+
     if len(blob) < getattr(C, "_PACK_HDR_SIZE", 0):
         print("too small for pck header")
         return 1
@@ -761,10 +932,34 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     output_dir = os.path.abspath(output_dir)
     ok_cnt = 0
     dat = read_bytes(input_pck)
-    hdr = _parse_pack_header(dat)
-    if not hdr:
-        sys.stderr.write("Invalid pck: header too small\n")
+    if _looks_like_flix_pck(dat) and (not _looks_like_siglus_pck(dat)):
+        info = _parse_flix_pck(dat)
+        if not info:
+            sys.stderr.write("Invalid pck\n")
+            return 1
+        names = list(info.get("names") or [])
+        entries = list(info.get("entries") or [])
+        out_dir = os.path.join(
+            output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
+        )
+        os.makedirs(out_dir, exist_ok=True)
+        sys.stdout.write("Output: %s\n" % out_dir)
+        item_cnt = min(len(names), len(entries)) if names else len(entries)
+        for i in range(item_cnt):
+            nm = names[i] if i < len(names) and names[i] else ("file_%d.bin" % i)
+            rel = _safe_relpath(nm) or nm
+            out_name = os.path.basename(rel) or rel
+            out_path = _unique_outpath(out_dir, out_name)
+            off, sz = entries[i]
+            write_bytes(out_path, dat[int(off) : int(off) + int(sz)])
+            ok_cnt += 1
+        sys.stdout.write("Extracted files: %d\n" % ok_cnt)
+        return 0
+
+    if not _looks_like_siglus_pck(dat):
+        sys.stderr.write("Invalid pck\n")
         return 1
+    hdr = _parse_pack_header(dat)
     scn_name_idx = _read_i32_pairs(
         dat, hdr.get("scn_name_index_list_ofs", 0), hdr.get("scn_name_index_cnt", 0)
     )
