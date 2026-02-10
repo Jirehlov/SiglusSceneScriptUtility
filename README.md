@@ -50,15 +50,6 @@ After editing some `.ss` files, you may want to compile them back to a `Scene_tr
 uv run siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 ```
 
-You can set a fixed tmp folder so that `siglus-ssu` only recompiles changed files (works after `_md5.json` is created),
-```bash
-uv run siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck --tmp /path/to/tmp
-```
-and run the game with a specified scene and z-label to see how your translation looks z-label-by-z-label.
-```bash
-uv run siglus-ssu -e /path/to/SiglusEngine.exe scene_name z-label
-```
-
 
 ## Tips
 
