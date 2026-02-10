@@ -577,7 +577,7 @@ def main(argv=None):
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
             compile_list = ss
-            md5_path = ""
+            md5_path = os.path.join(tmp, "_md5.json")
             cur_inc = {}
             cur_ss = {}
             if getattr(a, "tmp_dir", ""):
@@ -634,11 +634,8 @@ def main(argv=None):
                         b = os.path.basename(p).lower()
                         nm = os.path.splitext(os.path.basename(p))[0]
                         dat_path = os.path.join(bs_dir, nm + ".dat")
-                        lz_path = os.path.join(bs_dir, nm + ".lzss")
                         need = False
                         if not os.path.isfile(dat_path):
-                            need = True
-                        elif (not a.no_angou) and (not os.path.isfile(lz_path)):
                             need = True
                         elif str(cur_ss.get(b, "")) != str(old_ss.get(b, "")):
                             need = True
@@ -656,6 +653,35 @@ def main(argv=None):
                                     os.remove(lp)
                                 except Exception:
                                     pass
+
+            else:
+
+                def _md5_file(p):
+                    h = hashlib.md5()
+                    with open(p, "rb") as f:
+                        while True:
+                            b = f.read(1024 * 1024)
+                            if not b:
+                                break
+                            h.update(b)
+                    return h.hexdigest()
+
+                for f in inc or []:
+                    p = os.path.join(inp, f)
+                    if os.path.isfile(p):
+                        cur_inc[str(f).lower()] = _md5_file(p)
+                for p in ss or []:
+                    if os.path.isfile(p):
+                        cur_ss[os.path.basename(p).lower()] = _md5_file(p)
+            write_text(
+                md5_path,
+                json.dumps(
+                    {"inc": cur_inc, "ss": cur_ss},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                enc="utf-8",
+            )
             if getattr(a, "dat_repack", False):
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
@@ -799,16 +825,6 @@ def main(argv=None):
                         parallel=a.parallel,
                     )
             link_pack(ctx)
-            if md5_path:
-                write_text(
-                    md5_path,
-                    json.dumps(
-                        {"inc": cur_inc, "ss": cur_ss},
-                        ensure_ascii=False,
-                        sort_keys=True,
-                    ),
-                    enc="utf-8",
-                )
         ok = True
     except Exception as e:
         msg = str(e) if e is not None else ""
