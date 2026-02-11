@@ -94,18 +94,11 @@ class FormTable:
         s._auto_prop_code = 0
 
     def _load_system_forms(s):
-        forms = (
-            getattr(C, "SYSTEM_FORM_DEFS", None)
-            or getattr(C, "FORM_DEF_LIST", None)
-            or []
-        )
+        forms = getattr(C, "_FORM_CODE", {})
+        if isinstance(forms, dict):
+            forms = forms.keys()
         for it in forms:
-            if isinstance(it, (list, tuple)) and len(it) >= 1:
-                name = _form_name(it[0])
-            elif isinstance(it, dict):
-                name = _form_name(it.get("name"))
-            else:
-                name = None
+            name = _form_name(it)
             if name:
                 s.f.setdefault(name, {})
 
