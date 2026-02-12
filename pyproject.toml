@@ -7,7 +7,7 @@ name = "siglus-scene-script-utility"
 version = "0.1.1"
 description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.14"
 authors = [
     { name = "Jirehlov" }
 ]
@@ -21,7 +21,7 @@ dev = [
     "maturin>=1.11.5",
     "pytest>=8.3.5",
     "ruff>=0.14.11",
-    "pillow",
+    "pillow>=12.1.1",
 ]
 
 [tool.maturin]
