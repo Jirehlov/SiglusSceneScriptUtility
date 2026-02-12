@@ -116,8 +116,16 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         z_label_list = _read_i32_list(
             blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
         )
+        read_flag_lines = _read_i32_list(
+            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+        )
         dis = disam.disassemble_scn_bytes(
-            scn, str_list, label_list, z_label_list, h.get("read_flag_cnt", 0)
+            scn,
+            str_list,
+            label_list,
+            z_label_list,
+            h.get("read_flag_cnt", 0),
+            read_flag_lines,
         )
         if (not dis) or ("CD_EOF" not in dis[-1]):
             print(
@@ -210,8 +218,16 @@ def _dat_disassembly_components(blob):
         z_label_list = _read_i32_list(
             blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
         )
+        read_flag_lines = _read_i32_list(
+            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+        )
         dis = disam.disassemble_scn_bytes(
-            scn, str_list, label_list, z_label_list, h.get("read_flag_cnt", 0)
+            scn,
+            str_list,
+            label_list,
+            z_label_list,
+            h.get("read_flag_cnt", 0),
+            read_flag_lines,
         )
         return (h, str_list, label_list, z_label_list, dis)
     except Exception:

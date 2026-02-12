@@ -132,7 +132,14 @@ def _escape_preview(s):
 
 
 def disassemble_scn_bytes(
-    scn, str_list, label_list, z_label_list=None, read_flag_cnt=None, *, lossless=False
+    scn,
+    str_list,
+    label_list,
+    z_label_list=None,
+    read_flag_cnt=None,
+    read_flag_lines=None,
+    *,
+    lossless=False,
 ):
     z_label_list = z_label_list or []
     form_rev = _invert_form_code_map()
@@ -175,6 +182,11 @@ def disassemble_scn_bytes(
     FM_OBJECT_CODE = int(
         (getattr(C, "_FORM_CODE", {}) or {}).get("object", 1310) or 1310
     )
+    known_forms = set()
+    try:
+        known_forms = {int(x) for x in form_rev.keys()}
+    except Exception:
+        known_forms = set()
     ELM_ARRAY = int(getattr(C, "ELM_ARRAY", -1))
     labels_at = {}
     try:
@@ -194,6 +206,18 @@ def disassemble_scn_bytes(
     except Exception:
         pass
     elm_map, elm_multi = _build_system_element_map()
+    cmd_rf_exclude_ec = set()
+    try:
+        for e in (
+            getattr(C, "ELM_GLOBAL_COLOR", None),
+            getattr(C, "ELM_GLOBAL_RUBY", None),
+            getattr(C, "ELM_GLOBAL_R", None),
+        ):
+            if e is None:
+                continue
+            cmd_rf_exclude_ec.add(int(e))
+    except Exception:
+        cmd_rf_exclude_ec = set()
 
     def fmt_form(f):
         try:
@@ -492,6 +516,106 @@ def disassemble_scn_bytes(
         v = read_i32_le(scn, p, default=None)
         return v
 
+    def _probe_ok(pos, max_ops=5):
+        p = int(pos)
+        for _ in range(max_ops):
+            op0 = read_u8(p)
+            if op0 is None:
+                return False
+            p += 1
+            if op0 == getattr(C, "CD_EOF", 22):
+                return True
+            if op0 in (
+                getattr(C, "CD_NONE", 0),
+                getattr(C, "CD_PROPERTY", 5),
+                getattr(C, "CD_COPY_ELM", 6),
+                getattr(C, "CD_ELM_POINT", 8),
+                getattr(C, "CD_ARG", 9),
+                getattr(C, "CD_SEL_BLOCK_START", 51),
+                getattr(C, "CD_SEL_BLOCK_END", 52),
+            ):
+                continue
+            if op0 in (
+                getattr(C, "CD_NL", 1),
+                getattr(C, "CD_POP", 3),
+                getattr(C, "CD_COPY", 4),
+                getattr(C, "CD_GOTO", 16),
+                getattr(C, "CD_GOTO_TRUE", 17),
+                getattr(C, "CD_GOTO_FALSE", 18),
+                getattr(C, "CD_TEXT", 49),
+            ):
+                v = read_i32(p)
+                if v is None:
+                    return False
+                if op0 in (getattr(C, "CD_POP", 3), getattr(C, "CD_COPY", 4)):
+                    if int(v) not in known_forms:
+                        return False
+                if op0 == getattr(C, "CD_NL", 1) and (int(v) < 0 or int(v) > 10000000):
+                    return False
+                p += 4
+                continue
+            if op0 == getattr(C, "CD_PUSH", 2):
+                f = read_i32(p)
+                v = read_i32(p + 4)
+                if f is None or v is None:
+                    return False
+                if int(f) not in known_forms:
+                    return False
+                p += 8
+                continue
+            if op0 == getattr(C, "CD_RETURN", 21):
+                h = read_i32(p)
+                if h is None:
+                    return False
+                p += 4
+                if int(h) != 0:
+                    f = read_i32(p)
+                    if f is None or int(f) not in known_forms:
+                        return False
+                    p += 4
+                continue
+            return True
+        return True
+
+    def _will_hit_text_rf(pos, target_rf, line_no):
+        p = int(pos)
+        lim = min(len(scn), p + 0x120)
+        ln_ref = None
+        try:
+            ln_ref = int(line_no) if line_no is not None else None
+        except Exception:
+            ln_ref = None
+        while p < lim:
+            op0 = read_u8(p)
+            if op0 is None:
+                return False
+            p += 1
+            if op0 == getattr(C, "CD_NL", 1):
+                ln = read_i32(p)
+                if ln is None:
+                    return False
+                p += 4
+                if ln_ref is not None and int(ln) != ln_ref:
+                    return False
+                continue
+            if op0 == getattr(C, "CD_TEXT", 49):
+                v = read_i32(p)
+                return v is not None and int(v) == int(target_rf)
+            # quick-skip fixed-size opcodes to improve scan fidelity
+            if op0 in (
+                getattr(C, "CD_POP", 3),
+                getattr(C, "CD_COPY", 4),
+                getattr(C, "CD_GOTO", 16),
+                getattr(C, "CD_GOTO_TRUE", 17),
+                getattr(C, "CD_GOTO_FALSE", 18),
+            ):
+                p += 4
+                continue
+            if op0 == getattr(C, "CD_PUSH", 2):
+                p += 8
+                continue
+        return False
+
     def _emit_db(ofs, data, note=None):
         if not data:
             return
@@ -522,6 +646,11 @@ def disassemble_scn_bytes(
     stack = []
     elm_points = []
     elm_point_pending_idx = None
+    read_flags_seen = []
+    try:
+        rf_lines = [int(x) for x in (read_flag_lines or [])]
+    except Exception:
+        rf_lines = []
 
     def stack_pop():
         if stack:
@@ -641,7 +770,7 @@ def disassemble_scn_bytes(
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
-            out.append("%08X: %s %d" % (ofs, opname, int(v)))
+            out.append("%08X: %s %s" % (ofs, opname, fmt_form(v)))
             continue
         if op in (
             getattr(C, "CD_PROPERTY", 5),
@@ -806,13 +935,6 @@ def disassemble_scn_bytes(
             continue
         if op == getattr(C, "CD_TEXT", 49):
             rf = read_i32(i)
-            rb = int.from_bytes(scn[i : i + 4], "big")
-            if not lossless:
-                rf = (
-                    rb
-                    if rf is not None and (rf < 0 or rf > 0xFFFF) and rb <= 0xFFFF
-                    else rf
-                )
             if rf is None:
                 out.append("%08X: %s <truncated>" % (ofs, opname))
                 if lossless:
@@ -825,6 +947,7 @@ def disassemble_scn_bytes(
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     txt = ' ; "%s"' % _escape_preview(str_list[int(sid)])
             out.append("%08X: %s read_flag=%d%s" % (ofs, opname, int(rf), txt))
+            read_flags_seen.append((ofs, int(rf)))
             stack_pop()
             continue
         if op == getattr(C, "CD_NAME", 50):
@@ -901,20 +1024,6 @@ def disassemble_scn_bytes(
                 break
             i += 4
             trf = None
-            if read_flag_cnt and i + 4 < len(scn):
-                rf0 = read_i32(i)
-                if rf0 is not None and 0 <= int(rf0) < int(read_flag_cnt):
-                    if i + 9 <= len(scn) and scn[i + 4] == getattr(C, "CD_POP", 3):
-                        trf = int(rf0)
-                        i += 4
-                    elif (
-                        i + 22 <= len(scn) and scn[i + 4] == 0x20 and scn[i + 5] == 0x0D
-                    ):
-                        trf = int(rf0)
-                        if lossless:
-                            _emit_db(i + 4, scn[i + 4 : i + 22], "CD_COMMAND tail")
-                        i += 22
-            rf_s = (" read_flag=%d" % trf) if trf is not None else ""
             element_code = None
             weak_ec = False
             try:
@@ -990,6 +1099,42 @@ def disassemble_scn_bytes(
             ename = _resolve_ename(
                 element_code, argc, arg_forms, ret_form, named_cnt, stack
             )
+            qname = ""
+            try:
+                qname = (ename or "").strip()
+                if qname:
+                    qname = qname.split(" ", 1)[0]
+                    qname = qname.split("{", 1)[0].strip()
+            except Exception:
+                qname = ""
+
+            if (
+                read_flag_cnt
+                and i + 4 <= len(scn)
+                and (element_code is None or int(element_code) not in cmd_rf_exclude_ec)
+                and qname not in {"global.color", "global.ruby", "global.r"}
+            ):
+                next_rf = len(read_flags_seen)
+                rf0 = read_i32(i)
+                line_ok = True
+                if rf_lines and next_rf < len(rf_lines):
+                    line_ok = cur_line == rf_lines[next_rf]
+                if (
+                    rf0 is not None
+                    and 0 <= int(rf0) < int(read_flag_cnt)
+                    and int(rf0) == next_rf
+                    and line_ok
+                ):
+                    next_op = read_u8(i + 4)
+                    if (
+                        next_op != getattr(C, "CD_TEXT", 49)
+                        and (not _will_hit_text_rf(i + 4, next_rf, cur_line))
+                        and _probe_ok(i + 4)
+                    ):
+                        trf = int(rf0)
+                        read_flags_seen.append((i, trf))
+                        i += 4
+            rf_s = (" read_flag=%d" % trf) if trf is not None else ""
             ec_s = (" ec=%s" % hx(element_code)) if element_code is not None else ""
             hint_s = ""
             try:
@@ -1075,7 +1220,5 @@ def disassemble_scn_bytes(
             out.append("%08X: %s" % (ofs, opname))
             break
         out.append("%08X: %s (unknown)" % (ofs, opname))
-        if lossless:
-            _emit_db(i, scn[i:], "unparsed tail")
-        break
+        continue
     return out
