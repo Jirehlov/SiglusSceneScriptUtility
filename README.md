@@ -46,3 +46,7 @@ If you type something in a `.ss` file that would break tokenization, wrap it in 
 Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle, which is expected but not guaranteed to be there. In rare cases, simply an initial seed can't fully reproduce the shuffle. My guess for the reason of this is that it's a result of incremental compilation (we have this, too, the --tmp option), which made the file order different.
 
 
+## TODOs
+
+1.Support element list for Flix builds.
+2.GUI or WebUI supports.
