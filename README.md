@@ -17,6 +17,19 @@ Run the following command in the project root to build the Rust extension and sy
 uv sync
 ```
 
+## Features
+
+1. Compilation of `.pck` files.
+
+2. Analysis and extraction of `.pck`, `.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`, `.g00`, `.nwa`, `ovk`, `owp`, `.omv` files.
+
+3. Disassemble `.dat` files.
+
+4. Textmapping for translators.
+
+5. Koe collector by character names.
+
+
 ## Usage
 
 You can use the `siglus-ssu` command directly through `uv run`:
@@ -49,4 +62,5 @@ Some official builds shuffled their strings with a magical initial seed. If you 
 ## TODOs
 
 1.Support element list for Flix builds.
+
 2.GUI or WebUI supports.
