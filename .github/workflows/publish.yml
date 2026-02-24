@@ -1,15 +1,7 @@
 name: Build wheels & publish to PyPI
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      target:
-        description: "Publish target"
-        type: choice
-        options: [testpypi, pypi]
-        default: testpypi
 
 jobs:
   wheels-windows:
@@ -17,14 +9,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: "3.12" } # 仅用于运行 cibuildwheel
+        with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (win32 + win_amd64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_WINDOWS: "x86 AMD64"
-          # 32-bit Windows 需要启用 i686 目标（官方建议）
           CIBW_BEFORE_ALL_WINDOWS: "rustup target add i686-pc-windows-msvc"
       - uses: actions/upload-artifact@v4
         with: { name: dist-windows, path: wheelhouse/*.whl }
@@ -50,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Build wheels (manylinux x86_64 only)
+      - name: Build wheels (manylinux x86_64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
@@ -72,7 +63,8 @@ jobs:
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_LINUX: "aarch64"
-          CIBW_BEFORE_ALL_LINUX: "curl -sSf https://sh.rustup.rs | sh -s -- -y"
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_BEFORE_ALL_LINUX: "curl -sSfL https://sh.rustup.rs | sh -s -- -y"
           CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
       - uses: actions/upload-artifact@v4
         with: { name: dist-linux-arm64, path: wheelhouse/*.whl }
@@ -117,21 +109,14 @@ jobs:
       - wheels-macos-arm64
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Trusted Publishing 必需
+      id-token: write
       contents: read
+    environment: pypi
     steps:
       - uses: actions/download-artifact@v4
         with: { path: dist, merge-multiple: true }
 
       - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: dist
-
-      - name: Publish to TestPyPI
-        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
           packages-dir: dist
