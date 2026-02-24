@@ -26,7 +26,7 @@ try:
         native_accel, "find_shuffle_seed_first", None
     )
     _USE_NATIVE = True
-except ImportError, AttributeError:
+except (ImportError, AttributeError):
     _USE_NATIVE = False
     _native_lzss_pack_level = None
     _native_msvcrand_shuffle_inplace = None
