@@ -65,23 +65,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: dist-linux, path: wheelhouse/*.whl }
 
-  wheels-linux-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - name: Build wheels (manylinux aarch64)
-        uses: pypa/cibuildwheel@v3.3.1
-        env:
-          CIBW_BUILD: "cp312-* cp313-* cp314-*"
-          CIBW_ARCHS_LINUX: "aarch64"
-          CIBW_SKIP: "*-musllinux_*"
-          CIBW_BEFORE_ALL_LINUX: "curl -sSfL https://sh.rustup.rs | sh -s -- -y"
-          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
-      - uses: actions/upload-artifact@v4
-        with: { name: dist-linux-arm64, path: wheelhouse/*.whl }
-
   wheels-macos-intel:
     runs-on: macos-15-intel
     steps:
@@ -118,7 +101,6 @@ jobs:
       - wheels-windows
       - wheels-windows-arm64
       - wheels-linux
-      - wheels-linux-arm64
       - wheels-macos-intel
       - wheels-macos-arm64
     runs-on: ubuntu-latest

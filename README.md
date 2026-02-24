@@ -10,7 +10,7 @@ This utility aims to reproduce compilation of SceneScripts of SiglusEngine as ex
 pip install siglus-ssu
 ```
 
-After installing from pip, you **must** run `init` once to download the required `const.py` at runtime:
+After installing from PyPI, you **must** run `init` once to download the required `const.py` at runtime:
 
 ```bash
 siglus-ssu init
@@ -50,7 +50,7 @@ uv sync
 
 ## Usage
 
-If you installed via pip, you can run the command directly:
+If you installed via PyPI, you can run the command directly:
 
 ```bash
 siglus-ssu --help
@@ -89,14 +89,3 @@ Some official builds shuffled their strings with a magical initial seed. If you 
 1.Support element list for Flix builds.
 
 2.GUI or WebUI supports.
-
-
-## Changelog
-
-### v0.1.7
-
-Published.
-
-### v0.1.8
-
-Minimum Python version is set to 3.12 .
