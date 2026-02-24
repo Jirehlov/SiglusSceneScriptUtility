@@ -4,6 +4,19 @@ on:
   workflow_dispatch:
 
 jobs:
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build sdist
+        run: |
+          python -m pip install -U build
+          python -m build --sdist
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-sdist, path: dist/*.tar.gz }
+
   wheels-windows:
     runs-on: windows-latest
     steps:
@@ -14,7 +27,7 @@ jobs:
       - name: Build wheels (win32 + win_amd64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_WINDOWS: "x86 AMD64"
           CIBW_BEFORE_ALL_WINDOWS: "rustup target add i686-pc-windows-msvc"
       - uses: actions/upload-artifact@v4
@@ -30,7 +43,7 @@ jobs:
       - name: Build wheels (win_arm64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_WINDOWS: "ARM64"
       - uses: actions/upload-artifact@v4
         with: { name: dist-windows-arm64, path: wheelhouse/*.whl }
@@ -44,7 +57,7 @@ jobs:
       - name: Build wheels (manylinux x86_64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_LINUX: "x86_64"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BEFORE_ALL_LINUX: "curl -sSfL https://sh.rustup.rs | sh -s -- -y"
@@ -61,7 +74,7 @@ jobs:
       - name: Build wheels (manylinux aarch64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_LINUX: "aarch64"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BEFORE_ALL_LINUX: "curl -sSfL https://sh.rustup.rs | sh -s -- -y"
@@ -79,7 +92,7 @@ jobs:
       - name: Build wheels (macOS x86_64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_MACOS: "x86_64"
       - uses: actions/upload-artifact@v4
         with: { name: dist-macos-intel, path: wheelhouse/*.whl }
@@ -94,13 +107,14 @@ jobs:
       - name: Build wheels (macOS arm64)
         uses: pypa/cibuildwheel@v3.3.1
         env:
-          CIBW_BUILD: "cp314-*"
+          CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_MACOS: "arm64"
       - uses: actions/upload-artifact@v4
         with: { name: dist-macos-arm64, path: wheelhouse/*.whl }
 
   publish:
     needs:
+      - sdist
       - wheels-windows
       - wheels-windows-arm64
       - wheels-linux
