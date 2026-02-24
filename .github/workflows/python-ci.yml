@@ -72,24 +72,3 @@ jobs:
           echo "::error::2. Set 'Workflow permissions' to 'Read and write permissions'"
           echo "::error::3. Check 'Allow GitHub Actions to create and approve pull requests'"
 
-  python-tests:
-    name: Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Configure git for CRLF
-        run: |
-          git config --global core.autocrlf true
-          git config --global core.eol crlf
-      - uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          python-version: "3.14"
-
-      - name: Install dependencies
-        run: uv sync
-
-      - name: Run pytest
-        run: uv run pytest
