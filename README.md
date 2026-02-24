@@ -4,18 +4,36 @@ This utility aims to reproduce compilation of SceneScripts of SiglusEngine as ex
 
 ## Installation
 
-### 1. Install `uv`
+### Option 1: Install from PyPI
 
-This project uses [uv](https://github.com/astral-sh/uv) for project management. 
+```bash
+pip install siglus-ssu
+```
 
-### 2. Install Rust Toolchain
+After installing from pip, you **must** run `init` once to download the required `const.py` at runtime:
+
+```bash
+siglus-ssu init
+```
+
+### Option 2: Install from source
+
+#### 1. Install `uv`
+
+This project uses [uv](https://github.com/astral-sh/uv) for project management.
+
+#### 2. Install Rust toolchain
+
 You need to install Rust compiler if you need the acceleration by the Rust native extension. Visit [rustup.rs](https://rustup.rs/) and follow the instructions for your platform.
 
-### 3. Setup Project
+#### 3. Setup project
+
 Run the following command in the project root to build the Rust extension and sync dependencies:
+
 ```bash
 uv sync
 ```
+
 
 ## Features
 
@@ -32,23 +50,30 @@ uv sync
 
 ## Usage
 
-You can use the `siglus-ssu` command directly through `uv run`:
+If you installed via pip, you can run the command directly:
 
 ```bash
-# Display help
+siglus-ssu --help
+```
+
+If you are running from source with uv, prefix commands with `uv run`:
+
+```bash
 uv run siglus-ssu --help
 ```
 
 ### Examples for a translator
 
 Extract a given `Scene.pck` to `translation_work` folder.
+
 ```bash
-uv run siglus-ssu -x /path/to/Scene.pck /path/to/translation_work
+siglus-ssu -x /path/to/Scene.pck /path/to/translation_work
 ```
 
 After editing some `.ss` files, you may want to compile them back to a `Scene_translated.pck`.
+
 ```bash
-uv run siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
+siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 ```
 
 
@@ -64,3 +89,9 @@ Some official builds shuffled their strings with a magical initial seed. If you 
 1.Support element list for Flix builds.
 
 2.GUI or WebUI supports.
+
+
+## Changelog
+
+###v0.1.7
+Published.

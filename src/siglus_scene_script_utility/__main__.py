@@ -19,7 +19,7 @@ def _usage(out=None):
     )
     out.write("\n")
     out.write("Modes:\n")
-    out.write("  init          Download required const.py\n")
+    out.write("  init            Download required const.py\n")
     out.write("  -c, --compile   Compile scripts\n")
     out.write(
         "  -x, --extract   Extract .pck or restore Gameexe.ini from Gameexe.dat\n"
@@ -31,6 +31,11 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
+    out.write("\n")
+    out.write("Init mode:\n")
+    out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
+    out.write("    --force, -f   Overwrite existing const.py\n")
+    out.write("    --ref         Git ref (branch/tag/commit), default: main\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
