@@ -20,7 +20,7 @@ jobs:
         with: { python-version: "3.12" } # 仅用于运行 cibuildwheel
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (win32 + win_amd64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_WINDOWS: "x86 AMD64"
@@ -37,7 +37,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (win_arm64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_WINDOWS: "ARM64"
@@ -51,7 +51,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Build wheels (manylinux i686 + x86_64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_LINUX: "i686 x86_64"
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
       - name: Build wheels (manylinux aarch64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_LINUX: "aarch64"
@@ -85,7 +85,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (macOS x86_64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_MACOS: "x86_64"
@@ -100,7 +100,7 @@ jobs:
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (macOS arm64)
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v3.3.1
         env:
           CIBW_BUILD: "cp314-*"
           CIBW_ARCHS_MACOS: "arm64"
