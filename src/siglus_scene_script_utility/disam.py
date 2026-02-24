@@ -601,7 +601,7 @@ def disassemble_scn_bytes(
             if op0 == getattr(C, "CD_TEXT", 49):
                 v = read_i32(p)
                 return v is not None and int(v) == int(target_rf)
-            # quick-skip fixed-size opcodes to improve scan fidelity
+
             if op0 in (
                 getattr(C, "CD_POP", 3),
                 getattr(C, "CD_COPY", 4),

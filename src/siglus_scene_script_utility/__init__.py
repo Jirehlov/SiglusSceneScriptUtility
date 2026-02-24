@@ -1,5 +1,9 @@
-"""
-SiglusEngine scene script utility for compiling/extracting scripts and data.
-"""
+__version__ = "0.1.6"
 
-__version__ = "0.1.2"
+try:
+    from ._const_manager import const_exists, load_const_module
+
+    if const_exists():
+        load_const_module()
+except Exception:
+    pass

@@ -1,0 +1,137 @@
+name: Build wheels & publish to PyPI
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Publish target"
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+jobs:
+  wheels-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" } # 仅用于运行 cibuildwheel
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build wheels (win32 + win_amd64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_WINDOWS: "x86 AMD64"
+          # 32-bit Windows 需要启用 i686 目标（官方建议）
+          CIBW_BEFORE_ALL_WINDOWS: "rustup target add i686-pc-windows-msvc"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-windows, path: wheelhouse/*.whl }
+
+  wheels-windows-arm64:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build wheels (win_arm64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_WINDOWS: "ARM64"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-windows-arm64, path: wheelhouse/*.whl }
+
+  wheels-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build wheels (manylinux i686 + x86_64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_LINUX: "i686 x86_64"
+          # manylinux 容器里需要装 Rust（官方建议）
+          CIBW_BEFORE_ALL_LINUX: "curl -sSf https://sh.rustup.rs | sh -s -- -y"
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-linux, path: wheelhouse/*.whl }
+
+  wheels-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build wheels (manylinux aarch64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_LINUX: "aarch64"
+          CIBW_BEFORE_ALL_LINUX: "curl -sSf https://sh.rustup.rs | sh -s -- -y"
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-linux-arm64, path: wheelhouse/*.whl }
+
+  wheels-macos-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build wheels (macOS x86_64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_MACOS: "x86_64"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-macos-intel, path: wheelhouse/*.whl }
+
+  wheels-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build wheels (macOS arm64)
+        uses: pypa/cibuildwheel@v2
+        env:
+          CIBW_BUILD: "cp314-*"
+          CIBW_ARCHS_MACOS: "arm64"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-macos-arm64, path: wheelhouse/*.whl }
+
+  publish:
+    needs:
+      - wheels-windows
+      - wheels-windows-arm64
+      - wheels-linux
+      - wheels-linux-arm64
+      - wheels-macos-intel
+      - wheels-macos-arm64
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Trusted Publishing 必需
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+
+      - name: Publish to PyPI
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+
+      - name: Publish to TestPyPI
+        if: github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist

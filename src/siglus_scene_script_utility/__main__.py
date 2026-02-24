@@ -11,7 +11,7 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
     out.write("\n")
     out.write("Options:\n")
     out.write(
@@ -19,6 +19,7 @@ def _usage(out=None):
     )
     out.write("\n")
     out.write("Modes:\n")
+    out.write("  init          Download required const.py\n")
     out.write("  -c, --compile   Compile scripts\n")
     out.write(
         "  -x, --extract   Extract .pck or restore Gameexe.ini from Gameexe.dat\n"
@@ -127,7 +128,7 @@ def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
+    out.write(f"usage: {p} [-h] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -152,6 +153,49 @@ def main(argv=None):
         _usage()
         return 0
     mode = argv[0]
+
+    if mode in ("init", "--init"):
+        from ._const_manager import download_const, load_const_module
+
+        force = False
+        ref = "main"
+        it = iter(argv[1:])
+        for a in it:
+            if a in ("--force", "-f"):
+                force = True
+            elif a == "--ref":
+                try:
+                    ref = next(it)
+                except StopIteration:
+                    sys.stderr.write(f"{_prog()}: --ref requires a value\n")
+                    return 2
+            elif a in ("-h", "--help", "help"):
+                sys.stdout.write(f"usage: {_prog()} init [--force] [--ref <git-ref>]\n")
+                return 0
+            else:
+                sys.stderr.write(f"{_prog()}: unknown init option: {a}\n")
+                return 2
+
+        try:
+            path = download_const(ref=ref, force=force)
+            load_const_module(path)
+        except Exception as e:
+            sys.stderr.write(f"{_prog()}: init failed: {e}\n")
+            return 1
+
+        sys.stdout.write(f"const.py installed at: {path}\n")
+        return 0
+
+    try:
+        from ._const_manager import _const_path, load_const_module
+
+        load_const_module()
+    except Exception:
+        p = _const_path()
+        sys.stderr.write(
+            f"{_prog()}: const.py is missing. Run '{_prog()} init' first. Expected at: {p}\n"
+        )
+        return 2
 
     if mode in ("-c", "--compile"):
         from . import compiler

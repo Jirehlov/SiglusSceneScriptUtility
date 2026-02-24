@@ -82,8 +82,8 @@ wheels = [
 ]
 
 [[package]]
-name = "siglus-scene-script-utility"
-version = "0.1.2"
+name = "siglus-ssu"
+version = "0.1.6"
 source = { editable = "." }
 
 [package.dev-dependencies]
@@ -97,7 +97,7 @@ dev = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "maturin", specifier = ">=1.11.5" },
+    { name = "maturin", specifier = ">=1.12.4" },
     { name = "pillow", specifier = ">=12.1.1" },
-    { name = "ruff", specifier = ">=0.14.11" },
+    { name = "ruff", specifier = ">=0.15.2" },
 ]
