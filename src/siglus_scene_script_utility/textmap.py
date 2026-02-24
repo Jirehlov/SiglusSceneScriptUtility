@@ -13,13 +13,14 @@ from .common import (
     eprint,
     hint_help as _hint_help,
     decode_text_auto,
-    _read_i32_pairs,
-    _read_i32_list,
     _max_pair_end,
     _decode_utf16le_strings,
     iter_files_by_ext,
     is_named_filename,
     ANGOU_DAT_NAME,
+    _read_struct_list,
+    _I32_PAIR_STRUCT,
+    _I32_STRUCT,
 )
 
 
@@ -230,8 +231,7 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
             continue
         if entry["text"] != original:
             eprint(
-                "textmap: %s: skip index %d (text mismatch: '%s' vs '%s')"
-                % (filename, int(entry.get("index", 0) or 0), entry["text"], original),
+                f"textmap: {filename}: skip index {int(entry.get('index', 0) or 0):d} (text mismatch: '{entry['text']}' vs '{original}')",
                 errors="replace",
             )
             continue
@@ -257,8 +257,7 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         rel_found = line_text.find(original, rel_start)
         if rel_found < 0:
             eprint(
-                "textmap: %s: original not found at line %d order %d"
-                % (filename, line_no, int(entry.get("order", 0) or 0)),
+                f"textmap: {filename}: original not found at line {line_no:d} order {int(entry.get('order', 0) or 0):d}",
                 errors="replace",
             )
             continue
@@ -322,8 +321,11 @@ def _parse_scn_dat(blob: bytes):
         h = meta.get("header") or {}
     except Exception:
         return None
-    idx_pairs = _read_i32_pairs(
-        blob, h.get("str_index_list_ofs", 0), h.get("str_index_cnt", 0)
+    idx_pairs = _read_struct_list(
+        blob,
+        h.get("str_index_list_ofs", 0),
+        h.get("str_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     if int(h.get("str_index_cnt", 0) or 0) and not idx_pairs:
         return None
@@ -347,23 +349,27 @@ def _parse_scn_dat(blob: bytes):
     if so >= 0 and ss > 0 and so + ss <= len(blob):
         scn_bytes = blob[so : so + ss]
     out_scn = {"scn_bytes": scn_bytes, "str_sort_index": order}
-    out_scn["label_list"] = _read_i32_list(
-        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0)
+    out_scn["label_list"] = _read_struct_list(
+        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
     )
-    out_scn["z_label_list"] = _read_i32_list(
-        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
+    out_scn["z_label_list"] = _read_struct_list(
+        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
     )
-    out_scn["cmd_label_list"] = _read_i32_pairs(
-        blob, h.get("cmd_label_list_ofs", 0), h.get("cmd_label_cnt", 0)
+    out_scn["cmd_label_list"] = _read_struct_list(
+        blob,
+        h.get("cmd_label_list_ofs", 0),
+        h.get("cmd_label_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
-    out_scn["scn_prop_list"] = _read_i32_pairs(
-        blob, h.get("scn_prop_list_ofs", 0), h.get("scn_prop_cnt", 0)
+    out_scn["scn_prop_list"] = _read_struct_list(
+        blob, h.get("scn_prop_list_ofs", 0), h.get("scn_prop_cnt", 0), _I32_PAIR_STRUCT
     )
 
-    spn_idx = _read_i32_pairs(
+    spn_idx = _read_struct_list(
         blob,
         h.get("scn_prop_name_index_list_ofs", 0),
         h.get("scn_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + _max_pair_end(spn_idx) * 2
     spn_list = (
@@ -380,14 +386,15 @@ def _parse_scn_dat(blob: bytes):
     out_scn["scn_prop_name_index_list"] = spn_idx
     out_scn["scn_prop_name_list"] = spn_list
 
-    out_scn["scn_cmd_list"] = _read_i32_list(
-        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0)
+    out_scn["scn_cmd_list"] = _read_struct_list(
+        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
     )
 
-    scn_idx = _read_i32_pairs(
+    scn_idx = _read_struct_list(
         blob,
         h.get("scn_cmd_name_index_list_ofs", 0),
         h.get("scn_cmd_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + _max_pair_end(scn_idx) * 2
     scn_list = (
@@ -404,10 +411,11 @@ def _parse_scn_dat(blob: bytes):
     out_scn["scn_cmd_name_index_list"] = scn_idx
     out_scn["scn_cmd_name_list"] = scn_list
 
-    cpn_idx = _read_i32_pairs(
+    cpn_idx = _read_struct_list(
         blob,
         h.get("call_prop_name_index_list_ofs", 0),
         h.get("call_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + _max_pair_end(cpn_idx) * 2
     cpn_list = (
@@ -424,11 +432,11 @@ def _parse_scn_dat(blob: bytes):
     out_scn["call_prop_name_index_list"] = cpn_idx
     out_scn["call_prop_name_list"] = cpn_list
 
-    out_scn["namae_list"] = _read_i32_list(
-        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0)
+    out_scn["namae_list"] = _read_struct_list(
+        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
     )
-    out_scn["read_flag_list"] = _read_i32_list(
-        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+    out_scn["read_flag_list"] = _read_struct_list(
+        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
     )
     return str_list, out_scn
 
@@ -465,8 +473,7 @@ def _apply_disam_map(str_list, rows, filename: str = ""):
             continue
         if str_list[idx] != original:
             eprint(
-                "textmap: %s: skip index %d (text mismatch: '%s' vs '%s')"
-                % (filename, idx, str_list[idx], original),
+                f"textmap: {filename}: skip index {idx:d} (text mismatch: '{str_list[idx]}' vs '{original}')",
                 errors="replace",
             )
             continue

@@ -32,7 +32,7 @@ def _parse(blob, want_payload=True):
         return out
     out["offsets"] = tuple(int(x) for x in offs)
     if int(out["cnt"]) > 256:
-        out["warnings"].append("cnt>256 (%d)" % int(out["cnt"]))
+        out["warnings"].append(f"cnt>256 ({int(out['cnt']):d})")
     if not want_payload:
         return out
     curves = []
@@ -42,7 +42,7 @@ def _parse(blob, want_payload=True):
         if of == 0:
             continue
         if of < 0 or of + _SUB_HDR_SIZE + 768 > n:
-            out["warnings"].append("bad offset[%d]=%d" % (i, of))
+            out["warnings"].append(f"bad offset[{i:d}]={of:d}")
             continue
         typ = int(read_i32_le(blob, of + 0, default=-1) or -1)
         dsz = int(read_i32_le(blob, of + 4, default=0) or 0)
@@ -51,7 +51,7 @@ def _parse(blob, want_payload=True):
             keep = tuple(int(x) for x in keep)
         except Exception:
             keep = (0,) * 14
-            out["warnings"].append("bad keep at %s" % hx(of))
+            out["warnings"].append(f"bad keep at {hx(of)}")
         p = of + _SUB_HDR_SIZE
         r = bytes(blob[p : p + 256])
         g = bytes(blob[p + 256 : p + 512])
@@ -61,9 +61,9 @@ def _parse(blob, want_payload=True):
             if p + 772 <= n:
                 sat = int(read_i32_le(blob, p + 768, default=0) or 0)
             else:
-                out["warnings"].append("truncated sat at %s" % hx(p + 768))
+                out["warnings"].append(f"truncated sat at {hx(p + 768)}")
         elif typ != _TONE:
-            out["warnings"].append("unknown type %d at %s" % (typ, hx(of)))
+            out["warnings"].append(f"unknown type {typ:d} at {hx(of)}")
         curves.append(
             {
                 "no": i,
@@ -84,20 +84,20 @@ def _parse(blob, want_payload=True):
 def tcr(blob: bytes, path: str = None) -> int:
     info = _parse(blob, want_payload=True)
     print("==== TCR Meta ====")
-    print("max: %d" % int(info.get("max") or 0))
-    print("cnt: %d" % int(info.get("cnt") or 0))
-    print("header_size: %d" % _HDR_SIZE)
+    print(f"max: {int(info.get('max') or 0):d}")
+    print(f"cnt: {int(info.get('cnt') or 0):d}")
+    print(f"header_size: {_HDR_SIZE:d}")
     nz = 0
     try:
         nz = sum(1 for x in (info.get("offsets") or ()) if int(x) != 0)
     except Exception:
         nz = 0
-    print("offset_nonzero_0_255: %d" % int(nz))
+    print(f"offset_nonzero_0_255: {int(nz):d}")
     for w in info.get("warnings") or []:
-        print("warning: %s" % w)
+        print(f"warning: {w}")
     if not info.get("ok"):
         for e in info.get("errors") or []:
-            print("error: %s" % e)
+            print(f"error: {e}")
         return 1
     print("")
     print("==== TCR Payload ====")
@@ -114,8 +114,7 @@ def tcr(blob: bytes, path: str = None) -> int:
             else ("RGB_SAT" if typ == _RGB_SAT else "UNKNOWN")
         )
         print(
-            "[%03d] offset=%d type=%d(%s) data_size=%d sat=%d"
-            % (i, of, typ, tn, dsz, sat)
+            f"[{i:03d}] offset={of:d} type={typ:d}({tn}) data_size={dsz:d} sat={sat:d}"
         )
         print("keep: " + ",".join(str(int(x)) for x in keep))
         r = c.get("r") or b""
@@ -134,17 +133,17 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
 
     def _d(k, x, y):
         if x != y:
-            diffs.append("%s: %r -> %r" % (k, x, y))
+            diffs.append(f"{k}: {x!r} -> {y!r}")
 
     _d("max", int(a.get("max") or 0), int(b.get("max") or 0))
     _d("cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
     oa = a.get("offsets") or ()
     ob = b.get("offsets") or ()
     if len(oa) != len(ob):
-        diffs.append("offsets_len: %d -> %d" % (len(oa), len(ob)))
+        diffs.append(f"offsets_len: {len(oa):d} -> {len(ob):d}")
     for i in range(min(len(oa), len(ob))):
         if int(oa[i]) != int(ob[i]):
-            diffs.append("offset[%d]: %d -> %d" % (i, int(oa[i]), int(ob[i])))
+            diffs.append(f"offset[{i:d}]: {int(oa[i]):d} -> {int(ob[i]):d}")
             if len(diffs) > 5000:
                 break
     ma = {int(c.get("no") or 0): c for c in (a.get("curves") or [])}
@@ -155,17 +154,17 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
         if ca is None and cb is None:
             continue
         if ca is None:
-            diffs.append("curve[%03d]: <missing> -> present" % i)
+            diffs.append(f"curve[{i:03d}]: <missing> -> present")
             continue
         if cb is None:
-            diffs.append("curve[%03d]: present -> <missing>" % i)
+            diffs.append(f"curve[{i:03d}]: present -> <missing>")
             continue
         for k in ("type", "data_size", "sat", "keep"):
             if ca.get(k) != cb.get(k):
-                diffs.append("curve[%03d].%s: %r -> %r" % (i, k, ca.get(k), cb.get(k)))
+                diffs.append(f"curve[{i:03d}].{k}: {ca.get(k)!r} -> {cb.get(k)!r}")
         for k in ("r", "g", "b"):
             if (ca.get(k) or b"") != (cb.get(k) or b""):
-                diffs.append("curve[%03d].%s: different" % (i, k))
+                diffs.append(f"curve[{i:03d}].{k}: different")
         if len(diffs) > 5000:
             break
 
@@ -176,5 +175,5 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
     for d in diffs[:5000]:
         print(d)
     if len(diffs) > 5000:
-        print("... (%d diffs omitted)" % (len(diffs) - 5000))
+        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
     return 0

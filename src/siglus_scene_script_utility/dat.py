@@ -10,8 +10,9 @@ from .common import (
     hx,
     _fmt_ts,
     _sha1,
-    _read_i32_pairs,
-    _read_i32_list,
+    _I32_STRUCT,
+    _I32_PAIR_STRUCT,
+    _read_struct_list,
     _max_pair_end,
     _decode_utf16le_strings,
     _add_gap_sections,
@@ -70,7 +71,7 @@ def _unique_out_path(path):
             return path
         root, ext = os.path.splitext(path)
         for i in range(1, 1000):
-            p = "%s.%d%s" % (root, i, ext)
+            p = f"{root}.{i:d}{ext}"
             if not os.path.exists(p):
                 return p
         return path
@@ -90,7 +91,7 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
             out_dir = os.path.dirname(str(dat_path)) or "."
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None
-        if len(blob) < getattr(C, "_SCN_HDR_SIZE", 0):
+        if len(blob) < getattr(C, "SCN_HDR_SIZE", 0):
             return None
         secs, meta = _dat_sections(blob)
         h = meta.get("header") or {}
@@ -99,8 +100,11 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         if so < 0 or ss <= 0 or so + ss > len(blob):
             return None
         scn = blob[so : so + ss]
-        str_idx = _read_i32_pairs(
-            blob, h.get("str_index_list_ofs", 0), h.get("str_index_cnt", 0)
+        str_idx = _read_struct_list(
+            blob,
+            h.get("str_index_list_ofs", 0),
+            h.get("str_index_cnt", 0),
+            _I32_PAIR_STRUCT,
         )
         str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
         str_list = (
@@ -110,14 +114,14 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
             if str_idx
             else []
         )
-        label_list = _read_i32_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0)
+        label_list = _read_struct_list(
+            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
         )
-        z_label_list = _read_i32_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
+        z_label_list = _read_struct_list(
+            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
         )
-        read_flag_lines = _read_i32_list(
-            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+        read_flag_lines = _read_struct_list(
+            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
         )
         dis = disam.disassemble_scn_bytes(
             scn,
@@ -129,8 +133,7 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         )
         if (not dis) or ("CD_EOF" not in dis[-1]):
             print(
-                "Disassembly of %s ended unexpectedly."
-                % os.path.basename(str(dat_path))
+                f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly."
             )
         out_name = os.path.basename(str(dat_path)) + ".txt"
         out_path = os.path.join(str(out_dir), out_name)
@@ -138,37 +141,37 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         out_path = _unique_out_path(out_path)
         lines = []
         lines.append("==== DAT DISASSEMBLY ====")
-        lines.append("file: %s" % dat_path)
-        lines.append("size: %d" % len(blob))
-        lines.append("header_size: %d" % int(h.get("header_size", 0) or 0))
-        lines.append("scn_ofs: %s" % hx(so))
-        lines.append("scn_size: %d" % ss)
-        lines.append("str_cnt: %d" % int(h.get("str_cnt", 0) or 0))
-        lines.append("label_cnt: %d" % int(h.get("label_cnt", 0) or 0))
-        lines.append("z_label_cnt: %d" % int(h.get("z_label_cnt", 0) or 0))
-        lines.append("cmd_label_cnt: %d" % int(h.get("cmd_label_cnt", 0) or 0))
-        lines.append("scn_prop_cnt: %d" % int(h.get("scn_prop_cnt", 0) or 0))
-        lines.append("scn_cmd_cnt: %d" % int(h.get("scn_cmd_cnt", 0) or 0))
-        lines.append("namae_cnt: %d" % int(h.get("namae_cnt", 0) or 0))
-        lines.append("read_flag_cnt: %d" % int(h.get("read_flag_cnt", 0) or 0))
+        lines.append(f"file: {dat_path}")
+        lines.append(f"size: {len(blob):d}")
+        lines.append(f"header_size: {int(h.get('header_size', 0) or 0):d}")
+        lines.append(f"scn_ofs: {hx(so)}")
+        lines.append(f"scn_size: {ss:d}")
+        lines.append(f"str_cnt: {int(h.get('str_cnt', 0) or 0):d}")
+        lines.append(f"label_cnt: {int(h.get('label_cnt', 0) or 0):d}")
+        lines.append(f"z_label_cnt: {int(h.get('z_label_cnt', 0) or 0):d}")
+        lines.append(f"cmd_label_cnt: {int(h.get('cmd_label_cnt', 0) or 0):d}")
+        lines.append(f"scn_prop_cnt: {int(h.get('scn_prop_cnt', 0) or 0):d}")
+        lines.append(f"scn_cmd_cnt: {int(h.get('scn_cmd_cnt', 0) or 0):d}")
+        lines.append(f"namae_cnt: {int(h.get('namae_cnt', 0) or 0):d}")
+        lines.append(f"read_flag_cnt: {int(h.get('read_flag_cnt', 0) or 0):d}")
         lines.append("")
         lines.append("---- str_list (xor utf16le) ----")
         for i, s in enumerate(str_list or []):
-            lines.append("[%d] %s" % (i, repr(s)))
+            lines.append(f"[{i:d}] {repr(s)}")
         lines.append("")
         lines.append("---- label_list ----")
         for i, ofs in enumerate(label_list or []):
             try:
-                lines.append("L%d = %08X" % (i, int(ofs)))
+                lines.append(f"L{i:d} = {int(ofs):08X}")
             except Exception:
-                lines.append("L%d = %r" % (i, ofs))
+                lines.append(f"L{i:d} = {ofs!r}")
         lines.append("")
         lines.append("---- z_label_list ----")
         for i, ofs in enumerate(z_label_list or []):
             try:
-                lines.append("Z%d = %08X" % (i, int(ofs)))
+                lines.append(f"Z{i:d} = {int(ofs):08X}")
             except Exception:
-                lines.append("Z%d = %r" % (i, ofs))
+                lines.append(f"Z{i:d} = {ofs!r}")
         lines.append("")
         lines.append("---- scn_bytes disassembly ----")
         lines.extend(dis)
@@ -182,10 +185,10 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
 
 def _dat_disassembly_components(blob):
     try:
-        if not isinstance(blob, (bytes, bytearray)) or len(blob) < C._SCN_HDR_SIZE:
+        if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
             return None
-        vals = struct.unpack_from("<" + "i" * len(C._SCN_HDR_FIELDS), blob, 0)
-        h = {k: int(v) for k, v in zip(C._SCN_HDR_FIELDS, vals)}
+        vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), blob, 0)
+        h = {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
         so = h.get("scn_ofs", 0)
         ss = h.get("scn_size", 0)
         if not (
@@ -199,8 +202,11 @@ def _dat_disassembly_components(blob):
         scn = blob[so : so + ss]
         str_list = []
         try:
-            str_idx = _read_i32_pairs(
-                blob, h.get("str_index_list_ofs", 0), h.get("str_index_cnt", 0)
+            str_idx = _read_struct_list(
+                blob,
+                h.get("str_index_list_ofs", 0),
+                h.get("str_index_cnt", 0),
+                _I32_PAIR_STRUCT,
             )
             str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
             str_list = (
@@ -212,14 +218,14 @@ def _dat_disassembly_components(blob):
             )
         except Exception:
             str_list = []
-        label_list = _read_i32_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0)
+        label_list = _read_struct_list(
+            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
         )
-        z_label_list = _read_i32_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0)
+        z_label_list = _read_struct_list(
+            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
         )
-        read_flag_lines = _read_i32_list(
-            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0)
+        read_flag_lines = _read_struct_list(
+            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
         )
         dis = disam.disassemble_scn_bytes(
             scn,
@@ -253,8 +259,8 @@ def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
         print("scn_bytes disassembly: identical (ignoring offsets)")
         return
     print("---- scn_bytes disassembly diff (ignoring offsets) ----")
-    print("--- %s" % name1)
-    print("+++ %s" % name2)
+    print(f"--- {name1}")
+    print(f"+++ {name2}")
     sm = difflib.SequenceMatcher(None, a, b)
     opcodes = [op for op in sm.get_opcodes() if op[0] != "equal"]
     if not opcodes:
@@ -275,7 +281,7 @@ def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
             else:
                 hunks.append([ha1, ha2, hb1, hb2])
     for ha1, ha2, hb1, hb2 in hunks:
-        print("@@ -%d,%d +%d,%d @@" % (ha1 + 1, ha2 - ha1, hb1 + 1, hb2 - hb1))
+        print(f"@@ -{ha1 + 1:d},{ha2 - ha1:d} +{hb1 + 1:d},{hb2 - hb1:d} @@")
         suba = a[ha1:ha2]
         subb = b[hb1:hb2]
         sm2 = difflib.SequenceMatcher(None, suba, subb)
@@ -286,35 +292,35 @@ def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
                     la = ha1 + i1 + p + 1
                     lb = hb1 + j1 + p + 1
                     txt = suba[i1 + p]
-                    print("  %5d %5d | %s" % (la, lb, txt))
+                    print(f"  {la:5d} {lb:5d} | {txt}")
             elif tag == "replace":
                 for p in range(i1, i2):
                     la = ha1 + p + 1
-                    print("- %5d %5s | %s" % (la, "", suba[p]))
+                    print(f"- {la:5d} {'':5s} | {suba[p]}")
                 for p in range(j1, j2):
                     lb = hb1 + p + 1
-                    print("+ %5s %5d | %s" % ("", lb, subb[p]))
+                    print(f"+ {'':5s} {lb:5d} | {subb[p]}")
             elif tag == "delete":
                 for p in range(i1, i2):
                     la = ha1 + p + 1
-                    print("- %5d %5s | %s" % (la, "", suba[p]))
+                    print(f"- {la:5d} {'':5s} | {suba[p]}")
             elif tag == "insert":
                 for p in range(j1, j2):
                     lb = hb1 + p + 1
-                    print("+ %5s %5d | %s" % ("", lb, subb[p]))
+                    print(f"+ {'':5s} {lb:5d} | {subb[p]}")
         print("")
 
 
 def _looks_like_dat(blob):
-    if (not blob) or len(blob) < C._SCN_HDR_SIZE:
+    if (not blob) or len(blob) < C.SCN_HDR_SIZE:
         return False
     try:
-        vals = struct.unpack_from("<" + "i" * len(C._SCN_HDR_FIELDS), blob, 0)
+        vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), blob, 0)
     except Exception:
         return False
-    h = {k: int(v) for k, v in zip(C._SCN_HDR_FIELDS, vals)}
+    h = {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
     hs = h.get("header_size", 0)
-    if hs < C._SCN_HDR_SIZE or hs > len(blob):
+    if hs < C.SCN_HDR_SIZE or hs > len(blob):
         return False
     so = h.get("scn_ofs", 0)
     ss = h.get("scn_size", 0)
@@ -334,12 +340,15 @@ def _dat_sections(blob):
         return hs
 
     h, hs, used, secs, sec, sec_fixed = build_sections(
-        blob, C._SCN_HDR_FIELDS, C._SCN_HDR_SIZE, _validate_header_size
+        blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE, _validate_header_size
     )
 
     sec(0, hs, "H", "scene_header")
-    str_idx = _read_i32_pairs(
-        blob, h.get("str_index_list_ofs", 0), h.get("str_index_cnt", 0)
+    str_idx = _read_struct_list(
+        blob,
+        h.get("str_index_list_ofs", 0),
+        h.get("str_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
     sec_fixed(
@@ -386,10 +395,11 @@ def _dat_sections(blob):
         "p",
         "scn_prop_name_index_list",
     )
-    spn_idx = _read_i32_pairs(
+    spn_idx = _read_struct_list(
         blob,
         h.get("scn_prop_name_index_list_ofs", 0),
         h.get("scn_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     spn_end = h.get("scn_prop_name_list_ofs", 0) + _max_pair_end(spn_idx) * 2
     if h.get("scn_prop_name_list_ofs", 0) > 0 and spn_end > h.get(
@@ -410,10 +420,11 @@ def _dat_sections(blob):
         "k",
         "scn_cmd_name_index_list",
     )
-    scn_idx = _read_i32_pairs(
+    scn_idx = _read_struct_list(
         blob,
         h.get("scn_cmd_name_index_list_ofs", 0),
         h.get("scn_cmd_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     scn_end = h.get("scn_cmd_name_list_ofs", 0) + _max_pair_end(scn_idx) * 2
     if h.get("scn_cmd_name_list_ofs", 0) > 0 and scn_end > h.get(
@@ -427,10 +438,11 @@ def _dat_sections(blob):
         "q",
         "call_prop_name_index_list",
     )
-    cpn_idx = _read_i32_pairs(
+    cpn_idx = _read_struct_list(
         blob,
         h.get("call_prop_name_index_list_ofs", 0),
         h.get("call_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     cpn_end = h.get("call_prop_name_list_ofs", 0) + _max_pair_end(cpn_idx) * 2
     if h.get("call_prop_name_list_ofs", 0) > 0 and cpn_end > h.get(
@@ -477,59 +489,48 @@ def _dat_sections(blob):
 
 
 def dat(path, blob: bytes) -> int:
-    if len(blob) < getattr(C, "_SCN_HDR_SIZE", 0):
+    if len(blob) < getattr(C, "SCN_HDR_SIZE", 0):
         print("too small for dat header")
         return 1
     secs, meta = _dat_sections(blob)
     h = meta.get("header") or {}
     print("header:")
-    print("  header_size=%d" % h.get("header_size", 0))
-    print("  scn_ofs=%s  scn_size=%d" % (hx(h.get("scn_ofs", 0)), h.get("scn_size", 0)))
+    print(f"  header_size={h.get('header_size', 0):d}")
+    print(f"  scn_ofs={hx(h.get('scn_ofs', 0))}  scn_size={h.get('scn_size', 0):d}")
     print("counts:")
     print(
-        "  str_cnt=%d  label_cnt=%d  z_label_cnt=%d  cmd_label_cnt=%d"
-        % (
-            h.get("str_cnt", 0),
-            h.get("label_cnt", 0),
-            h.get("z_label_cnt", 0),
-            h.get("cmd_label_cnt", 0),
-        )
+        f"  str_cnt={h.get('str_cnt', 0):d}  label_cnt={h.get('label_cnt', 0):d}  z_label_cnt={h.get('z_label_cnt', 0):d}  cmd_label_cnt={h.get('cmd_label_cnt', 0):d}"
     )
     print(
-        "  scn_prop_cnt=%d  scn_cmd_cnt=%d"
-        % (h.get("scn_prop_cnt", 0), h.get("scn_cmd_cnt", 0))
+        f"  scn_prop_cnt={h.get('scn_prop_cnt', 0):d}  scn_cmd_cnt={h.get('scn_cmd_cnt', 0):d}"
     )
     print(
-        "  namae_cnt=%d  read_flag_cnt=%d"
-        % (h.get("namae_cnt", 0), h.get("read_flag_cnt", 0))
+        f"  namae_cnt={h.get('namae_cnt', 0):d}  read_flag_cnt={h.get('read_flag_cnt', 0):d}"
     )
     sp = meta.get("scn_prop_names") or []
     if sp:
         pv = sp[: C.MAX_LIST_PREVIEW]
         print(
-            "scn_prop_names (preview): %s"
-            % (", ".join([repr(s) for s in pv]) + (" ..." if len(sp) > len(pv) else ""))
+            f"scn_prop_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(sp) > len(pv) else '')}"
         )
     sc = meta.get("scn_cmd_names") or []
     if sc:
         pv = sc[: C.MAX_LIST_PREVIEW]
         print(
-            "scn_cmd_names (preview): %s"
-            % (", ".join([repr(s) for s in pv]) + (" ..." if len(sc) > len(pv) else ""))
+            f"scn_cmd_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(sc) > len(pv) else '')}"
         )
     cp = meta.get("call_prop_names") or []
     if cp:
         pv = cp[: C.MAX_LIST_PREVIEW]
         print(
-            "call_prop_names (preview): %s"
-            % (", ".join([repr(s) for s in pv]) + (" ..." if len(cp) > len(pv) else ""))
+            f"call_prop_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(cp) > len(pv) else '')}"
         )
     print("")
     _print_sections(secs, len(blob))
     out_txt = _write_dat_disassembly(path, blob)
     if out_txt:
         print("")
-        print("wrote: %s" % out_txt)
+        print(f"wrote: {out_txt}")
     return 0
 
 
@@ -571,16 +572,16 @@ def analyze_gameexe_dat(path):
     import sys
 
     if not os.path.exists(path):
-        sys.stderr.write("not found: %s\n" % path)
+        sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
     st = os.stat(path)
     print("==== Analyze ====")
-    print("file: %s" % path)
+    print(f"file: {path}")
     print("type: gameexe_dat")
-    print("size: %d bytes (%s)" % (len(blob), hx(len(blob))))
-    print("mtime: %s" % _fmt_ts(st.st_mtime))
-    print("sha1: %s" % _sha1(blob))
+    print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
+    print(f"mtime: {_fmt_ts(st.st_mtime)}")
+    print(f"sha1: {_sha1(blob)}")
     print("")
     if not blob or len(blob) < 8:
         print("invalid gameexe.dat: too small")
@@ -599,28 +600,26 @@ def analyze_gameexe_dat(path):
         sys.stderr.write(str(e) + "\n")
         return 1
     print("==== Meta ====")
-    print("header0: %d" % int(hdr0))
-    print("mode: %d" % int(mode))
-    print("payload_size: %d bytes (%s)" % (payload_size, hx(payload_size)))
+    print(f"header0: {int(hdr0):d}")
+    print(f"mode: {int(mode):d}")
+    print(f"payload_size: {payload_size:d} bytes ({hx(payload_size)})")
     if int(mode) != 0:
-        print("exe_el: %s" % ("present" if exe_el else "missing"))
+        print(f"exe_el: {('present' if exe_el else 'missing')}")
     lz0, lz1 = info.get("lzss_header") or (0, 0)
-    print("lzss_header: %d, %d" % (int(lz0), int(lz1)))
+    print(f"lzss_header: {int(lz0):d}, {int(lz1):d}")
     print(
-        "lzss_size: %d bytes (%s)"
-        % (int(info.get("lzss_size", 0) or 0), hx(int(info.get("lzss_size", 0) or 0)))
+        f"lzss_size: {int(info.get('lzss_size', 0) or 0):d} bytes ({hx(int(info.get('lzss_size', 0) or 0))})"
     )
     print(
-        "raw_size: %d bytes (%s)"
-        % (int(info.get("raw_size", 0) or 0), hx(int(info.get("raw_size", 0) or 0)))
+        f"raw_size: {int(info.get('raw_size', 0) or 0):d} bytes ({hx(int(info.get('raw_size', 0) or 0))})"
     )
     if info.get("warning"):
-        print("warning: %s" % info.get("warning"))
+        print(f"warning: {info.get('warning')}")
     print("")
     print("==== Structure ====")
     print("0x00000000: header (<ii>) 8 bytes")
-    print("0x00000008: payload %d bytes" % payload_size)
-    print("0x00000008: lzss_header (<II>) %d, %d" % (int(lz0), int(lz1)))
+    print(f"0x00000008: payload {payload_size:d} bytes")
+    print(f"0x00000008: lzss_header (<II>) {int(lz0):d}, {int(lz1):d}")
     return 0
 
 
@@ -670,7 +669,7 @@ def compare_gameexe_dat(p1, p2):
     for k, v1, v2 in diffs:
         s1 = " | ".join(v1) if v1 else "<missing>"
         s2 = " | ".join(v2) if v2 else "<missing>"
-        print("%s: %s -> %s" % (k, s1, s2))
+        print(f"{k}: {s1} -> {s2}")
     return 0
 
 
@@ -681,7 +680,7 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
     h2 = m2.get("header") or {}
     diffs = [
         _diff_kv(k, h1.get(k), h2.get(k))
-        for k in C._SCN_HDR_FIELDS
+        for k in C.SCN_HDR_FIELDS
         if h1.get(k) != h2.get(k)
     ]
     if diffs:
@@ -703,20 +702,20 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
         sh1 = _sha1(b1[so1 : so1 + ss1])
         sh2 = _sha1(b2[so2 : so2 + ss2])
         same = ss1 == ss2 and sh1 == sh2
-        print("scn_bytes: size1=%d sha1_1=%s" % (ss1, sh1))
-        print("          size2=%d sha1_2=%s" % (ss2, sh2))
-        print("          %s" % ("identical" if same else "different"))
+        print(f"scn_bytes: size1={ss1:d} sha1_1={sh1}")
+        print(f"          size2={ss2:d} sha1_2={sh2}")
+        print(f"          {('identical' if same else 'different')}")
 
     def _cmp_list(title, a, b):
         if a == b:
-            print("%s: identical (%d)" % (title, len(a)))
+            print(f"{title}: identical ({len(a):d})")
             return
-        print("%s: different (len1=%d len2=%d)" % (title, len(a), len(b)))
+        print(f"{title}: different (len1={len(a):d} len2={len(b):d})")
         for i in range(min(12, max(len(a), len(b)))):
             v1 = a[i] if i < len(a) else None
             v2 = b[i] if i < len(b) else None
             if v1 != v2:
-                print("  [%d] %r -> %r" % (i, v1, v2))
+                print(f"  [{i:d}] {v1!r} -> {v2!r}")
 
     _cmp_list(
         "scn_prop_names",
@@ -740,13 +739,13 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
         if out1 or out2:
             print("")
         if out1:
-            print("wrote: %s" % out1)
+            print(f"wrote: {out1}")
         else:
-            print("failed to write: %s.txt" % p1)
+            print(f"failed to write: {p1}.txt")
         if out2:
-            print("wrote: %s" % out2)
+            print(f"wrote: {out2}")
         else:
-            print("failed to write: %s.txt" % p2)
+            print(f"failed to write: {p2}.txt")
 
     if out_dir:
         c1 = _dat_disassembly_components(b1)

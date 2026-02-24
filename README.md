@@ -21,7 +21,7 @@ uv sync
 
 1. Compilation of `.pck` files.
 
-2. Analysis and extraction of `.pck`, `.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`, `.g00`, `.nwa`, `ovk`, `owp`, `.omv` files.
+2. Analysis and extraction of `.pck`, `.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`, `.g00`, `.nwa`, `.ovk`, `.owp`, `.omv` files.
 
 3. Disassemble `.dat` files.
 

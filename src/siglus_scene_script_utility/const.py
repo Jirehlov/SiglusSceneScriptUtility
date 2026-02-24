@@ -2202,7 +2202,7 @@ try:
         tp, parent, form, name, owner, group, code, *rest = it
         if not isinstance(parent, str) or not isinstance(name, str):
             continue
-        k = "ELM_%s_%s" % (_sanitize_ident(parent), _sanitize_ident(name))
+        k = f"ELM_{_sanitize_ident(parent)}_{_sanitize_ident(name)}"
         globals()[k] = create_elm_code(owner, group, code)
 except Exception:
     pass
@@ -2332,11 +2332,6 @@ SCN_HDR_FIELDS = (
 )
 PACK_HDR_SIZE = 92
 SCN_HDR_SIZE = 132
-_PACK_HDR_FIELDS = PACK_HDR_FIELDS
-_PACK_HDR_SIZE = PACK_HDR_SIZE
-_SCN_HDR_FIELDS = SCN_HDR_FIELDS
-_SCN_HDR_SIZE = SCN_HDR_SIZE
-_FIELDS = SCN_HDR_FIELDS
 TPC = bytes.fromhex(
     "8be55dc3a1e030440085c074095f5e33c05b8be55dc38b450c85c075148b55ec83c220526a00e8f528010083c40889450c8b45e46a006a005053ff1534b143008b451085c074058b4dec89088a45f084c07578a1e03044008b7de88b750c85c075448b1dd0b0430085ff763781ff000004006a0076438b45f88d55fc5268000004005650ff152cb143006a05ffd3a1e030440081ef0000040081c60000040085c074c58b5df853e8f4fbffff8b450c83c4045f5e5b8be55dc38b55f88d4dfc51575652ff152cb14300ebd88b45e883c020506a00e8472801008b7de88945f48bf0a1e030440083c40885c075568b1dd0b0430085ff764981ff000004006a0076"
 )

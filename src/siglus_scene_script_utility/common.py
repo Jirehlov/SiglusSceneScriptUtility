@@ -387,8 +387,8 @@ def hx(x):
     if v < 0:
         return "-"
     if v <= 0xFFFFFFFF:
-        return "0x%08X" % v
-    return "0x%X" % v
+        return f"0x{v:08X}"
+    return f"0x{v:X}"
 
 
 def _dn(name, width=None):
@@ -477,7 +477,11 @@ def iter_files_by_ext(root: str, extensions, exclude_names=None, exclude_pred=No
     return sorted(out)
 
 
-def _read_i32_pairs(dat, ofs, cnt):
+_I32_STRUCT = struct.Struct("<i")
+_I32_PAIR_STRUCT = struct.Struct("<2i")
+
+
+def _read_struct_list(dat, ofs, cnt, st: struct.Struct):
     out = []
     try:
         ofs = int(ofs)
@@ -486,30 +490,14 @@ def _read_i32_pairs(dat, ofs, cnt):
         return out
     if ofs < 0 or cnt <= 0:
         return out
-    need = cnt * 8
+    need = cnt * st.size
     if ofs + need > len(dat):
         return out
+    u = st.unpack_from
+    step = st.size
     for i in range(cnt):
-        a, b = struct.unpack_from("<2i", dat, ofs + i * 8)
-        out.append((int(a), int(b)))
-    return out
-
-
-def _read_i32_list(dat, ofs, cnt):
-    out = []
-    try:
-        ofs = int(ofs)
-        cnt = int(cnt)
-    except Exception:
-        return out
-    if ofs < 0 or cnt <= 0:
-        return out
-    need = cnt * 4
-    if ofs + need > len(dat):
-        return out
-    for i in range(cnt):
-        v = struct.unpack_from("<i", dat, ofs + i * 4)[0]
-        out.append(int(v))
+        t = u(dat, ofs + i * step)
+        out.append(int(t[0]) if len(t) == 1 else tuple(int(x) for x in t))
     return out
 
 
@@ -632,9 +620,7 @@ def _print_sections(secs, total):
     w = int(getattr(C, "NAME_W", 40) or 40)
     print("==== Structure (ranges) ====")
     print("%3s  %-10s  %-10s  %10s  %-*s" % ("SYM", "START", "LAST", "SIZE", w, "NAME"))
-    print(
-        "%3s  %-10s  %-10s  %10s  %s" % ("-" * 3, "-" * 10, "-" * 10, "-" * 10, "-" * w)
-    )
+    print(f"{'-' * 3:3s}  {'-' * 10:<10s}  {'-' * 10:<10s}  {'-' * 10:10s}  {'-' * w}")
     for a, b, sym, name in secs:
         print(
             "%3s  %-10s  %-10s  %10d  %-*s"
@@ -645,7 +631,7 @@ def _print_sections(secs, total):
     un = total - cov
     pct = (un / total * 100.0) if total else 0.0
     print("")
-    print("coverage: %d/%d bytes  unused: %d (%.2f%%)" % (cov, total, un, pct))
+    print(f"coverage: {cov:d}/{total:d} bytes  unused: {un:d} ({pct:.2f}%)")
 
 
 def hint_help(out=None) -> None:
@@ -684,4 +670,4 @@ def exe_angou_element(angou_bytes: bytes) -> bytes:
 
 
 def _diff_kv(k, a, b):
-    return "%s: %r -> %r" % (k, a, b)
+    return f"{k}: {a!r} -> {b!r}"

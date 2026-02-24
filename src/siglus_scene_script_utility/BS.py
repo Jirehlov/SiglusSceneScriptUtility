@@ -393,7 +393,9 @@ def _build_scn_dat(plad, out_scn):
         write_i32_le(
             b, int((it.get("line_no", 0) if isinstance(it, dict) else it) or 0)
         )
-    b[0:132] = struct.pack("<" + "i" * 33, *[int(h.get(k, 0)) for k in C._FIELDS])
+    b[0:132] = struct.pack(
+        "<" + "i" * 33, *[int(h.get(k, 0)) for k in C.SCN_HDR_FIELDS]
+    )
     return bytes(b)
 
 

@@ -3,8 +3,8 @@ import sys
 
 
 def _prog():
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
-    return p or "siglus-tool"
+    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
+    return p or "siglus-ssu"
 
 
 def _usage(out=None):

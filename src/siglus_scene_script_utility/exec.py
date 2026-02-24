@@ -28,7 +28,7 @@ def main(argv=None):
     ):
         zlabel = zlabel[1:-1]
     if os.path.basename(ss_name) != ss_name:
-        sys.stderr.write("Invalid scene name: %s\n" % ss_name)
+        sys.stderr.write(f"Invalid scene name: {ss_name}\n")
         return 2
     label = str(zlabel).strip()
     if label.startswith("#"):
@@ -41,7 +41,7 @@ def main(argv=None):
     except Exception:
         label_i = None
     if label_i is None or label_i < 0:
-        sys.stderr.write("Invalid zlabel: %s\n" % zlabel)
+        sys.stderr.write(f"Invalid zlabel: {zlabel}\n")
         return 2
     label = str(label_i)
     ss = ss_name
@@ -76,6 +76,6 @@ def main(argv=None):
                 cwd=engine_dir,
             )
     except Exception as e:
-        sys.stderr.write("Failed to launch engine: %s\n" % e)
+        sys.stderr.write(f"Failed to launch engine: {e}\n")
         return 1
     return 0

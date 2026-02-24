@@ -18,21 +18,21 @@ def _fmt_key_txt(el: bytes) -> str:
     b = bytes(el or b"")
     if len(b) >= 16:
         b = b[:16]
-    return ", ".join("0x%02X" % x for x in b)
+    return ", ".join(f"0x{x:02X}" for x in b)
 
 
 def analyze_angou_dat(path: str) -> int:
     if not os.path.exists(path):
-        sys.stderr.write("not found: %s\n" % path)
+        sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
     st = os.stat(path)
     print("==== Analyze ====")
-    print("file: %s" % path)
+    print(f"file: {path}")
     print("type: angou.dat")
-    print("size: %d bytes (%s)" % (len(blob), hx(len(blob))))
-    print("mtime: %s" % _fmt_ts(st.st_mtime))
-    print("sha1: %s" % _sha1(blob))
+    print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
+    print(f"mtime: {_fmt_ts(st.st_mtime)}")
+    print(f"sha1: {_sha1(blob)}")
     print("")
     try:
         t, _, _ = decode_text_auto(blob)
@@ -42,11 +42,11 @@ def analyze_angou_dat(path: str) -> int:
         except Exception:
             t = ""
     s0 = str((t or "").split("\n", 1)[0]).strip("\r\n")
-    print("angou: %s" % s0)
+    print(f"angou: {s0}")
     mb = s0.encode("cp932", "ignore") if s0 else b""
     exe_el = exe_angou_element(mb) if mb else b""
     if exe_el:
-        print("key.txt: %s" % _fmt_key_txt(exe_el))
+        print(f"key.txt: {_fmt_key_txt(exe_el)}")
     else:
         print("key.txt: ")
     return 0
@@ -83,20 +83,20 @@ def _detect_type(path, blob):
 
 def analyze_file(path, readall=False):
     if not os.path.exists(path):
-        sys.stderr.write("not found: %s\n" % path)
+        sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
     ftype = _detect_type(path, blob)
     st = os.stat(path)
     print("==== Analyze ====")
-    print("file: %s" % path)
-    print("type: %s" % ftype)
-    print("size: %d bytes (%s)" % (len(blob), hx(len(blob))))
-    print("mtime: %s" % _fmt_ts(st.st_mtime))
-    print("sha1: %s" % _sha1(blob))
+    print(f"file: {path}")
+    print(f"type: {ftype}")
+    print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
+    print(f"mtime: {_fmt_ts(st.st_mtime)}")
+    print(f"sha1: {_sha1(blob)}")
     print("")
     if ftype not in SUPPORTED_TYPES:
-        print("unsupported file type for -a mode: %s" % ftype)
+        print(f"unsupported file type for -a mode: {ftype}")
         print("only .pck, .dat, .dbs, .gan, .sav, .cgm and .tcr are supported.")
         return 1
     if ftype == "gan":
@@ -139,15 +139,15 @@ def compare_files(p1, p2):
     t1 = _detect_type(p1, b1)
     t2 = _detect_type(p2, b2)
     print("==== Compare ====")
-    print("file1: %s" % p1)
-    print("file2: %s" % p2)
-    print("type1: %s  size1=%d (%s)" % (t1, len(b1), hx(len(b1))))
-    print("type2: %s  size2=%d (%s)" % (t2, len(b2), hx(len(b2))))
-    print("sha1_1: %s" % _sha1(b1))
-    print("sha1_2: %s" % _sha1(b2))
+    print(f"file1: {p1}")
+    print(f"file2: {p2}")
+    print(f"type1: {t1}  size1={len(b1):d} ({hx(len(b1))})")
+    print(f"type2: {t2}  size2={len(b2):d} ({hx(len(b2))})")
+    print(f"sha1_1: {_sha1(b1)}")
+    print(f"sha1_2: {_sha1(b2)}")
     print("")
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
-        print("unsupported file type for -a mode (type1=%s type2=%s)" % (t1, t2))
+        print(f"unsupported file type for -a mode (type1={t1} type2={t2})")
         print("only .pck, .dat, .dbs, .gan, .sav, .cgm and .tcr are supported.")
         return 1
     if t1 != t2:

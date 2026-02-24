@@ -22,12 +22,6 @@ from .common import (
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
-def _ensure_dir_for_file(p):
-    d = os.path.dirname(p)
-    if d:
-        os.makedirs(d, exist_ok=True)
-
-
 def _glob_sorted_rel(base, pattern):
     hits = glob.glob(os.path.join(base, pattern), recursive=True)
     rels = []
@@ -85,10 +79,10 @@ def _build_inc_data(ctx):
 
 
 def _parse_scn_header(dat):
-    if (not dat) or len(dat) < C._SCN_HDR_SIZE:
+    if (not dat) or len(dat) < C.SCN_HDR_SIZE:
         return {}
-    vals = struct.unpack_from("<" + "i" * len(C._SCN_HDR_FIELDS), dat, 0)
-    return {k: int(v) for k, v in zip(C._SCN_HDR_FIELDS, vals)}
+    vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), dat, 0)
+    return {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
 
 
 def _parse_cmd_labels(dat):
@@ -271,8 +265,8 @@ def _build_pack_bytes(
     original_source_header_size,
     original_source_chunks,
 ):
-    hdr = {k: 0 for k in C._PACK_HDR_FIELDS}
-    hdr["header_size"] = C._PACK_HDR_SIZE
+    hdr = {k: 0 for k in C.PACK_HDR_FIELDS}
+    hdr["header_size"] = C.PACK_HDR_SIZE
     hdr["scn_data_exe_angou_mod"] = int(scn_data_exe_angou_mod)
     hdr["original_source_header_size"] = int(original_source_header_size)
     inc_prop_blob = _pack_inc_props(inc_prop_list)
@@ -281,7 +275,7 @@ def _build_pack_bytes(
     inc_cmd_idx, inc_cmd_name_blob = _build_index_list_for_strings(inc_cmd_name_list)
     scn_name_idx, scn_name_blob = _build_index_list_for_strings(scn_name_list)
     scn_data_idx, scn_data_blob = _build_index_list_for_blobs(scn_data_list)
-    b = bytearray(b"\0" * C._PACK_HDR_SIZE)
+    b = bytearray(b"\0" * C.PACK_HDR_SIZE)
 
     def _push(sec):
         ofs = len(b)
@@ -311,10 +305,10 @@ def _build_pack_bytes(
     for ch in original_source_chunks or []:
         _push(ch)
     struct.pack_into(
-        "<" + "i" * len(C._PACK_HDR_FIELDS),
+        "<" + "i" * len(C.PACK_HDR_FIELDS),
         b,
         0,
-        *[int(hdr[k]) for k in C._PACK_HDR_FIELDS],
+        *[int(hdr[k]) for k in C.PACK_HDR_FIELDS],
     )
     return bytes(b)
 
@@ -458,11 +452,9 @@ def link_pack(ctx):
     )
     if exe_on and out_path_noangou:
         p = os.path.join(out_path_noangou, scene_pck)
-        _ensure_dir_for_file(p)
         write_bytes(p, pack_no)
     if not exe_on:
         p = os.path.join(out_path, scene_pck)
-        _ensure_dir_for_file(p)
         write_bytes(p, pack_no)
         return p
     ang = []
@@ -482,6 +474,5 @@ def link_pack(ctx):
         original_chunks,
     )
     p = os.path.join(out_path, scene_pck)
-    _ensure_dir_for_file(p)
     write_bytes(p, pack_a)
     return p

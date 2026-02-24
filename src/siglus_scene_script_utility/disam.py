@@ -194,7 +194,7 @@ def disassemble_scn_bytes(
             if ofs is None:
                 continue
             o = int(ofs)
-            labels_at.setdefault(o, []).append("L%d" % i)
+            labels_at.setdefault(o, []).append(f"L{i:d}")
     except Exception:
         pass
     try:
@@ -202,7 +202,7 @@ def disassemble_scn_bytes(
             if ofs is None:
                 continue
             o = int(ofs)
-            labels_at.setdefault(o, []).append("Z%d" % i)
+            labels_at.setdefault(o, []).append(f"Z{i:d}")
     except Exception:
         pass
     elm_map, elm_multi = _build_system_element_map()
@@ -224,7 +224,7 @@ def disassemble_scn_bytes(
             fi = int(f)
         except Exception:
             return str(f)
-        return "%s(%d)" % (form_rev.get(fi, "form"), fi)
+        return f"{form_rev.get(fi, 'form')}({fi:d})"
 
     def _call_sig_from_arg_forms(arg_forms):
         sig = []
@@ -334,10 +334,10 @@ def disassemble_scn_bytes(
                     if 999000000 <= vid < 1000000000:
                         vid -= 999000000
                     if 0 <= vid <= 999999999 and 0 <= ch <= 999:
-                        return "KOE(%09d,%03d)" % (vid, ch)
+                        return f"KOE({vid:09d},{ch:03d})"
                     if 0 <= vid <= 999999999:
-                        return "KOE(%09d,%d)" % (vid, ch)
-                    return "KOE(%d,%d)" % (vid, ch)
+                        return f"KOE({vid:09d},{ch:d})"
+                    return f"KOE({vid:d},{ch:d})"
         res = None
         res_l = None
         for a in args:
@@ -425,14 +425,14 @@ def disassemble_scn_bytes(
                         "ef_",
                     )
                 ):
-                    parts.append('"%s"' % _escape_preview(s))
+                    parts.append(f'"{_escape_preview(s)}"')
                     continue
             v = _get_int(a)
             if v is not None:
                 parts.append(str(v))
         if not parts:
-            parts = ['"%s"' % _escape_preview(res)]
-        return "%s(%s)" % (tag, ", ".join(parts))
+            parts = [f'"{_escape_preview(res)}"']
+        return f"{tag}({', '.join(parts)})"
 
     def _sig_exact_match(sig, call_sig):
         if len(sig) != len(call_sig):
@@ -632,13 +632,13 @@ def disassemble_scn_bytes(
                 chunk = b[k * 4 : k * 4 + 4]
                 vals.append(str(int.from_bytes(chunk, "little", signed=True)))
             suffix = (" ; " + str(note)) if note else ""
-            out.append("%08X: DD %s%s" % (base, ", ".join(vals), suffix))
+            out.append(f"{base:08X}: DD {', '.join(vals)}{suffix}")
             base = (base + dd_cnt * 4) & 0xFFFFFFFF
         rem = b[dd_cnt * 4 :]
         if rem:
-            bs = ", ".join("0x%02X" % x for x in rem)
+            bs = ", ".join(f"0x{x:02X}" for x in rem)
             suffix = (" ; " + str(note)) if (note and not dd_cnt) else ""
-            out.append("%08X: DB %s%s" % (base, bs, suffix))
+            out.append(f"{base:08X}: DB {bs}{suffix}")
 
     out = []
     i = 0
@@ -659,18 +659,18 @@ def disassemble_scn_bytes(
     while i < len(scn):
         ofs = i
         if ofs in labels_at:
-            out.append("%08X: <%s>" % (ofs, ",".join(labels_at[ofs])))
+            out.append(f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
         op = read_u8(i)
         if op is None:
             break
         i += 1
-        opname = op_names.get(op, "OP_%02X" % op)
+        opname = op_names.get(op, f"OP_{op:02X}")
         if (
             i + 8 <= len(scn)
             and scn[i + 3] == getattr(C, "CD_POP", 3)
             and scn[i + 4 : i + 8] == b"\x00\x00\x00\x00"
         ):
-            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
             if lossless:
                 _emit_db(i, scn[i : i + 3], "skip")
             i += 3
@@ -681,7 +681,7 @@ def disassemble_scn_bytes(
             and scn[i : i + 3] == b"\x00\x00\x00"
             and scn[i + 16] == getattr(C, "CD_ELM_POINT", 8)
         ):
-            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
             if lossless:
                 _emit_db(i, scn[i : i + 16], "skip")
             i += 16
@@ -693,7 +693,7 @@ def disassemble_scn_bytes(
             and scn[i + 4] == 0x0D
             and scn[i + 21] == getattr(C, "CD_ELM_POINT", 8)
         ):
-            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
             if lossless:
                 _emit_db(i, scn[i : i + 21], "skip")
             i += 21
@@ -704,18 +704,18 @@ def disassemble_scn_bytes(
             and scn[i + 3] == getattr(C, "CD_ELM_POINT", 8)
             and scn[i + 4] == getattr(C, "CD_PUSH", 2)
         ):
-            out.append("%08X: %s (unknown)" % (ofs, "OP_%02X" % op))
+            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
             if lossless:
                 _emit_db(i, scn[i : i + 3], "skip")
             i += 3
             continue
         if op == getattr(C, "CD_NONE", 0):
-            out.append("%08X: %s" % (ofs, opname))
+            out.append(f"{ofs:08X}: {opname}")
             continue
         if op == getattr(C, "CD_NL", 1):
             ln = read_i32(i)
             if ln is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -724,21 +724,21 @@ def disassemble_scn_bytes(
             stack = []
             elm_points = []
             elm_point_pending_idx = None
-            out.append("%08X: %s %d" % (ofs, opname, cur_line))
+            out.append(f"{ofs:08X}: {opname} {cur_line:d}")
             continue
         if op == getattr(C, "CD_PUSH", 2):
             form = read_i32(i)
             val = read_i32(i + 4)
             if form is None or val is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 8
             s = ""
             if int(form) == FM_STR_CODE and 0 <= int(val) < len(str_list or []):
-                s = ' ; "%s"' % _escape_preview(str_list[int(val)])
-            out.append("%08X: %s %s, %d%s" % (ofs, opname, fmt_form(form), int(val), s))
+                s = f' ; "{_escape_preview(str_list[int(val)])}"'
+            out.append(f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
             stack.append({"form": int(form), "val": int(val)})
             if elm_point_pending_idx is not None and int(form) == FM_INT_CODE:
                 try:
@@ -754,23 +754,23 @@ def disassemble_scn_bytes(
         if op == getattr(C, "CD_POP", 3):
             form = read_i32(i)
             if form is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
-            out.append("%08X: %s %s" % (ofs, opname, fmt_form(form)))
+            out.append(f"{ofs:08X}: {opname} {fmt_form(form)}")
             stack_pop()
             continue
         if op == getattr(C, "CD_COPY", 4):
             v = read_i32(i)
             if v is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
-            out.append("%08X: %s %s" % (ofs, opname, fmt_form(v)))
+            out.append(f"{ofs:08X}: {opname} {fmt_form(v)}")
             continue
         if op in (
             getattr(C, "CD_PROPERTY", 5),
@@ -780,7 +780,7 @@ def disassemble_scn_bytes(
             getattr(C, "CD_SEL_BLOCK_START", 51),
             getattr(C, "CD_SEL_BLOCK_END", 52),
         ):
-            out.append("%08X: %s" % (ofs, opname))
+            out.append(f"{ofs:08X}: {opname}")
             if op == getattr(C, "CD_PROPERTY", 5):
                 stack_pop()
                 stack.append({"form": FM_INT_CODE, "val": None})
@@ -797,12 +797,12 @@ def disassemble_scn_bytes(
             a = read_i32(i)
             b = read_i32(i + 4)
             if a is None or b is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 8
-            out.append("%08X: %s %d, %d" % (ofs, opname, int(a), int(b)))
+            out.append(f"{ofs:08X}: {opname} {int(a):d}, {int(b):d}")
             continue
         if op in (
             getattr(C, "CD_GOTO", 16),
@@ -811,7 +811,7 @@ def disassemble_scn_bytes(
         ):
             lid = read_i32(i)
             if lid is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -820,10 +820,10 @@ def disassemble_scn_bytes(
             try:
                 li = int(lid)
                 if 0 <= li < len(label_list or []):
-                    dest = " -> %08X" % int(label_list[li])
+                    dest = f" -> {int(label_list[li]):08X}"
             except Exception:
                 dest = ""
-            out.append("%08X: %s L%d%s" % (ofs, opname, int(lid), dest))
+            out.append(f"{ofs:08X}: {opname} L{int(lid):d}{dest}")
             if op in (getattr(C, "CD_GOTO_TRUE", 17), getattr(C, "CD_GOTO_FALSE", 18)):
                 stack_pop()
             continue
@@ -831,7 +831,7 @@ def disassemble_scn_bytes(
             lid = read_i32(i)
             argc = read_i32(i + 4)
             if lid is None or argc is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -840,7 +840,7 @@ def disassemble_scn_bytes(
             for _k in range(max(0, int(argc))):
                 f = read_i32(i)
                 if f is None:
-                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    out.append(f"{ofs:08X}: {opname} <truncated>")
                     i = len(scn)
                     break
                 i += 4
@@ -849,25 +849,17 @@ def disassemble_scn_bytes(
             try:
                 li = int(lid)
                 if 0 <= li < len(label_list or []):
-                    dest = " -> %08X" % int(label_list[li])
+                    dest = f" -> {int(label_list[li]):08X}"
             except Exception:
                 dest = ""
             out.append(
-                "%08X: %s L%d argc=%d forms=[%s]%s"
-                % (
-                    ofs,
-                    opname,
-                    int(lid),
-                    int(argc),
-                    ", ".join([fmt_form(f) for f in forms]),
-                    dest,
-                )
+                f"{ofs:08X}: {opname} L{int(lid):d} argc={int(argc):d} forms=[{', '.join([fmt_form(f) for f in forms])}]{dest}"
             )
             continue
         if op == getattr(C, "CD_RETURN", 21):
             has_arg = read_i32(i)
             if has_arg is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -876,13 +868,13 @@ def disassemble_scn_bytes(
             if int(has_arg) != 0:
                 form = read_i32(i)
                 if form is None:
-                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    out.append(f"{ofs:08X}: {opname} <truncated>")
                     if lossless:
                         _emit_db(i, scn[i:], "truncated")
                     break
                 i += 4
-                extra = " %s" % fmt_form(form)
-            out.append("%08X: %s %d%s" % (ofs, opname, int(has_arg), extra))
+                extra = f" {fmt_form(form)}"
+            out.append(f"{ofs:08X}: {opname} {int(has_arg):d}{extra}")
             stack = []
             continue
         if op == getattr(C, "CD_ASSIGN", 32):
@@ -890,14 +882,13 @@ def disassemble_scn_bytes(
             b = read_i32(i + 4)
             c = read_i32(i + 8)
             if a is None or b is None or c is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 12
             out.append(
-                "%08X: %s l=%s r=%s al_id=%d"
-                % (ofs, opname, fmt_form(a), fmt_form(b), int(c))
+                f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}"
             )
             stack_pop()
             stack_pop()
@@ -906,12 +897,12 @@ def disassemble_scn_bytes(
             form = read_i32(i)
             opr = read_u8(i + 4)
             if form is None or opr is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 5
-            out.append("%08X: %s %s op=%d" % (ofs, opname, fmt_form(form), int(opr)))
+            out.append(f"{ofs:08X}: {opname} {fmt_form(form)} op={int(opr):d}")
             stack_pop()
             stack.append({"form": int(form), "val": None})
             continue
@@ -920,14 +911,13 @@ def disassemble_scn_bytes(
             fr = read_i32(i + 4)
             opr = read_u8(i + 8)
             if fl is None or fr is None or opr is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
             i += 9
             out.append(
-                "%08X: %s %s, %s op=%d"
-                % (ofs, opname, fmt_form(fl), fmt_form(fr), int(opr))
+                f"{ofs:08X}: {opname} {fmt_form(fl)}, {fmt_form(fr)} op={int(opr):d}"
             )
             stack_pop()
             stack_pop()
@@ -936,7 +926,7 @@ def disassemble_scn_bytes(
         if op == getattr(C, "CD_TEXT", 49):
             rf = read_i32(i)
             if rf is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -945,8 +935,8 @@ def disassemble_scn_bytes(
             if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
-                    txt = ' ; "%s"' % _escape_preview(str_list[int(sid)])
-            out.append("%08X: %s read_flag=%d%s" % (ofs, opname, int(rf), txt))
+                    txt = f' ; "{_escape_preview(str_list[int(sid)])}"'
+            out.append(f"{ofs:08X}: {opname} read_flag={int(rf):d}{txt}")
             read_flags_seen.append((ofs, int(rf)))
             stack_pop()
             continue
@@ -955,15 +945,15 @@ def disassemble_scn_bytes(
             if stack and int(stack[-1].get("form", -1)) == FM_STR_CODE:
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
-                    nm = ' "%s"' % _escape_preview(str_list[int(sid)])
-            out.append("%08X: %s%s" % (ofs, opname, nm))
+                    nm = f' "{_escape_preview(str_list[int(sid)])}"'
+            out.append(f"{ofs:08X}: {opname}{nm}")
             stack_pop()
             continue
         if op == getattr(C, "CD_COMMAND", 48):
             arg_list_id = read_i32(i)
             argc = read_i32(i + 4)
             if arg_list_id is None or argc is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -972,7 +962,7 @@ def disassemble_scn_bytes(
             for _k in range(max(0, int(argc))):
                 f = read_i32(i)
                 if f is None:
-                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    out.append(f"{ofs:08X}: {opname} <truncated>")
                     i = len(scn)
                     break
                 i += 4
@@ -980,7 +970,7 @@ def disassemble_scn_bytes(
                 if f == FM_LIST_CODE:
                     nsub = read_i32(i)
                     if nsub is None:
-                        out.append("%08X: %s <truncated>" % (ofs, opname))
+                        out.append(f"{ofs:08X}: {opname} <truncated>")
                         i = len(scn)
                         break
                     i += 4
@@ -988,7 +978,7 @@ def disassemble_scn_bytes(
                     for _j in range(max(0, int(nsub))):
                         sf = read_i32(i)
                         if sf is None:
-                            out.append("%08X: %s <truncated>" % (ofs, opname))
+                            out.append(f"{ofs:08X}: {opname} <truncated>")
                             i = len(scn)
                             break
                         i += 4
@@ -1000,7 +990,7 @@ def disassemble_scn_bytes(
                 break
             named_cnt = read_i32(i)
             if named_cnt is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -1009,7 +999,7 @@ def disassemble_scn_bytes(
             for _k in range(max(0, int(named_cnt))):
                 ni = read_i32(i)
                 if ni is None:
-                    out.append("%08X: %s <truncated>" % (ofs, opname))
+                    out.append(f"{ofs:08X}: {opname} <truncated>")
                     i = len(scn)
                     break
                 i += 4
@@ -1018,7 +1008,7 @@ def disassemble_scn_bytes(
                 break
             ret_form = read_i32(i)
             if ret_form is None:
-                out.append("%08X: %s <truncated>" % (ofs, opname))
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 if lossless:
                     _emit_db(i, scn[i:], "truncated")
                 break
@@ -1134,8 +1124,8 @@ def disassemble_scn_bytes(
                         trf = int(rf0)
                         read_flags_seen.append((i, trf))
                         i += 4
-            rf_s = (" read_flag=%d" % trf) if trf is not None else ""
-            ec_s = (" ec=%s" % hx(element_code)) if element_code is not None else ""
+            rf_s = (f" read_flag={trf:d}") if trf is not None else ""
+            ec_s = (f" ec={hx(element_code)}") if element_code is not None else ""
             hint_s = ""
             try:
                 res0 = None
@@ -1189,24 +1179,11 @@ def disassemble_scn_bytes(
                 f = int(af0.get("form", 0) or 0)
                 if f == FM_LIST_CODE:
                     af.append(
-                        "list[%s]"
-                        % (",".join([fmt_form(x) for x in (af0.get("sub") or [])]))
+                        f"list[{','.join([fmt_form(x) for x in af0.get('sub') or []])}]"
                     )
                 else:
                     af.append(fmt_form(f))
-            line = "%08X: %s arg_list=%d argc=%d args=[%s] named=%d ret=%s%s%s%s%s" % (
-                ofs,
-                opname,
-                int(arg_list_id),
-                int(argc),
-                ", ".join(af),
-                int(named_cnt),
-                fmt_form(ret_form),
-                rf_s,
-                ec_s,
-                ename,
-                hint_s,
-            )
+            line = f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} argc={int(argc):d} args=[{', '.join(af)}] named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{hint_s}"
             note = _build_decompile_note(stack, argc, ename)
             if note:
                 line += " // " + note
@@ -1217,8 +1194,8 @@ def disassemble_scn_bytes(
                 stack.append({"form": int(ret_form), "val": None})
             continue
         if op == getattr(C, "CD_EOF", 22):
-            out.append("%08X: %s" % (ofs, opname))
+            out.append(f"{ofs:08X}: {opname}")
             break
-        out.append("%08X: %s (unknown)" % (ofs, opname))
+        out.append(f"{ofs:08X}: {opname} (unknown)")
         continue
     return out

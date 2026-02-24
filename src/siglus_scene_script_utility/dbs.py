@@ -222,7 +222,7 @@ def _parse_dbs(m_type: int, data: bytes):
 
     row_calls = []
     if row_cnt:
-        row_calls = list(struct.unpack_from("<%di" % row_cnt, data, row_ofs))
+        row_calls = list(struct.unpack_from(f"<{row_cnt:d}i", data, row_ofs))
 
     col_headers = []
     for i in range(col_cnt):
@@ -257,31 +257,28 @@ def dbs(blob: bytes) -> int:
     try:
         m_type, data = _dbs_unpack(blob)
     except Exception as e:
-        print("dbs: failed to unpack: %s" % (e,))
+        print(f"dbs: failed to unpack: {e}")
         return 1
 
     print("dbs:")
-    print("  m_type=%d  (0=mbcs/shift_jis, nonzero=utf16le)" % int(m_type))
-    print("  packed_bytes=%d" % (len(blob) - 4))
-    print("  unpacked_bytes=%d" % len(data))
-    print("  unpacked_sha1=%s" % _sha1(data))
+    print(f"  m_type={int(m_type):d}  (0=mbcs/shift_jis, nonzero=utf16le)")
+    print(f"  packed_bytes={len(blob) - 4:d}")
+    print(f"  unpacked_bytes={len(data):d}")
+    print(f"  unpacked_sha1={_sha1(data)}")
     try:
         info = _parse_dbs(m_type, data)
     except Exception as e:
-        print("  parse_error=%s" % (e,))
+        print(f"  parse_error={e}")
         return 1
 
     print("  header:")
-    print("    data_size=%d" % info["data_size"])
-    print("    row_cnt=%d  col_cnt=%d" % (info["row_cnt"], info["col_cnt"]))
-    print("    offset_scale=%d" % int(info.get("offset_scale", 1)))
+    print(f"    data_size={info['data_size']:d}")
+    print(f"    row_cnt={info['row_cnt']:d}  col_cnt={info['col_cnt']:d}")
+    print(f"    offset_scale={int(info.get('offset_scale', 1)):d}")
     print(
-        "    row_header_offset=%d  column_header_offset=%d"
-        % (info["row_header_offset"], info["column_header_offset"])
+        f"    row_header_offset={info['row_header_offset']:d}  column_header_offset={info['column_header_offset']:d}"
     )
-    print(
-        "    data_offset=%d  str_offset=%d" % (info["data_offset"], info["str_offset"])
-    )
+    print(f"    data_offset={info['data_offset']:d}  str_offset={info['str_offset']:d}")
 
     rows = info["row_calls"]
     cols = info["col_headers"]
@@ -289,20 +286,20 @@ def dbs(blob: bytes) -> int:
     print("")
     print("rows(call_no) preview:")
     for i, v in enumerate(rows[: C.MAX_LIST_PREVIEW]):
-        print("  [%d] %d" % (i, v))
+        print(f"  [{i:d}] {v:d}")
     if len(rows) > C.MAX_LIST_PREVIEW:
-        print("  ... (%d more)" % (len(rows) - C.MAX_LIST_PREVIEW))
+        print(f"  ... ({len(rows) - C.MAX_LIST_PREVIEW:d} more)")
 
     print("")
     print("columns(call_no, data_type) preview:")
     for i, (cn, dt) in enumerate(cols[: C.MAX_LIST_PREVIEW]):
         ch = chr(dt & 0xFF) if 32 <= (dt & 0xFF) <= 126 else ""
         if ch:
-            print("  [%d] call_no=%d  data_type=%d (%r)" % (i, cn, dt, ch))
+            print(f"  [{i:d}] call_no={cn:d}  data_type={dt:d} ({ch!r})")
         else:
-            print("  [%d] call_no=%d  data_type=%d" % (i, cn, dt))
+            print(f"  [{i:d}] call_no={cn:d}  data_type={dt:d}")
     if len(cols) > C.MAX_LIST_PREVIEW:
-        print("  ... (%d more)" % (len(cols) - C.MAX_LIST_PREVIEW))
+        print(f"  ... ({len(cols) - C.MAX_LIST_PREVIEW:d} more)")
 
     if info["row_cnt"] and info["col_cnt"]:
         print("")
@@ -316,10 +313,10 @@ def dbs(blob: bytes) -> int:
             ch = chr(dt & 0xFF)
             if ch == "S":
                 sv = _dbs_get_str(m_type, sblob, int(v))
-                print("  col_call_no=%d  S[%d] -> %s" % (cn, int(v), repr(sv)))
+                print(f"  col_call_no={cn:d}  S[{int(v):d}] -> {repr(sv)}")
             else:
                 iv = struct.unpack("<i", struct.pack("<I", v))[0]
-                print("  col_call_no=%d  V -> %d" % (cn, iv))
+                print(f"  col_call_no={cn:d}  V -> {iv:d}")
             shown += 1
         if shown == 0:
             print("  (none)")
@@ -331,12 +328,12 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         t1, u1 = _dbs_unpack(b1)
         t2, u2 = _dbs_unpack(b2)
     except Exception as e:
-        print("dbs: unpack failed: %s" % (e,))
+        print(f"dbs: unpack failed: {e}")
         return 1
 
     print("dbs structural compare:")
-    print("  m_type_1=%d  unpacked_sha1_1=%s" % (int(t1), _sha1(u1)))
-    print("  m_type_2=%d  unpacked_sha1_2=%s" % (int(t2), _sha1(u2)))
+    print(f"  m_type_1={int(t1):d}  unpacked_sha1_1={_sha1(u1)}")
+    print(f"  m_type_2={int(t2):d}  unpacked_sha1_2={_sha1(u2)}")
 
     if u1 == u2 and int(t1) == int(t2):
         print("  identical after XOR+LZSS unpack")
@@ -346,7 +343,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         s1 = _parse_dbs(t1, u1)
         s2 = _parse_dbs(t2, u2)
     except Exception as e:
-        print("  parse failed: %s" % (e,))
+        print(f"  parse failed: {e}")
 
         lim = min(len(u1), len(u2), 1024 * 1024)
         first = None
@@ -357,7 +354,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         if first is None and len(u1) != len(u2):
             first = lim
         if first is not None:
-            print("  first_diff_offset=%d" % first)
+            print(f"  first_diff_offset={first:d}")
         return 0
 
     def _hd(k):
@@ -380,7 +377,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         print("")
         print("header diffs:")
         for k, a, b in diffs:
-            print("  %s: %r -> %r" % (k, a, b))
+            print(f"  {k}: {a!r} -> {b!r}")
 
     r1 = s1["row_calls"]
     r2 = s2["row_calls"]
@@ -395,9 +392,9 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         only1 = sorted(list(set1 - set2))[: C.MAX_LIST_PREVIEW]
         only2 = sorted(list(set2 - set1))[: C.MAX_LIST_PREVIEW]
         if only1:
-            print("  only in file1 (preview): %s" % ", ".join([str(x) for x in only1]))
+            print(f"  only in file1 (preview): {', '.join([str(x) for x in only1])}")
         if only2:
-            print("  only in file2 (preview): %s" % ", ".join([str(x) for x in only2]))
+            print(f"  only in file2 (preview): {', '.join([str(x) for x in only2])}")
         if not only1 and not only2:
             print("  (same set, different order)")
 
@@ -414,13 +411,12 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         print("")
         print("column call_no diffs:")
         if only1:
-            print("  only in file1 (preview): %s" % ", ".join([str(x) for x in only1]))
+            print(f"  only in file1 (preview): {', '.join([str(x) for x in only1])}")
         if only2:
-            print("  only in file2 (preview): %s" % ", ".join([str(x) for x in only2]))
+            print(f"  only in file2 (preview): {', '.join([str(x) for x in only2])}")
         if typechg:
             print(
-                "  data_type changed (preview): %s"
-                % ", ".join([str(x) for x in typechg])
+                f"  data_type changed (preview): {', '.join([str(x) for x in typechg])}"
             )
         if (not only1) and (not only2) and (not typechg):
             print("  (same set, different order)")
@@ -436,7 +432,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         total = rc * cc
         limit = min(total, 2_000_000)
         print("")
-        print("cell diffs (scan %d / %d cells):" % (limit, total))
+        print(f"cell diffs (scan {limit:d} / {total:d} cells):")
         dif_cnt = 0
         sblob1 = s1["str_blob"]
         sblob2 = s2["str_blob"]
@@ -456,15 +452,13 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
                     sv1 = _dbs_get_str(t1, sblob1, int(v1))
                     sv2 = _dbs_get_str(t2, sblob2, int(v2))
                     print(
-                        "  r=%d c=%d col_call_no=%d: %r -> %r"
-                        % (r, c, col_call_no, sv1, sv2)
+                        f"  r={r:d} c={c:d} col_call_no={col_call_no:d}: {sv1!r} -> {sv2!r}"
                     )
                 else:
                     iv1 = struct.unpack("<i", struct.pack("<I", v1))[0]
                     iv2 = struct.unpack("<i", struct.pack("<I", v2))[0]
                     print(
-                        "  r=%d c=%d col_call_no=%d: %d -> %d"
-                        % (r, c, col_call_no, iv1, iv2)
+                        f"  r={r:d} c={c:d} col_call_no={col_call_no:d}: {iv1:d} -> {iv2:d}"
                     )
                 dif_cnt += 1
                 if dif_cnt >= 20:
@@ -486,7 +480,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         if first is not None:
             print("")
             print("unpacked byte-level diff:")
-            print("  first_diff_offset=%d" % first)
+            print(f"  first_diff_offset={first:d}")
 
     return 0
 
@@ -532,14 +526,14 @@ def export_dbs_to_csv(path: str) -> int:
 
     if not os.path.isdir(path):
         if not os.path.exists(path):
-            sys.stderr.write("dbs export: file not found: %s\\n" % path)
+            sys.stderr.write(f"dbs export: file not found: {path}\\n")
             return 1
         if not os.path.isfile(path):
-            sys.stderr.write("dbs export: not a file: %s\\n" % path)
+            sys.stderr.write(f"dbs export: not a file: {path}\\n")
             return 1
         if not path.lower().endswith(".dbs"):
             sys.stderr.write(
-                "dbs export: expected a .dbs file (or directory), got: %s\n" % path
+                f"dbs export: expected a .dbs file (or directory), got: {path}\n"
             )
             return 2
 
@@ -562,9 +556,9 @@ def export_dbs_to_csv(path: str) -> int:
             for call_no, dt in info.get("col_headers") or []:
                 ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
                 if ch:
-                    header.append("%d(%s)" % (int(call_no), ch))
+                    header.append(f"{int(call_no):d}({ch})")
                 else:
-                    header.append("%d" % int(call_no))
+                    header.append(f"{int(call_no):d}")
 
             with open(out_fp, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f, lineterminator="\r\n")
@@ -584,16 +578,16 @@ def export_dbs_to_csv(path: str) -> int:
                         row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
                     w.writerow(row)
 
-            sys.stdout.write("Wrote: %s\n" % out_fp)
+            sys.stdout.write(f"Wrote: {out_fp}\n")
         except Exception as e:
             err = 1
-            sys.stderr.write("dbs export failed: %s: %s\n" % (fp, e))
+            sys.stderr.write(f"dbs export failed: {fp}: {e}\n")
 
     if not any_found:
         if os.path.isdir(path):
-            sys.stderr.write("dbs export: no .dbs found under: %s\\n" % path)
+            sys.stderr.write(f"dbs export: no .dbs found under: {path}\\n")
         else:
-            sys.stderr.write("dbs export: no .dbs found: %s\\n" % path)
+            sys.stderr.write(f"dbs export: no .dbs found: {path}\\n")
         return 1
     return err
 
@@ -694,14 +688,14 @@ def apply_dbs_csv(path: str) -> int:
 
     if not os.path.isdir(path):
         if not os.path.exists(path):
-            sys.stderr.write("dbs apply: file not found: %s\\n" % path)
+            sys.stderr.write(f"dbs apply: file not found: {path}\\n")
             return 1
         if not os.path.isfile(path):
-            sys.stderr.write("dbs apply: not a file: %s\\n" % path)
+            sys.stderr.write(f"dbs apply: not a file: {path}\\n")
             return 1
         if not path.lower().endswith(".dbs"):
             sys.stderr.write(
-                "dbs apply: expected a .dbs file (or directory), got: %s\\n" % path
+                f"dbs apply: expected a .dbs file (or directory), got: {path}\\n"
             )
             return 2
 
@@ -712,7 +706,7 @@ def apply_dbs_csv(path: str) -> int:
         csv_path = fp + ".csv"
         if not os.path.isfile(csv_path):
             err = 1
-            sys.stderr.write("dbs apply: missing csv: %s\n" % csv_path)
+            sys.stderr.write(f"dbs apply: missing csv: {csv_path}\n")
             continue
         try:
             blob = read_bytes(fp)
@@ -815,15 +809,15 @@ def apply_dbs_csv(path: str) -> int:
                     new_expanded += b"\x00" * pad
             out_blob = _dbs_pack(m_type, new_expanded)
             write_bytes(fp, out_blob)
-            sys.stdout.write("Applied: %s\n" % fp)
+            sys.stdout.write(f"Applied: {fp}\n")
         except Exception as e:
             err = 1
-            sys.stderr.write("dbs apply failed: %s: %s\n" % (fp, e))
+            sys.stderr.write(f"dbs apply failed: {fp}: {e}\n")
 
     if not any_found:
         if os.path.isdir(path):
-            sys.stderr.write("dbs apply: no .dbs found under: %s\\n" % path)
+            sys.stderr.write(f"dbs apply: no .dbs found under: {path}\\n")
         else:
-            sys.stderr.write("dbs apply: no .dbs found: %s\\n" % path)
+            sys.stderr.write(f"dbs apply: no .dbs found: {path}\\n")
         return 1
     return err

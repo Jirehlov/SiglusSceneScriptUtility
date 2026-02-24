@@ -10,6 +10,7 @@ from .common import (
     hint_help as _hint_help,
     fmt_kv as _fmt_kv,
     iter_files_by_ext,
+    write_bytes,
 )
 from . import sound
 from . import extract
@@ -29,14 +30,6 @@ def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
     except Exception:
         pass
-
-
-def _write_file(path: str, data: bytes) -> None:
-    d = os.path.dirname(path)
-    if d:
-        os.makedirs(d, exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(data)
 
 
 def _analyze_one(path: str) -> int:
@@ -304,12 +297,12 @@ def _extract_one(
                 tmp_dir=tmp_dir,
             )
 
-        _write_file(os.path.join(out_dir, base_name + ".ogg"), ogg)
+        write_bytes(os.path.join(out_dir, base_name + ".ogg"), ogg)
         return 1
 
     if ext == ".nwa":
         wav = sound.decode_nwa_to_wav_bytes(src_path)
-        _write_file(os.path.join(out_dir, base_name + ".wav"), wav)
+        write_bytes(os.path.join(out_dir, base_name + ".wav"), wav)
         return 1
 
     if ext == ".ovk":
@@ -323,7 +316,7 @@ def _extract_one(
                 out_name = f"{base_name}_{entry_no}.ogg"
             else:
                 out_name = f"{base_name}.ogg"
-            _write_file(os.path.join(out_dir, out_name), ogg)
+            write_bytes(os.path.join(out_dir, out_name), ogg)
             wrote += 1
         return wrote
 

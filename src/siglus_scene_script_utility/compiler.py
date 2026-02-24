@@ -215,9 +215,9 @@ def _read_scn_dat_header_bytes(path):
     if len(b) < DAT_HDR_SZ:
         raise ValueError("bad dat header")
     vals = struct.unpack_from("<" + "i" * 33, b, 0)
-    fields = list(getattr(C, "_FIELDS", []) or [])
+    fields = list(getattr(C, "SCN_HDR_FIELDS", []) or [])
     if len(fields) != 33:
-        raise ValueError("bad const._FIELDS")
+        raise ValueError("bad const.SCN_HDR_FIELDS")
     h = {fields[i]: int(vals[i]) for i in range(33)}
     return b, h
 

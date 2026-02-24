@@ -1351,7 +1351,7 @@ def _sa_diff(a, b, p=""):
             r.append(((p + "/len") if p else "len", len(a), len(b)))
         n = min(len(a), len(b))
         for i in range(n):
-            r += _sa_diff(a[i], b[i], p + "[%d]" % i)
+            r += _sa_diff(a[i], b[i], p + f"[{i:d}]")
         return r
     if a != b:
         r.append((p, a, b))

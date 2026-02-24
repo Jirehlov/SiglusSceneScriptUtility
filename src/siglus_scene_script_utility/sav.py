@@ -28,46 +28,31 @@ def _zstr_a(b):
     return s
 
 
-def _dump_payload_full(prefix, v):
+def _dump_payload_full(prefix, v, out=None):
+    def _emit(s: str) -> None:
+        if out is None:
+            print(s)
+        else:
+            out.append(s)
+
     if isinstance(v, dict):
         for kk in sorted(v.keys()):
             np = f"{kk}" if not prefix else f"{prefix}.{kk}"
-            _dump_payload_full(np, v.get(kk))
+            _dump_payload_full(np, v.get(kk), out=out)
         return
     if isinstance(v, (list, tuple)):
         lst = list(v)
-        print(f"{prefix}_cnt: {len(lst)}")
+        _emit(f"{prefix}_cnt: {len(lst)}")
         for i, e in enumerate(lst):
-            _dump_payload_full(f"{prefix}[{i}]", e)
+            _dump_payload_full(f"{prefix}[{i}]", e, out=out)
         return
     if isinstance(v, bytes):
-        print(f"{prefix}: {v.hex()}")
+        _emit(f"{prefix}: {v.hex()}")
         return
     if v is None:
-        print(f"{prefix}: ")
+        _emit(f"{prefix}: ")
         return
-    print(f"{prefix}: {v!s}")
-
-
-def _dump_payload_full_lines(prefix, v, out):
-    if isinstance(v, dict):
-        for kk in sorted(v.keys()):
-            np = f"{kk}" if not prefix else f"{prefix}.{kk}"
-            _dump_payload_full_lines(np, v.get(kk), out)
-        return
-    if isinstance(v, (list, tuple)):
-        lst = list(v)
-        out.append(f"{prefix}_cnt: {len(lst)}")
-        for i, e in enumerate(lst):
-            _dump_payload_full_lines(f"{prefix}[{i}]", e, out)
-        return
-    if isinstance(v, bytes):
-        out.append(f"{prefix}: {v.hex()}")
-        return
-    if v is None:
-        out.append(f"{prefix}: ")
-        return
-    out.append(f"{prefix}: {v!s}")
+    _emit(f"{prefix}: {v!s}")
 
 
 def _tid_ok(y, mo, d, h, mi, s, ms):
@@ -451,7 +436,7 @@ def _read_fixed_int_list(r):
         raise ValueError("bad fixed array")
     r.seek(start + 8)
     data = r._read(cnt * 4)
-    out = list(struct.unpack_from("<%di" % cnt, data, 0)) if cnt else []
+    out = list(struct.unpack_from(f"<{cnt:d}i", data, 0)) if cnt else []
     r.seek(jump)
     return out
 
@@ -893,7 +878,7 @@ def sav(blob, path=None):
                 pp = str(path)
                 txt = os.path.splitext(pp)[0] + ".txt"
                 out = []
-                _dump_payload_full_lines("", p, out)
+                _dump_payload_full("", p, out=out)
                 data = "\r\n".join(out) + "\r\n"
                 with open(txt, "wb") as f:
                     f.write(data.encode("utf-8"))
@@ -911,7 +896,7 @@ def sav(blob, path=None):
                 pp = str(path)
                 txt = os.path.splitext(pp)[0] + ".txt"
                 out = []
-                _dump_payload_full_lines("", p, out)
+                _dump_payload_full("", p, out=out)
                 data = "\r\n".join(out) + "\r\n"
                 with open(txt, "wb") as f:
                     f.write(data.encode("utf-8"))

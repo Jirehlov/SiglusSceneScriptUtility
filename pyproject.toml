@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "siglus-scene-script-utility"
-version = "0.1.1"
+version = "0.1.2"
 description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -19,7 +19,6 @@ siglus-ssu = "siglus_scene_script_utility.__main__:main"
 [dependency-groups]
 dev = [
     "maturin>=1.11.5",
-    "pytest>=8.3.5",
     "ruff>=0.14.11",
     "pillow>=12.1.1",
 ]

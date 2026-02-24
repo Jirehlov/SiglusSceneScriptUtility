@@ -58,7 +58,7 @@ def decode_cgm(blob):
         try:
             payload = lzss_unpack(bytes(body))
         except Exception as e:
-            r["errors"].append("lzss_unpack: %s" % e)
+            r["errors"].append(f"lzss_unpack: {e}")
             return r
     else:
         payload = b""
@@ -105,7 +105,7 @@ def decode_cgm(blob):
     if need != len(payload):
         tail = payload[need:]
         if tail and any(x != 0 for x in tail):
-            r["warnings"].append("nonzero tail: %d" % len(tail))
+            r["warnings"].append(f"nonzero tail: {len(tail):d}")
     r["ok"] = True
     return r
 
@@ -113,42 +113,31 @@ def decode_cgm(blob):
 def cgm(blob, path=None):
     info = decode_cgm(blob)
     print("==== CGM Meta ====")
-    print("head: %s" % (info.get("head") or ""))
-    print("cnt: %d" % int(info.get("cnt") or 0))
-    print("auto_flag: %d" % int(info.get("auto_flag") or 0))
+    print(f"head: {info.get('head') or ''}")
+    print(f"cnt: {int(info.get('cnt') or 0):d}")
+    print(f"auto_flag: {int(info.get('auto_flag') or 0):d}")
     r0, r1 = info.get("rev") or (0, 0)
-    print("rev: %d, %d" % (int(r0), int(r1)))
-    print("packed_size: %d" % int(info.get("packed_size") or 0))
-    print("unpacked_size: %d" % int(info.get("unpacked_size") or 0))
-    print("record_size: %d" % int(info.get("record_size") or 0))
+    print(f"rev: {int(r0):d}, {int(r1):d}")
+    print(f"packed_size: {int(info.get('packed_size') or 0):d}")
+    print(f"unpacked_size: {int(info.get('unpacked_size') or 0):d}")
+    print(f"record_size: {int(info.get('record_size') or 0):d}")
     for w in info.get("warnings") or []:
-        print("warning: %s" % w)
+        print(f"warning: {w}")
     if not info.get("ok"):
         for e in info.get("errors") or []:
-            print("error: %s" % e)
+            print(f"error: {e}")
         return 1
     es = info.get("entries") or []
     print("")
     print("==== CGM Payload ====")
-    print("entry_count: %d" % len(es))
+    print(f"entry_count: {len(es):d}")
     n = getattr(C, "MAX_LIST_PREVIEW", 8)
     for i, (name, flag, cec, codes) in enumerate(es[:n]):
         print(
-            "[%d] flag_no=%d code_exist_cnt=%d code=%d,%d,%d,%d,%d name=%r"
-            % (
-                i,
-                int(flag),
-                int(cec),
-                int(codes[0]),
-                int(codes[1]),
-                int(codes[2]),
-                int(codes[3]),
-                int(codes[4]),
-                name,
-            )
+            f"[{i:d}] flag_no={int(flag):d} code_exist_cnt={int(cec):d} code={int(codes[0]):d},{int(codes[1]):d},{int(codes[2]):d},{int(codes[3]):d},{int(codes[4]):d} name={name!r}"
         )
     if len(es) > n:
-        print("... (%d entries omitted)" % (len(es) - n))
+        print(f"... ({len(es) - n:d} entries omitted)")
     return 0
 
 
@@ -159,7 +148,7 @@ def compare_cgm(b1, b2):
 
     def _d(k, x, y):
         if x != y:
-            diffs.append("%s: %r -> %r" % (k, x, y))
+            diffs.append(f"{k}: {x!r} -> {y!r}")
 
     _d("head", a.get("head"), b.get("head"))
     _d("cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
@@ -168,16 +157,16 @@ def compare_cgm(b1, b2):
     ea = a.get("entries") or []
     eb = b.get("entries") or []
     if len(ea) != len(eb):
-        diffs.append("entry_count: %d -> %d" % (len(ea), len(eb)))
+        diffs.append(f"entry_count: {len(ea):d} -> {len(eb):d}")
     for i in range(max(len(ea), len(eb))):
         if i >= len(ea):
-            diffs.append("entry[%d]: <missing> -> present" % i)
+            diffs.append(f"entry[{i:d}]: <missing> -> present")
             continue
         if i >= len(eb):
-            diffs.append("entry[%d]: present -> <missing>" % i)
+            diffs.append(f"entry[{i:d}]: present -> <missing>")
             continue
         if ea[i] != eb[i]:
-            diffs.append("entry[%d]: %r -> %r" % (i, ea[i], eb[i]))
+            diffs.append(f"entry[{i:d}]: {ea[i]!r} -> {eb[i]!r}")
         if len(diffs) > 5000:
             break
     if not diffs:
@@ -187,5 +176,5 @@ def compare_cgm(b1, b2):
     for d in diffs[:5000]:
         print(d)
     if len(diffs) > 5000:
-        print("... (%d diffs omitted)" % (len(diffs) - 5000))
+        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
     return 0

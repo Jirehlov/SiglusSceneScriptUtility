@@ -80,7 +80,7 @@ def main(argv=None):
         for exe_el in cands:
             try:
                 out_path = GEI.restore_gameexe_ini(in_path, out_dir, exe_el=exe_el)
-                sys.stdout.write("Wrote: %s\n" % out_path)
+                sys.stdout.write(f"Wrote: {out_path}\n")
                 return 0
             except Exception as e:
                 last_err = e
