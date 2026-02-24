@@ -93,5 +93,10 @@ Some official builds shuffled their strings with a magical initial seed. If you 
 
 ## Changelog
 
-###v0.1.7
+### v0.1.7
+
 Published.
+
+### v0.1.8
+
+Minimum Python version is set to 3.12 .

@@ -4,10 +4,10 @@ build-backend = "maturin"
 
 [project]
 name = "siglus-ssu"
-version = "0.1.7"
+version = "0.1.8"
 description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 authors = [
     { name = "Jirehlov" }
 ]
