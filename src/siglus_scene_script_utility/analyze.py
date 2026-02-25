@@ -1,7 +1,18 @@
 import os
 import sys
 
-from .common import hx, _fmt_ts, read_bytes, _sha1, decode_text_auto, exe_angou_element
+from .common import (
+    hx,
+    _fmt_ts,
+    read_bytes,
+    _sha1,
+    decode_text_auto,
+    exe_angou_element,
+    ANGOU_DAT_NAME,
+    find_named_path,
+    find_siglus_engine_exe,
+    siglus_engine_exe_element,
+)
 
 from . import pck
 from . import dat
@@ -22,18 +33,41 @@ def _fmt_key_txt(el: bytes) -> str:
 
 
 def analyze_angou_dat(path: str) -> int:
+    if os.path.isdir(path):
+        p = find_named_path(path, ANGOU_DAT_NAME, recursive=False)
+        if p:
+            return analyze_angou_dat(p)
+        ep = find_siglus_engine_exe(path)
+        if ep:
+            return analyze_angou_dat(ep)
+        sys.stderr.write(
+            f"not found: {os.path.join(path, ANGOU_DAT_NAME)} or SiglusEngine*.exe\n"
+        )
+        return 2
     if not os.path.exists(path):
         sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
     st = os.stat(path)
+    bn = os.path.basename(path or "")
+    cf = bn.casefold()
+    exe_el = b""
+    is_exe = cf.startswith("siglusengine") and cf.endswith(".exe")
+    if is_exe:
+        exe_el = siglus_engine_exe_element(blob)
     print("==== Analyze ====")
     print(f"file: {path}")
-    print("type: angou.dat")
+    print(f"type: {'siglusengine.exe' if is_exe else 'angou.dat'}")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {_fmt_ts(st.st_mtime)}")
     print(f"sha1: {_sha1(blob)}")
     print("")
+    if is_exe:
+        if exe_el:
+            print(f"key.txt: {_fmt_key_txt(exe_el)}")
+            return 0
+        print("key.txt: ")
+        return 1
     try:
         t, _, _ = decode_text_auto(blob)
     except Exception:

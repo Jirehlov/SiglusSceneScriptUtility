@@ -101,7 +101,7 @@ def _usage(out=None):
     out.write(
         f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
-    out.write(f"  {p} -a <path_to_暗号.dat> --angou\n")
+    out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --disam      Write .dat disassembly to __DATDIR__\n")
     out.write(

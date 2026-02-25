@@ -11,6 +11,172 @@ ANGOU_DAT_NAME = "暗号.dat"
 KEY_TXT_NAME = "key.txt"
 
 
+def find_siglus_engine_exe(base_dir: str) -> str:
+    base_dir = _safe_abspath(base_dir)
+    if not base_dir or (not os.path.isdir(base_dir)):
+        return ""
+    try:
+        names = os.listdir(base_dir)
+    except Exception:
+        names = []
+    for fn in names:
+        if str(fn or "").casefold() == "siglusengine.exe":
+            p = os.path.join(base_dir, fn)
+            if os.path.isfile(p):
+                return _safe_abspath(p)
+    cands = []
+    for fn in names:
+        s = str(fn or "")
+        cf = s.casefold()
+        if (not cf.startswith("siglusengine")) or (not cf.endswith(".exe")):
+            continue
+        p = os.path.join(base_dir, fn)
+        if os.path.isfile(p):
+            cands.append(_safe_abspath(p))
+    if not cands:
+        return ""
+    cands.sort(key=lambda p: (len(os.path.basename(p)), os.path.basename(p).casefold()))
+    return cands[0]
+
+
+def _pe32_info(b: bytes):
+    if (not b) or len(b) < 0x100:
+        return None
+    if b[:2] != b"MZ":
+        return None
+    try:
+        e = struct.unpack_from("<I", b, 0x3C)[0]
+    except Exception:
+        return None
+    if e <= 0 or e + 0x18 > len(b):
+        return None
+    if b[e : e + 4] != b"PE\x00\x00":
+        return None
+    try:
+        n = struct.unpack_from("<H", b, e + 6)[0]
+        sz_opt = struct.unpack_from("<H", b, e + 20)[0]
+    except Exception:
+        return None
+    opt = e + 24
+    if opt + sz_opt > len(b):
+        return None
+    try:
+        magic = struct.unpack_from("<H", b, opt)[0]
+    except Exception:
+        return None
+    if magic != 0x10B:
+        return None
+    try:
+        ib = struct.unpack_from("<I", b, opt + 28)[0]
+    except Exception:
+        return None
+    sec_hdr = opt + sz_opt
+    secs = []
+    for i in range(int(n) & 0xFFFF):
+        o = sec_hdr + i * 40
+        if o + 40 > len(b):
+            break
+        try:
+            rva = struct.unpack_from("<I", b, o + 12)[0]
+            rawsz = struct.unpack_from("<I", b, o + 16)[0]
+            rawptr = struct.unpack_from("<I", b, o + 20)[0]
+            chs = struct.unpack_from("<I", b, o + 36)[0]
+        except Exception:
+            continue
+        secs.append(
+            (
+                int(rva) & 0xFFFFFFFF,
+                int(rawptr) & 0xFFFFFFFF,
+                int(rawsz) & 0xFFFFFFFF,
+                int(chs) & 0xFFFFFFFF,
+            )
+        )
+    if not secs:
+        return None
+    return int(ib) & 0xFFFFFFFF, secs
+
+
+def _va2off_pe32(image_base: int, secs, va: int):
+    r = int(va) - int(image_base)
+    for rva, raw, rsz, _chs in secs:
+        if rva <= r < rva + rsz:
+            return int(raw) + (r - int(rva))
+    return None
+
+
+def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
+    info = _pe32_info(exe_bytes)
+    if not info:
+        return b""
+    image_base, secs = info
+    sig = bytes.fromhex("8A 44 0D")
+    tail = bytes.fromhex("8D 52 01 30 42 FF 41")
+    EX = 0x20000000
+    hit_off = None
+    disp = None
+    for _rva, raw, rsz, chs in secs:
+        if not (int(chs) & EX):
+            continue
+        raw = int(raw)
+        rsz = int(rsz)
+        if raw < 0 or rsz <= 0 or raw + rsz > len(exe_bytes):
+            continue
+        x = exe_bytes[raw : raw + rsz]
+        lim = len(x) - 11
+        if lim <= 0:
+            continue
+        for i in range(lim):
+            if x[i : i + 3] == sig and x[i + 4 : i + 11] == tail:
+                hit_off = raw + i
+                disp = struct.unpack("<b", x[i + 3 : i + 4])[0]
+                break
+        if hit_off is not None:
+            break
+    if hit_off is None or disp is None:
+        return b""
+    want = set(range(int(disp), int(disp) + 16))
+    got = {}
+    blob = exe_bytes[max(0, int(hit_off) - 0x800) : int(hit_off)]
+    for i in range(len(blob) - 4):
+        if blob[i] == 0xC6 and blob[i + 1] == 0x45:
+            d = struct.unpack("<b", blob[i + 2 : i + 3])[0]
+            if d in want and d not in got:
+                got[d] = blob[i + 3]
+    for i in range(len(blob) - 3):
+        if blob[i] == 0x88 and blob[i + 1] == 0x45:
+            d = struct.unpack("<b", blob[i + 2 : i + 3])[0]
+            if d not in want or d in got:
+                continue
+            j = i - 1
+            mn = max(-1, i - 0x30)
+            while j > mn:
+                if blob[j] == 0xA0 and j + 5 <= i:
+                    addr = struct.unpack_from("<I", blob, j + 1)[0]
+                    p = _va2off_pe32(image_base, secs, addr)
+                    if p is not None and 0 <= int(p) < len(exe_bytes):
+                        got[d] = exe_bytes[int(p)]
+                        break
+                if blob[j] == 0xB0 and j + 2 <= i:
+                    got[d] = blob[j + 1]
+                    break
+                j -= 1
+    out = []
+    for d in range(int(disp), int(disp) + 16):
+        v = got.get(d)
+        if v is None:
+            return b""
+        out.append(int(v) & 255)
+    return bytes(out)
+
+
+def read_siglus_engine_exe_el(path: str) -> bytes:
+    try:
+        b = read_bytes(path)
+    except Exception:
+        return b""
+    return siglus_engine_exe_element(b)
+
+
 def _safe_abspath(p: str) -> str:
     try:
         return os.path.abspath(str(p or ""))
@@ -236,6 +402,11 @@ def find_exe_el(
     kp = find_named_path(base_dir, KEY_TXT_NAME, recursive=recursive)
     if kp:
         el = read_exe_el_key(kp)
+        if el and len(el) == 16:
+            return el
+    ep = find_siglus_engine_exe(base_dir)
+    if ep:
+        el = read_siglus_engine_exe_el(ep)
         if el and len(el) == 16:
             return el
     return b""

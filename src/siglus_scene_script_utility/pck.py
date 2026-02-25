@@ -31,6 +31,8 @@ from .common import (
     KEY_TXT_NAME,
     read_exe_el_key,
     find_exe_el,
+    find_siglus_engine_exe,
+    read_siglus_engine_exe_el,
 )
 
 MAX_SCENE_LIST = 2000
@@ -867,6 +869,14 @@ def _iter_exe_el_candidates(os_dir: str):
                 yielded = True
                 yield el
 
+    ep = find_siglus_engine_exe(os_dir)
+    if ep:
+        el = read_siglus_engine_exe_el(ep)
+        if el and el not in seen:
+            seen.add(el)
+            yielded = True
+            yield el
+
     try:
         pck = os.path.join(os_dir or ".", "Scene.pck")
         if not os.path.isfile(pck):
@@ -928,13 +938,25 @@ def _iter_exe_el_candidates(os_dir: str):
         return
 
 
-def _compute_exe_el(os_dir: str):
-    el = find_exe_el(os_dir, recursive=True)
-    if el:
-        return el
-    el = _compute_exe_el_from_scene_pck(os_dir)
-    if el:
-        return el
+def _compute_exe_el(os_dir: str, alt_dir: str = ""):
+    dirs = []
+    for d in (os_dir, alt_dir):
+        if not d:
+            continue
+        try:
+            d = os.path.abspath(d)
+        except Exception:
+            d = str(d)
+        if d and d not in dirs:
+            dirs.append(d)
+    for d in dirs:
+        el = find_exe_el(d, recursive=True)
+        if el:
+            return el
+    for d in dirs:
+        el = _compute_exe_el_from_scene_pck(d)
+        if el:
+            return el
     return b""
 
 
@@ -1049,7 +1071,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             sys.stderr.write(f"Warning: failed to extract original sources: {e}\n")
     exe_el = b""
     if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0:
-        exe_el = _compute_exe_el(os_dir)
+        exe_el = _compute_exe_el(os_dir, os.path.dirname(input_pck))
         if not exe_el:
             sys.stderr.write(
                 "Warning: scn_data_exe_angou_mod=1 but 暗号.dat not found/invalid under output folder; scene data may remain encrypted.\n"
