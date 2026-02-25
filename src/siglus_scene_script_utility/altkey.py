@@ -14,7 +14,6 @@ from .common import (
     KEY_TXT_NAME,
     read_siglus_engine_exe_el,
     siglus_engine_exe_element,
-    siglus_engine_exe_el_patch_points,
 )
 
 
@@ -99,14 +98,14 @@ def apply_altkey(input_exe: str, key_bytes: bytes, output_exe: str = "") -> str:
 
     exe_bytes = read_bytes(in_path)
 
-    pts = siglus_engine_exe_el_patch_points(exe_bytes)
-    if not pts:
+    r = siglus_engine_exe_element(exe_bytes, with_patch_points=True)
+    if not r:
         raise ValueError(
             "unable to locate patch points for exe_el (unsupported SiglusEngine.exe build?)"
         )
 
     b = bytearray(exe_bytes)
-    _disp, points = pts
+    _disp, _old_el, points = r
     for i in range(16):
         off, _old = points[i]
         if off < 0 or off >= len(b):

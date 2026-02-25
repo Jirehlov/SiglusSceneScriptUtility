@@ -165,32 +165,24 @@ def _siglus_engine_exe_el_scan(exe_bytes: bytes):
     return disp_i, got
 
 
-def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
+def siglus_engine_exe_element(exe_bytes: bytes, with_patch_points: bool = False):
     r = _siglus_engine_exe_el_scan(exe_bytes)
     if not r:
-        return b""
+        return None if with_patch_points else b""
     disp, got = r
     out = []
-    for d in range(int(disp), int(disp) + 16):
-        v = got.get(d)
-        if not v:
-            return b""
-        out.append(int(v[0]) & 255)
-    return bytes(out)
-
-
-def siglus_engine_exe_el_patch_points(exe_bytes: bytes):
-    r = _siglus_engine_exe_el_scan(exe_bytes)
-    if not r:
-        return None
-    disp, got = r
     points = []
     for d in range(int(disp), int(disp) + 16):
         v = got.get(d)
         if not v:
-            return None
-        points.append((int(v[1]), int(v[0]) & 255))
-    return int(disp), points
+            return None if with_patch_points else b""
+        b = int(v[0]) & 255
+        out.append(b)
+        points.append((int(v[1]), b))
+    exe_el = bytes(out)
+    if with_patch_points:
+        return int(disp), exe_el, points
+    return exe_el
 
 
 def read_siglus_engine_exe_el(path: str) -> bytes:
