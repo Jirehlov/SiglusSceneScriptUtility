@@ -7,13 +7,38 @@ def _prog():
     return p or "siglus-ssu"
 
 
+def _get_version() -> str:
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return _pkg_version("siglus-ssu")
+    except Exception:
+        try:
+            from . import __version__ as _v
+
+            return str(_v)
+        except Exception:
+            return "unknown"
+
+
+def _print_version(out=None) -> None:
+    if out is None:
+        out = sys.stdout
+    p = _prog()
+    out.write(f"{p} {_get_version()}\n")
+
+
 def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
+    out.write(f"{p} {_get_version()}\n")
+    out.write(
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n"
+    )
     out.write("\n")
     out.write("Options:\n")
+    out.write("  -V, --version   Show version and exit\n")
     out.write(
         "  --legacy        Force pure Python implementation (disable Rust accel)\n"
     )
@@ -133,7 +158,10 @@ def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"usage: {p} [-h] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n")
+    out.write(f"{p} {_get_version()}\n")
+    out.write(
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n"
+    )
     out.write(f"Try '{p} --help' for more information.\n")
 
 
@@ -151,7 +179,13 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     argv = _consume_legacy(argv)
-    if not argv or argv[0] in ("-h", "--help", "help"):
+    if argv and argv[0] in ("-V", "--version", "version"):
+        _print_version()
+        return 0
+    if not argv:
+        _usage_short()
+        return 0
+    if argv[0] in ("-h", "--help", "help"):
         _usage()
         return 0
     if len(argv) > 1 and argv[1] in ("-h", "--help", "help"):

@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility
 
-This utility aims to reproduce compilation of SceneScripts of SiglusEngine as exactly as possible, along with other related (and unrelated) features.
+This utility aims to reproduce **SiglusEngine** SceneScript compilation as exactly as possible, along with other related (and unrelated) features.
 
 ## Installation
 
@@ -24,9 +24,9 @@ This project uses [uv](https://github.com/astral-sh/uv) for project management.
 
 #### 2. Install Rust toolchain
 
-You need to install Rust compiler if you need the acceleration by the Rust native extension. Visit [rustup.rs](https://rustup.rs/) and follow the instructions for your platform.
+You need to install a Rust compiler if you want the acceleration provided by the Rust native extension. Visit [rustup.rs](https://rustup.rs/) and follow the instructions for your platform.
 
-#### 3. Setup project
+#### 3. Set up the project
 
 Run the following command in the project root to build the Rust extension and sync dependencies:
 
@@ -34,19 +34,13 @@ Run the following command in the project root to build the Rust extension and sy
 uv sync
 ```
 
-
 ## Features
 
 1. Compilation of `.pck` files.
-
 2. Analysis and extraction of `.pck`, `.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`, `.g00`, `.nwa`, `.ovk`, `.owp`, `.omv` files.
-
 3. Disassemble `.dat` files.
-
 4. Textmapping for translators.
-
 5. Koe collector by character names.
-
 
 ## Usage
 
@@ -64,28 +58,27 @@ uv run siglus-ssu --help
 
 ### Examples for a translator
 
-Extract a given `Scene.pck` to `translation_work` folder.
+Extract a given `Scene.pck` to a `translation_work` folder:
 
 ```bash
 siglus-ssu -x /path/to/Scene.pck /path/to/translation_work
 ```
 
-After editing some `.ss` files, you may want to compile them back to a `Scene_translated.pck`.
+After editing some `.ss` files, compile them back into a `Scene_translated.pck`:
 
 ```bash
 siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 ```
 
-
 ## Tips
 
-If you type something in a `.ss` file that would break tokenization, wrap it in double quotes so it's treated as a literal.
-
-Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though. It won't affect your engine's parsing), set the initial seed with --set-shuffle. If you don't know the seed, try to find it with --test-shuffle, which is expected but not guaranteed to be there. In rare cases, simply an initial seed can't fully reproduce the shuffle. My guess for the reason of this is that it's a result of incremental compilation (we have this, too, the --tmp option), which made the file order different.
-
+- If you type something in a `.ss` file that would break tokenization, wrap it in double quotes so it's treated as a literal.
+- Some official builds shuffled their strings with a magical initial seed. If you want to reproduce the shuffle bit-by-bit (you don't have to, though—it won't affect your engine's parsing), set the initial seed with `--set-shuffle`.
+  - If you don't know the seed, try to find it with `--test-shuffle`, which is expected but not guaranteed to be there.
+  - In rare cases, a single initial seed can't fully reproduce the shuffle. My guess is that this is a result of incremental compilation (we have this too, via the `--tmp` option), which makes the file order different.
+- There is no prebuilt wheel for Termux, so you may need to build the Rust extension by yourself, which is not easy.
 
 ## TODOs
 
-1.Support element list for Flix builds.
-
-2.GUI or WebUI supports.
+1. Support element list for Flix builds.
+2. GUI or WebUI supports.

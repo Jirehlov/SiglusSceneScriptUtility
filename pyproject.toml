@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "siglus-ssu"
-version = "0.1.9"
+version = "0.1.10"
 description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -15,6 +15,10 @@ dependencies = []
 
 [project.scripts]
 siglus-ssu = "siglus_scene_script_utility.__main__:main"
+
+[project.urls]
+Repository = "https://github.com/Jirehlov/SiglusSceneScriptUtility"
+Issues = "https://github.com/Jirehlov/SiglusSceneScriptUtility/issues"
 
 [dependency-groups]
 dev = [
