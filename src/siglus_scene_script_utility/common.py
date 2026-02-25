@@ -104,10 +104,10 @@ def _va2off_pe32(image_base: int, secs, va: int):
     return None
 
 
-def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
+def _siglus_engine_exe_el_scan(exe_bytes: bytes):
     info = _pe32_info(exe_bytes)
     if not info:
-        return b""
+        return None
     image_base, secs = info
     sig = bytes.fromhex("8A 44 0D")
     tail = bytes.fromhex("8D 52 01 30 42 FF 41")
@@ -133,15 +133,17 @@ def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
         if hit_off is not None:
             break
     if hit_off is None or disp is None:
-        return b""
-    want = set(range(int(disp), int(disp) + 16))
+        return None
+    disp_i = int(disp)
+    want = set(range(disp_i, disp_i + 16))
     got = {}
-    blob = exe_bytes[max(0, int(hit_off) - 0x800) : int(hit_off)]
+    blob_start = max(0, int(hit_off) - 0x800)
+    blob = exe_bytes[int(blob_start) : int(hit_off)]
     for i in range(len(blob) - 4):
         if blob[i] == 0xC6 and blob[i + 1] == 0x45:
             d = struct.unpack("<b", blob[i + 2 : i + 3])[0]
             if d in want and d not in got:
-                got[d] = blob[i + 3]
+                got[d] = (int(blob[i + 3]) & 255, int(blob_start) + i + 3)
     for i in range(len(blob) - 3):
         if blob[i] == 0x88 and blob[i + 1] == 0x45:
             d = struct.unpack("<b", blob[i + 2 : i + 3])[0]
@@ -154,19 +156,41 @@ def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
                     addr = struct.unpack_from("<I", blob, j + 1)[0]
                     p = _va2off_pe32(image_base, secs, addr)
                     if p is not None and 0 <= int(p) < len(exe_bytes):
-                        got[d] = exe_bytes[int(p)]
+                        got[d] = (int(exe_bytes[int(p)]) & 255, int(p))
                         break
                 if blob[j] == 0xB0 and j + 2 <= i:
-                    got[d] = blob[j + 1]
+                    got[d] = (int(blob[j + 1]) & 255, int(blob_start) + j + 1)
                     break
                 j -= 1
+    return disp_i, got
+
+
+def siglus_engine_exe_element(exe_bytes: bytes) -> bytes:
+    r = _siglus_engine_exe_el_scan(exe_bytes)
+    if not r:
+        return b""
+    disp, got = r
     out = []
     for d in range(int(disp), int(disp) + 16):
         v = got.get(d)
-        if v is None:
+        if not v:
             return b""
-        out.append(int(v) & 255)
+        out.append(int(v[0]) & 255)
     return bytes(out)
+
+
+def siglus_engine_exe_el_patch_points(exe_bytes: bytes):
+    r = _siglus_engine_exe_el_scan(exe_bytes)
+    if not r:
+        return None
+    disp, got = r
+    points = []
+    for d in range(int(disp), int(disp) + 16):
+        v = got.get(d)
+        if not v:
+            return None
+        points.append((int(v[1]), int(v[0]) & 255))
+    return int(disp), points
 
 
 def read_siglus_engine_exe_el(path: str) -> bytes:

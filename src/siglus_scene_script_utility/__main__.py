@@ -34,7 +34,7 @@ def _usage(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
     )
     out.write("\n")
     out.write("Options:\n")
@@ -56,6 +56,7 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
+    out.write("  -ak, --altkey   Overwrite exe_el key into SiglusEngine.exe\n")
     out.write("\n")
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
@@ -153,6 +154,15 @@ def _usage(out=None):
     out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
     out.write(f"  {p} -v --a <input_file.omv>\n")
 
+    out.write("\n")
+    out.write("Altkey mode:\n")
+    out.write(f"  {p} -ak <input_exe> <input_key> [-o output_exe]\n")
+    out.write("    <input_key> can be either:\n")
+    out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
+    out.write(
+        "      - path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
+    )
+
 
 def _usage_short(out=None):
     if out is None:
@@ -160,7 +170,7 @@ def _usage_short(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
     )
     out.write(f"Try '{p} --help' for more information.\n")
 
@@ -304,6 +314,14 @@ def main(argv=None):
         from . import video_tool
 
         rc = video_tool.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+
+    if mode in ("-ak", "--altkey"):
+        from . import altkey
+
+        rc = altkey.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
