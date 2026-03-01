@@ -10,6 +10,28 @@ from .common import (
 from . import video
 
 
+def _pixfmt_name(v: int) -> str:
+    m = {0: "4:2:0", 1: "4:2:2", 2: "4:4:4"}
+    return m.get(int(v), str(v))
+
+
+def _comment_keys(c: video.VorbisComment) -> str:
+    keys = []
+    seen = set()
+    for s in c.comments:
+        if not s:
+            continue
+        k = s.split("=", 1)[0]
+        if not k:
+            continue
+        uk = k.upper()
+        if uk in seen:
+            continue
+        seen.add(uk)
+        keys.append(k)
+    return ",".join(keys)
+
+
 def _analyze_one(path: str) -> int:
     ext = os.path.splitext(path)[1].lower()
     if ext != ".omv":
@@ -30,6 +52,94 @@ def _analyze_one(path: str) -> int:
     print(_fmt_kv("ogv_size", info.ogv_size))
     if info.stream_kinds:
         print(_fmt_kv("streams", ",".join(info.stream_kinds)))
+
+    theoras = [s for s in info.streams if s.kind == "theora"]
+    vorbiss = [s for s in info.streams if s.kind == "vorbis"]
+    opuss = [s for s in info.streams if s.kind == "opus"]
+    speexs = [s for s in info.streams if s.kind == "speex"]
+
+    if theoras:
+        print(_fmt_kv("theora_streams", len(theoras)))
+        for i, s in enumerate(theoras):
+            t = s.theora
+            print(_fmt_kv(f"theora{i}_serial", s.serial))
+            if t:
+                print(
+                    _fmt_kv(
+                        f"theora{i}_version",
+                        f"{t.version_major}.{t.version_minor}.{t.version_subminor}",
+                    )
+                )
+                print(_fmt_kv(f"theora{i}_frame", f"{t.frame_width}x{t.frame_height}"))
+                print(_fmt_kv(f"theora{i}_pic", f"{t.pic_width}x{t.pic_height}"))
+                print(_fmt_kv(f"theora{i}_pic_xy", f"{t.pic_x},{t.pic_y}"))
+                print(_fmt_kv(f"theora{i}_fps", f"{t.fps_n}/{t.fps_d}"))
+                if t.fps_d:
+                    print(_fmt_kv(f"theora{i}_fps_float", f"{t.fps_n / t.fps_d:.6f}"))
+                print(_fmt_kv(f"theora{i}_aspect", f"{t.aspect_n}/{t.aspect_d}"))
+                print(_fmt_kv(f"theora{i}_colorspace", t.colorspace))
+                print(_fmt_kv(f"theora{i}_pixel_format", _pixfmt_name(t.pixel_format)))
+                print(_fmt_kv(f"theora{i}_target_bitrate", t.target_bitrate))
+                print(_fmt_kv(f"theora{i}_quality", t.quality))
+                print(
+                    _fmt_kv(
+                        f"theora{i}_keyframe_granule_shift", t.keyframe_granule_shift
+                    )
+                )
+            if s.comment:
+                print(_fmt_kv(f"theora{i}_comment_vendor", s.comment.vendor))
+                ck = _comment_keys(s.comment)
+                if ck:
+                    print(_fmt_kv(f"theora{i}_comment_keys", ck))
+
+    if vorbiss:
+        print(_fmt_kv("vorbis_streams", len(vorbiss)))
+        for i, s in enumerate(vorbiss):
+            v = s.vorbis
+            print(_fmt_kv(f"vorbis{i}_serial", s.serial))
+            if v:
+                print(_fmt_kv(f"vorbis{i}_channels", v.channels))
+                print(_fmt_kv(f"vorbis{i}_sample_rate", v.sample_rate))
+                print(_fmt_kv(f"vorbis{i}_bitrate_nominal", v.bitrate_nominal))
+                print(_fmt_kv(f"vorbis{i}_bitrate_maximum", v.bitrate_maximum))
+                print(_fmt_kv(f"vorbis{i}_bitrate_minimum", v.bitrate_minimum))
+                print(
+                    _fmt_kv(f"vorbis{i}_blocksize", f"{v.blocksize_0},{v.blocksize_1}")
+                )
+            if s.comment:
+                print(_fmt_kv(f"vorbis{i}_comment_vendor", s.comment.vendor))
+                ck = _comment_keys(s.comment)
+                if ck:
+                    print(_fmt_kv(f"vorbis{i}_comment_keys", ck))
+
+    if opuss:
+        print(_fmt_kv("opus_streams", len(opuss)))
+        for i, s in enumerate(opuss):
+            o = s.opus
+            print(_fmt_kv(f"opus{i}_serial", s.serial))
+            if o:
+                print(_fmt_kv(f"opus{i}_version", o.version))
+                print(_fmt_kv(f"opus{i}_channels", o.channels))
+                print(_fmt_kv(f"opus{i}_pre_skip", o.pre_skip))
+                print(_fmt_kv(f"opus{i}_input_sample_rate", o.input_sample_rate))
+                print(_fmt_kv(f"opus{i}_output_gain", o.output_gain))
+                print(_fmt_kv(f"opus{i}_channel_mapping", o.channel_mapping))
+            if s.comment:
+                print(_fmt_kv(f"opus{i}_comment_vendor", s.comment.vendor))
+                ck = _comment_keys(s.comment)
+                if ck:
+                    print(_fmt_kv(f"opus{i}_comment_keys", ck))
+
+    if speexs:
+        print(_fmt_kv("speex_streams", len(speexs)))
+        for i, s in enumerate(speexs):
+            sp = s.speex
+            print(_fmt_kv(f"speex{i}_serial", s.serial))
+            if sp:
+                print(_fmt_kv(f"speex{i}_version", sp.version))
+                print(_fmt_kv(f"speex{i}_channels", sp.channels))
+                print(_fmt_kv(f"speex{i}_sample_rate", sp.sample_rate))
+
     return 0
 
 
@@ -121,7 +231,7 @@ def main(argv=None) -> int:
             eprint(f"[{idx}/{total}] done: wrote {out_path}")
         except Exception as e:
             failed += 1
-            eprint(f"[{idx}/{total}] failed: {src_path}	{e}")
+            eprint(f"[{idx}/{total}] failed: {src_path}\t{e}")
 
     eprint(f"done total={total} wrote={wrote} failed={failed}")
     return 0 if failed == 0 else 1
