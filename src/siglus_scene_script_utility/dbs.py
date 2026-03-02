@@ -519,6 +519,142 @@ def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> st
         return str(raw_val)
 
 
+def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
+    blob = read_bytes(dbs_path)
+    m_type, expanded = _dbs_unpack(blob)
+    info = _parse_dbs(m_type, expanded)
+
+    row_cnt = int(info.get("row_cnt") or 0)
+    col_cnt = int(info.get("col_cnt") or 0)
+    data_ofs = int(info.get("data_offset") or 0)
+    data_blob = info.get("data_blob") or expanded
+
+    header = ["row_call_no"]
+    for call_no, dt in info.get("col_headers") or []:
+        ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
+        if ch:
+            header.append(f"{int(call_no):d}({ch})")
+        else:
+            header.append(f"{int(call_no):d}")
+
+    os.makedirs(os.path.dirname(out_csv_path) or ".", exist_ok=True)
+    with open(out_csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(header)
+
+        row_calls = info.get("row_calls") or []
+        for r in range(row_cnt):
+            row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
+            base = data_ofs + (r * col_cnt * 4)
+            for c in range(col_cnt):
+                try:
+                    raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[0]
+                except Exception:
+                    raw_val = 0
+                row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
+            w.writerow(row)
+
+
+def apply_one_dbs_csv(dbs_path: str, csv_path: str) -> None:
+    blob = read_bytes(dbs_path)
+    m_type, expanded = _dbs_unpack(blob)
+    info = _parse_dbs(m_type, expanded)
+    row_cnt = int(info.get("row_cnt") or 0)
+    col_cnt = int(info.get("col_cnt") or 0)
+    row_ofs = int(info.get("row_header_offset") or 0)
+    col_ofs = int(info.get("column_header_offset") or 0)
+    data_ofs = int(info.get("data_offset") or 0)
+    str_ofs = int(info.get("str_offset") or 0)
+    offset_scale = int(info.get("offset_scale") or 1)
+    col_headers = info.get("col_headers") or []
+    data_blob = info.get("data_blob") or expanded
+    row_calls = list(info.get("row_calls") or [])
+
+    rows = _dbs_read_csv_rows(csv_path)
+
+    new_str_blob = bytearray()
+    prefix = bytearray(data_blob[:str_ofs])
+
+    for r in range(row_cnt):
+        row = rows[r] if r < len(rows) else None
+        if row and len(row) > 0 and row[0] != "":
+            try:
+                row_calls[r] = int(row[0], 0)
+            except Exception:
+                pass
+        base = data_ofs + (r * col_cnt * 4)
+        for c in range(col_cnt):
+            try:
+                cell_raw = struct.unpack_from("<I", data_blob, base + c * 4)[0]
+            except Exception:
+                cell_raw = 0
+            cell_val = None
+            if row and (c + 1) < len(row):
+                cell_val = row[c + 1]
+            try:
+                _, dt = col_headers[c]
+            except Exception:
+                dt = 0
+            ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
+            if ch == "S":
+                if cell_val is None:
+                    cell_val = _dbs_get_str(
+                        m_type, info.get("str_blob") or b"", int(cell_raw)
+                    )
+                ofs = len(new_str_blob)
+                new_str_blob.extend(_dbs_encode_text(m_type, cell_val))
+                struct.pack_into("<I", prefix, base + c * 4, int(ofs))
+            else:
+                if cell_val is None or cell_val == "":
+                    struct.pack_into("<I", prefix, base + c * 4, int(cell_raw))
+                    continue
+                try:
+                    v = int(cell_val, 0)
+                except Exception:
+                    v = int(cell_raw)
+                struct.pack_into("<I", prefix, base + c * 4, int(v) & 0xFFFFFFFF)
+
+    for r in range(row_cnt):
+        v = row_calls[r] if r < len(row_calls) else r
+        struct.pack_into("<i", prefix, row_ofs + r * 4, int(v))
+
+    new_data_size = str_ofs + len(new_str_blob)
+    if offset_scale > 1:
+        pad = (-new_data_size) % offset_scale
+        if pad:
+            new_str_blob.extend(b"\x00" * pad)
+            new_data_size += pad
+
+    raw_data_size = int(new_data_size // max(offset_scale, 1))
+    raw_row_ofs = int(row_ofs // max(offset_scale, 1))
+    raw_col_ofs = int(col_ofs // max(offset_scale, 1))
+    raw_data_ofs = int(data_ofs // max(offset_scale, 1))
+    raw_str_ofs = int(str_ofs // max(offset_scale, 1))
+    struct.pack_into(
+        "<7i",
+        prefix,
+        0,
+        raw_data_size,
+        row_cnt,
+        col_cnt,
+        raw_row_ofs,
+        raw_col_ofs,
+        raw_data_ofs,
+        raw_str_ofs,
+    )
+
+    new_expanded = bytes(prefix) + bytes(new_str_blob)
+    if len(new_expanded) < len(expanded):
+        new_expanded += expanded[len(new_expanded) :]
+    align = int(C.DBS_MAP_WIDTH * 4)
+    if align > 0:
+        pad = (-len(new_expanded)) % align
+        if pad:
+            new_expanded += b"\x00" * pad
+    out_blob = _dbs_pack(m_type, new_expanded)
+    write_bytes(dbs_path, out_blob)
+
+
 def export_dbs_to_csv(path: str) -> int:
     if not path:
         sys.stderr.write("dbs export: missing path\\n")
@@ -543,40 +679,7 @@ def export_dbs_to_csv(path: str) -> int:
         any_found = True
         out_fp = fp + ".csv"
         try:
-            blob = read_bytes(fp)
-            m_type, expanded = _dbs_unpack(blob)
-            info = _parse_dbs(m_type, expanded)
-
-            row_cnt = int(info.get("row_cnt") or 0)
-            col_cnt = int(info.get("col_cnt") or 0)
-            data_ofs = int(info.get("data_offset") or 0)
-            data_blob = info.get("data_blob") or expanded
-
-            header = ["row_call_no"]
-            for call_no, dt in info.get("col_headers") or []:
-                ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
-                if ch:
-                    header.append(f"{int(call_no):d}({ch})")
-                else:
-                    header.append(f"{int(call_no):d}")
-
-            with open(out_fp, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.writer(f, lineterminator="\r\n")
-                w.writerow(header)
-
-                row_calls = info.get("row_calls") or []
-                for r in range(row_cnt):
-                    row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
-                    base = data_ofs + (r * col_cnt * 4)
-                    for c in range(col_cnt):
-                        try:
-                            raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[
-                                0
-                            ]
-                        except Exception:
-                            raw_val = 0
-                        row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
-                    w.writerow(row)
+            export_one_dbs_to_csv(fp, out_fp)
 
             sys.stdout.write(f"Wrote: {out_fp}\n")
         except Exception as e:
@@ -709,106 +812,8 @@ def apply_dbs_csv(path: str) -> int:
             sys.stderr.write(f"dbs apply: missing csv: {csv_path}\n")
             continue
         try:
-            blob = read_bytes(fp)
-            m_type, expanded = _dbs_unpack(blob)
-            info = _parse_dbs(m_type, expanded)
-            row_cnt = int(info.get("row_cnt") or 0)
-            col_cnt = int(info.get("col_cnt") or 0)
-            row_ofs = int(info.get("row_header_offset") or 0)
-            col_ofs = int(info.get("column_header_offset") or 0)
-            data_ofs = int(info.get("data_offset") or 0)
-            str_ofs = int(info.get("str_offset") or 0)
-            offset_scale = int(info.get("offset_scale") or 1)
-            col_headers = info.get("col_headers") or []
-            data_blob = info.get("data_blob") or expanded
-            row_calls = list(info.get("row_calls") or [])
+            apply_one_dbs_csv(fp, csv_path)
 
-            rows = _dbs_read_csv_rows(csv_path)
-
-            new_str_blob = bytearray()
-            prefix = bytearray(data_blob[:str_ofs])
-
-            for r in range(row_cnt):
-                row = rows[r] if r < len(rows) else None
-                if row and len(row) > 0 and row[0] != "":
-                    try:
-                        row_calls[r] = int(row[0], 0)
-                    except Exception:
-                        pass
-                base = data_ofs + (r * col_cnt * 4)
-                for c in range(col_cnt):
-                    cell_raw = 0
-                    try:
-                        cell_raw = struct.unpack_from("<I", data_blob, base + c * 4)[0]
-                    except Exception:
-                        cell_raw = 0
-                    cell_val = None
-                    if row and (c + 1) < len(row):
-                        cell_val = row[c + 1]
-                    try:
-                        _, dt = col_headers[c]
-                    except Exception:
-                        dt = 0
-                    ch = chr(int(dt) & 0xFF) if 32 <= (int(dt) & 0xFF) <= 126 else ""
-                    if ch == "S":
-                        if cell_val is None:
-                            cell_val = _dbs_get_str(
-                                m_type, info.get("str_blob") or b"", int(cell_raw)
-                            )
-                        ofs = len(new_str_blob)
-                        new_str_blob.extend(_dbs_encode_text(m_type, cell_val))
-                        struct.pack_into("<I", prefix, base + c * 4, int(ofs))
-                    else:
-                        if cell_val is None or cell_val == "":
-                            struct.pack_into("<I", prefix, base + c * 4, int(cell_raw))
-                            continue
-                        try:
-                            v = int(cell_val, 0)
-                        except Exception:
-                            v = int(cell_raw)
-                        struct.pack_into(
-                            "<I", prefix, base + c * 4, int(v) & 0xFFFFFFFF
-                        )
-
-            for r in range(row_cnt):
-                v = row_calls[r] if r < len(row_calls) else r
-                struct.pack_into("<i", prefix, row_ofs + r * 4, int(v))
-
-            new_data_size = str_ofs + len(new_str_blob)
-            if offset_scale > 1:
-                pad = (-new_data_size) % offset_scale
-                if pad:
-                    new_str_blob.extend(b"\x00" * pad)
-                    new_data_size += pad
-
-            raw_data_size = int(new_data_size // max(offset_scale, 1))
-            raw_row_ofs = int(row_ofs // max(offset_scale, 1))
-            raw_col_ofs = int(col_ofs // max(offset_scale, 1))
-            raw_data_ofs = int(data_ofs // max(offset_scale, 1))
-            raw_str_ofs = int(str_ofs // max(offset_scale, 1))
-            struct.pack_into(
-                "<7i",
-                prefix,
-                0,
-                raw_data_size,
-                row_cnt,
-                col_cnt,
-                raw_row_ofs,
-                raw_col_ofs,
-                raw_data_ofs,
-                raw_str_ofs,
-            )
-
-            new_expanded = bytes(prefix) + bytes(new_str_blob)
-            if len(new_expanded) < len(expanded):
-                new_expanded += expanded[len(new_expanded) :]
-            align = int(C.DBS_MAP_WIDTH * 4)
-            if align > 0:
-                pad = (-len(new_expanded)) % align
-                if pad:
-                    new_expanded += b"\x00" * pad
-            out_blob = _dbs_pack(m_type, new_expanded)
-            write_bytes(fp, out_blob)
             sys.stdout.write(f"Applied: {fp}\n")
         except Exception as e:
             err = 1

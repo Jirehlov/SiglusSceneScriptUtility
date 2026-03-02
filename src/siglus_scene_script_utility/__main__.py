@@ -34,7 +34,7 @@ def _usage(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
     )
     out.write("\n")
     out.write("Options:\n")
@@ -50,6 +50,7 @@ def _usage(out=None):
         "  -x, --extract   Extract .pck or restore Gameexe.ini from Gameexe.dat\n"
     )
     out.write("  -a, --analyze   Analyze/compare files\n")
+    out.write("  -d, --db        Export/apply/analyze .dbs\n")
     out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
     out.write("  -e, --exec      Execute at a #z label\n")
     out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
@@ -92,15 +93,12 @@ def _usage(out=None):
     out.write("Extract mode:\n")
     out.write(f"  {p} -x [--disam] <input_pck> <output_dir>\n")
     out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
-    out.write(f"  {p} -x <path_to_dbs|path_to_dir>\n")
-    out.write(f"  {p} -x --apply <path_to_dbs|path_to_dir>\n")
     out.write("    --disam      Dump .dat disassembly when extracting .pck\n")
     out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
-    out.write("    --apply        Apply .dbs CSV back to .dbs\n")
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(
-        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|dbs|gan|sav|cgm|tcr)> [input_file_2]\n"
+        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
     out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
@@ -150,6 +148,11 @@ def _usage(out=None):
     )
     out.write(f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n")
     out.write("\n")
+    out.write("DB mode:\n")
+    out.write(f"  {p} -d --x <input_dir|input_file> <output_dir>\n")
+    out.write(f"  {p} -d --a <input_file.dbs> [input_file_2.dbs]\n")
+    out.write(f"  {p} -d --c <input_dbs|input_dir> <csv_dir>\n")
+    out.write("\n")
     out.write("Video mode:\n")
     out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
     out.write(f"  {p} -v --a <input_file.omv>\n")
@@ -177,7 +180,7 @@ def _usage_short(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
     )
     out.write(f"Try '{p} --help' for more information.\n")
 
@@ -266,6 +269,13 @@ def main(argv=None):
         from . import analyze
 
         rc = analyze.main(argv[1:])
+        if rc == 2:
+            _usage_short()
+        return rc
+    if mode in ("-d", "--db"):
+        from . import db
+
+        rc = db.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc

@@ -16,13 +16,12 @@ from .common import (
 
 from . import pck
 from . import dat
-from . import dbs
 from . import gan
 from . import sav
 from . import cgm
 from . import tcr
 
-SUPPORTED_TYPES = ("pck", "dat", "dbs", "gan", "sav", "cgm", "tcr")
+SUPPORTED_TYPES = ("pck", "dat", "gan", "sav", "cgm", "tcr")
 
 
 def _fmt_key_txt(el: bytes) -> str:
@@ -92,8 +91,6 @@ def _detect_type(path, blob):
         return "pck"
     if ext == ".dat":
         return "dat"
-    if ext == ".dbs":
-        return "dbs"
     if ext == ".gan":
         return "gan"
     if ext == ".sav":
@@ -106,8 +103,6 @@ def _detect_type(path, blob):
         return "pck"
     if dat._looks_like_dat(blob):
         return "dat"
-    if dbs._looks_like_dbs(blob):
-        return "dbs"
     if sav._looks_like_sav(blob):
         return "sav"
     if cgm._looks_like_cgm(blob):
@@ -131,14 +126,12 @@ def analyze_file(path, readall=False):
     print("")
     if ftype not in SUPPORTED_TYPES:
         print(f"unsupported file type for -a mode: {ftype}")
-        print("only .pck, .dat, .dbs, .gan, .sav, .cgm and .tcr are supported.")
+        print("only .pck, .dat, .gan, .sav, .cgm and .tcr are supported.")
         return 1
     if ftype == "gan":
         return gan.gan(blob)
     if ftype == "pck":
         return pck.pck(blob)
-    if ftype == "dbs":
-        return dbs.dbs(blob)
     if ftype == "dat":
         return dat.dat(path, blob)
     if ftype == "cgm":
@@ -182,7 +175,7 @@ def compare_files(p1, p2):
     print("")
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print(f"unsupported file type for -a mode (type1={t1} type2={t2})")
-        print("only .pck, .dat, .dbs, .gan, .sav, .cgm and .tcr are supported.")
+        print("only .pck, .dat, .gan, .sav, .cgm and .tcr are supported.")
         return 1
     if t1 != t2:
         print("Different types; structural compare is skipped.")
@@ -195,8 +188,6 @@ def compare_files(p1, p2):
         return 0
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
-    if t1 == "dbs":
-        return dbs.compare_dbs(b1, b2)
     if t1 == "pck":
         return pck.compare_pck(b1, b2)
     if t1 == "dat":

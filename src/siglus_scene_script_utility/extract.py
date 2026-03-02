@@ -2,11 +2,8 @@ import os
 import sys
 
 from . import GEI
-from . import dbs
 from . import pck
 
-export_dbs_to_csv = dbs.export_dbs_to_csv
-apply_dbs_csv = dbs.apply_dbs_csv
 extract_pck = pck.extract_pck
 _iter_exe_el_candidates = pck._iter_exe_el_candidates
 
@@ -17,48 +14,17 @@ def main(argv=None):
     args = list(argv)
     dat_txt = False
     gei = False
-    apply_mode = False
     if "--gei" in args:
         args.remove("--gei")
         gei = True
     if "--disam" in args:
         args.remove("--disam")
         dat_txt = True
-    if "--apply" in args:
-        args.remove("--apply")
-        apply_mode = True
     if gei and dat_txt:
         sys.stderr.write("--disam is not supported with --gei\n")
         return 2
-    if apply_mode and (gei or dat_txt):
-        sys.stderr.write("--apply is only supported for .dbs csv apply\n")
-        return 2
     if not args or args[0] in ("-h", "--help", "help"):
         return 2
-
-    if apply_mode:
-        if len(args) != 1:
-            return 2
-        return apply_dbs_csv(args[0])
-
-    if not gei and len(args) == 1:
-        return export_dbs_to_csv(args[0])
-
-    if (
-        not gei
-        and len(args) == 2
-        and args[0].lower().endswith(".dbs")
-        and os.path.isfile(args[0])
-    ):
-        if (
-            args[1]
-            and args[1] not in (".", "./")
-            and os.path.abspath(args[1]) != os.path.abspath(os.path.dirname(args[0]))
-        ):
-            sys.stderr.write(
-                "warning: dbs export ignores output_dir; writing next to source file\n"
-            )
-        return export_dbs_to_csv(args[0])
 
     if gei:
         if len(args) == 1:
