@@ -1,498 +1,628 @@
-from __future__ import annotations
-
 import os
 import shutil
 import struct
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from collections import namedtuple
 
-_OGGS = b"OggS"
+OGGS_SIGNATURE = b"OggS"
+OGG_HEADER_STRUCT = struct.Struct("<4sBBqIIIB")
+TABLEA_STRUCT = struct.Struct("<IBBHIIiii")
+TABLEB_STRUCT = struct.Struct("<IIIIIIII")
+OUTER_STRUCT = struct.Struct("<42I")
 
+OMVInfo = namedtuple(
+    "OMVInfo",
+    "path size_bytes oggs_offset header_size ogv_size stream_kinds",
+    defaults=[()],
+)
+OuterHeader = namedtuple(
+    "OuterHeader",
+    "raw dword_3c dword_28 dword_2c qword_30 dword_40 dword_44 dword_48 dword_4c dword_50",
+)
+TableAEntry = namedtuple(
+    "TableAEntry", "page_no is_eos is_packet_start page_bytes x0 back_link aux0 aux1"
+)
+TableBEntry = namedtuple(
+    "TableBEntry",
+    "seq page_no frame_no flags last_key_seq last_key_page prev_time time_ms",
+)
+OMVFullInfo = namedtuple(
+    "OMVFullInfo",
+    "basic outer table_a table_b ogg_data_offset theora_serial theora_fps_num theora_fps_den theora_kfgshift theora_pixfmt theora_pic_w theora_pic_h",
+)
+_OggPage = namedtuple(
+    "_OggPage", "serial seq header_type granulepos segments body page_bytes"
+)
 
-@dataclass(frozen=True)
-class VorbisComment:
-    vendor: str
-    comments: Tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class TheoraIdent:
-    version_major: int
-    version_minor: int
-    version_subminor: int
-    frame_width: int
-    frame_height: int
-    pic_width: int
-    pic_height: int
-    pic_x: int
-    pic_y: int
-    fps_n: int
-    fps_d: int
-    aspect_n: int
-    aspect_d: int
-    colorspace: int
-    target_bitrate: int
-    quality: int
-    keyframe_granule_shift: int
-    pixel_format: int
-
-
-@dataclass(frozen=True)
-class VorbisIdent:
-    version: int
-    channels: int
-    sample_rate: int
-    bitrate_maximum: int
-    bitrate_nominal: int
-    bitrate_minimum: int
-    blocksize_0: int
-    blocksize_1: int
-
-
-@dataclass(frozen=True)
-class OpusHead:
-    version: int
-    channels: int
-    pre_skip: int
-    input_sample_rate: int
-    output_gain: int
-    channel_mapping: int
-
-
-@dataclass(frozen=True)
-class SpeexHead:
-    version: str
-    sample_rate: int
-    channels: int
-
-
-@dataclass(frozen=True)
-class OggStreamInfo:
-    serial: int
-    kind: str
-    theora: Optional[TheoraIdent] = None
-    vorbis: Optional[VorbisIdent] = None
-    opus: Optional[OpusHead] = None
-    speex: Optional[SpeexHead] = None
-    comment: Optional[VorbisComment] = None
-
-
-@dataclass(frozen=True)
-class OMVInfo:
-    path: str
-    size_bytes: int
-    oggs_offset: int
-    header_size: int
-    ogv_size: int
-    stream_kinds: Tuple[str, ...] = ()
-    streams: Tuple[OggStreamInfo, ...] = ()
+_OUTER_TEMPLATE = (
+    168,
+    257,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    33333,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    4294967295,
+    4294967295,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+)
 
 
-def find_oggs_offset(path: str, *, chunk_size: int = 1024 * 1024) -> int:
-    if chunk_size < 64:
-        chunk_size = 64
+def _read_exact(file_obj, n_bytes):
+    data = file_obj.read(n_bytes)
+    if len(data) != n_bytes:
+        raise EOFError("unexpected EOF")
+    return data
 
-    with open(path, "rb") as f:
-        off = 0
+
+def _parse_outer_header(path):
+    try:
+        with open(path, "rb") as file_obj:
+            raw = file_obj.read(168)
+        if len(raw) != 168:
+            return None
+        size0, size1 = struct.unpack_from("<II", raw, 0)
+        if size0 != 168 or size1 != 257:
+            return None
+        dword_28, dword_2c = struct.unpack_from("<II", raw, 40)
+        qword_30 = struct.unpack_from("<Q", raw, 48)[0]
+        dword_3c, dword_40, dword_44, dword_48, dword_4c, dword_50 = struct.unpack_from(
+            "<IIIIII", raw, 60
+        )
+        return OuterHeader(
+            raw,
+            int(dword_3c),
+            int(dword_28),
+            int(dword_2c),
+            int(qword_30),
+            int(dword_40),
+            int(dword_44),
+            int(dword_48),
+            int(dword_4c),
+            int(dword_50),
+        )
+    except Exception:
+        return None
+
+
+def find_oggs_offset(path, start_off=0, *, chunk_size=1024 * 1024):
+    start_off = 0 if start_off < 0 else int(start_off)
+    chunk_size = 64 if chunk_size < 64 else int(chunk_size)
+    with open(path, "rb") as file_obj:
+        file_obj.seek(start_off)
+        offset = start_off
         tail = b""
         while True:
-            b = f.read(chunk_size)
-            if not b:
+            block = file_obj.read(chunk_size)
+            if not block:
                 break
-            buf = tail + b
-
-            start = 0
+            buf = tail + block
+            search_from = 0
             while True:
-                i = buf.find(_OGGS, start)
-                if i < 0:
+                index = buf.find(OGGS_SIGNATURE, search_from)
+                if index < 0:
                     break
-                abs_off = off - len(tail) + i
-
-                ver_idx = i + 4
-                if ver_idx < len(buf):
-                    if buf[ver_idx] == 0:
+                abs_off = offset - len(tail) + index
+                ver_pos = index + 4
+                if ver_pos < len(buf):
+                    if buf[ver_pos] == 0:
                         return abs_off
                 else:
-                    cur = f.tell()
-                    f.seek(abs_off + 4)
-                    vb = f.read(1)
-                    f.seek(cur)
+                    cur = file_obj.tell()
+                    file_obj.seek(abs_off + 4)
+                    vb = file_obj.read(1)
+                    file_obj.seek(cur)
                     if vb == b"\x00":
                         return abs_off
-
-                start = i + 1
-
+                search_from = index + 1
             tail = buf[-8:]
-            off += len(b)
+            offset += len(block)
+    raise ValueError("OggS not found")
 
-    raise ValueError("OMV: embedded Ogg stream not found (missing OggS)")
 
-
-def extract_ogv_from_omv(omv_path: str, out_ogv_path: str) -> None:
-    oggs_off = find_oggs_offset(omv_path)
+def extract_ogv_from_omv(omv_path, out_ogv_path):
+    oggs_off = find_oggs_offset(omv_path, 0)
     out_dir = os.path.dirname(out_ogv_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-
     with open(omv_path, "rb") as fin, open(out_ogv_path, "wb") as fout:
         fin.seek(oggs_off)
         shutil.copyfileobj(fin, fout, length=1024 * 1024)
 
 
-def read_omv_info(path: str, *, parse_streams: bool = True) -> OMVInfo:
-    st = os.stat(path)
-    size = int(st.st_size)
-    oggs_off = find_oggs_offset(path)
+def read_omv_info(path, *, parse_streams=True):
+    size = int(os.stat(path).st_size)
+    oggs_off = find_oggs_offset(path, 0)
     header_size = int(oggs_off)
     ogv_size = int(size - oggs_off)
-    kinds: Tuple[str, ...] = ()
-    streams: Tuple[OggStreamInfo, ...] = ()
+    stream_kinds = ()
     if parse_streams:
         try:
-            streams = tuple(_parse_ogg_streams(path, oggs_off))
-            kinds = tuple(s.kind for s in streams)
-        except Exception:
-            kinds = ()
-            streams = ()
-    return OMVInfo(
-        path=str(path),
-        size_bytes=size,
-        oggs_offset=oggs_off,
-        header_size=header_size,
-        ogv_size=ogv_size,
-        stream_kinds=kinds,
-        streams=streams,
-    )
-
-
-_OGG_HDR = struct.Struct("<4sBBqIIIB")
-
-
-def _read_exact(f, n: int) -> bytes:
-    b = f.read(n)
-    if len(b) != n:
-        raise EOFError("unexpected EOF")
-    return b
-
-
-def _detect_packet_kind(pkt: bytes) -> Optional[str]:
-    if not pkt:
-        return None
-
-    if len(pkt) >= 7 and pkt[:1] == b"\x01" and pkt[1:7] == b"vorbis":
-        return "vorbis"
-    if len(pkt) >= 7 and pkt[:1] == b"\x80" and pkt[1:7] == b"theora":
-        return "theora"
-    if len(pkt) >= 8 and pkt[:8] == b"OpusHead":
-        return "opus"
-    if len(pkt) >= 8 and pkt[:8] == b"Speex   ":
-        return "speex"
-
-    return None
-
-
-def _u32le(b: bytes, off: int) -> int:
-    return int(struct.unpack_from("<I", b, off)[0])
-
-
-def _i32le(b: bytes, off: int) -> int:
-    return int(struct.unpack_from("<i", b, off)[0])
-
-
-def _parse_vorbis_comment(payload: bytes) -> Optional[VorbisComment]:
-    try:
-        if len(payload) < 8:
-            return None
-        off = 0
-        vendor_len = _u32le(payload, off)
-        off += 4
-        if vendor_len > len(payload) - off:
-            return None
-        vendor = payload[off : off + vendor_len].decode("utf-8", errors="replace")
-        off += vendor_len
-        if off + 4 > len(payload):
-            return VorbisComment(vendor=vendor, comments=())
-        n = _u32le(payload, off)
-        off += 4
-        comments: List[str] = []
-        for _ in range(int(n)):
-            if off + 4 > len(payload):
-                break
-            clen = _u32le(payload, off)
-            off += 4
-            if clen > len(payload) - off:
-                break
-            c = payload[off : off + clen].decode("utf-8", errors="replace")
-            off += clen
-            comments.append(c)
-        return VorbisComment(vendor=vendor, comments=tuple(comments))
-    except Exception:
-        return None
-
-
-def _parse_theora_ident(pkt: bytes) -> Optional[TheoraIdent]:
-    if len(pkt) < 42:
-        return None
-    if not (pkt[:1] == b"\x80" and pkt[1:7] == b"theora"):
-        return None
-    vmaj = int(pkt[7])
-    vmin = int(pkt[8])
-    vrev = int(pkt[9])
-    fmbw = int.from_bytes(pkt[10:12], "big", signed=False)
-    fmbh = int.from_bytes(pkt[12:14], "big", signed=False)
-    picw = int.from_bytes(pkt[14:17], "big", signed=False)
-    pich = int.from_bytes(pkt[17:20], "big", signed=False)
-    picx = int(pkt[20])
-    picy = int(pkt[21])
-    fps_n = int.from_bytes(pkt[22:26], "big", signed=False)
-    fps_d = int.from_bytes(pkt[26:30], "big", signed=False)
-    aspect_n = int.from_bytes(pkt[30:33], "big", signed=False)
-    aspect_d = int.from_bytes(pkt[33:36], "big", signed=False)
-    colorspace = int(pkt[36])
-    target_bitrate = int.from_bytes(pkt[37:40], "big", signed=False)
-    tail = pkt[40:42]
-    br = _BitReader(tail)
-    quality = br.read_bits(6)
-    kfgs = br.read_bits(5)
-    pixfmt = br.read_bits(2)
-    _ = br.read_bits(3)
-    return TheoraIdent(
-        version_major=vmaj,
-        version_minor=vmin,
-        version_subminor=vrev,
-        frame_width=fmbw * 16,
-        frame_height=fmbh * 16,
-        pic_width=picw,
-        pic_height=pich,
-        pic_x=picx,
-        pic_y=picy,
-        fps_n=fps_n,
-        fps_d=fps_d,
-        aspect_n=aspect_n,
-        aspect_d=aspect_d,
-        colorspace=colorspace,
-        target_bitrate=target_bitrate,
-        quality=quality,
-        keyframe_granule_shift=kfgs,
-        pixel_format=pixfmt,
-    )
-
-
-def _parse_vorbis_ident(pkt: bytes) -> Optional[VorbisIdent]:
-    if len(pkt) < 30:
-        return None
-    if not (pkt[:1] == b"\x01" and pkt[1:7] == b"vorbis"):
-        return None
-    try:
-        ver = _u32le(pkt, 7)
-        ch = int(pkt[11])
-        sr = _u32le(pkt, 12)
-        bmax = _i32le(pkt, 16)
-        bnom = _i32le(pkt, 20)
-        bmin = _i32le(pkt, 24)
-        bs = int(pkt[28])
-        bs0 = 1 << (bs & 0x0F)
-        bs1 = 1 << ((bs >> 4) & 0x0F)
-        return VorbisIdent(
-            version=int(ver),
-            channels=int(ch),
-            sample_rate=int(sr),
-            bitrate_maximum=int(bmax),
-            bitrate_nominal=int(bnom),
-            bitrate_minimum=int(bmin),
-            blocksize_0=int(bs0),
-            blocksize_1=int(bs1),
-        )
-    except Exception:
-        return None
-
-
-def _parse_opus_head(pkt: bytes) -> Optional[OpusHead]:
-    if len(pkt) < 19:
-        return None
-    if pkt[:8] != b"OpusHead":
-        return None
-    try:
-        ver = int(pkt[8])
-        ch = int(pkt[9])
-        pre = int.from_bytes(pkt[10:12], "little", signed=False)
-        sr = int.from_bytes(pkt[12:16], "little", signed=False)
-        gain = int.from_bytes(pkt[16:18], "little", signed=True)
-        cm = int(pkt[18])
-        return OpusHead(
-            version=ver,
-            channels=ch,
-            pre_skip=pre,
-            input_sample_rate=sr,
-            output_gain=gain,
-            channel_mapping=cm,
-        )
-    except Exception:
-        return None
-
-
-def _parse_speex_head(pkt: bytes) -> Optional[SpeexHead]:
-    if len(pkt) < 80:
-        return None
-    if pkt[:8] != b"Speex   ":
-        return None
-    try:
-        ver = pkt[8:28].split(b"\x00", 1)[0].decode("utf-8", errors="replace")
-        rate = _u32le(pkt, 36)
-        ch = _u32le(pkt, 48)
-        return SpeexHead(version=ver, sample_rate=int(rate), channels=int(ch))
-    except Exception:
-        return None
-
-
-def _extract_comment_for_kind(kind: str, pkt: bytes) -> Optional[VorbisComment]:
-    if kind == "theora":
-        if len(pkt) >= 7 and pkt[:1] == b"\x81" and pkt[1:7] == b"theora":
-            return _parse_vorbis_comment(pkt[7:])
-        return None
-    if kind == "vorbis":
-        if len(pkt) >= 7 and pkt[:1] == b"\x03" and pkt[1:7] == b"vorbis":
-            return _parse_vorbis_comment(pkt[7:])
-        return None
-    if kind == "opus":
-        if len(pkt) >= 8 and pkt[:8] == b"OpusTags":
-            return _parse_vorbis_comment(pkt[8:])
-        return None
-    if kind == "speex":
-        return None
-    return None
-
-
-class _BitReader:
-    def __init__(self, data: bytes):
-        self._data = data
-        self._pos = 0
-
-    def read_bits(self, n: int) -> int:
-        if n <= 0:
-            return 0
-        v = 0
-        for _ in range(n):
-            byte_i = self._pos // 8
-            bit_i = 7 - (self._pos % 8)
-            if byte_i >= len(self._data):
-                raise EOFError("bitstream EOF")
-            bit = (self._data[byte_i] >> bit_i) & 1
-            v = (v << 1) | bit
-            self._pos += 1
-        return int(v)
-
-
-def _parse_ogg_streams(
-    path: str, oggs_off: int, *, max_pages: int = 256
-) -> List[OggStreamInfo]:
-    kinds_by_serial: Dict[int, str] = {}
-    packet_bufs: Dict[int, bytearray] = {}
-    pkt_index: Dict[int, int] = {}
-    theora_by_serial: Dict[int, TheoraIdent] = {}
-    vorbis_by_serial: Dict[int, VorbisIdent] = {}
-    opus_by_serial: Dict[int, OpusHead] = {}
-    speex_by_serial: Dict[int, SpeexHead] = {}
-    comment_by_serial: Dict[int, VorbisComment] = {}
-
-    with open(path, "rb") as f:
-        f.seek(oggs_off)
-        pages = 0
-        while pages < max_pages:
-            sig = f.read(4)
-            if not sig:
-                break
-            if sig != _OGGS:
-                break
-
-            rest = _read_exact(f, _OGG_HDR.size - 4)
-            _cap, ver, header_type, _gran, serial, _seq, _crc, seg_cnt = (
-                _OGG_HDR.unpack(sig + rest)
+            kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, oggs_off)
+            stream_kinds = tuple(
+                kinds_by_serial[serial] for serial in sorted(kinds_by_serial)
             )
-            if ver != 0:
-                break
+        except Exception:
+            stream_kinds = ()
+    return OMVInfo(str(path), size, oggs_off, header_size, ogv_size, stream_kinds)
 
-            segs = _read_exact(f, seg_cnt)
-            payload_len = int(sum(segs))
-            payload = _read_exact(f, payload_len)
 
-            if not (header_type & 0x01):
-                packet_bufs.setdefault(serial, bytearray())
-                if packet_bufs[serial]:
-                    packet_bufs[serial].clear()
+def read_omv_full_info(path):
+    basic = read_omv_info(path, parse_streams=True)
+    outer = _parse_outer_header(path)
+    table_a = ()
+    table_b = ()
+    ogg_data_offset = basic.oggs_offset
+    if outer:
+        table_a, table_b, data_off = _try_parse_tables(path, outer)
+        if data_off is not None:
+            ogg_data_offset = int(data_off)
+    theora_serial = theora_fps_num = theora_fps_den = theora_kfgshift = (
+        theora_pixfmt
+    ) = theora_pic_w = theora_pic_h = None
+    try:
+        kinds = _parse_ogg_stream_kinds_by_serial(path, ogg_data_offset)
+        theora_serial = next(
+            (serial for serial, kind in kinds.items() if kind == "theora"), None
+        )
+        if theora_serial is not None:
+            theora_info = _read_theora_ident_from_stream(
+                path, ogg_data_offset, theora_serial
+            )
+            if theora_info:
+                (
+                    theora_fps_num,
+                    theora_fps_den,
+                    theora_kfgshift,
+                    theora_pixfmt,
+                    theora_pic_w,
+                    theora_pic_h,
+                ) = theora_info
+    except Exception:
+        pass
+    return OMVFullInfo(
+        basic,
+        outer,
+        table_a,
+        table_b,
+        ogg_data_offset,
+        theora_serial,
+        theora_fps_num,
+        theora_fps_den,
+        theora_kfgshift,
+        theora_pixfmt,
+        theora_pic_w,
+        theora_pic_h,
+    )
 
-            p = 0
-            cur = packet_bufs.setdefault(serial, bytearray())
-            for seg_len in segs:
+
+def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
+    if not os.path.isfile(ogv_path):
+        raise FileNotFoundError(ogv_path)
+    kinds = _parse_ogg_stream_kinds_by_serial(ogv_path, 0)
+    theora_serial = next(
+        (serial for serial, kind in kinds.items() if kind == "theora"), None
+    )
+    if theora_serial is None:
+        raise ValueError("OGV: no theora stream found")
+    theora_info = _read_theora_ident_from_stream(ogv_path, 0, theora_serial)
+    if not theora_info:
+        raise ValueError("OGV: missing theora identification header")
+    fps_num, fps_den, theora_kfgshift, theora_pixfmt, pic_w, pic_h = theora_info
+    dword_28 = (
+        (2 if int(pic_w) * 9 == int(pic_h) * 16 else 1) if mode is None else int(mode)
+    )
+    pic_h2 = int(pic_h) if dword_28 == 2 else int(pic_h) * 3 // 4
+    page_summaries = []
+    frames_in_page = []
+    first_frame_index = []
+    frame_no_in_page = []
+    header_pages = set()
+    table_b = []
+    packet_buffer = bytearray()
+    packet_pages = []
+    last_key_seq = -1
+    last_key_page = -1
+    prev_time_state = 0
+    ratio = (float(fps_den) / float(fps_num)) if fps_num else 0.0
+    if isinstance(flags_hi24, int):
+        _flags_ranges = None
+        _flags_base = int(flags_hi24) & 0xFFFFFF00
+    else:
+        _flags_ranges = list(flags_hi24)
+        _flags_base = 0
+
+    def _flags_base_for(_i):
+        if _flags_ranges is None:
+            return _flags_base
+        for _s, _e, _v in _flags_ranges:
+            if _i >= _s and (_e is None or _i <= _e):
+                return int(_v) & 0xFFFFFF00
+        return 0
+
+    seq = 0
+    x0 = 0
+    video_page_no = -1
+    with open(ogv_path, "rb") as file_obj:
+        for page in _iter_ogg_pages(file_obj, 0):
+            if page.serial != theora_serial:
+                continue
+            video_page_no += 1
+            page_bytes_len = len(page.page_bytes)
+            is_eos = 1 if page.header_type & 4 else 0
+            is_packet_start = 1 if page.header_type & 1 == 0 else 0
+            page_summaries.append(
+                (video_page_no, is_eos, is_packet_start, page_bytes_len, x0)
+            )
+            frames_in_page.append(0)
+            first_frame_index.append(-1)
+            frame_no_in_page.append(0)
+            x0 += page_bytes_len
+            if page.header_type & 1 == 0:
+                packet_buffer.clear()
+                packet_pages.clear()
+            elif (not packet_pages) or packet_pages[-1] != video_page_no:
+                packet_pages.append(video_page_no)
+            body_pos = 0
+            for seg_len in page.segments:
+                seg_len = int(seg_len)
+                if not packet_pages:
+                    packet_pages.append(video_page_no)
+                if seg_len:
+                    packet_buffer.extend(page.body[body_pos : body_pos + seg_len])
+                body_pos += seg_len
+                if seg_len < 255:
+                    packet = bytes(packet_buffer)
+                    packet_buffer.clear()
+                    span = packet_pages[:]
+                    packet_pages.clear()
+                    if packet and (packet[0] & 128) != 0:
+                        header_pages.update(span)
+                        continue
+                    last_page = int(span[-1])
+                    if first_frame_index[last_page] < 0:
+                        first_frame_index[last_page] = int(seq)
+                    frame_no = int(frame_no_in_page[last_page])
+                    frame_no_in_page[last_page] = frame_no + 1
+                    frames_in_page[last_page] = int(frames_in_page[last_page]) + 1
+                    is_key = (
+                        bool(packet)
+                        and (packet[0] & 128) == 0
+                        and (packet[0] & 64) == 0
+                    )
+                    if is_key:
+                        last_key_seq = int(seq)
+                        last_key_page = int(last_page)
+                    flags = int(_flags_base_for(int(seq)) | (1 if is_key else 0))
+                    time_ms = int(ratio * float(seq + 1) * 1000.0) & 4294967295
+                    table_b.append(
+                        TableBEntry(
+                            int(seq),
+                            int(last_page),
+                            int(frame_no),
+                            int(flags),
+                            int(last_key_seq),
+                            int(last_key_page),
+                            int(prev_time_state) & 4294967295,
+                            int(time_ms),
+                        )
+                    )
+                    prev_time_state = int(time_ms + 1)
+                    seq += 1
+    table_a = []
+    for index, (page_no, is_eos, is_packet_start, page_bytes, x0_value) in enumerate(
+        page_summaries
+    ):
+        if index in header_pages:
+            aux0 = aux1 = -1
+        else:
+            aux0 = int(frames_in_page[index])
+            aux1 = int(first_frame_index[index]) if aux0 > 0 else -1
+        table_a.append(
+            TableAEntry(
+                int(page_no),
+                int(is_eos),
+                int(is_packet_start),
+                int(page_bytes),
+                int(x0_value),
+                0,
+                int(aux0),
+                int(aux1),
+            )
+        )
+    _fill_tablea_backlinks(table_a)
+    header = _build_outer_header(
+        dword_28=int(dword_28),
+        dword_2c=int(pic_w),
+        qword_30=int(pic_h2),
+        dword_40=int(theora_serial),
+        dword_4c=len(table_a),
+        dword_50=len(table_b),
+    )
+    out_dir = os.path.dirname(out_omv_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+    with open(out_omv_path, "wb") as out:
+        out.write(header)
+        for entry in table_a:
+            out.write(
+                TABLEA_STRUCT.pack(
+                    int(entry.page_no) & 4294967295,
+                    int(entry.is_eos) & 255,
+                    int(entry.is_packet_start) & 255,
+                    0,
+                    int(entry.page_bytes) & 4294967295,
+                    int(entry.x0) & 4294967295,
+                    int(entry.back_link),
+                    int(entry.aux0),
+                    int(entry.aux1),
+                )
+            )
+        for entry in table_b:
+            out.write(
+                TABLEB_STRUCT.pack(
+                    int(entry.seq) & 4294967295,
+                    int(entry.page_no) & 4294967295,
+                    int(entry.frame_no) & 4294967295,
+                    int(entry.flags) & 4294967295,
+                    int(entry.last_key_seq) & 4294967295,
+                    int(entry.last_key_page) & 4294967295,
+                    int(entry.prev_time) & 4294967295,
+                    int(entry.time_ms) & 4294967295,
+                )
+            )
+        with open(ogv_path, "rb") as file_obj:
+            for page in _iter_ogg_pages(file_obj, 0):
+                if page.serial == theora_serial:
+                    out.write(page.page_bytes)
+
+
+def _iter_ogg_pages(file_obj, oggs_off, *, max_pages=None):
+    file_obj.seek(int(oggs_off))
+    pages = 0
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            return
+        signature = file_obj.read(4)
+        if not signature:
+            return
+        if signature != OGGS_SIGNATURE:
+            raise ValueError("OGG: missing OggS signature")
+        rest = _read_exact(file_obj, OGG_HEADER_STRUCT.size - 4)
+        _cap, version, header_type, granulepos, serial, seq, _crc, segment_count = (
+            OGG_HEADER_STRUCT.unpack(signature + rest)
+        )
+        if version != 0:
+            raise ValueError("OGG: unsupported version")
+        segments = _read_exact(file_obj, int(segment_count))
+        body_len = int(sum(segments))
+        body = _read_exact(file_obj, body_len)
+        granulepos = int(granulepos)
+        granulepos = None if granulepos < 0 else granulepos
+        page_bytes = signature + rest + segments + body
+        yield _OggPage(
+            int(serial),
+            int(seq),
+            int(header_type),
+            granulepos,
+            segments,
+            body,
+            page_bytes,
+        )
+        pages += 1
+
+
+def _detect_packet_kind(packet):
+    if not packet:
+        return None
+    if len(packet) >= 7 and packet[:1] == b"\x01" and packet[1:7] == b"vorbis":
+        return "vorbis"
+    if len(packet) >= 7 and packet[:1] == b"\x80" and packet[1:7] == b"theora":
+        return "theora"
+    if len(packet) >= 8 and packet[:8] == b"OpusHead":
+        return "opus"
+    if len(packet) >= 8 and packet[:8] == b"Speex   ":
+        return "speex"
+    return None
+
+
+def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
+    buffers = {}
+    with open(path, "rb") as file_obj:
+        for page in _iter_ogg_pages(file_obj, oggs_off, max_pages=max_pages):
+            serial = int(page.serial)
+            if serial_filter is not None and serial != int(serial_filter):
+                continue
+            if page.header_type & 1 == 0:
+                buffers.setdefault(serial, bytearray()).clear()
+            current = buffers.setdefault(serial, bytearray())
+            body_pos = 0
+            for seg_len in page.segments:
                 seg_len = int(seg_len)
                 if seg_len:
-                    cur.extend(payload[p : p + seg_len])
-                p += seg_len
+                    current.extend(page.body[body_pos : body_pos + seg_len])
+                body_pos += seg_len
                 if seg_len < 255:
-                    idx = int(pkt_index.get(serial, 0))
-                    pkt = bytes(cur)
-                    if idx == 0:
-                        k = _detect_packet_kind(pkt)
-                        if k:
-                            kinds_by_serial[serial] = k
-                            if k == "theora":
-                                ti = _parse_theora_ident(pkt)
-                                if ti:
-                                    theora_by_serial[serial] = ti
-                            elif k == "vorbis":
-                                vi = _parse_vorbis_ident(pkt)
-                                if vi:
-                                    vorbis_by_serial[serial] = vi
-                            elif k == "opus":
-                                oi = _parse_opus_head(pkt)
-                                if oi:
-                                    opus_by_serial[serial] = oi
-                            elif k == "speex":
-                                si = _parse_speex_head(pkt)
-                                if si:
-                                    speex_by_serial[serial] = si
-                    elif idx == 1:
-                        k = kinds_by_serial.get(serial)
-                        if k and serial not in comment_by_serial:
-                            c = _extract_comment_for_kind(k, pkt)
-                            if c:
-                                comment_by_serial[serial] = c
+                    yield serial, bytes(current)
+                    current.clear()
 
-                    pkt_index[serial] = idx + 1
-                    cur.clear()
 
-            pages += 1
+def _parse_ogg_stream_kinds_by_serial(path, oggs_off, *, max_pages=256):
+    kinds_by_serial = {}
+    for serial, packet in _iter_ogg_packets(path, oggs_off, max_pages=max_pages):
+        if serial in kinds_by_serial:
+            continue
+        kind = _detect_packet_kind(packet)
+        if kind:
+            kinds_by_serial[int(serial)] = kind
+        if len(kinds_by_serial) >= 2:
+            break
+    return kinds_by_serial
 
-            if pages >= 8 and kinds_by_serial:
-                done = True
-                for s, k in kinds_by_serial.items():
-                    if k == "theora" and s not in theora_by_serial:
-                        done = False
-                        break
-                    if k == "vorbis" and s not in vorbis_by_serial:
-                        done = False
-                        break
-                    if k == "opus" and s not in opus_by_serial:
-                        done = False
-                        break
-                    if k == "speex" and s not in speex_by_serial:
-                        done = False
-                        break
-                if done:
-                    break
 
-    out: List[OggStreamInfo] = []
-    for serial in sorted(kinds_by_serial.keys()):
-        k = kinds_by_serial[serial]
-        out.append(
-            OggStreamInfo(
-                serial=int(serial),
-                kind=str(k),
-                theora=theora_by_serial.get(serial),
-                vorbis=vorbis_by_serial.get(serial),
-                opus=opus_by_serial.get(serial),
-                speex=speex_by_serial.get(serial),
-                comment=comment_by_serial.get(serial),
+def _read_theora_ident_from_stream(path, oggs_off, serial):
+    for _serial, packet in _iter_ogg_packets(
+        path, oggs_off, serial_filter=int(serial), max_pages=4096
+    ):
+        if len(packet) >= 42 and packet[0] == 128 and packet[1:7] == b"theora":
+            fps_num = int.from_bytes(packet[22:26], "big")
+            fps_den = int.from_bytes(packet[26:30], "big")
+            theora_pixfmt = int(packet[37])
+            theora_pic_w = int.from_bytes(packet[14:17], "big")
+            theora_pic_h = int.from_bytes(packet[17:20], "big")
+            b41 = packet[41] if len(packet) >= 43 else packet[40]
+            b42 = packet[42] if len(packet) >= 43 else packet[41]
+            theora_kfgshift = int((b41 & 3) << 3 | (b42 >> 5))
+            return (
+                int(fps_num),
+                int(fps_den),
+                int(theora_kfgshift),
+                int(theora_pixfmt),
+                int(theora_pic_w),
+                int(theora_pic_h),
             )
+    return None
+
+
+def _fill_tablea_backlinks(entries):
+    for index, entry in enumerate(entries):
+        if entry.is_packet_start:
+            entries[index] = entry._replace(back_link=index)
+            continue
+        seen_frames = 0
+        back_link = index
+        while back_link > 0:
+            prev = entries[back_link]
+            if seen_frames < 2:
+                if prev.aux0 > 0:
+                    seen_frames += 1
+            elif prev.aux0 > 0:
+                break
+            back_link -= 1
+            if entries[back_link].is_packet_start:
+                break
+        entries[index] = entry._replace(back_link=back_link)
+
+
+def _build_outer_header(*, dword_28, dword_2c, qword_30, dword_40, dword_4c, dword_50):
+    arr = list(_OUTER_TEMPLATE)
+    arr[10] = int(dword_28) & 4294967295
+    arr[11] = int(dword_2c) & 4294967295
+    arr[12] = int(qword_30) & 4294967295
+    arr[16] = int(dword_40) & 4294967295
+    arr[19] = int(dword_4c) & 4294967295
+    arr[20] = int(dword_50) & 4294967295
+    return OUTER_STRUCT.pack(*[int(x) & 4294967295 for x in arr])
+
+
+def _parse_tablea(buf):
+    if len(buf) % 28:
+        raise ValueError("OMV: invalid tableA size")
+    return tuple(
+        TableAEntry(
+            int(page_no),
+            int(is_eos),
+            int(is_packet_start),
+            int(page_bytes),
+            int(x0),
+            int(back_link),
+            int(aux0),
+            int(aux1),
         )
-    return out
+        for page_no, is_eos, is_packet_start, _pad, page_bytes, x0, back_link, aux0, aux1 in struct.iter_unpack(
+            "<IBBHIIiii", buf
+        )
+    )
+
+
+def _parse_tableb(buf):
+    if len(buf) % 32:
+        raise ValueError("OMV: invalid tableB size")
+    return tuple(
+        TableBEntry(
+            int(seq),
+            int(page_no),
+            int(frame_no),
+            int(flags),
+            int(last_key_seq),
+            int(last_key_page),
+            int(prev_time),
+            int(time_ms),
+        )
+        for seq, page_no, frame_no, flags, last_key_seq, last_key_page, prev_time, time_ms in struct.iter_unpack(
+            "<IIIIIIII", buf
+        )
+    )
+
+
+def _try_parse_tables(path, outer):
+    size = int(os.stat(path).st_size)
+    table_a_count = int(outer.dword_4c)
+    if table_a_count <= 0 or table_a_count > 5000000:
+        return (), (), None
+    table_a_bytes = 28 * table_a_count
+    after_a = 168 + table_a_bytes
+    if after_a > size:
+        return (), (), None
+    with open(path, "rb") as file_obj:
+        file_obj.seek(168)
+        table_a = _parse_tablea(_read_exact(file_obj, table_a_bytes))
+    table_b_count = int(outer.dword_50)
+    table_b = ()
+    data_off_guess = int(after_a)
+    if 0 < table_b_count <= 50000000:
+        table_b_len = 32 * table_b_count
+        if after_a + table_b_len <= size:
+            with open(path, "rb") as file_obj:
+                file_obj.seek(after_a)
+                table_b = _parse_tableb(_read_exact(file_obj, table_b_len))
+            data_off_guess = int(after_a + table_b_len)
+    ogg_off = None
+    for off in (data_off_guess, after_a, 0):
+        try:
+            ogg_off = find_oggs_offset(path, int(off))
+            break
+        except Exception:
+            pass
+    if ogg_off is None:
+        return table_a, table_b, None
+    if not table_b:
+        tail_len = int(ogg_off - after_a)
+        if tail_len > 0 and tail_len % 32 == 0:
+            fb_n = tail_len // 32
+            if 0 < fb_n <= 50000000:
+                with open(path, "rb") as file_obj:
+                    file_obj.seek(after_a)
+                    table_b = _parse_tableb(_read_exact(file_obj, tail_len))
+    return table_a, table_b, int(ogg_off)

@@ -153,7 +153,14 @@ def _usage(out=None):
     out.write("Video mode:\n")
     out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
     out.write(f"  {p} -v --a <input_file.omv>\n")
-
+    out.write(
+        f"  {p} -v --c <input_ogv> <output_omv|output_dir> [--refer ref.omv] [--mode N] [--flags 0x18DE00]\n"
+    )
+    out.write(
+        "    --refer  Apply mode and TableB flags_hi24 from ref .omv (overridden by --mode/--flags)\n"
+    )
+    out.write("    --mode   Override header mode (@0x28), default: auto from ogv\n")
+    out.write("    --flags  Override TableB flags high 24 bits, default: 0\n")
     out.write("\n")
     out.write("Altkey mode:\n")
     out.write(f"  {p} -ak <input_exe> <input_key> [-o output_exe]\n")
@@ -202,7 +209,6 @@ def main(argv=None):
         _usage()
         return 0
     mode = argv[0]
-
     if mode in ("init", "--init"):
         from ._const_manager import download_const, load_const_module
 
@@ -224,17 +230,14 @@ def main(argv=None):
             else:
                 sys.stderr.write(f"{_prog()}: unknown init option: {a}\n")
                 return 2
-
         try:
             path = download_const(ref=ref, force=force)
             load_const_module(path)
         except Exception as e:
             sys.stderr.write(f"{_prog()}: init failed: {e}\n")
             return 1
-
         sys.stdout.write(f"const.py installed at: {path}\n")
         return 0
-
     try:
         from ._const_manager import _const_path, load_const_module
 
@@ -245,7 +248,6 @@ def main(argv=None):
             f"{_prog()}: const.py is missing. Run '{_prog()} init' first. Expected at: {p}\n"
         )
         return 2
-
     if mode in ("-c", "--compile"):
         from . import compiler
 
@@ -253,7 +255,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-x", "--extract"):
         from . import extract
 
@@ -261,7 +262,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-a", "--analyze"):
         from . import analyze
 
@@ -269,7 +269,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-k", "--koe"):
         from . import koe_collector
 
@@ -277,7 +276,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-e", "--exec", "--execute"):
         from . import exec
 
@@ -285,7 +283,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-m", "--textmap"):
         from . import textmap
 
@@ -293,7 +290,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-g", "--g00"):
         from . import g00
 
@@ -301,7 +297,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-s", "--sound"):
         from . import sound_tool
 
@@ -309,7 +304,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-v", "--video"):
         from . import video_tool
 
@@ -317,7 +311,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     if mode in ("-ak", "--altkey"):
         from . import altkey
 
@@ -325,7 +318,6 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-
     sys.stderr.write(f"{_prog()}: unknown mode: {mode}\n")
     _usage_short()
     return 2
