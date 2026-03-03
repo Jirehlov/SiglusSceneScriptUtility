@@ -57,7 +57,7 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
-    out.write("  -p, --patch   Overwrite exe_el key into SiglusEngine.exe\n")
+    out.write("  -p, --patch   Patch SiglusEngine.exe (altkey/lang)\n")
     out.write("\n")
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
@@ -173,11 +173,27 @@ def _usage(out=None):
     out.write("    --flags  Override TableB flags high 24 bits, default: 0\n")
     out.write("\n")
     out.write("Patch mode:\n")
-    out.write(f"  {p} -p <input_exe> <input_key> [-o output_exe]\n")
+    out.write(
+        f"  {p} -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]\n"
+    )
+    out.write(
+        f"  {p} -p --lang (chs|eng|<json>) <input_exe> [-o output_exe] [--inplace]\n"
+    )
     out.write("    <input_key> can be either:\n")
     out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
     out.write(
         "      - path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
+    )
+    out.write("    <json> (custom) fields:\n")
+    out.write("      - charset: 0/128/134 or 'eng'/'jp'/'chs'\n")
+    out.write("      - suffix: output suffix for default naming\n")
+    out.write("      - replace: object mapping old->new\n")
+    out.write(
+        "      - skip_standalone: list of old strings to skip when surrounded by NULs\n"
+    )
+    out.write("      example:\n")
+    out.write(
+        '        \'{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}\'\n'
     )
 
 
