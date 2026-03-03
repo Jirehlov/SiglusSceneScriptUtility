@@ -9,28 +9,6 @@ from .native_ops import lzss_pack, lzss_unpack, tile_copy
 from .common import _sha1, read_bytes, write_bytes
 
 
-def _looks_like_dbs(blob):
-    if (not blob) or len(blob) < 12:
-        return False
-    try:
-        m_type = struct.unpack_from("<i", blob, 0)[0]
-    except Exception:
-        return False
-
-    if m_type < -16 or m_type > 16:
-        return False
-    try:
-        pack_sz = struct.unpack_from("<I", blob, 4)[0] ^ C.DBS_XOR32_CODE
-        org_sz = struct.unpack_from("<I", blob, 8)[0] ^ C.DBS_XOR32_CODE
-    except Exception:
-        return False
-    if org_sz == 0 or org_sz > 512 * 1024 * 1024:
-        return False
-    if pack_sz == 0 or pack_sz > (len(blob) - 4):
-        return False
-    return True
-
-
 def _xor32_inplace(barr, code):
     if not barr:
         return
@@ -408,19 +386,6 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             print(f"  first_diff_offset={first:d}")
 
     return 0
-
-
-def _iter_dbs_files(path: str):
-    if not path:
-        return
-    if os.path.isdir(path):
-        for root, _dirs, files in os.walk(path):
-            for fn in files:
-                if fn.lower().endswith(".dbs"):
-                    yield os.path.join(root, fn)
-    else:
-        if path.lower().endswith(".dbs") and os.path.isfile(path):
-            yield path
 
 
 def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> str:

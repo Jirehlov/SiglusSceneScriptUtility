@@ -112,7 +112,7 @@ def _analyze_one(path: str) -> int:
             print(_fmt_kv(f"entry[{i}].no", int(no_)))
             print(_fmt_kv(f"entry[{i}].offset", int(offset_)))
             print(_fmt_kv(f"entry[{i}].size", int(size_)))
-            print(_fmt_kv(f"entry[{i}].sample_cnt", int(smp_cnt_)))
+            print(_fmt_kv(f"entry[{i}].smp_cnt", int(smp_cnt_)))
         return 0
 
     if ext == ".owp":
@@ -262,6 +262,25 @@ def _ffmpeg_trim_ogg_bytes(
             pass
 
 
+def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
+    bn = os.path.basename(src_path)
+    base_name, ext = os.path.splitext(bn)
+    ext = ext.lower()
+
+    out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
+    os.makedirs(out_dir, exist_ok=True)
+
+    if ext == ".ogg":
+        with open(src_path, "rb") as f:
+            ogg = f.read()
+        owp = sound.encode_ogg_to_owp_bytes(ogg)
+        out_path = os.path.join(out_dir, base_name + ".owp")
+        write_bytes(out_path, owp)
+        return 1
+
+    raise RuntimeError("unsupported file type (expected .ogg)")
+
+
 def _extract_one(
     src_path: str,
     out_root: str,
@@ -333,20 +352,26 @@ def main(argv=None) -> int:
 
     do_x = False
     do_a = False
+    do_c = False
     if "--x" in argv:
         do_x = True
         argv = [a for a in argv if a != "--x"]
     if "--a" in argv:
         do_a = True
         argv = [a for a in argv if a != "--a"]
+    if "--c" in argv:
+        do_c = True
+        argv = [a for a in argv if a != "--c"]
 
-    if do_x and do_a:
-        eprint("error: choose only one of --x or --a")
+    if (1 if do_x else 0) + (1 if do_a else 0) + (1 if do_c else 0) > 1:
+        eprint("error: choose only one of --x or --a or --c")
         _hint_help()
         return 2
 
-    if not do_x and not do_a:
-        eprint("error: missing flag: specify --x (extract) or --a (analyze)")
+    if not do_x and not do_a and not do_c:
+        eprint(
+            "error: missing flag: specify --x (extract) or --a (analyze) or --c (create)"
+        )
         _hint_help()
         return 2
 
@@ -363,6 +388,95 @@ def main(argv=None) -> int:
             eprint(f"input not found: {inp}")
             return 1
         return _analyze_one(inp)
+
+    if do_c:
+        if "--trim" in argv:
+            eprint("error: --trim is only valid with --x")
+            return 2
+        if len(argv) != 2:
+            eprint("error: expected <input> <output_dir> for --c")
+            _hint_help()
+            return 2
+        inp, out_root = argv[0], argv[1]
+
+        src_is_dir = os.path.isdir(inp)
+        if not src_is_dir and not os.path.isfile(inp):
+            eprint(f"input not found: {inp}")
+            return 1
+
+        os.makedirs(out_root, exist_ok=True)
+
+        files = iter_files_by_ext(inp, [".ogg"]) if src_is_dir else [inp]
+        wrote = 0
+        failed = 0
+
+        if not files:
+            eprint("no supported audio files found")
+            return 0
+
+        tasks = []
+        if src_is_dir:
+            suffix_re = re.compile(r"^(?P<base>.+)_(?P<no>-?\d+)$")
+            groups = {}
+            for src_path in files:
+                rel = os.path.relpath(src_path, inp)
+                rel_dir = os.path.dirname(rel)
+                base, _ = os.path.splitext(os.path.basename(src_path))
+                m = suffix_re.match(base)
+                if not m:
+                    tasks.append(("owp", src_path, rel_dir, base))
+                    continue
+                base2 = m.group("base")
+                no = int(m.group("no"))
+                key = (rel_dir, base2)
+                groups.setdefault(key, []).append((no, src_path))
+
+            for (rel_dir, base2), items in sorted(
+                groups.items(), key=lambda x: (x[0][0], x[0][1])
+            ):
+                if len(items) >= 2:
+                    tasks.append(("ovk", items, rel_dir, base2))
+                    continue
+                for no, src_path in items:
+                    base = os.path.splitext(os.path.basename(src_path))[0]
+                    tasks.append(("owp", src_path, rel_dir, base))
+        else:
+            src_path = files[0]
+            rel_dir = ""
+            base = os.path.splitext(os.path.basename(src_path))[0]
+            tasks.append(("owp", src_path, rel_dir, base))
+
+        total = len(tasks)
+        for idx, t in enumerate(tasks, 1):
+            kind = t[0]
+            eprint(f"[{idx}/{total}] processing: {kind}")
+            try:
+                if kind == "owp":
+                    _, src_path, rel_dir, _base = t
+                    n = _pack_one(src_path, out_root, rel_dir)
+                    wrote += n
+                    eprint(f"[{idx}/{total}] done: wrote {n}")
+                    continue
+
+                _, items, rel_dir, base2 = t
+                out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
+                os.makedirs(out_dir, exist_ok=True)
+                entry_list = []
+                for no, src_path in sorted(items, key=lambda x: x[0]):
+                    with open(src_path, "rb") as f:
+                        ogg = f.read()
+                    entry_list.append((no, ogg))
+                ovk = sound.encode_oggs_to_ovk_bytes(entry_list)
+                out_path = os.path.join(out_dir, base2 + ".ovk")
+                write_bytes(out_path, ovk)
+                wrote += 1
+                eprint(f"[{idx}/{total}] done: wrote 1")
+            except Exception as e:
+                failed += 1
+                eprint(f"[{idx}/{total}] failed\t{e}")
+
+        eprint(f"done total={total} wrote={wrote} failed={failed}")
+        return 0 if failed == 0 else 1
 
     trim_path = ""
     if "--trim" in argv:

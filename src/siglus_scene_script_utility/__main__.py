@@ -147,6 +147,7 @@ def _usage(out=None):
         f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
     )
     out.write(f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n")
+    out.write(f"  {p} -s --c <input_ogg|input_dir> <output_dir>\n")
     out.write("\n")
     out.write("DB mode:\n")
     out.write(f"  {p} -d --x <input_dir|input_file> <output_dir>\n")

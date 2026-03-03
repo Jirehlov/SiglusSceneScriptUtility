@@ -57,6 +57,70 @@ def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
     return out
 
 
+def encode_ogg_to_owp_bytes(ogg_bytes: bytes, key: int = 0x39) -> bytes:
+    if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
+        raise ValueError("OWP encode failed: input is not OggS")
+    return bytes((x ^ key) for x in ogg_bytes)
+
+
+def _ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
+    if len(ogg_bytes) < 27 or ogg_bytes[:4] != b"OggS":
+        return 0
+    i = 0
+    best = 0
+    got = False
+    n = len(ogg_bytes)
+    while i + 27 <= n:
+        if ogg_bytes[i : i + 4] != b"OggS":
+            break
+        gp = struct.unpack_from("<q", ogg_bytes, i + 6)[0]
+        segs = ogg_bytes[i + 26]
+        hdr_end = i + 27 + segs
+        if hdr_end > n:
+            break
+        seg_table = ogg_bytes[i + 27 : hdr_end]
+        payload_len = 0
+        for b in seg_table:
+            payload_len += b
+        page_end = hdr_end + payload_len
+        if page_end > n:
+            break
+        if gp != -1:
+            if (not got) or gp > best:
+                best = gp
+                got = True
+        i = page_end
+    if got:
+        return int(best)
+    return 0
+
+
+def encode_oggs_to_ovk_bytes(entries: List[Tuple[int, bytes]]) -> bytes:
+    if not entries:
+        return struct.pack("<I", 0)
+    ordered = sorted(((int(no), ogg) for (no, ogg) in entries), key=lambda x: x[0])
+    seen = set()
+    for no, ogg in ordered:
+        if no in seen:
+            raise ValueError(f"OVK encode failed: duplicate entry_no={no}")
+        seen.add(no)
+        if len(ogg) < 4 or ogg[:4] != b"OggS":
+            raise ValueError(f"OVK encode failed: entry_no={no} is not OggS")
+
+    cnt = len(ordered)
+    header_size = 4 + _OVK_ENTRY_STRUCT.size * cnt
+    table = bytearray()
+    payload = bytearray()
+    off = header_size
+    for no, ogg in ordered:
+        size = len(ogg)
+        smp = _ogg_calc_smp_cnt(ogg)
+        table += _OVK_ENTRY_STRUCT.pack(size, off, no, smp)
+        payload += ogg
+        off += size
+    return struct.pack("<I", cnt) + bytes(table) + bytes(payload)
+
+
 @dataclass(frozen=True)
 class OVKEntry:
     entry_no: int
