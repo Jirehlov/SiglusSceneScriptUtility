@@ -57,7 +57,7 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
-    out.write("  -p, --patch   Patch SiglusEngine.exe (altkey/lang)\n")
+    out.write("  -p, --patch     Patch SiglusEngine.exe (altkey/lang)\n")
     out.write("\n")
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
@@ -72,20 +72,20 @@ def _usage(out=None):
         f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
     )
     out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
-    out.write("    --debug        Keep temp files (also prints stage timings)\n")
-    out.write("    --charset ENC  Force source charset (jis/cp932 or utf8)\n")
-    out.write("    --no-os        Skip OS stage (do not pack source files)\n")
+    out.write("    --debug         Keep temp files (also prints stage timings)\n")
+    out.write("    --charset ENC   Force source charset (jis/cp932 or utf8)\n")
+    out.write("    --no-os         Skip OS stage (do not pack source files)\n")
     out.write(
-        "    --dat-repack   Repack existing .dat files in input_dir (skip .ss compilation)\n"
+        "    --dat-repack    Repack existing .dat files in input_dir (skip .ss compilation)\n"
     )
-    out.write("    --no-angou     Disable encryption/compression (header_size=0)\n")
-    out.write("    --parallel     Enable parallel compilation\n")
-    out.write("    --max-workers  Limit parallel workers (default: auto)\n")
-    out.write("    --lzss-level   LZSS compression level (2-17, default: 17)\n")
+    out.write("    --no-angou      Disable encryption/compression (header_size=0)\n")
+    out.write("    --parallel      Enable parallel compilation\n")
+    out.write("    --max-workers   Limit parallel workers (default: auto)\n")
+    out.write("    --lzss-level    LZSS compression level (2-17, default: 17)\n")
     out.write(
-        "    --set-shuffle  Set initial shuffle seed (MSVCRand) for .dat string order\n"
+        "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order\n"
     )
-    out.write("    --tmp          Use specific temp directory\n")
+    out.write("    --tmp           Use specific temp directory\n")
     out.write(
         "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order\n"
     )
@@ -93,7 +93,7 @@ def _usage(out=None):
     out.write("Extract mode:\n")
     out.write(f"  {p} -x [--disam] <input_pck> <output_dir>\n")
     out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
-    out.write("    --disam      Dump .dat disassembly when extracting .pck\n")
+    out.write("    --disam        Dump .dat disassembly when extracting .pck\n")
     out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
     out.write("\n")
     out.write("Analyze mode:\n")
@@ -102,7 +102,7 @@ def _usage(out=None):
     )
     out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
-    out.write("    --disam      Write .dat disassembly to __DATDIR__\n")
+    out.write("    --disam        Write .dat disassembly to __DATDIR__\n")
     out.write(
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
     )
