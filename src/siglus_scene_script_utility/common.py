@@ -578,6 +578,11 @@ def hx(x):
     return f"0x{v:X}"
 
 
+def append_diff(diffs, k, x, y):
+    if x != y:
+        diffs.append(f"{k}: {x!r} -> {y!r}")
+
+
 def _dn(name, width=None):
     s = str(name or "")
     try:

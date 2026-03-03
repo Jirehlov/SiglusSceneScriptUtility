@@ -15,19 +15,6 @@ def _form_name(f):
     return f
 
 
-def _map_arg_form(f):
-    if isinstance(f, str):
-        return f
-    try:
-        fv = int(f)
-        for k, v in C._FORM_CODE.items():
-            if int(v) == fv:
-                return k
-    except Exception:
-        pass
-    return f
-
-
 def _parse_arg_spec(arg_spec):
     if not arg_spec:
         return {}
@@ -64,15 +51,15 @@ def _parse_arg_spec(arg_spec):
                 except Exception:
                     aid = len(al)
                 nm = parts[1]
-                fm = _map_arg_form(parts[2])
+                fm = _form_name(parts[2])
             elif len(parts) == 2:
                 aid = len(al)
                 nm = parts[0]
-                fm = _map_arg_form(parts[1])
+                fm = _form_name(parts[1])
             else:
                 aid = len(al)
                 nm = ""
-                fm = _map_arg_form(parts[0])
+                fm = _form_name(parts[0])
             al.append(
                 {
                     "id": aid,
@@ -373,7 +360,7 @@ class MA:
         if t == C.NT_S_LABEL:
             ok = s.ma_label(sen.get("label"))
         elif t == C.NT_S_Z_LABEL:
-            ok = s.ma_z_label(sen.get("z_label"))
+            ok = s.ma_label(sen.get("z_label"))
         elif t == C.NT_S_DEF_PROP:
             ok = s.ma_def_prop(sen.get("def_prop"))
         elif t == C.NT_S_DEF_CMD:
@@ -389,9 +376,9 @@ class MA:
         elif t == C.NT_S_WHILE:
             ok = s.ma_while(sen.get("While"))
         elif t == C.NT_S_CONTINUE:
-            ok = s.ma_continue(sen.get("Continue"))
+            ok = s.ma_label(sen.get("Continue"))
         elif t == C.NT_S_BREAK:
-            ok = s.ma_break(sen.get("Break"))
+            ok = s.ma_label(sen.get("Break"))
         elif t == C.NT_S_SWITCH:
             ok = s.ma_switch(sen.get("Switch"))
         elif t == C.NT_S_ASSIGN:
@@ -399,11 +386,11 @@ class MA:
         elif t == C.NT_S_COMMAND:
             ok = s.ma_command(sen.get("command"), sel)
         elif t == C.NT_S_TEXT:
-            ok = s.ma_text(sen.get("text"))
+            ok = s.ma_label(sen.get("text"))
         elif t == C.NT_S_NAME:
             ok = s.ma_name(sen.get("name"))
         elif t == C.NT_S_EOF:
-            ok = s.ma_eof(sen.get("eof"))
+            ok = s.ma_label(sen.get("eof"))
         else:
             return 0
         if not ok:
@@ -413,11 +400,6 @@ class MA:
         return 1
 
     def ma_label(s, n):
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
-        return 1
-
-    def ma_z_label(s, n):
         if isinstance(n, dict):
             n["node_form"] = C.FM_VOID
         return 1
@@ -573,16 +555,6 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
-    def ma_continue(s, n):
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
-        return 1
-
-    def ma_break(s, n):
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
-        return 1
-
     def ma_switch(s, n):
         if not isinstance(n, dict):
             return 0
@@ -688,11 +660,6 @@ class MA:
                 s.last_atom((n.get("command") or {}).get("elm_list")),
             )
         n["node_form"] = C.FM_VOID
-        return 1
-
-    def ma_text(s, n):
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
         return 1
 
     def ma_exp(s, n, sel):
@@ -1173,11 +1140,6 @@ class MA:
                 else (C.FM_LABEL if tp == C.LA_T["LABEL"] else C.FM_VOID)
             )
         )
-        return 1
-
-    def ma_eof(s, n):
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
         return 1
 
     def check_operate_1(s, rf):

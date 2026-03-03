@@ -1,6 +1,6 @@
 import struct
 
-from .common import read_i32_le, hx
+from .common import read_i32_le, hx, append_diff
 
 _TONE = 0
 _RGB_SAT = 1
@@ -131,12 +131,8 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
     b = _parse(b2, want_payload=True)
     diffs = []
 
-    def _d(k, x, y):
-        if x != y:
-            diffs.append(f"{k}: {x!r} -> {y!r}")
-
-    _d("max", int(a.get("max") or 0), int(b.get("max") or 0))
-    _d("cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
+    append_diff(diffs, "max", int(a.get("max") or 0), int(b.get("max") or 0))
+    append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
     oa = a.get("offsets") or ()
     ob = b.get("offsets") or ()
     if len(oa) != len(ob):

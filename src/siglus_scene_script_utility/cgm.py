@@ -1,5 +1,5 @@
 from . import const as C
-from .common import read_i32_le
+from .common import read_i32_le, append_diff
 from .native_ops import xor_cycle_inplace, lzss_unpack
 
 
@@ -146,14 +146,12 @@ def compare_cgm(b1, b2):
     b = decode_cgm(b2)
     diffs = []
 
-    def _d(k, x, y):
-        if x != y:
-            diffs.append(f"{k}: {x!r} -> {y!r}")
-
-    _d("head", a.get("head"), b.get("head"))
-    _d("cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
-    _d("auto_flag", int(a.get("auto_flag") or 0), int(b.get("auto_flag") or 0))
-    _d("rev", a.get("rev"), b.get("rev"))
+    append_diff(diffs, "head", a.get("head"), b.get("head"))
+    append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
+    append_diff(
+        diffs, "auto_flag", int(a.get("auto_flag") or 0), int(b.get("auto_flag") or 0)
+    )
+    append_diff(diffs, "rev", a.get("rev"), b.get("rev"))
     ea = a.get("entries") or []
     eb = b.get("entries") or []
     if len(ea) != len(eb):

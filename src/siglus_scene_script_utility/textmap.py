@@ -450,11 +450,6 @@ def _write_disam_map(csv_path: str, str_list):
             w.writerow([i, s, s])
 
 
-def _read_disam_map(csv_path: str):
-    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
-
-
 def _apply_disam_map(str_list, rows, filename: str = ""):
     changes = 0
     for row in rows or []:
@@ -576,7 +571,7 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
     if not os.path.exists(csv_path):
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
-    rows = _read_disam_map(csv_path)
+    rows = _read_map(csv_path)
     updated_list, count = _apply_disam_map(list(str_list), rows, filename=fname)
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")

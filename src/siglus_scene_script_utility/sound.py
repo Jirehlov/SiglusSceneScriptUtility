@@ -242,6 +242,18 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             v -= 0x10000
         return v
 
+    br = None
+    nowsmp = 0
+
+    def apply_delta(nbits: int, sign_bit: int, shift: int):
+        nonlocal nowsmp, br
+        code = br.get(nbits)
+        if code & sign_bit:
+            code &= sign_bit - 1
+            nowsmp -= code << shift
+        else:
+            nowsmp += code << shift
+
     if header.channels == 1:
         nowsmp = _int16_le(data, 0)
         br = _BitReader(data, byte_pos=2, bit_pos=0)
@@ -256,16 +268,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             pack_mod = 0
 
         mod = 3 + pack_mod
-
-        def apply_delta(nbits: int, sign_bit: int, shift: int):
-            nonlocal nowsmp
-            code = br.get(nbits)
-            if code & sign_bit:
-                code &= sign_bit - 1
-                nowsmp -= code << shift
-            else:
-                nowsmp += code << shift
-
         zero_cnt = 0
 
         for i in range(src_smp_cnt):
@@ -324,16 +326,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
 
     zero_cnt = 0
     nowsmp = 0
-
-    def apply_delta(nbits: int, sign_bit: int, shift: int):
-        nonlocal nowsmp
-        code = br.get(nbits)
-        if code & sign_bit:
-            code &= sign_bit - 1
-            nowsmp -= code << shift
-        else:
-            nowsmp += code << shift
-
     for i in range(src_smp_cnt):
         if (i & 1) == 0:
             nowsmp = nowsmp_l

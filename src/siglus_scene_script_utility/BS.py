@@ -1037,7 +1037,7 @@ class BS:
             s.scn_push_u8(C.CD_OPERATE_2)
             s.scn_push_i32(form_l)
             s.scn_push_i32(form_r)
-            s.bs_assign_operator(assign.get("equal"))
+            s.bs_operator_1(assign.get("equal"))
         form_r2 = _fc(dereference(assign.get("equal_form", assign.get("node_form"))))
         s.scn_push_u8(C.CD_ASSIGN)
         s.scn_push_i32(_fc((assign.get("left") or {}).get("node_form")))
@@ -1143,7 +1143,7 @@ class BS:
             s.scn_push_i32(form_l)
             s.scn_push_i32(form_r)
             s.add_out_txt("CD_OPERATE_2")
-            return s.bs_operator_2(exp.get("opr"))
+            return s.bs_operator_1(exp.get("opr"))
         s.es = "Unknown expression node_type"
         return False
 
@@ -1481,15 +1481,7 @@ class BS:
             )
         return True
 
-    def bs_assign_operator(s, opr):
-        s.scn_push_u8(int(((opr or {}).get("atom") or {}).get("opt", 0) or 0))
-        return True
-
     def bs_operator_1(s, opr):
-        s.scn_push_u8(int(((opr or {}).get("atom") or {}).get("opt", 0) or 0))
-        return True
-
-    def bs_operator_2(s, opr):
         s.scn_push_u8(int(((opr or {}).get("atom") or {}).get("opt", 0) or 0))
         return True
 

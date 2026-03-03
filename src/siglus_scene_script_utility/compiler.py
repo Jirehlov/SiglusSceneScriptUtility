@@ -580,18 +580,18 @@ def main(argv=None):
             md5_path = os.path.join(tmp, "_md5.json")
             cur_inc = {}
             cur_ss = {}
+
+            def _md5_file(p):
+                h = hashlib.md5()
+                with open(p, "rb") as f:
+                    while True:
+                        b = f.read(1024 * 1024)
+                        if not b:
+                            break
+                        h.update(b)
+                return h.hexdigest()
+
             if getattr(a, "tmp_dir", ""):
-
-                def _md5_file(p):
-                    h = hashlib.md5()
-                    with open(p, "rb") as f:
-                        while True:
-                            b = f.read(1024 * 1024)
-                            if not b:
-                                break
-                            h.update(b)
-                    return h.hexdigest()
-
                 md5_path = os.path.join(tmp, "_md5.json")
                 for f in inc or []:
                     p = os.path.join(inp, f)
@@ -655,17 +655,6 @@ def main(argv=None):
                                     pass
 
             else:
-
-                def _md5_file(p):
-                    h = hashlib.md5()
-                    with open(p, "rb") as f:
-                        while True:
-                            b = f.read(1024 * 1024)
-                            if not b:
-                                break
-                            h.update(b)
-                    return h.hexdigest()
-
                 for f in inc or []:
                     p = os.path.join(inp, f)
                     if os.path.isfile(p):
