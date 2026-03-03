@@ -347,15 +347,88 @@ def read_bytes(path: str) -> bytes:
 
 
 def write_bytes(path: str, data: bytes) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    ensure_parent_dir(path)
     with open(path, "wb") as f:
         f.write(data)
 
 
 def write_text(path: str, text: str, enc: str = "utf-8") -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    ensure_parent_dir(path)
     with open(path, "w", encoding=enc, newline="\r\n") as f:
         f.write(text)
+
+
+def ensure_parent_dir(path: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+
+def write_encoded_text(path: str, text: str, enc: str) -> None:
+    write_bytes(path, str(text or "").encode(enc))
+
+
+def parse_i32_header(dat: bytes, fields, size: int, offset: int = 0) -> dict:
+    if (not dat) or len(dat) < offset + int(size or 0):
+        return {}
+    try:
+        vals = struct.unpack_from("<" + "i" * len(fields), dat, int(offset or 0))
+    except Exception:
+        return {}
+    return {k: int(v) for k, v in zip(fields, vals)}
+
+
+def parse_i32_header_checked(
+    dat: bytes,
+    fields,
+    size: int,
+    offset: int = 0,
+    header_size_key: str = "header_size",
+) -> dict:
+    h = parse_i32_header(dat, fields, size, offset=offset)
+    if not h:
+        return {}
+    try:
+        hs = int(h.get(header_size_key, 0) or 0)
+    except Exception:
+        return {}
+    if hs < int(size or 0) or hs > len(dat):
+        return {}
+    return h
+
+
+def looks_like_siglus_dat(blob: bytes) -> bool:
+    h = parse_i32_header_checked(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
+    if not h:
+        return False
+    so = h.get("scn_ofs", 0)
+    ss = h.get("scn_size", 0)
+    try:
+        so = int(so)
+        ss = int(ss)
+    except Exception:
+        return False
+    if so < 0 or ss < 0 or so > len(blob):
+        return False
+    if ss and so + ss > len(blob):
+        return False
+    return True
+
+
+def looks_like_siglus_pck(blob: bytes) -> bool:
+    h = parse_i32_header_checked(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    if not h:
+        return False
+    for k in (
+        "scn_name_index_list_ofs",
+        "scn_data_index_list_ofs",
+        "scn_data_list_ofs",
+    ):
+        try:
+            o = int(h.get(k, 0) or 0)
+        except Exception:
+            return False
+        if o < 0 or o > len(blob):
+            return False
+    return True
 
 
 def read_exe_el_key(path: str) -> bytes:

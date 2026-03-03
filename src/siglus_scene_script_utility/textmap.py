@@ -10,6 +10,7 @@ from . import dat as DAT
 from . import pck
 from .native_ops import lzss_pack, xor_cycle_inplace
 from .common import (
+    looks_like_siglus_dat,
     eprint,
     hint_help as _hint_help,
     decode_text_auto,
@@ -21,6 +22,7 @@ from .common import (
     _read_struct_list,
     _I32_PAIR_STRUCT,
     _I32_STRUCT,
+    write_encoded_text,
 )
 
 
@@ -46,13 +48,6 @@ def _align_newlines(text: str, newline: str) -> str:
     if newline and newline != "\n":
         return text.replace("\n", newline)
     return text
-
-
-def _write_text(path: str, text: str, encoding: str):
-    data = text.encode(encoding)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(data)
 
 
 def _encode_quoted(value: str) -> str:
@@ -314,7 +309,7 @@ def _fix_brackets_content(text: str):
 
 
 def _parse_scn_dat(blob: bytes):
-    if not DAT._looks_like_dat(blob):
+    if not looks_like_siglus_dat(blob):
         return None
     try:
         _, meta = DAT._dat_sections(blob)
@@ -627,13 +622,13 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
 
     out_encoding = encoding
     try:
-        _write_text(ss_path, _align_newlines(updated, newline), out_encoding)
+        write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
     except UnicodeEncodeError:
         eprint(
             f"textmap: {fname}: encode failed, falling back to utf-8", errors="replace"
         )
         out_encoding = "utf-8"
-        _write_text(ss_path, _align_newlines(updated, newline), out_encoding)
+        write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
 
     written_text, _written_enc, _nl2 = _read_text(ss_path)
     fixed_text, fixed_quote_count, fixed_space_count = _fix_brackets_content(
@@ -642,14 +637,18 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     fixed_total = fixed_quote_count + fixed_space_count
     if fixed_total:
         try:
-            _write_text(ss_path, _align_newlines(fixed_text, newline), out_encoding)
+            write_encoded_text(
+                ss_path, _align_newlines(fixed_text, newline), out_encoding
+            )
         except UnicodeEncodeError:
             eprint(
                 f"textmap: {fname}: encode failed during post-fix, falling back to utf-8",
                 errors="replace",
             )
             out_encoding = "utf-8"
-            _write_text(ss_path, _align_newlines(fixed_text, newline), out_encoding)
+            write_encoded_text(
+                ss_path, _align_newlines(fixed_text, newline), out_encoding
+            )
         if fixed_quote_count:
             eprint(
                 f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside 【】",

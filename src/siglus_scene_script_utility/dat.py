@@ -311,26 +311,6 @@ def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
         print("")
 
 
-def _looks_like_dat(blob):
-    if (not blob) or len(blob) < C.SCN_HDR_SIZE:
-        return False
-    try:
-        vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), blob, 0)
-    except Exception:
-        return False
-    h = {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
-    hs = h.get("header_size", 0)
-    if hs < C.SCN_HDR_SIZE or hs > len(blob):
-        return False
-    so = h.get("scn_ofs", 0)
-    ss = h.get("scn_size", 0)
-    if so < 0 or ss < 0 or so > len(blob):
-        return False
-    if ss and so + ss > len(blob):
-        return False
-    return True
-
-
 def _dat_sections(blob):
     n = len(blob)
 

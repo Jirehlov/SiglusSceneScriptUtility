@@ -12,6 +12,7 @@ from .common import (
     find_named_path,
     find_siglus_engine_exe,
     siglus_engine_exe_element,
+    looks_like_siglus_dat,
 )
 
 from . import pck
@@ -101,7 +102,7 @@ def _detect_type(path, blob):
         return "tcr"
     if pck._looks_like_pck(blob):
         return "pck"
-    if dat._looks_like_dat(blob):
+    if looks_like_siglus_dat(blob):
         return "dat"
     if sav._looks_like_sav(blob):
         return "sav"

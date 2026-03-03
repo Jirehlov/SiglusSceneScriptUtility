@@ -22,6 +22,7 @@ from .native_ops import (
     tile_copy,
 )
 from .common import (
+    looks_like_siglus_dat,
     record_stage_time,
     read_bytes,
     read_text_auto,
@@ -685,9 +686,7 @@ def main(argv=None):
                         b = read_bytes(fp)
                     except Exception:
                         continue
-                    from .dat import _looks_like_dat
-
-                    if _looks_like_dat(b):
+                    if looks_like_siglus_dat(b):
                         dats.append(fp)
                 dats.sort(key=lambda x: os.path.basename(x).lower())
                 if not dats:

@@ -18,6 +18,7 @@ from .common import (
     ANGOU_DAT_NAME,
     KEY_TXT_NAME,
     read_exe_el_key,
+    parse_i32_header,
 )
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
@@ -78,15 +79,8 @@ def _build_inc_data(ctx):
     return iad
 
 
-def _parse_scn_header(dat):
-    if (not dat) or len(dat) < C.SCN_HDR_SIZE:
-        return {}
-    vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), dat, 0)
-    return {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
-
-
 def _parse_cmd_labels(dat):
-    h = _parse_scn_header(dat)
+    h = parse_i32_header(dat, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
     if not h:
         return []
     ofs = h.get("cmd_label_list_ofs", 0)

@@ -23,6 +23,7 @@ from .common import (
     decode_text_auto,
     read_bytes,
     write_bytes,
+    parse_i32_header,
     parse_code,
     list_named_paths,
     is_named_filename,
@@ -33,31 +34,10 @@ from .common import (
     find_exe_el,
     find_siglus_engine_exe,
     read_siglus_engine_exe_el,
+    looks_like_siglus_pck,
 )
 
 MAX_SCENE_LIST = 2000
-
-
-def _looks_like_siglus_pck(blob):
-    if (not blob) or len(blob) < C.PACK_HDR_SIZE:
-        return False
-    try:
-        vals = struct.unpack_from("<" + "i" * len(C.PACK_HDR_FIELDS), blob, 0)
-    except Exception:
-        return False
-    h = {k: int(v) for k, v in zip(C.PACK_HDR_FIELDS, vals)}
-    hs = h.get("header_size", 0)
-    if hs < C.PACK_HDR_SIZE or hs > len(blob):
-        return False
-    for k in (
-        "scn_name_index_list_ofs",
-        "scn_data_index_list_ofs",
-        "scn_data_list_ofs",
-    ):
-        o = h.get(k, 0)
-        if o < 0 or o > len(blob):
-            return False
-    return True
 
 
 def _parse_flix_pck(blob: bytes) -> dict:
@@ -147,7 +127,7 @@ def _looks_like_flix_pck(blob) -> bool:
 
 
 def _looks_like_pck(blob):
-    return _looks_like_siglus_pck(blob) or _looks_like_flix_pck(blob)
+    return looks_like_siglus_pck(blob) or _looks_like_flix_pck(blob)
 
 
 def _pck_sections(blob, preview=False):
@@ -399,7 +379,7 @@ def _pck_original_sources(blob, h, scn_data_end):
 
 
 def pck(blob: bytes) -> int:
-    if _looks_like_flix_pck(blob) and (not _looks_like_siglus_pck(blob)):
+    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         secs, meta = _flix_pck_sections(blob, preview=True)
         h = meta.get("header") or {}
         print("header:")
@@ -655,13 +635,6 @@ def _unique_outpath(out_dir: str, name: str) -> str:
     return p
 
 
-def _parse_pack_header(dat: bytes) -> dict:
-    if (not dat) or len(dat) < C.PACK_HDR_SIZE:
-        return {}
-    vals = struct.unpack_from("<" + "i" * len(C.PACK_HDR_FIELDS), dat, 0)
-    return {k: int(v) for k, v in zip(C.PACK_HDR_FIELDS, vals)}
-
-
 def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
     out = []
     if blob_ofs <= 0 or blob_ofs + blob_bytes > len(dat):
@@ -781,7 +754,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         if not os.path.isfile(pck):
             return b""
         dat = read_bytes(pck)
-        hdr = _parse_pack_header(dat)
+        hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
         if not hdr:
             return b""
         orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
@@ -882,7 +855,7 @@ def _iter_exe_el_candidates(os_dir: str):
         if not os.path.isfile(pck):
             return
         dat = read_bytes(pck)
-        hdr = _parse_pack_header(dat)
+        hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
         if not hdr:
             return
         orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
@@ -965,7 +938,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     output_dir = os.path.abspath(output_dir)
     ok_cnt = 0
     dat = read_bytes(input_pck)
-    if _looks_like_flix_pck(dat) and (not _looks_like_siglus_pck(dat)):
+    if _looks_like_flix_pck(dat) and (not looks_like_siglus_pck(dat)):
         info = _parse_flix_pck(dat)
         if not info:
             sys.stderr.write("Invalid pck\n")
@@ -989,10 +962,10 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         sys.stdout.write(f"Extracted files: {ok_cnt:d}\n")
         return 0
 
-    if not _looks_like_siglus_pck(dat):
+    if not looks_like_siglus_pck(dat):
         sys.stderr.write("Invalid pck\n")
         return 1
-    hdr = _parse_pack_header(dat)
+    hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     scn_name_idx = _read_struct_list(
         dat,
         hdr.get("scn_name_index_list_ofs", 0),
