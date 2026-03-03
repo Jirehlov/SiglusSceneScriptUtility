@@ -34,7 +34,7 @@ def _usage(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write("\n")
     out.write("Options:\n")
@@ -57,7 +57,7 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
-    out.write("  -ak, --altkey   Overwrite exe_el key into SiglusEngine.exe\n")
+    out.write("  -p, --patch   Overwrite exe_el key into SiglusEngine.exe\n")
     out.write("\n")
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
@@ -172,8 +172,8 @@ def _usage(out=None):
     out.write("    --mode   Override header mode (@0x28), default: auto from ogv\n")
     out.write("    --flags  Override TableB flags high 24 bits, default: 0\n")
     out.write("\n")
-    out.write("Altkey mode:\n")
-    out.write(f"  {p} -ak <input_exe> <input_key> [-o output_exe]\n")
+    out.write("Patch mode:\n")
+    out.write(f"  {p} -p <input_exe> <input_key> [-o output_exe]\n")
     out.write("    <input_key> can be either:\n")
     out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
     out.write(
@@ -187,7 +187,7 @@ def _usage_short(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-ak) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write(f"Try '{p} --help' for more information.\n")
 
@@ -328,10 +328,10 @@ def main(argv=None):
         if rc == 2:
             _usage_short()
         return rc
-    if mode in ("-ak", "--altkey"):
-        from . import altkey
+    if mode in ("-p", "--patch"):
+        from . import patch
 
-        rc = altkey.main(argv[1:])
+        rc = patch.main(argv[1:])
         if rc == 2:
             _usage_short()
         return rc
