@@ -151,7 +151,13 @@ def _usage(out=None):
     out.write("DB mode:\n")
     out.write(f"  {p} -d --x <input_dir|input_file> <output_dir>\n")
     out.write(f"  {p} -d --a <input_file.dbs> [input_file_2.dbs]\n")
-    out.write(f"  {p} -d --c <input_dbs|input_dir> <csv_dir>\n")
+    out.write(
+        f"  {p} -d --c [--type N] [--set-shuffle SEED] <input_csv|input_dir> <output_dbs|output_dir>\n"
+    )
+    out.write(
+        f"  {p} -d --c --test-shuffle [skip0] <expected.dbs> <input_csv> <output_dbs>\n"
+    )
+
     out.write("\n")
     out.write("Video mode:\n")
     out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
