@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-> *本文档由 Claude Opus 4.6 Thinking 生成。*
+*本文档由 Claude Opus 4.6 Thinking 生成。*
 **版本：** 见 `siglus-ssu --version`  
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility  
 **英文版：** [manual.md](manual.md)
@@ -153,7 +153,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.1.10
+siglus-ssu init --ref v0.1.11
 ```
 
 ---
@@ -411,7 +411,7 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 ### `-k` / `--koe` — 按角色收集语音文件
 
-扫描 `.ss` 脚本源文件（或导出的 `.txt` 反汇编文件）中的 `KOE()`、`KOE2()`、`EXKOE()` 语音调用指令，将其与 `.ovk` 语音存档条目匹配，并将对应的 `.ogg` 音频文件提取到按角色命名的子目录中。
+扫描 `.ss` 脚本源文件（或导出的 `.txt` 反汇编文件）中的 `KOE()`、`KOE2()`、`EXKOE()` 语音调用指令，将其与 `.ovk` 语音文件条目匹配，并将对应的 `.ogg` 音频文件提取到按角色命名的子目录中。
 
 同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。
 
@@ -426,7 +426,7 @@ siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
 | 参数 | 说明 |
 |---|---|
 | `<ss_dir>` | `.ss` 源文件目录，或导出的 `.txt` 反汇编目录（若目录中存在 `.txt` 文件则优先使用）。也可以是单个 `.ss` 或 `.txt` 文件。 |
-| `<voice_dir>` | 包含 `.ovk` 语音存档文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。 |
+| `<voice_dir>` | 包含 `.ovk` 语音文件文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。 |
 | `<output_dir>` | 提取的 `.ogg` 文件和 `koe_master.csv` 清单的输出目录。 |
 
 #### 输出结构
@@ -605,7 +605,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 
 ### `-g` / `--g00` — 处理 `.g00` 图片文件
 
-提供分析、提取、合并和更新 SiglusEngine `.g00` 图片存档的工具，用于背景、立绘等视觉资源。
+提供分析、提取、合并和更新 SiglusEngine `.g00` 图片文件的工具，用于背景、立绘等视觉资源。
 
 #### `.g00` 文件类型
 
@@ -689,9 +689,9 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/game_dir/
 
 | 扩展名 | 说明 |
 |---|---|
-| `.nwa` | NeWA 自适应差分 PCM 压缩音频。解码为 `.wav`。 |
+| `.nwa` | NWA 自适应差分 PCM 压缩音频。解码为 `.wav`。 |
 | `.owp` | XOR 混淆的 Ogg Vorbis 音频。解码为 `.ogg`。 |
-| `.ovk` | 包含多个编号语音条目的 Ogg Vorbis 存档。提取为单独的 `.ogg` 文件。 |
+| `.ovk` | 包含多个编号语音条目的 Ogg Vorbis 文件。提取为单独的 `.ogg` 文件。 |
 
 #### 语法
 
@@ -712,7 +712,7 @@ siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 |---|---|
 | `--x` | **提取**模式。解码 `.owp` → `.ogg`，`.nwa` → `.wav`，`.ovk` → 单独的 `.ogg` 文件。 |
 | `--a` | **分析**模式。打印单个音频文件的详细结构头部信息。 |
-| `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 存档。 |
+| `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 文件。 |
 | `--trim <Gameexe.dat>` | （仅提取模式）从 `Gameexe.dat` 读取 `#BGM.*` 循环点表，并用 **ffmpeg** 将每个 `.owp` 裁剪到其循环区域。需要 `ffmpeg` 在系统 PATH 中。 |
 
 #### 示例
@@ -721,7 +721,7 @@ siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 # 解码目录中的所有音频
 siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/
 
-# 解码单个 .ovk 语音存档
+# 解码单个 .ovk 语音文件
 siglus-ssu -s --x /path/to/z0001.ovk /path/to/ogg_out/
 
 # 解码 .owp BGM 并按 Gameexe.dat 循环点裁剪

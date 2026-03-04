@@ -4,7 +4,7 @@ This utility aims to reproduce **SiglusEngine** SceneScript compilation as exact
 
 ## Documentation
 
-See the **[English Manual](manual.md)** or **[中文手册](manual_cn.md)** for installation instructions, complete reference of all modes, options, examples, and tips.
+See the **[English Manual](manual.md)** or **[中文手册](manual_cn.md)** for installation instructions, complete reference of all modes, options, examples, and tips. See the **[Changelog](changelog.md)** for recent updates.
 
 ## Quick Examples
 
