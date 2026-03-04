@@ -98,7 +98,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
     return tokens
 
 
-def _locate_tokens(source_text: str, tokens, filename: str = ""):
+def _locate_tokens(source_text: str, tokens):
     lines = source_text.splitlines(keepends=True)
     line_spans = []
     pos = 0
@@ -112,21 +112,36 @@ def _locate_tokens(source_text: str, tokens, filename: str = ""):
     for token in tokens:
         line_no = int(token["line"] or 0)
         if line_no <= 0 or line_no > len(line_spans):
-            eprint(
-                f"textmap: {filename}: invalid line for token {token['index']}: {line_no}",
-                errors="replace",
-            )
             continue
         line_start, line_end, line_text = line_spans[line_no - 1]
         cursor = cursors.get(line_no, 0)
         text = token["text"]
-        quoted = '"' + _encode_quoted(text) + '"'
-        pos_quoted = line_text.find(quoted, cursor)
-        pos_raw = line_text.find(text, cursor)
+        quoted_lit = '"' + _encode_quoted(text) + '"'
+        pos_quoted = line_text.find(quoted_lit, cursor)
+        pos_raw = -1 if text == "" else line_text.find(text, cursor)
         if pos_quoted >= 0 and (pos_raw < 0 or pos_quoted <= pos_raw):
-            start = line_start + pos_quoted + 1
-            cursor = pos_quoted + len(quoted)
+            abs_start = line_start + pos_quoted
+            abs_end = abs_start + len(quoted_lit)
+            start = abs_start + 1
+            cursor = pos_quoted + len(quoted_lit)
+            quoted_flag = 1
         elif pos_raw >= 0:
+            rel_left = pos_raw
+            rel_right = pos_raw + len(text)
+            quoted_flag = 0
+            if (
+                rel_left > 0
+                and rel_right < len(line_text)
+                and line_text[rel_left - 1] == '"'
+                and line_text[rel_right] == '"'
+            ):
+                while rel_left > 0 and line_text[rel_left - 1] == '"':
+                    rel_left -= 1
+                while rel_right < len(line_text) and line_text[rel_right] == '"':
+                    rel_right += 1
+                quoted_flag = 1
+            abs_start = line_start + rel_left
+            abs_end = line_start + rel_right
             start = line_start + pos_raw
             cursor = pos_raw + len(text)
         else:
@@ -140,6 +155,9 @@ def _locate_tokens(source_text: str, tokens, filename: str = ""):
                 "line": token["line"],
                 "order": order,
                 "start": start,
+                "span_start": abs_start,
+                "span_end": abs_end,
+                "quoted": quoted_flag,
                 "text": text,
             }
         )
@@ -156,6 +174,9 @@ def _write_map(csv_path: str, entries):
                 "line",
                 "order",
                 "start",
+                "span_start",
+                "span_end",
+                "quoted",
                 "original",
                 "replacement",
             ]
@@ -163,12 +184,15 @@ def _write_map(csv_path: str, entries):
         for e in entries:
             w.writerow(
                 [
-                    e["index"],
-                    e["line"],
-                    e["order"],
-                    e["start"],
-                    e["text"],
-                    e["text"],
+                    e.get("index", 0),
+                    e.get("line", 0),
+                    e.get("order", 0),
+                    e.get("start", 0),
+                    e.get("span_start", 0),
+                    e.get("span_end", 0),
+                    e.get("quoted", 0),
+                    e.get("text", ""),
+                    e.get("text", ""),
                 ]
             )
 
@@ -179,26 +203,29 @@ def _read_map(csv_path: str):
 
 
 def _apply_map(text: str, entries, rows, filename: str = ""):
+    def _to_int(v, default=-1):
+        try:
+            return int(v)
+        except Exception:
+            return default
+
     changes = []
     line_order_map = {}
+    index_map = {}
     for entry in entries:
-        line = int(entry.get("line", 0) or 0)
-        order = int(entry.get("order", 0) or 0)
-        if line <= 0 or order <= 0:
-            continue
-        line_order_map[(line, order)] = entry
-    lines = text.splitlines(keepends=True)
-    line_offsets = [0]
-    for line in lines:
-        line_offsets.append(line_offsets[-1] + len(line))
+        line = _to_int(entry.get("line", 0), 0)
+        order = _to_int(entry.get("order", 0), 0)
+        idx = _to_int(entry.get("index", 0), 0)
+        if idx > 0:
+            index_map[idx] = entry
+        if line > 0 and order > 0:
+            line_order_map[(line, order)] = entry
+
     for row in rows:
+        line = _to_int(row.get("line", ""), 0)
+        order = _to_int(row.get("order", ""), 0)
+        idx = _to_int(row.get("index", ""), 0)
         entry = None
-        try:
-            line = int(row.get("line", ""))
-            order = int(row.get("order", ""))
-        except Exception:
-            line = 0
-            order = 0
         if line > 0 and order > 0:
             entry = line_order_map.get((line, order))
             if entry is None:
@@ -207,74 +234,121 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                     errors="replace",
                 )
                 continue
-        if entry is None:
-            try:
-                idx = int(row.get("index", ""))
-            except Exception:
-                continue
-            if idx <= 0 or idx > len(entries):
+        if entry is None and idx > 0:
+            entry = index_map.get(idx)
+            if entry is None:
                 eprint(
-                    f"textmap: {filename}: index {idx} out of range", errors="replace"
+                    f"textmap: {filename}: index {idx} out of range",
+                    errors="replace",
                 )
                 continue
-            entry = entries[idx - 1]
-        original = row.get("original", entry["text"])
+        if entry is None:
+            continue
+
+        original = row.get("original", entry.get("text", ""))
         replacement = row.get("replacement")
         if replacement is None:
             replacement = original
         if replacement == original:
             continue
-        if entry["text"] != original:
+        if entry.get("text", "") != original:
             eprint(
-                f"textmap: {filename}: skip index {int(entry.get('index', 0) or 0):d} (text mismatch: '{entry['text']}' vs '{original}')",
+                f"textmap: {filename}: skip index {_to_int(entry.get('index', 0), 0):d} (text mismatch: '{entry.get('text', '')}' vs '{original}')",
                 errors="replace",
             )
             continue
+
+        row_span_start = _to_int(row.get("span_start", row.get("abs_start", "")), -1)
+        row_span_end = _to_int(row.get("span_end", row.get("abs_end", "")), -1)
+        entry_span_start = _to_int(entry.get("span_start", ""), -1)
+        entry_span_end = _to_int(entry.get("span_end", ""), -1)
+
+        candidates = []
+        if row_span_start >= 0 and row_span_end > row_span_start:
+            candidates.append((row_span_start, row_span_end))
+        if entry_span_start >= 0 and entry_span_end > entry_span_start:
+            candidates.append((entry_span_start, entry_span_end))
+
+        used_span = None
+        used_quoted = None
+        expected_q = '"' + _encode_quoted(original) + '"'
+        expected_r = original
+        for s, e in candidates:
+            if s < 0 or e > len(text) or e <= s:
+                continue
+            seg = text[s:e]
+            if seg == expected_q:
+                used_span = (s, e)
+                used_quoted = 1
+                break
+            if seg == expected_r:
+                used_span = (s, e)
+                used_quoted = 0
+                break
+
+        if used_span is None:
+            line_no = _to_int(entry.get("line", 0), 0)
+            if line_no > 0:
+                lines = text.splitlines(keepends=True)
+                if line_no <= len(lines):
+                    line_text = lines[line_no - 1]
+                    line_start = sum(len(x) for x in lines[: line_no - 1])
+                    rel_start = max(0, _to_int(entry.get("start", 0), 0) - line_start)
+                    pos = line_text.find(expected_q, rel_start)
+                    if pos >= 0:
+                        used_span = (
+                            line_start + pos,
+                            line_start + pos + len(expected_q),
+                        )
+                        used_quoted = 1
+                    else:
+                        pos2 = (
+                            -1
+                            if original == ""
+                            else line_text.find(original, rel_start)
+                        )
+                        if pos2 >= 0:
+                            rel_left = pos2
+                            rel_right = pos2 + len(original)
+                            if (
+                                rel_left > 0
+                                and rel_right < len(line_text)
+                                and line_text[rel_left - 1] == '"'
+                                and line_text[rel_right] == '"'
+                            ):
+                                while rel_left > 0 and line_text[rel_left - 1] == '"':
+                                    rel_left -= 1
+                                while (
+                                    rel_right < len(line_text)
+                                    and line_text[rel_right] == '"'
+                                ):
+                                    rel_right += 1
+                                used_quoted = 1
+                            else:
+                                used_quoted = 0
+                            used_span = (line_start + rel_left, line_start + rel_right)
+
+        if used_span is None:
+            eprint(
+                f"textmap: {filename}: original not found at line {line:d} order {order:d}",
+                errors="replace",
+            )
+            continue
+
         if (
             replacement.startswith('"')
             and replacement.endswith('"')
             and len(replacement) >= 2
         ):
-            replacement = replacement
+            replacement_lit = replacement
         else:
-            replacement = '"' + _encode_quoted(replacement) + '"'
-        line_no = int(entry.get("line", 0) or 0)
-        start_pos = int(entry.get("start", 0) or 0)
-        if line_no <= 0 or line_no > len(lines):
-            eprint(
-                f"textmap: {filename}: invalid line for entry {entry.get('index', 0)}",
-                errors="replace",
-            )
-            continue
-        line_text = lines[line_no - 1]
-        line_start = line_offsets[line_no - 1]
-        rel_start = max(0, start_pos - line_start)
-        rel_found = line_text.find(original, rel_start)
-        if rel_found < 0:
-            eprint(
-                f"textmap: {filename}: original not found at line {line_no:d} order {int(entry.get('order', 0) or 0):d}",
-                errors="replace",
-            )
-            continue
-        rel_end = rel_found + len(original)
-        rel_left = rel_found
-        rel_right = rel_end
-        if (
-            rel_left > 0
-            and rel_right < len(line_text)
-            and line_text[rel_left - 1] == '"'
-            and line_text[rel_right] == '"'
-        ):
-            while rel_left > 0 and line_text[rel_left - 1] == '"':
-                rel_left -= 1
-            while rel_right < len(line_text) and line_text[rel_right] == '"':
-                rel_right += 1
-            abs_start = line_start + rel_left
-            abs_end = line_start + rel_right
-        else:
-            abs_start = line_start + rel_found
-            abs_end = abs_start + len(original)
-        changes.append((abs_start, abs_end, replacement))
+            if used_quoted:
+                replacement_lit = '"' + _encode_quoted(replacement) + '"'
+            else:
+                replacement_lit = replacement
+
+        changes.append((used_span[0], used_span[1], replacement_lit))
+
     if not changes:
         return text, 0
     changes.sort(key=lambda x: x[0], reverse=True)
@@ -288,6 +362,9 @@ def _fix_brackets_content(text: str):
         return text, 0, 0
     out = []
     in_bracket = False
+    stage = 0
+    in_str = False
+    esc = False
     fixed_quotes = 0
     fixed_spaces = 0
     for ch in text:
@@ -295,15 +372,53 @@ def _fix_brackets_content(text: str):
             out.append(ch)
             if ch == "【":
                 in_bracket = True
+                stage = 0
+                in_str = False
+                esc = False
             continue
         if ch == "】":
             in_bracket = False
+            stage = 0
+            in_str = False
+            esc = False
             out.append(ch)
-        elif ch == '"':
-            fixed_quotes += 1
-        elif ch == " ":
-            fixed_spaces += 1
-        else:
+            continue
+        if stage == 0:
+            if ch == " ":
+                fixed_spaces += 1
+                continue
+            if ch == '"':
+                stage = 2
+                in_str = True
+                esc = False
+                out.append(ch)
+                continue
+            stage = 1
+        if stage == 1:
+            if ch == '"':
+                fixed_quotes += 1
+                continue
+            if ch == " ":
+                fixed_spaces += 1
+                continue
+            out.append(ch)
+            continue
+        if stage == 2:
+            if in_str:
+                out.append(ch)
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == " ":
+                fixed_spaces += 1
+                continue
+            if ch == '"':
+                fixed_quotes += 1
+                continue
             out.append(ch)
     return "".join(out), fixed_quotes, fixed_spaces
 
@@ -605,7 +720,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
             iad_base = BS.build_ia_data(ctx)
             iad_cache[key] = iad_base
     tokens = _collect_tokens(text, ctx, iad_base=iad_base)
-    entries = _locate_tokens(text, tokens, filename=fname)
+    entries = _locate_tokens(text, tokens)
     csv_path = ss_path + ".csv"
     if not apply_mode:
         _write_map(csv_path, entries)
