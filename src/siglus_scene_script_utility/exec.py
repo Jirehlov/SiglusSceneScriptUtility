@@ -57,24 +57,15 @@ def main(argv=None):
         os.makedirs(work_dir, exist_ok=True)
     except Exception:
         pass
-    work_dir_q = work_dir
-    if os.name == "nt":
-        work_dir_q = work_dir.replace("\\", "\\\\")
-    cmd = f'"{engine_path}" /work_dir="{work_dir_q}" /start="{ss}" /z_no={label} /end_start'
+    cmd = [
+        engine_path,
+        f"/work_dir={work_dir}",
+        f"/start={ss}",
+        f"/z_no={label}",
+        "/end_start",
+    ]
     try:
-        if os.name == "nt":
-            subprocess.Popen(cmd, cwd=engine_dir, shell=False)
-        else:
-            subprocess.Popen(
-                [
-                    engine_path,
-                    f"/work_dir={work_dir}",
-                    f"/start={ss}",
-                    f"/z_no={label}",
-                    "/end_start",
-                ],
-                cwd=engine_dir,
-            )
+        subprocess.Popen(cmd, cwd=engine_dir)
     except Exception as e:
         sys.stderr.write(f"Failed to launch engine: {e}\n")
         return 1

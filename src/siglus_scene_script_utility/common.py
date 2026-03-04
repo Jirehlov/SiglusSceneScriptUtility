@@ -936,3 +936,35 @@ def exe_angou_element(angou_bytes: bytes) -> bytes:
 
 def _diff_kv(k, a, b):
     return f"{k}: {a!r} -> {b!r}"
+
+
+def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
+    found = [f for f in flags if f in argv]
+    if len(found) != 1:
+        eprint("error: choose exactly one of " + ", ".join(flags))
+        hint_help()
+        return None, argv
+    return found[0][2], [a for a in argv if a not in flags]
+
+
+def missing_input_file(path: str) -> bool:
+    if not os.path.isfile(path):
+        eprint(f"input not found: {path}")
+        return True
+    return False
+
+
+def run_batch(files, process_fn):
+    total = len(files)
+    wrote = failed = 0
+    for idx, src_path in enumerate(files, 1):
+        eprint(f"[{idx}/{total}] processing: {src_path}")
+        try:
+            n, label = process_fn(src_path)
+            wrote += n
+            eprint(f"[{idx}/{total}] done: wrote {label}")
+        except Exception as exc:
+            failed += 1
+            eprint(f"[{idx}/{total}] failed: {src_path}\t{exc}")
+    eprint(f"done total={total} wrote={wrote} failed={failed}")
+    return 0 if failed == 0 else 1

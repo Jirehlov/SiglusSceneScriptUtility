@@ -1,7 +1,31 @@
 import os
 import sys
-from .common import eprint, fmt_kv, hint_help, iter_files_by_ext
+from .common import (
+    eprint,
+    fmt_kv,
+    hint_help,
+    iter_files_by_ext,
+    parse_mode_flag,
+    missing_input_file,
+    run_batch,
+)
 from . import video
+
+
+def _build_hi24_ranges(hi24):
+    if not hi24:
+        return []
+    ranges = []
+    s = 0
+    cur = hi24[0]
+    for i in range(1, len(hi24)):
+        v = hi24[i]
+        if v != cur:
+            ranges.append((s, i - 1, cur))
+            s = i
+            cur = v
+    ranges.append((s, len(hi24) - 1, cur))
+    return ranges
 
 
 def _analyze_one(path):
@@ -64,23 +88,10 @@ def _analyze_one(path):
         )
         hi24 = [int(e.flags) & 0xFFFFFF00 for e in info.table_b]
         uniq = sorted(set(hi24))
-        ranges = []
-        if hi24:
-            s = 0
-            cur = hi24[0]
-            for i in range(1, len(hi24)):
-                v = hi24[i]
-                if v != cur:
-                    ranges.append((s, i - 1, cur))
-                    s = i
-                    cur = v
-            ranges.append((s, len(hi24) - 1, cur))
-        rs = []
-        for a, b, v in ranges:
-            if a == b:
-                rs.append(f"{a}:0x{v:06X}")
-            else:
-                rs.append(f"{a}-{b}:0x{v:06X}")
+        ranges = _build_hi24_ranges(hi24)
+        rs = [
+            f"{a}:0x{v:06X}" if a == b else f"{a}-{b}:0x{v:06X}" for a, b, v in ranges
+        ]
         if rs:
             print(fmt_kv("flags_hi24_variants", ",".join(rs)))
             print(fmt_kv("flags_hi24_variant_count", len(uniq)))
@@ -106,21 +117,16 @@ def main(argv=None):
     if (not argv) or argv[0] in ("-h", "--help", "help"):
         hint_help()
         return 0
-    mode_flags = [flag for flag in ("--x", "--a", "--c") if flag in argv]
-    if len(mode_flags) != 1:
-        eprint("error: choose exactly one of --x, --a, --c")
-        hint_help()
+    mode, argv = parse_mode_flag(argv)
+    if mode is None:
         return 2
-    mode = mode_flags[0][2]
-    argv = [arg for arg in argv if arg not in ("--x", "--a", "--c")]
     if mode == "a":
         if len(argv) != 1:
             eprint("error: expected 1 input file for --a")
             hint_help()
             return 2
         inp = argv[0]
-        if not os.path.isfile(inp):
-            eprint(f"input not found: {inp}")
+        if missing_input_file(inp):
             return 1
         return _analyze_one(inp)
     if mode == "c":
@@ -192,8 +198,7 @@ def main(argv=None):
             hint_help()
             return 2
         inp, outp = positional[0], positional[1]
-        if not os.path.isfile(inp):
-            eprint(f"input not found: {inp}")
+        if missing_input_file(inp):
             return 1
         treat_dir = (
             os.path.isdir(outp)
@@ -230,17 +235,7 @@ def main(argv=None):
                 if len(uniq) <= 1:
                     flags_hi24 = int(uniq[0]) if uniq else 0
                 else:
-                    ranges = []
-                    s = 0
-                    cur = hi24[0]
-                    for j in range(1, len(hi24)):
-                        v = hi24[j]
-                        if v != cur:
-                            ranges.append((s, j - 1, cur))
-                            s = j
-                            cur = v
-                    ranges.append((s, len(hi24) - 1, cur))
-                    flags_hi24 = ranges
+                    flags_hi24 = _build_hi24_ranges(hi24)
         try:
             video.build_omv_from_ogv(
                 inp, outp2, mode=mode_override, flags_hi24=flags_hi24
@@ -257,35 +252,25 @@ def main(argv=None):
         return 2
     inp, out_root = argv[0], argv[1]
     src_is_dir = os.path.isdir(inp)
-    if (not src_is_dir) and (not os.path.isfile(inp)):
-        eprint(f"input not found: {inp}")
+    if not src_is_dir and missing_input_file(inp):
         return 1
     os.makedirs(out_root, exist_ok=True)
-    if (not src_is_dir) and os.path.splitext(inp)[1].lower() != ".omv":
+    if not src_is_dir and os.path.splitext(inp)[1].lower() != ".omv":
         eprint("error: unsupported file type (expected .omv)")
         return 1
     files = iter_files_by_ext(inp, [".omv"]) if src_is_dir else [inp]
-    total = len(files)
-    if total == 0:
+    if not files:
         eprint("no .omv files found")
         return 0
-    wrote = failed = 0
-    for idx, src_path in enumerate(files, 1):
-        eprint(f"[{idx}/{total}] processing: {src_path}")
-        try:
-            rel_dir = (
-                os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
-            )
-            stem = os.path.splitext(os.path.basename(src_path))[0]
-            out_path = os.path.join(out_root, rel_dir, stem + ".ogv")
-            video.extract_ogv_from_omv(src_path, out_path)
-            wrote += 1
-            eprint(f"[{idx}/{total}] done: wrote {out_path}")
-        except Exception as exc:
-            failed += 1
-            eprint(f"[{idx}/{total}] failed: {src_path}\t{exc}")
-    eprint(f"done total={total} wrote={wrote} failed={failed}")
-    return 0 if failed == 0 else 1
+
+    def _proc(src_path):
+        rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
+        stem = os.path.splitext(os.path.basename(src_path))[0]
+        out_path = os.path.join(out_root, rel_dir, stem + ".ogv")
+        video.extract_ogv_from_omv(src_path, out_path)
+        return 1, out_path
+
+    return run_batch(files, _proc)
 
 
 if __name__ == "__main__":

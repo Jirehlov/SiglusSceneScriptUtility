@@ -11,6 +11,8 @@ from .common import (
     fmt_kv as _fmt_kv,
     iter_files_by_ext,
     write_bytes,
+    missing_input_file,
+    run_batch,
 )
 from . import sound
 from . import extract
@@ -350,25 +352,13 @@ def main(argv=None) -> int:
         _hint_help()
         return 0
 
-    do_x = False
-    do_a = False
-    do_c = False
-    if "--x" in argv:
-        do_x = True
-        argv = [a for a in argv if a != "--x"]
-    if "--a" in argv:
-        do_a = True
-        argv = [a for a in argv if a != "--a"]
-    if "--c" in argv:
-        do_c = True
-        argv = [a for a in argv if a != "--c"]
-
-    if (1 if do_x else 0) + (1 if do_a else 0) + (1 if do_c else 0) > 1:
+    do_x, do_a, do_c = "--x" in argv, "--a" in argv, "--c" in argv
+    argv = [a for a in argv if a not in ("--x", "--a", "--c")]
+    if sum([do_x, do_a, do_c]) > 1:
         eprint("error: choose only one of --x or --a or --c")
         _hint_help()
         return 2
-
-    if not do_x and not do_a and not do_c:
+    if not (do_x or do_a or do_c):
         eprint(
             "error: missing flag: specify --x (extract) or --a (analyze) or --c (create)"
         )
@@ -384,8 +374,7 @@ def main(argv=None) -> int:
             _hint_help()
             return 2
         inp = argv[0]
-        if not os.path.isfile(inp):
-            eprint(f"input not found: {inp}")
+        if missing_input_file(inp):
             return 1
         return _analyze_one(inp)
 
@@ -400,8 +389,7 @@ def main(argv=None) -> int:
         inp, out_root = argv[0], argv[1]
 
         src_is_dir = os.path.isdir(inp)
-        if not src_is_dir and not os.path.isfile(inp):
-            eprint(f"input not found: {inp}")
+        if not src_is_dir and missing_input_file(inp):
             return 1
 
         os.makedirs(out_root, exist_ok=True)
@@ -496,8 +484,7 @@ def main(argv=None) -> int:
     inp, out_root = argv[0], argv[1]
 
     src_is_dir = os.path.isdir(inp)
-    if not src_is_dir and not os.path.isfile(inp):
-        eprint(f"input not found: {inp}")
+    if not src_is_dir and missing_input_file(inp):
         return 1
 
     trim_table = None
@@ -528,39 +515,25 @@ def main(argv=None) -> int:
     os.makedirs(out_root, exist_ok=True)
 
     files = iter_files_by_ext(inp, [".owp", ".nwa", ".ovk"]) if src_is_dir else [inp]
-    total = len(files)
-    wrote = 0
-    failed = 0
 
-    if total == 0:
+    if not files:
         eprint("no supported audio files found")
         _cleanup_tmp_dir(tmp_dir, out_root)
         return 0
 
-    for idx, src_path in enumerate(files, 1):
-        eprint(f"[{idx}/{total}] processing: {src_path}")
-        try:
-            if src_is_dir:
-                rel = os.path.relpath(src_path, inp)
-                rel_dir = os.path.dirname(rel)
-            else:
-                rel_dir = ""
-            n = _extract_one(
-                src_path,
-                out_root,
-                rel_dir,
-                trim_table=trim_table,
-                ffmpeg_path=ffmpeg_path,
-                tmp_dir=tmp_dir,
-            )
-            wrote += n
-            eprint(f"[{idx}/{total}] done: wrote {n}")
-        except Exception as e:
-            failed += 1
-            eprint(f"[{idx}/{total}] failed: {src_path}\t{e}")
+    def _proc(src_path):
+        rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
+        n = _extract_one(
+            src_path,
+            out_root,
+            rel_dir,
+            trim_table=trim_table,
+            ffmpeg_path=ffmpeg_path,
+            tmp_dir=tmp_dir,
+        )
+        return n, n
 
-    eprint(f"done total={total} wrote={wrote} failed={failed}")
-    exit_code = 0 if failed == 0 else 1
+    exit_code = run_batch(files, _proc)
     _cleanup_tmp_dir(tmp_dir, out_root)
     return exit_code
 

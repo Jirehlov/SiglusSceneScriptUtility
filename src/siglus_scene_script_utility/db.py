@@ -1,7 +1,17 @@
 import os
 import sys
 
-from .common import eprint, fmt_kv, hint_help, iter_files_by_ext, read_bytes, _sha1
+from .common import (
+    eprint,
+    fmt_kv,
+    hint_help,
+    iter_files_by_ext,
+    read_bytes,
+    _sha1,
+    parse_mode_flag,
+    missing_input_file,
+    run_batch,
+)
 from . import dbs
 
 
@@ -45,11 +55,9 @@ def _compare_two(p1, p2):
     ):
         eprint("error: unsupported file type (expected .dbs)")
         return 1
-    if not os.path.isfile(p1):
-        eprint(f"input not found: {p1}")
+    if missing_input_file(p1):
         return 1
-    if not os.path.isfile(p2):
-        eprint(f"input not found: {p2}")
+    if missing_input_file(p2):
         return 1
     b1 = read_bytes(p1)
     b2 = read_bytes(p2)
@@ -145,13 +153,9 @@ def main(argv=None):
     if (not argv) or argv[0] in ("-h", "--help", "help"):
         hint_help()
         return 0
-    mode_flags = [flag for flag in ("--x", "--a", "--c") if flag in argv]
-    if len(mode_flags) != 1:
-        eprint("error: choose exactly one of --x, --a, --c")
-        hint_help()
+    mode, argv = parse_mode_flag(argv)
+    if mode is None:
         return 2
-    mode = mode_flags[0][2]
-    argv = [arg for arg in argv if arg not in ("--x", "--a", "--c")]
 
     opt_type = None
     if "--type" in argv:
@@ -205,8 +209,7 @@ def main(argv=None):
             return 2
         if len(argv) == 1:
             inp = argv[0]
-            if not os.path.isfile(inp):
-                eprint(f"input not found: {inp}")
+            if missing_input_file(inp):
                 return 1
             return _analyze_one(inp)
         return _compare_two(argv[0], argv[1])
@@ -218,35 +221,25 @@ def main(argv=None):
             return 2
         inp, out_root = argv[0], argv[1]
         src_is_dir = os.path.isdir(inp)
-        if (not src_is_dir) and (not os.path.isfile(inp)):
-            eprint(f"input not found: {inp}")
+        if not src_is_dir and missing_input_file(inp):
             return 1
         files = _iter_files_sorted(inp, [".dbs"]) if src_is_dir else [inp]
         if not files:
             eprint("no .dbs files found")
             return 0
         os.makedirs(out_root, exist_ok=True)
-        total = len(files)
-        wrote = failed = 0
-        for idx, src_path in enumerate(files, 1):
-            eprint(f"[{idx}/{total}] processing: {src_path}")
-            try:
-                rel_dir = (
-                    os.path.dirname(os.path.relpath(src_path, inp))
-                    if src_is_dir
-                    else ""
-                )
-                out_path = os.path.join(
-                    out_root, rel_dir, os.path.basename(src_path) + ".csv"
-                )
-                dbs.export_one_dbs_to_csv(src_path, out_path)
-                wrote += 1
-                eprint(f"[{idx}/{total}] done: wrote {out_path}")
-            except Exception as exc:
-                failed += 1
-                eprint(f"[{idx}/{total}] failed: {src_path}\t{exc}")
-        eprint(f"done total={total} wrote={wrote} failed={failed}")
-        return 0 if failed == 0 else 1
+
+        def _proc(src_path):
+            rel_dir = (
+                os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
+            )
+            out_path = os.path.join(
+                out_root, rel_dir, os.path.basename(src_path) + ".csv"
+            )
+            dbs.export_one_dbs_to_csv(src_path, out_path)
+            return 1, out_path
+
+        return run_batch(files, _proc)
 
     if mode != "c":
         eprint("error: unknown mode")
@@ -286,24 +279,16 @@ def main(argv=None):
         os.makedirs(out_root, exist_ok=True)
         m_type = int(opt_type) if opt_type is not None else 1
         dbs.reset_msvcrt_rand(opt_seed)
-        total = len(files)
-        wrote = failed = 0
-        for idx, csv_path in enumerate(files, 1):
-            eprint(f"[{idx}/{total}] processing: {csv_path}")
-            try:
-                out_path = _map_out_path(inp, out_root, csv_path, src_is_dir)
-                os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-                dbs.create_one_dbs_from_csv(csv_path, out_path, m_type=m_type)
-                wrote += 1
-                eprint(f"[{idx}/{total}] done: wrote {out_path}")
-            except Exception as exc:
-                failed += 1
-                eprint(f"[{idx}/{total}] failed: {csv_path}\t{exc}")
-        eprint(f"done total={total} wrote={wrote} failed={failed}")
-        return 0 if failed == 0 else 1
 
-    if not os.path.isfile(inp):
-        eprint(f"input not found: {inp}")
+        def _proc(csv_path):
+            out_path = _map_out_path(inp, out_root, csv_path, src_is_dir)
+            os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+            dbs.create_one_dbs_from_csv(csv_path, out_path, m_type=m_type)
+            return 1, out_path
+
+        return run_batch(files, _proc)
+
+    if missing_input_file(inp):
         return 1
 
     out_is_file = os.path.splitext(out_root)[1].lower() == ".dbs"
