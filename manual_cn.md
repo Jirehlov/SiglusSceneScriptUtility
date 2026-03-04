@@ -1,6 +1,7 @@
 # SiglusSceneScriptUtility 使用手册
 
 *本文档由 Claude Opus 4.6 Thinking 生成。*
+
 **版本：** 见 `siglus-ssu --version`  
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility  
 **英文版：** [manual.md](manual.md)
