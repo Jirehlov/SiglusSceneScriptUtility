@@ -26,6 +26,53 @@ from .common import (
 )
 
 
+def _csv_escape_text(s: str) -> str:
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
+    return s
+
+
+def _csv_unescape_text(s: str) -> str:
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch != "\\":
+            out.append(ch)
+            i += 1
+            continue
+        if i + 1 >= n:
+            out.append("\\")
+            break
+        nxt = s[i + 1]
+        if nxt == "n":
+            out.append("\n")
+            i += 2
+        elif nxt == "r":
+            out.append("\r")
+            i += 2
+        elif nxt == "t":
+            out.append("\t")
+            i += 2
+        elif nxt == "\\":
+            out.append("\\")
+            i += 2
+        else:
+            out.append("\\")
+            out.append(nxt)
+            i += 2
+    return "".join(out)
+
+
 def _read_text(path: str):
     data = open(path, "rb").read()
 
@@ -182,6 +229,8 @@ def _write_map(csv_path: str, entries):
             ]
         )
         for e in entries:
+            if e.get("text", "") == "":
+                continue
             w.writerow(
                 [
                     e.get("index", 0),
@@ -191,8 +240,8 @@ def _write_map(csv_path: str, entries):
                     e.get("span_start", 0),
                     e.get("span_end", 0),
                     e.get("quoted", 0),
-                    e.get("text", ""),
-                    e.get("text", ""),
+                    _csv_escape_text(e.get("text", "")),
+                    _csv_escape_text(e.get("text", "")),
                 ]
             )
 
@@ -245,8 +294,10 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         if entry is None:
             continue
 
-        original = row.get("original", entry.get("text", ""))
+        original = _csv_unescape_text(row.get("original", entry.get("text", "")))
         replacement = row.get("replacement")
+        if replacement is not None:
+            replacement = _csv_unescape_text(replacement)
         if replacement is None:
             replacement = original
         if replacement == original:
@@ -557,7 +608,9 @@ def _write_disam_map(csv_path: str, str_list):
         w = csv.writer(f)
         w.writerow(["index", "original", "replacement"])
         for i, s in enumerate(str_list or []):
-            w.writerow([i, s, s])
+            if s == "":
+                continue
+            w.writerow([i, _csv_escape_text(s), _csv_escape_text(s)])
 
 
 def _apply_disam_map(str_list, rows, filename: str = ""):
@@ -570,8 +623,10 @@ def _apply_disam_map(str_list, rows, filename: str = ""):
         if idx < 0 or idx >= len(str_list):
             eprint(f"textmap: {filename}: index {idx} out of range", errors="replace")
             continue
-        original = row.get("original", str_list[idx])
+        original = _csv_unescape_text(row.get("original", str_list[idx]))
         replacement = row.get("replacement")
+        if replacement is not None:
+            replacement = _csv_unescape_text(replacement)
         if replacement is None:
             replacement = original
         if replacement == original:
