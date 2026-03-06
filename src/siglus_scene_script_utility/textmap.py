@@ -5,6 +5,8 @@ import sys
 from . import CA
 from . import BS
 from . import LA
+from . import MA
+from . import SA
 from . import const as C
 from . import dat as DAT
 from . import pck
@@ -120,6 +122,74 @@ def _needs_quoted_literal(value: str) -> bool:
     return False
 
 
+def _collect_compiled_string_atom_ids(root, atom_type_map):
+    out = set()
+
+    def _add(atom):
+        if not isinstance(atom, dict):
+            return
+        if int(atom.get("type", -1) or -1) != int(C.LA_T["VAL_STR"]):
+            return
+        aid = int(atom.get("id", -1) or -1)
+        if aid < 0:
+            return
+        if int(atom_type_map.get(aid, -1) or -1) != int(C.LA_T["VAL_STR"]):
+            return
+        out.add(aid)
+
+    def _walk(node):
+        if isinstance(node, list):
+            for item in node:
+                _walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        nt = node.get("node_type")
+        if nt == C.NT_S_TEXT:
+            _add(((node.get("text") or {}).get("atom") or {}))
+        elif nt == C.NT_S_NAME:
+            _add(((((node.get("name") or {}).get("name") or {}).get("atom")) or {}))
+        elif nt == C.NT_SMP_LITERAL:
+            _add((((node.get("Literal") or {}).get("atom")) or {}))
+        for value in node.values():
+            _walk(value)
+
+    _walk(root)
+    return out
+
+
+def _collect_replace_symbol_spans(
+    line_text: str, replace_tree
+) -> list[tuple[int, int]]:
+    spans = []
+    if not line_text or not isinstance(replace_tree, dict):
+        return spans
+    p = 0
+    n = len(line_text)
+    while p < n:
+        rep = CA._rt_search(replace_tree, line_text, p)
+        if not isinstance(rep, dict):
+            p += 1
+            continue
+        name = rep.get("name") or ""
+        if not name:
+            p += 1
+            continue
+        end = p + len(name)
+        spans.append((p, end))
+        p = end if end > p else p + 1
+    return spans
+
+
+def _is_within_replace_symbol(rel_left: int, rel_right: int, spans) -> bool:
+    if rel_left < 0 or rel_right <= rel_left:
+        return False
+    for span_left, span_right in spans or []:
+        if span_left <= rel_left and rel_right <= span_right:
+            return True
+    return False
+
+
 def _collect_tokens(text: str, ctx: dict, iad_base=None):
     if iad_base is None:
         iad = BS.build_ia_data(ctx)
@@ -136,10 +206,37 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
         raise RuntimeError(
             f"textmap: LA failed: {err.get('str', '')} at line {err.get('line', 0)}"
         )
+    atom_list = list(lad.get("atom_list") or [])
+    atom_type_map = {}
+    for atom in atom_list:
+        atom_type_map[int(atom.get("id", -1) or -1)] = int(atom.get("type", -1) or -1)
+    sa = SA.SA(iad, lad)
+    ok, sad = sa.analize()
+    if not ok:
+        last = sa.last if isinstance(sa.last, dict) else {}
+        atom = last.get("atom") if isinstance(last.get("atom"), dict) else {}
+        raise RuntimeError(
+            f"textmap: SA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
+        )
+    ma = MA.MA(iad, lad, sad)
+    ok, mad = ma.analize()
+    if not ok:
+        last = ma.last if isinstance(ma.last, dict) else {}
+        atom = last.get("atom") if isinstance(last.get("atom"), dict) else {}
+        raise RuntimeError(
+            f"textmap: MA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
+        )
+    keep_ids = _collect_compiled_string_atom_ids(
+        (mad or {}).get("root") if isinstance(mad, dict) else None,
+        atom_type_map,
+    )
     str_list = lad.get("str_list") or []
     tokens = []
-    for atom in lad.get("atom_list") or []:
+    for atom in atom_list:
         if atom.get("type") != C.LA_T["VAL_STR"]:
+            continue
+        aid = int(atom.get("id", -1) or -1)
+        if aid not in keep_ids:
             continue
         opt = int(atom.get("opt", -1))
         if opt < 0 or opt >= len(str_list):
@@ -151,10 +248,10 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
                 "text": str_list[opt],
             }
         )
-    return tokens
+    return tokens, iad
 
 
-def _locate_tokens(source_text: str, tokens):
+def _locate_tokens(source_text: str, tokens, iad):
     lines = source_text.splitlines(keepends=True)
     line_spans = []
     pos = 0
@@ -165,6 +262,8 @@ def _locate_tokens(source_text: str, tokens):
     cursors = {}
     line_orders = {}
     out = []
+    replace_tree = iad.get("replace_tree") if isinstance(iad, dict) else None
+    replace_span_cache = {}
     for token in tokens:
         line_no = int(token["line"] or 0)
         if line_no <= 0 or line_no > len(line_spans):
@@ -172,6 +271,10 @@ def _locate_tokens(source_text: str, tokens):
         line_start, line_end, line_text = line_spans[line_no - 1]
         cursor = cursors.get(line_no, 0)
         text = token["text"]
+        replace_spans = replace_span_cache.get(line_no)
+        if replace_spans is None:
+            replace_spans = _collect_replace_symbol_spans(line_text, replace_tree)
+            replace_span_cache[line_no] = replace_spans
         quoted_lit = '"' + _encode_quoted(text) + '"'
         pos_quoted = line_text.find(quoted_lit, cursor)
         pos_raw = -1 if text == "" else line_text.find(text, cursor)
@@ -196,6 +299,9 @@ def _locate_tokens(source_text: str, tokens):
                 while rel_right < len(line_text) and line_text[rel_right] == '"':
                     rel_right += 1
                 quoted_flag = 1
+            elif _is_within_replace_symbol(rel_left, rel_right, replace_spans):
+                cursors[line_no] = pos_raw + len(text)
+                continue
             abs_start = line_start + rel_left
             abs_end = line_start + rel_right
             start = line_start + pos_raw
@@ -783,8 +889,8 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         if iad_base is None:
             iad_base = BS.build_ia_data(ctx)
             iad_cache[key] = iad_base
-    tokens = _collect_tokens(text, ctx, iad_base=iad_base)
-    entries = _locate_tokens(text, tokens)
+    tokens, iad = _collect_tokens(text, ctx, iad_base=iad_base)
+    entries = _locate_tokens(text, tokens, iad)
     csv_path = ss_path + ".csv"
     if not apply_mode:
         _write_map(csv_path, entries)
