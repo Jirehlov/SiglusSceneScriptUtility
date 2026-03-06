@@ -111,6 +111,15 @@ def _encode_quoted(value: str) -> str:
     return "".join(out)
 
 
+def _needs_quoted_literal(value: str) -> bool:
+    if not value:
+        return False
+    for ch in value:
+        if ch in "【】" or not CA._iszen(ch):
+            return True
+    return False
+
+
 def _collect_tokens(text: str, ctx: dict, iad_base=None):
     if iad_base is None:
         iad = BS.build_ia_data(ctx)
@@ -393,7 +402,7 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         ):
             replacement_lit = replacement
         else:
-            if used_quoted:
+            if used_quoted or _needs_quoted_literal(replacement):
                 replacement_lit = '"' + _encode_quoted(replacement) + '"'
             else:
                 replacement_lit = replacement
