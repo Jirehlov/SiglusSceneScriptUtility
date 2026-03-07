@@ -606,7 +606,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 
 ### `-g` / `--g00` — 处理 `.g00` 图片文件
 
-提供分析、提取、合并和更新 SiglusEngine `.g00` 图片文件的工具，用于背景、立绘等视觉资源。
+提供分析、提取、合并、创建和更新 SiglusEngine `.g00` 图片文件的工具，用于背景、立绘等视觉资源。
 
 #### `.g00` 文件类型
 
@@ -631,8 +631,8 @@ siglus-ssu -g --x <input_g00 | input_dir> <output_dir>
 # 将多个 .g00 文件（或 cut）合并为单张 PNG
 siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] --o <output_dir>
 
-# 将新图片写入现有 .g00（output_g00 可省略）
-siglus-ssu -g --c [--type N] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
+# 从图片创建新的 .g00，或基于显式参考 .g00 执行更新
+siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
 ```
 
 #### 参数
@@ -642,9 +642,10 @@ siglus-ssu -g --c [--type N] <input_png | input_jpeg | input_dir> [output_g00 | 
 | `--a` | **分析**模式。打印类型、画布尺寸、LZSS 统计以及 type2 文件的每个 cut 的详细信息。 |
 | `--x` | **提取**模式。解码每个 `.g00` 并写入 PNG 或 JPEG 文件。 |
 | `--m` | **合并**模式。将多个 `.g00` 图片或 cut 合成为一张 PNG。 |
-| `--c` | **编译/更新**模式。将现有 `.g00` 的图片数据替换为新的 PNG/JPEG 内容。 |
+| `--c` | **创建/更新**模式。不带 `--refer` 时创建新的 `.g00`；带 `--refer` 时，以参考 `.g00` 为 base 更新图片数据。 |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | （仅合并模式）合并后 PNG 的输出目录。 |
-| `--type N`, `--t N` | （仅编译模式）覆盖预期的 `.g00` 类型以进行验证。 |
+| `--type N`, `--t N` | （仅创建模式）在创建模式下强制输出 `.g00` 类型；在更新模式下覆盖参考 `.g00` 的预期类型用于验证。 |
+| `--refer <ref_g00 | ref_dir>` | （仅创建模式）显式指定更新所用的参考 `.g00`。单文件输入时可传 `.g00` 文件或目录；目录输入时必须传参考目录。 |
 | `<g00spec>[:cutNNN]` | 合并模式中，可在路径后附加 `:cutNNN`（如 `bg_day.g00:cut002`）以选择 type2 `.g00` 中的特定 cut。 |
 
 #### 示例
@@ -662,15 +663,28 @@ siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merg
 # 合并 type2 .g00 中的特定 cut
 siglus-ssu -g --m /path/to/sprite.g00:cut005 /path/to/overlay.g00 --o /path/to/out/
 
-# 更新现有 .g00 中的图片（单文件，指定输出）
+# 从 PNG 创建新的 type0 .g00（输出可省略）
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00
 
-# 省略输出路径：工具在输入图片所在目录查找同名 .g00
+# 省略输出路径：在输入图片旁创建 <input_basename>.g00
 siglus-ssu -g --c /path/to/new_bg.png
 
-# 批量更新目录中的图片
-siglus-ssu -g --c /path/to/updated_pngs/ /path/to/game_dir/
+# 从 JPEG 创建新的 type3 .g00
+siglus-ssu -g --c /path/to/op.jpeg /path/to/op.g00
+
+# 基于显式参考更新现有 .g00
+siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/original_bg.g00
+
+# 使用参考目录进行批量更新
+siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/original_g00/
 ```
+
+#### 创建模式说明
+
+- 省略 `--refer` 时进入创建模式。
+- 当前仅实现 **type0** 与 **type3** 的创建。
+- 默认推断规则：`png` -> type0，`jpg/jpeg` -> type3。也可显式指定 `--type 0` 或 `--type 3`。
+- `type1` 与 `type2` 的创建暂未实现。
 
 #### type2 cut 命名规范
 
@@ -678,7 +692,7 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/game_dir/
 - `<basename>.png` — 仅一个 cut 时。
 - `<basename>_cut000.png`、`<basename>_cut001.png` 等 — 多个 cut 时。
 
-使用 `--c` 更新特定 cut 时，在输入目录中放置名为 `<basename>_cut###.png` 的图片。
+使用 `--c --refer ...` 更新特定 cut 时，在输入目录中放置名为 `<basename>_cut###.png` 的图片。
 
 ---
 

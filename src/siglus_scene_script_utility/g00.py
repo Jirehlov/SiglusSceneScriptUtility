@@ -6,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from . import const as C
-from .native_ops import lzss_unpack, lzss_pack
+from .native_ops import lzss_unpack, lzss_pack, lzss32_pack
 from .common import read_u16_le
 
 try:
@@ -504,93 +504,6 @@ def _load_image_bgra(p: Path):
     return bgra, w, h
 
 
-def _lzss32_pack(bgra: bytes) -> bytes:
-    if not bgra:
-        return b""
-    if (len(bgra) & 3) != 0:
-        raise ValueError("lzss32: bgra not aligned")
-    mv = memoryview(bgra)
-
-    for i in range(3, len(bgra), 4):
-        if mv[i] != 255:
-            raise ValueError("type0 requires alpha=255 for all pixels")
-
-    org = len(bgra)
-    n_px = org // 4
-    WIN_PX = 4095
-    MAX_PX = 16
-
-    def key2(px_i: int):
-        o = px_i * 4
-        if o + 8 <= org:
-            return mv[o : o + 8].tobytes()
-        return None
-
-    last_pos = {}
-
-    out = bytearray(b"\0" * 8)
-    flags = 0
-    bit = 0
-    flag_pos = len(out)
-    out.append(0)
-
-    i = 0
-    while i < n_px:
-        best_len = 0
-        best_off = 0
-
-        k = key2(i)
-        if k is not None:
-            j = last_pos.get(k)
-            if j is not None:
-                off_px = i - j
-                if 0 < off_px <= WIN_PX:
-                    max_here = min(MAX_PX, n_px - i)
-                    o1 = i * 4
-                    o2 = j * 4
-                    ln = 0
-                    while ln < max_here:
-                        a = o1 + ln * 4
-                        b = o2 + ln * 4
-                        if mv[a : a + 4] != mv[b : b + 4]:
-                            break
-                        ln += 1
-                    if ln >= 1:
-                        best_len = ln
-                        best_off = off_px
-
-        if best_len:
-            v = (best_off << 4) | (best_len - 1)
-            out.extend(struct.pack("<H", v))
-            step = best_len
-        else:
-            flags |= 1 << bit
-            o = i * 4
-            out.append(mv[o])
-            out.append(mv[o + 1])
-            out.append(mv[o + 2])
-            step = 1
-
-        for k_i in range(i, min(i + step, n_px)):
-            kk = key2(k_i)
-            if kk is not None:
-                last_pos[kk] = k_i
-
-        i += step
-        bit += 1
-        if bit == 8:
-            out[flag_pos] = flags & 0xFF
-            flags = 0
-            bit = 0
-            flag_pos = len(out)
-            out.append(0)
-
-    out[flag_pos] = flags & 0xFF
-    arc = len(out)
-    struct.pack_into("<II", out, 0, arc, org)
-    return bytes(out)
-
-
 def _cut_canvas_bgra(blk: bytes):
     if len(blk) < C.G00_CUT_SZ:
         raise ValueError("cut block short")
@@ -667,6 +580,83 @@ def _resolve_out_base(inp: Path, out_arg, base_name: str, dir_input: bool):
     return base, base
 
 
+def _resolve_refer_base(refer_arg, base_name: str, dir_input: bool):
+    if refer_arg is None:
+        return None
+    rp = Path(refer_arg)
+    if dir_input:
+        if not rp.exists() or not rp.is_dir():
+            raise ValueError("--refer must be a directory when input is a directory")
+        return rp / f"{base_name}.g00"
+    if rp.exists() and rp.is_dir():
+        return rp / f"{base_name}.g00"
+    return rp
+
+
+def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
+    if out_arg is None:
+        out_dir = inp if dir_input else inp.parent
+        return out_dir / f"{base_name}.g00"
+
+    outp = Path(out_arg)
+    if dir_input:
+        if outp.exists() and outp.is_file():
+            raise ValueError("output must be a directory when input is a directory")
+        if outp.suffix.lower() == ".g00":
+            raise ValueError("output must be a directory when input is a directory")
+        outp.mkdir(parents=True, exist_ok=True)
+        return outp / f"{base_name}.g00"
+
+    if outp.exists() and outp.is_dir():
+        return outp / f"{base_name}.g00"
+    if outp.suffix.lower() == ".g00" or (outp.exists() and outp.is_file()):
+        out_dir = outp.parent
+        if out_dir:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        return outp
+
+    outp.mkdir(parents=True, exist_ok=True)
+    return outp / f"{base_name}.g00"
+
+
+def _resolve_update_out(inp: Path, out_arg, refer_arg, base_name: str, dir_input: bool):
+    if out_arg is None:
+        ref_base = _resolve_refer_base(refer_arg, base_name, dir_input)
+        if ref_base is None:
+            raise ValueError("internal error: update output resolution needs --refer")
+        return ref_base
+    return _resolve_create_out(inp, out_arg, base_name, dir_input)
+
+
+def _infer_create_type(img_p: Path, type_opt):
+    if type_opt is not None:
+        return type_opt
+    if img_p.suffix.lower() in (".jpg", ".jpeg"):
+        return 3
+    return 0
+
+
+def _build_g00_from_image(img_p: Path, g00_type: int):
+    if g00_type == 0:
+        bgra, w, h = _load_image_bgra(img_p)
+        return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
+
+    if g00_type == 3:
+        if img_p.suffix.lower() not in (".jpg", ".jpeg"):
+            raise ValueError("type3 create expects .jpg/.jpeg input")
+        need_pil()
+        with Image.open(img_p) as img:
+            w, h = img.size
+        jpeg = img_p.read_bytes()
+        return bytes([3]) + struct.pack("<HH", w, h) + de_xor(jpeg)
+
+    if g00_type == 1:
+        raise ValueError("type1 create is not implemented yet; use --refer to update")
+    if g00_type == 2:
+        raise ValueError("type2 create is not implemented yet; use --refer to update")
+    raise ValueError(f"unsupported create type: {g00_type}")
+
+
 def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=None):
     if not base_bytes:
         raise ValueError("empty base g00")
@@ -702,7 +692,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             report["changed"] = base_bgra != bgra
         if base_bgra == bgra:
             return base_bytes
-        comp = _lzss32_pack(bgra)
+        comp = lzss32_pack(bgra)
         return bytes([0]) + struct.pack("<HH", w, h) + comp
 
     if t == 3:
@@ -920,42 +910,72 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
     raise ValueError("unknown type")
 
 
-def run_compose(inp: str, out_arg, type_expect):
+def run_compose(inp: str, out_arg, type_opt, refer_arg=None):
     ip = Path(inp)
     if not ip.exists():
         return 2
+
+    do_update = refer_arg is not None
     if ip.is_file():
         if not _is_image_file(ip):
             return 2
         base_name, cut_idx = _img_base_and_cut(ip)
-        base_path, out_path = _resolve_out_base(ip, out_arg, base_name, dir_input=False)
-        if not base_path.is_file():
-            raise ValueError(f"missing base g00 at output: {base_path}")
-        base_bytes = base_path.read_bytes()
-        rep = {}
-        new_bytes = _apply_updates_to_g00(base_bytes, [(ip, cut_idx)], type_expect, rep)
-        t = rep.get("base_type", base_bytes[0] if base_bytes else -1)
-        desc = rep.get("type_desc", _G00_TYPE_DESC.get(t, f"type{t}"))
-        print(f"[*] {base_path}")
-        print(f"    Type: {t} ({desc})")
-        if rep.get("base_wh") is not None:
-            bw, bh = rep["base_wh"]
-            print(f"    BaseWH: {bw}x{bh}")
-        if rep.get("valid_cuts") is not None:
-            print(f"    ValidCuts: {rep['valid_cuts']}")
-        for u in rep.get("updates", []):
-            cut = u.get("cut")
-            wh = u.get("wh")
-            chg = u.get("changed")
-            cut_s = f" cut{cut:03d}" if isinstance(cut, int) else ""
-            wh_s = f" {wh[0]}x{wh[1]}" if isinstance(wh, tuple) else ""
-            st = "CHG" if chg else "SAME"
-            print(f"    [{st}]{cut_s} {u.get('image')}{wh_s}")
-        if new_bytes == base_bytes:
-            print("    Result: unchanged (skip)")
+        out_path = (
+            _resolve_update_out(ip, out_arg, refer_arg, base_name, dir_input=False)
+            if do_update
+            else _resolve_create_out(ip, out_arg, base_name, dir_input=False)
+        )
+        if do_update:
+            base_path = _resolve_refer_base(refer_arg, base_name, dir_input=False)
+            if not base_path.is_file():
+                raise ValueError(f"missing refer g00: {base_path}")
+            base_bytes = base_path.read_bytes()
+            rep = {}
+            new_bytes = _apply_updates_to_g00(
+                base_bytes, [(ip, cut_idx)], type_opt, rep
+            )
+            t = rep.get("base_type", base_bytes[0] if base_bytes else -1)
+            desc = rep.get("type_desc", _G00_TYPE_DESC.get(t, f"type{t}"))
+            print(f"[*] refer={base_path}")
+            print(f"    Type: {t} ({desc})")
+            if rep.get("base_wh") is not None:
+                bw, bh = rep["base_wh"]
+                print(f"    BaseWH: {bw}x{bh}")
+            if rep.get("valid_cuts") is not None:
+                print(f"    ValidCuts: {rep['valid_cuts']}")
+            for u in rep.get("updates", []):
+                cut = u.get("cut")
+                wh = u.get("wh")
+                chg = u.get("changed")
+                cut_s = f" cut{cut:03d}" if isinstance(cut, int) else ""
+                wh_s = f" {wh[0]}x{wh[1]}" if isinstance(wh, tuple) else ""
+                st = "CHG" if chg else "SAME"
+                print(f"    [{st}]{cut_s} {u.get('image')}{wh_s}")
+            if new_bytes == base_bytes:
+                print("    Result: unchanged (skip)")
+            else:
+                print(
+                    f"    Result: updated ({len(base_bytes)} -> {len(new_bytes)} bytes)"
+                )
         else:
-            print(f"    Result: updated ({len(base_bytes)} -> {len(new_bytes)} bytes)")
+            if cut_idx is not None:
+                raise ValueError(
+                    "create mode does not support _cut### inputs; type2 create is not implemented yet"
+                )
+            t = _infer_create_type(ip, type_opt)
+            desc = _G00_TYPE_DESC.get(t, f"type{t}")
+            print(f"[*] create={out_path}")
+            print(f"    Type: {t} ({desc})")
+            new_bytes = _build_g00_from_image(ip, t)
+            print(f"    Source: {ip}")
+            print(f"    Result: created ({len(new_bytes)} bytes)")
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(new_bytes)
+        if do_update and new_bytes == base_bytes and out_path == base_path:
+            print("    Output: in-place")
+        else:
+            print(f"    Output: {out_path}")
         return 0
 
     imgs = [p for p in sorted(ip.iterdir()) if p.is_file() and _is_image_file(p)]
@@ -967,51 +987,94 @@ def run_compose(inp: str, out_arg, type_expect):
         base_name, cut_idx = _img_base_and_cut(p)
         groups.setdefault(base_name, []).append((p, cut_idx))
 
-    if out_arg is None:
-        out_dir = ip
-    else:
-        out_dir = Path(out_arg)
-        if out_dir.exists() and out_dir.is_file():
-            raise ValueError("output must be a directory when input is a directory")
-        if out_dir.suffix.lower() == ".g00":
-            raise ValueError("output must be a directory when input is a directory")
-        out_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Compose: {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)")
-
-    total = changed = same = 0
-    for base_name, ups in groups.items():
-        base_path = out_dir / f"{base_name}.g00"
-        if not base_path.is_file():
-            raise ValueError(f"missing base g00 at output: {base_path}")
-        base_bytes = base_path.read_bytes()
-        rep = {}
-        new_bytes = _apply_updates_to_g00(base_bytes, ups, type_expect, rep)
-        t = rep.get("base_type", base_bytes[0] if base_bytes else -1)
-        desc = rep.get("type_desc", _G00_TYPE_DESC.get(t, f"type{t}"))
-        print(f"[*] {base_path}")
-        print(f"    Type: {t} ({desc})")
-        if rep.get("base_wh") is not None:
-            bw, bh = rep["base_wh"]
-            print(f"    BaseWH: {bw}x{bh}")
-        if rep.get("valid_cuts") is not None:
-            print(f"    ValidCuts: {rep['valid_cuts']}")
-        for u in rep.get("updates", []):
-            cut = u.get("cut")
-            wh = u.get("wh")
-            chg = u.get("changed")
-            cut_s = f" cut{cut:03d}" if isinstance(cut, int) else ""
-            wh_s = f" {wh[0]}x{wh[1]}" if isinstance(wh, tuple) else ""
-            st = "CHG" if chg else "SAME"
-            print(f"    [{st}]{cut_s} {u.get('image')}{wh_s}")
-        if new_bytes == base_bytes:
-            same += 1
-            print("    Result: unchanged (skip)")
+    if do_update:
+        if out_arg is None:
+            out_dir = Path(refer_arg)
+            if not out_dir.exists() or not out_dir.is_dir():
+                raise ValueError(
+                    "--refer must be a directory when input is a directory"
+                )
         else:
-            changed += 1
-            print(f"    Result: updated ({len(base_bytes)} -> {len(new_bytes)} bytes)")
+            out_dir = Path(out_arg)
+            if out_dir.exists() and out_dir.is_file():
+                raise ValueError("output must be a directory when input is a directory")
+            if out_dir.suffix.lower() == ".g00":
+                raise ValueError("output must be a directory when input is a directory")
+            out_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"Compose(update): {ip} refer={refer_arg} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
+        )
+    else:
+        if out_arg is None:
+            out_dir = ip
+        else:
+            out_dir = Path(out_arg)
+            if out_dir.exists() and out_dir.is_file():
+                raise ValueError("output must be a directory when input is a directory")
+            if out_dir.suffix.lower() == ".g00":
+                raise ValueError("output must be a directory when input is a directory")
+            out_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
+        )
+
+    total = changed = same = created = 0
+    for base_name, ups in groups.items():
+        out_path = out_dir / f"{base_name}.g00"
+        if do_update:
+            base_path = _resolve_refer_base(refer_arg, base_name, dir_input=True)
+            if not base_path.is_file():
+                raise ValueError(f"missing refer g00: {base_path}")
+            base_bytes = base_path.read_bytes()
+            rep = {}
+            new_bytes = _apply_updates_to_g00(base_bytes, ups, type_opt, rep)
+            t = rep.get("base_type", base_bytes[0] if base_bytes else -1)
+            desc = rep.get("type_desc", _G00_TYPE_DESC.get(t, f"type{t}"))
+            print(f"[*] refer={base_path}")
+            print(f"    Type: {t} ({desc})")
+            if rep.get("base_wh") is not None:
+                bw, bh = rep["base_wh"]
+                print(f"    BaseWH: {bw}x{bh}")
+            if rep.get("valid_cuts") is not None:
+                print(f"    ValidCuts: {rep['valid_cuts']}")
+            for u in rep.get("updates", []):
+                cut = u.get("cut")
+                wh = u.get("wh")
+                chg = u.get("changed")
+                cut_s = f" cut{cut:03d}" if isinstance(cut, int) else ""
+                wh_s = f" {wh[0]}x{wh[1]}" if isinstance(wh, tuple) else ""
+                st = "CHG" if chg else "SAME"
+                print(f"    [{st}]{cut_s} {u.get('image')}{wh_s}")
+            if new_bytes == base_bytes:
+                same += 1
+                print("    Result: unchanged (skip)")
+            else:
+                changed += 1
+                print(
+                    f"    Result: updated ({len(base_bytes)} -> {len(new_bytes)} bytes)"
+                )
+        else:
+            if len(ups) != 1 or ups[0][1] is not None:
+                raise ValueError(
+                    f"create mode does not support multi-cut target: {base_name}"
+                )
+            img_p, _ = ups[0]
+            t = _infer_create_type(img_p, type_opt)
+            desc = _G00_TYPE_DESC.get(t, f"type{t}")
+            print(f"[*] create={out_path}")
+            print(f"    Type: {t} ({desc})")
+            print(f"    Source: {img_p}")
+            new_bytes = _build_g00_from_image(img_p, t)
+            created += 1
+            print(f"    Result: created ({len(new_bytes)} bytes)")
         total += 1
-        base_path.write_bytes(new_bytes)
-    print(f"Done. Targets={total} UPDATED={changed} SAME={same}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_bytes(new_bytes)
+        print(f"    Output: {out_path}")
+    if do_update:
+        print(f"Done. Targets={total} UPDATED={changed} SAME={same}")
+    else:
+        print(f"Done. Targets={total} CREATED={created}")
     return 0
 
 
@@ -1037,23 +1100,35 @@ def main(argv=None):
         return run_extract(args[1], args[2])
 
     if args[0] == "--c":
-        type_expect = None
+        type_opt = None
+        refer_arg = None
         i = 1
-        while i < len(args) and args[i] in ("--type", "--t"):
-            if i + 1 >= len(args):
-                return 2
-            try:
-                type_expect = int(args[i + 1], 0)
-            except Exception:
-                return 2
-            i += 2
-        rest = args[i:]
+        rest = []
+        while i < len(args):
+            a = args[i]
+            if a in ("--type", "--t"):
+                if i + 1 >= len(args):
+                    return 2
+                try:
+                    type_opt = int(args[i + 1], 0)
+                except Exception:
+                    return 2
+                i += 2
+                continue
+            if a == "--refer":
+                if i + 1 >= len(args):
+                    return 2
+                refer_arg = args[i + 1]
+                i += 2
+                continue
+            rest.append(a)
+            i += 1
         if len(rest) not in (1, 2):
             return 2
         inp = rest[0]
         out_arg = rest[1] if len(rest) == 2 else None
         try:
-            return run_compose(inp, out_arg, type_expect)
+            return run_compose(inp, out_arg, type_opt, refer_arg=refer_arg)
         except Exception as e:
             print(f"[!] {e}", file=sys.stderr)
             return 1

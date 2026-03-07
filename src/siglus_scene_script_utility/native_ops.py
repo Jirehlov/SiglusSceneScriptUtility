@@ -18,6 +18,7 @@ try:
     _native_lzss_pack = native_accel.lzss_pack
     _native_lzss_pack_level = native_accel.lzss_pack_level
     _native_lzss_unpack = native_accel.lzss_unpack
+    _native_lzss32_pack = getattr(native_accel, "lzss32_pack", None)
     _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
     _native_md5_digest = native_accel.md5_digest
     _native_tile_copy = native_accel.tile_copy
@@ -29,6 +30,7 @@ try:
 except (ImportError, AttributeError):
     _USE_NATIVE = False
     _native_lzss_pack_level = None
+    _native_lzss32_pack = None
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
 
@@ -125,7 +127,6 @@ class _LzssTreeFind:
         self.src_cnt = src_cnt
         self.window_size = window_size
         self.look_ahead_size = look_ahead_size
-
         self.max_match_len = max(2, min(level, look_ahead_size))
         self.src_index = 0
         self.match_target = 0
@@ -188,7 +189,7 @@ def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
     tree_find.ready(mv, len(src), WINDOW_SIZE, LOOK_AHEAD, level)
     pack_buf = bytearray(b"\0" * 8)
     pack_buf_size = 8
-    pack_data = bytearray(1 + (2 * 8))
+    pack_data = bytearray(1 + (3 * 8))
     pack_data[0] = 0
     pack_bit_count = 0
     pack_data_count = 1
@@ -233,6 +234,64 @@ def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
             break
     struct.pack_into("<II", pack_buf, 0, pack_buf_size, len(src))
     return bytes(pack_buf[:pack_buf_size])
+
+
+def _py_lzss32_pack(src: bytes) -> bytes:
+    if not src:
+        return b""
+    if (len(src) & 3) != 0:
+        raise ValueError("lzss32: source size is not a multiple of 4")
+    src_cnt = len(src) // 4
+    if src_cnt == 0:
+        return b""
+    dwords = list(struct.unpack(f"<{src_cnt}I", src))
+    INDEX_BITS = 12
+    BREAK_EVEN = 0
+    LENGTH_BITS = 16 - INDEX_BITS
+    LOOK_AHEAD = (1 << LENGTH_BITS) + BREAK_EVEN
+    WINDOW_SIZE = 1 << INDEX_BITS
+    tree_find = _LzssTreeFind()
+    tree_find.ready(dwords, src_cnt, WINDOW_SIZE, LOOK_AHEAD, LOOK_AHEAD)
+    pack_buf = bytearray(b"\0" * 8)
+    pack_data = bytearray(1 + (3 * 8))
+    pack_data[0] = 0
+    pack_bit_count = 0
+    pack_data_count = 1
+    replace_cnt = 0
+    bit_mask = (1, 2, 4, 8, 16, 32, 64, 128)
+    while True:
+        if tree_find.src_index >= tree_find.src_cnt:
+            break
+        if replace_cnt > 0:
+            tree_find.proc(replace_cnt)
+        if tree_find.src_index >= tree_find.src_cnt:
+            break
+        if tree_find.match_size <= BREAK_EVEN:
+            replace_cnt = 1
+            pack_data[0] |= bit_mask[pack_bit_count]
+            v = dwords[tree_find.src_index]
+            pack_data[pack_data_count] = v & 0xFF
+            pack_data[pack_data_count + 1] = (v >> 8) & 0xFF
+            pack_data[pack_data_count + 2] = (v >> 16) & 0xFF
+            pack_data_count += 3
+        else:
+            replace_cnt = tree_find.match_size
+            tok = (
+                (tree_find.window_top - tree_find.match_target) % WINDOW_SIZE
+            ) << LENGTH_BITS
+            tok |= tree_find.match_size - BREAK_EVEN - 1
+            pack_data[pack_data_count : pack_data_count + 2] = tok.to_bytes(2, "little")
+            pack_data_count += 2
+        pack_bit_count += 1
+        if pack_bit_count == 8:
+            pack_buf.extend(pack_data[:pack_data_count])
+            pack_bit_count = 0
+            pack_data_count = 1
+            pack_data[0] = 0
+    if pack_data_count > 1:
+        pack_buf.extend(pack_data[:pack_data_count])
+    struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
+    return bytes(pack_buf)
 
 
 def _py_lzss_unpack(src: bytes) -> bytes:
@@ -374,6 +433,15 @@ def lzss_unpack(src: bytes) -> bytes:
     return _py_lzss_unpack(src)
 
 
+def lzss32_pack(src: bytes) -> bytes:
+    if _USE_NATIVE and _native_lzss32_pack is not None:
+        try:
+            return _native_lzss32_pack(src)
+        except Exception:
+            pass
+    return _py_lzss32_pack(src)
+
+
 def xor_cycle_inplace(b, code, st=0):
     if _USE_NATIVE and isinstance(b, bytearray):
         _native_xor_cycle_inplace(
@@ -397,7 +465,6 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         _native_tile_copy(
             d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim
         )
-
         if isinstance(d, memoryview):
             d[:] = d_arr
     else:

@@ -1,4 +1,5 @@
 mod lzss;
+mod lzss32;
 mod md5;
 mod nwa;
 mod tile;
@@ -34,6 +35,12 @@ fn lzss_pack_level(py: Python<'_>, data: &[u8], level: usize) -> PyResult<Py<PyB
 #[pyfunction]
 fn lzss_unpack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = lzss::unpack(data);
+    Ok(PyBytes::new(py, &result).into())
+}
+
+#[pyfunction]
+fn lzss32_pack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let result = lzss32::pack(data).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &result).into())
 }
 
@@ -422,6 +429,7 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_pack, m)?)?;
     m.add_function(wrap_pyfunction!(lzss_pack_level, m)?)?;
     m.add_function(wrap_pyfunction!(lzss_unpack, m)?)?;
+    m.add_function(wrap_pyfunction!(lzss32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(xor_cycle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(md5_digest, m)?)?;
     m.add_function(wrap_pyfunction!(nwa_decode_pcm, m)?)?;

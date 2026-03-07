@@ -133,10 +133,13 @@ def _usage(out=None):
         "    note: you can select a type2 cut via suffix :cutNNN (e.g. foo.g00:cut002)\n"
     )
     out.write(
-        f"  {p} -g --c [--type N] <input_png|input_jpeg|input_dir> [output_g00|output_dir]\n"
+        f"  {p} -g --c [--type N] [--refer <ref_g00|ref_dir>] <input_png|input_jpeg|input_dir> [output_g00|output_dir]\n"
     )
     out.write(
-        "    note: base <name>.g00 must already exist at the OUTPUT location (in-place overwrite)\n"
+        "    note: without --refer, --c creates .g00 (currently type0/type3 only)\n"
+    )
+    out.write(
+        "          with --refer, --c updates from the reference .g00 instead of implicitly reading output as base\n"
     )
     out.write(
         "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"

@@ -651,7 +651,7 @@ Special characters in `original` and `replacement` are escape-encoded:
 
 ### `-g` / `--g00` — Work with `.g00` Image Files
 
-Provides tools for analyzing, extracting, merging, and updating `.g00` image archives used by SiglusEngine for backgrounds, sprites, and other visuals.
+Provides tools for analyzing, extracting, merging, creating, and updating `.g00` image archives used by SiglusEngine for backgrounds, sprites, and other visuals.
 
 #### `.g00` File Types
 
@@ -676,8 +676,8 @@ siglus-ssu -g --x <input_g00 | input_dir> <output_dir>
 # Merge multiple .g00 files (or cuts) into a single PNG
 siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] --o <output_dir>
 
-# Update image data inside an existing .g00 (output_g00 is optional)
-siglus-ssu -g --c [--type N] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
+# Create a new .g00 from image files, or update from an explicit reference .g00
+siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
 ```
 
 #### Parameters
@@ -687,9 +687,10 @@ siglus-ssu -g --c [--type N] <input_png | input_jpeg | input_dir> [output_g00 | 
 | `--a` | **Analyze** mode. Prints type, canvas size, LZSS stats, and per-cut details for type2 files. |
 | `--x` | **Extract** mode. Decodes each `.g00` and writes PNG or JPEG files. |
 | `--m` | **Merge** mode. Composites multiple `.g00` images or cuts into one PNG. |
-| `--c` | **Compile/update** mode. Updates the image payload of an existing `.g00` with new PNG/JPEG content. |
+| `--c` | **Create/update** mode. Without `--refer`, creates a new `.g00`. With `--refer`, updates image payload using the referenced `.g00` as the base. |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | (Merge mode only) Output directory for the merged PNG. |
-| `--type N`, `--t N` | (Compile mode only) Override the expected `.g00` type for validation. |
+| `--type N`, `--t N` | (Create mode only) In create mode, force the output `.g00` type. In update mode, override the expected reference `.g00` type for validation. |
+| `--refer <ref_g00 | ref_dir>` | (Create mode only) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. |
 | `<g00spec>[:cutNNN]` | For merge mode, optionally select a specific cut index from a type2 `.g00` by appending `:cutNNN` (e.g., `bg_day.g00:cut002`). |
 
 #### Examples
@@ -710,18 +711,28 @@ siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merg
 # Merge a specific cut from a type2 .g00
 siglus-ssu -g --m /path/to/sprite.g00:cut005 /path/to/overlay.g00 --o /path/to/out/
 
-# Update the image in an existing .g00 in-place (single file).
-# The base .g00 must already exist at the output location.
+# Create a new type0 .g00 from a PNG (output optional)
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00
 
-# Omit output path: the tool looks for <input_basename>.g00 in the same directory as the input image.
+# Omit output path: create <input_basename>.g00 next to the input image
 siglus-ssu -g --c /path/to/new_bg.png
 
-# Update all images in a directory.
-# Images must be named <basename>.png or <basename>_cut###.png to match cuts.
-# The matching <basename>.g00 must exist in the output directory.
-siglus-ssu -g --c /path/to/updated_pngs/ /path/to/game_dir/
+# Create a new type3 .g00 from a JPEG
+siglus-ssu -g --c /path/to/op.jpeg /path/to/op.g00
+
+# Update an existing .g00 using an explicit reference
+siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/original_bg.g00
+
+# Batch update using a reference directory
+siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/original_g00/
 ```
+
+#### Create Mode Notes
+
+- Create mode is selected when `--refer` is omitted.
+- Currently implemented create targets are **type0** and **type3** only.
+- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. You may also force `--type 0` or `--type 3`.
+- `type1` and `type2` create are not implemented yet.
 
 #### Type2 Cut Naming Convention
 
@@ -729,7 +740,7 @@ For multi-cut type2 `.g00` files, extracted images are named:
 - `<basename>.png` — if only one cut exists.
 - `<basename>_cut000.png`, `<basename>_cut001.png`, etc. — if multiple cuts exist.
 
-To update a specific cut, place an image named `<basename>_cut###.png` in the input directory when running `--c`.
+To update a specific cut, place an image named `<basename>_cut###.png` in the input directory when running `--c --refer ...`.
 
 ---
 
