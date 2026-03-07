@@ -193,7 +193,7 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
     if src.is_empty() {
         return Ok(Vec::new());
     }
-    if src.len() % 4 != 0 {
+    if !src.len().is_multiple_of(4) {
         return Err("lzss32: source size is not a multiple of 4".to_string());
     }
     let src_cnt = src.len() / 4;
