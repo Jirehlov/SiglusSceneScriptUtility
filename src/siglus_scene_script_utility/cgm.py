@@ -1,5 +1,5 @@
 from . import const as C
-from .common import read_i32_le, append_diff
+from .common import read_i32_le, append_diff, print_limited_diffs
 from .native_ops import xor_cycle_inplace, lzss_unpack
 
 
@@ -167,12 +167,8 @@ def compare_cgm(b1, b2):
             diffs.append(f"entry[{i:d}]: {ea[i]!r} -> {eb[i]!r}")
         if len(diffs) > 5000:
             break
-    if not diffs:
-        print("CGM data are identical.")
-        return 0
-    print("==== CGM Differences ====")
-    for d in diffs[:5000]:
-        print(d)
-    if len(diffs) > 5000:
-        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
-    return 0
+    return print_limited_diffs(
+        diffs,
+        "==== CGM Differences ====",
+        "CGM data are identical.",
+    )

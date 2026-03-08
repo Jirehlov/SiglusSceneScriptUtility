@@ -1,6 +1,6 @@
 import struct
 
-from .common import read_i32_le, hx, append_diff
+from .common import read_i32_le, hx, append_diff, print_limited_diffs
 
 _TONE = 0
 _RGB_SAT = 1
@@ -164,12 +164,8 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
         if len(diffs) > 5000:
             break
 
-    if not diffs:
-        print("TCR data are identical.")
-        return 0
-    print("==== TCR Differences ====")
-    for d in diffs[:5000]:
-        print(d)
-    if len(diffs) > 5000:
-        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
-    return 0
+    return print_limited_diffs(
+        diffs,
+        "==== TCR Differences ====",
+        "TCR data are identical.",
+    )

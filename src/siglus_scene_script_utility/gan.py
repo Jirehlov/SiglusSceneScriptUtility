@@ -1,5 +1,5 @@
 from . import const as C
-from .common import hx, read_i32_le_advancing
+from .common import hx, read_i32_le_advancing, print_limited_diffs
 
 _GAN_CODE_VERSION = 10000
 _GAN_VERSION_10000 = 10000
@@ -315,12 +315,8 @@ def compare_gan(b1, b2):
                 vb = int(pb.get(fk) or 0)
                 if va != vb:
                     diffs.append(f"set[{si:d}].pat[{pi:d}].{fk}: {va:d} -> {vb:d}")
-    if not diffs:
-        print("GAN data are identical.")
-        return 0
-    print("==== GAN Differences ====")
-    for d in diffs[:5000]:
-        print(d)
-    if len(diffs) > 5000:
-        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
-    return 0
+    return print_limited_diffs(
+        diffs,
+        "==== GAN Differences ====",
+        "GAN data are identical.",
+    )

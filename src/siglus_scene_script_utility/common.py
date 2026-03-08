@@ -250,7 +250,7 @@ def find_named_path(base_dir: str, target_name: str, recursive: bool = True) -> 
     return hits[0] if hits else ""
 
 
-def norm_charset(cs: str) -> str:
+def norm_charset(cs: str, keep_unknown: bool = False) -> str:
     s = str(cs or "").strip().lower()
     if s in (
         "jis",
@@ -265,7 +265,7 @@ def norm_charset(cs: str) -> str:
         return "cp932"
     if s in ("utf8", "utf-8", "utf_8", "utf8-sig", "utf-8-sig"):
         return "utf-8"
-    return ""
+    return str(cs or "") if keep_unknown else ""
 
 
 def decode_text_auto(data: bytes, force_charset: str = ""):
@@ -654,6 +654,35 @@ def hx(x):
 def append_diff(diffs, k, x, y):
     if x != y:
         diffs.append(f"{k}: {x!r} -> {y!r}")
+
+
+def print_limited_diffs(diffs, title: str, identical_message: str, limit: int = 5000):
+    if not diffs:
+        print(identical_message)
+        return 0
+    print(title)
+    for d in diffs[:limit]:
+        print(d)
+    if len(diffs) > limit:
+        print(f"... ({len(diffs) - limit:d} diffs omitted)")
+    return 0
+
+
+def parse_gei_disam_args(argv, *, disam_action=None, allow_gei_disam: bool = True):
+    args = list(argv or [])
+    gei = False
+    disam = False
+    if "--gei" in args:
+        args.remove("--gei")
+        gei = True
+    if "--disam" in args:
+        args.remove("--disam")
+        disam = True
+        if disam_action is not None:
+            disam_action()
+    if gei and disam and (not allow_gei_disam):
+        raise ValueError("--disam is not supported with --gei")
+    return args, gei, disam
 
 
 def _dn(name, width=None):

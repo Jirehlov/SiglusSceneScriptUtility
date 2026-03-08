@@ -30,6 +30,7 @@ from .common import (
     parse_code,
     find_named_path,
     ANGOU_DAT_NAME,
+    norm_charset,
 )
 
 
@@ -276,26 +277,6 @@ def _scan_dir(p):
     return ini, inc, ss
 
 
-def _norm_charset(cs):
-    if not cs:
-        return ""
-    s = str(cs).strip().lower()
-    if s in (
-        "jis",
-        "sjis",
-        "shift_jis",
-        "shift-jis",
-        "cp932",
-        "ms932",
-        "windows-932",
-        "windows932",
-    ):
-        return "cp932"
-    if s in ("utf8", "utf-8", "utf_8", "utf8-sig", "utf-8-sig"):
-        return "utf-8"
-    return cs
-
-
 def _is_jp_char(ch):
     o = ord(ch)
     return (0x3040 <= o <= 0x30FF) or (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
@@ -522,7 +503,11 @@ def main(argv=None):
             )
             os.makedirs(tmp, exist_ok=True)
     ini, inc, ss = _scan_dir(inp)
-    charset = _norm_charset(a.charset) if getattr(a, "charset", None) else ""
+    charset = (
+        norm_charset(a.charset, keep_unknown=True)
+        if getattr(a, "charset", None)
+        else ""
+    )
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False
     ctx = {

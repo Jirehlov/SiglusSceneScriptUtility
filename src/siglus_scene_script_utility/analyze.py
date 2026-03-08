@@ -13,6 +13,7 @@ from .common import (
     find_siglus_engine_exe,
     siglus_engine_exe_element,
     looks_like_siglus_dat,
+    parse_gei_disam_args,
 )
 
 from . import pck
@@ -209,13 +210,11 @@ def main(argv=None):
     args = list(argv)
     if (not args) or args[0] in ("-h", "--help", "help"):
         return 2
-    gei = False
-    if "--gei" in args:
-        args.remove("--gei")
-        gei = True
-    if "--disam" in args:
-        args.remove("--disam")
-        dat.DAT_TXT_OUT_DIR = "__DATDIR__"
+    args, gei, _disam = parse_gei_disam_args(
+        args,
+        disam_action=lambda: setattr(dat, "DAT_TXT_OUT_DIR", "__DATDIR__"),
+        allow_gei_disam=True,
+    )
 
     readall = False
     if "--readall" in args:

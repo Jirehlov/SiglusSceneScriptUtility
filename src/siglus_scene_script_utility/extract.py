@@ -1,6 +1,7 @@
 import os
 import sys
 
+from .common import parse_gei_disam_args
 from . import GEI
 from . import pck
 
@@ -13,15 +14,14 @@ def main(argv=None):
         argv = sys.argv[1:]
     args = list(argv)
     dat_txt = False
-    gei = False
-    if "--gei" in args:
-        args.remove("--gei")
-        gei = True
-    if "--disam" in args:
-        args.remove("--disam")
-        dat_txt = True
-    if gei and dat_txt:
-        sys.stderr.write("--disam is not supported with --gei\n")
+    try:
+        args, gei, dat_txt = parse_gei_disam_args(
+            args,
+            disam_action=lambda: None,
+            allow_gei_disam=False,
+        )
+    except ValueError as e:
+        sys.stderr.write(str(e) + "\n")
         return 2
     if not args or args[0] in ("-h", "--help", "help"):
         return 2

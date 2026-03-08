@@ -4,7 +4,6 @@ import time
 import glob
 from . import const as C
 from .CA import _rt
-from .IA import IncAnalyzer
 from .common import (
     log_stage,
     record_stage_time,
@@ -20,6 +19,7 @@ from .common import (
     read_exe_el_key,
     parse_i32_header,
 )
+from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
 
 
@@ -46,37 +46,6 @@ def _make_original_source_rel_list(scn_path):
     out += _glob_sorted_rel(scn_path, "*.inc")
     out += _glob_sorted_rel(scn_path, "*.ss")
     return out
-
-
-def _build_inc_data(ctx):
-    scn_path = ctx.get("scn_path") or ""
-    inc_list = ctx.get("inc_list") or []
-    iad = {
-        "replace_tree": _rt(),
-        "name_set": set(ctx.get("defined_names") or []),
-        "property_list": [],
-        "command_list": [],
-        "property_cnt": 0,
-        "command_cnt": 0,
-        "inc_property_cnt": 0,
-        "inc_command_cnt": 0,
-    }
-    ia2 = []
-    for inc in inc_list:
-        inc_path = inc if os.path.isabs(inc) else os.path.join(scn_path, inc)
-        if not os.path.isfile(inc_path):
-            raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = read_text_auto(inc_path, force_charset=(ctx.get("charset_force") or ""))
-        iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
-        ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
-        if not ia.step1():
-            raise RuntimeError(f"{os.path.basename(inc_path)} line({ia.el}): {ia.es}")
-        ia2.append((os.path.basename(inc_path), iad2))
-    for name, iad2 in ia2:
-        ia = IncAnalyzer("", C.FM_GLOBAL, iad, iad2)
-        if not ia.step2():
-            raise RuntimeError(f"{name} line({ia.el}): {ia.es}")
-    return iad
 
 
 def _parse_cmd_labels(dat):
@@ -386,7 +355,7 @@ def link_pack(ctx):
     iad = ctx.get("ia_data")
     if not isinstance(iad, dict):
         if ctx.get("inc_list"):
-            iad = _build_inc_data(ctx)
+            iad = build_ia_data(ctx)
         else:
             iad = {
                 "replace_tree": _rt(),
