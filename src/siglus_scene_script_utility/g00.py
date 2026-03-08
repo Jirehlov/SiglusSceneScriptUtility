@@ -1428,10 +1428,14 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
     do_update = refer_arg is not None
     if _is_image_file(ip):
         base_name, cut_idx = _img_base_and_cut(ip)
-    elif do_update or type_opt != 2 or not _is_layout_file(ip):
-        return 2
-    else:
+    elif _is_layout_file(ip):
+        if do_update:
+            raise ValueError("json input does not support --refer")
+        if type_opt != 2:
+            raise ValueError("json input is only accepted with --type 2")
         base_name, cut_idx = _layout_base_name(ip), None
+    else:
+        return 2
     out_path = (
         _resolve_refer_base(refer_arg, base_name, dir_input=False)
         if do_update and out_arg is None

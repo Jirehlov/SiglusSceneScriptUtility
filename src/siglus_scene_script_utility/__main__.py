@@ -133,10 +133,10 @@ def _usage(out=None):
         "    note: you can select a type2 cut via suffix :cutNNN (e.g. foo.g00:cut002)\n"
     )
     out.write(
-        f"  {p} -g --c [--type N] [--refer <ref_g00|ref_dir>] [--config <file|dir>] <input_png|input_jpeg|input_json|input_dir> [output_g00|output_dir]\n"
+        f"  {p} -g --c [--type N] [--refer <ref_g00|ref_dir>] <input_png|input_jpeg|input_json(type2 only)|input_dir> [output_g00|output_dir]\n"
     )
     out.write(
-        "    note: without --refer, --c creates .g00 (type0/type2/type3 supported; type2 can use JSON layout files)\n"
+        "    note: without --refer, --c creates .g00 (type0/type2/type3 supported; JSON input is only accepted with --type 2)\n"
     )
     out.write(
         "          with --refer, --c updates from the reference .g00 instead of implicitly reading output as base\n"
