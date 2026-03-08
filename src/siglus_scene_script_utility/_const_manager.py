@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -7,6 +8,7 @@ from importlib import util as iu
 from pathlib import Path
 
 _API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_scene_script_utility/const.py?ref={ref}"
+_CONST_SHA512 = "363ddb5660089611b6116c035a14d721558a648c90d27ad81a56aad9d4267e6f4672e6ccbd42119c61cdd48de192a7c3626ed685e904c21b3f0ea57f6730c0d7"
 
 
 def _const_path() -> Path:
@@ -51,9 +53,10 @@ def download_const(ref: str = "main", force: bool = False) -> Path:
         payload = json.loads(r.read().decode("utf-8", "replace"))
     if payload.get("encoding") != "base64" or "content" not in payload:
         raise RuntimeError("Unexpected GitHub API response (missing base64 content).")
-    text = base64.b64decode(payload["content"].replace("\n", "")).decode(
-        "utf-8", "strict"
-    )
+    data = base64.b64decode(payload["content"].replace("\n", ""))
+    if hashlib.sha512(data).hexdigest() != _CONST_SHA512:
+        raise RuntimeError("const.py sha512 mismatch.")
+    text = data.decode("utf-8", "strict")
     tmp = dst.with_suffix(".py.tmp")
     tmp.write_text(text, encoding="utf-8", newline="\r\n")
     tmp.replace(dst)
