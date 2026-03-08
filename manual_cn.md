@@ -645,7 +645,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--c` | **创建/更新**模式。不带 `--refer` 时创建新的 `.g00`；带 `--refer` 时，以参考 `.g00` 为 base 更新图片数据。 |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | （仅合并模式）合并后 PNG 的输出目录。 |
 | `--type N`, `--t N` | （仅创建模式）在创建模式下强制输出 `.g00` 类型；在更新模式下覆盖参考 `.g00` 的预期类型用于验证。 |
-| `--refer <ref_g00 | ref_dir>` | （仅创建模式）显式指定更新所用的参考 `.g00`。单文件输入时可传 `.g00` 文件或目录；目录输入时必须传参考目录。 |
+| `--refer <ref_g00 \| ref_dir>` | （仅创建模式）显式指定更新所用的参考 `.g00`。单文件输入时可传 `.g00` 文件或目录；目录输入时必须传参考目录。 |
 | `<g00spec>[:cutNNN]` | 合并模式中，可在路径后附加 `:cutNNN`（如 `bg_day.g00:cut002`）以选择 type2 `.g00` 中的特定 cut。 |
 
 #### 示例
@@ -727,8 +727,6 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/orig
 - `source_rect` 为可选；省略时使用整张源图。若同时给出 `source_rect` 与 `canvas_rect`，两者宽高必须一致。
 - `center` 为可选，默认继承 `default_center` 或 `(0,0)`。
 - 若追求稳定可复现的回灌，建议保留提取时生成的 JSON，只改动明确需要修改的 PNG 像素或矩形/中心点字段。
-- `alpha0_rgb` 不再属于推荐 schema。创建器会严格尊重输入 PNG：若 **alpha=0** 像素下方本来就有 hidden RGB，就原样保留；若没有，就不会额外恢复或合成。
-- 为兼容旧版自动生成的布局，JSON 中若仍出现 `"alpha0_rgb": "keep"`，当前版本仍接受；除此之外的取值会被拒绝。
 
 #### type2 提取与回灌资产
 

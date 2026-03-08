@@ -690,7 +690,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--c` | **Create/update** mode. Without `--refer`, creates a new `.g00`. With `--refer`, updates image payload using the referenced `.g00` as the base. |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | (Merge mode only) Output directory for the merged PNG. |
 | `--type N`, `--t N` | (Create mode only) In create mode, force the output `.g00` type. In update mode, override the expected reference `.g00` type for validation. |
-| `--refer <ref_g00 | ref_dir>` | (Create mode only) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. |
+| `--refer <ref_g00 \| ref_dir>` | (Create mode only) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. |
 | `<g00spec>[:cutNNN]` | For merge mode, optionally select a specific cut index from a type2 `.g00` by appending `:cutNNN` (e.g., `bg_day.g00:cut002`). |
 
 #### Examples
@@ -775,8 +775,6 @@ Notes:
 - `source_rect` is optional. If omitted, the full source image is used. When both are present, they must have the same width and height.
 - `center` is optional per cut and defaults to `default_center` or `(0,0)`.
 - Recommended practice for strict, reproducible rebuilds: keep one JSON file beside the extracted PNG set and edit only the PNG pixels or the explicit rect/center fields you actually intend to change.
-- `alpha0_rgb` is no longer part of the recommended schema. The creator respects the source PNG exactly as provided: if hidden RGB under fully transparent pixels exists, it is preserved; if it does not exist, nothing is synthesized.
-- Older JSON files may still contain `"alpha0_rgb": "keep"`; this remains accepted for backward compatibility, but other values are rejected.
 
 #### Type2 Extract / Rebuild Asset Convention
 

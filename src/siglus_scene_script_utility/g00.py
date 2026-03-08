@@ -968,9 +968,6 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     default_center = _parse_json_xy(
         obj.get("default_center", defaults.get("center")), "default_center"
     ) or (0, 0)
-    root_alpha0_rgb = obj.get("alpha0_rgb", defaults.get("alpha0_rgb"))
-    if root_alpha0_rgb is not None and str(root_alpha0_rgb).strip().lower() != "keep":
-        raise ValueError("type2 layout alpha0_rgb, when present, must be 'keep'")
     cuts_in = obj.get("cuts")
     if not isinstance(cuts_in, list):
         raise ValueError("type2 layout json requires cuts[]")
@@ -1000,9 +997,6 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
             "cuts[].canvas_rect/target_rect",
         )
         center = _parse_json_xy(raw.get("center"), "cuts[].center") or default_center
-        alpha0_rgb = raw.get("alpha0_rgb")
-        if alpha0_rgb is not None and str(alpha0_rgb).strip().lower() != "keep":
-            raise ValueError("cuts[].alpha0_rgb, when present, must be 'keep'")
         cuts.append(
             {
                 "source": source,
