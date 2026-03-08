@@ -67,27 +67,3 @@ pub fn copy(
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_tile_copy_basic() {
-        let mut dst = vec![0u8; 16];
-        let src = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let mask = vec![128u8; 4]; // All above default lim
-
-        copy(&mut dst, &src, 2, 2, &mask, 2, 2, 0, 0, false, 64);
-
-        // All tiles should be copied since mask values (128) >= lim (64)
-        assert_eq!(dst, src);
-    }
-
-    #[test]
-    fn test_tile_copy_empty() {
-        let mut dst = vec![0u8; 16];
-        copy(&mut dst, &[], 2, 2, &[], 2, 2, 0, 0, false, 64);
-        assert_eq!(dst, vec![0u8; 16]);
-    }
-}

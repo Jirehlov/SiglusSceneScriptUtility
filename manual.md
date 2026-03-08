@@ -677,7 +677,7 @@ siglus-ssu -g --x <input_g00 | input_dir> <output_dir>
 siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] --o <output_dir>
 
 # Create a new .g00 from image files, or update from an explicit reference .g00
-siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
+siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
 ```
 
 #### Parameters
@@ -720,6 +720,12 @@ siglus-ssu -g --c /path/to/new_bg.png
 # Create a new type3 .g00 from a JPEG
 siglus-ssu -g --c /path/to/op.jpeg /path/to/op.g00
 
+# Create a type2 .g00 from a JSON layout
+siglus-ssu -g --c --type 2 /path/to/char_face.type2.json /path/to/char_face.g00
+
+# Batch create type2 .g00 files from a directory of extracted/rebuild layouts
+siglus-ssu -g --c --type 2 /path/to/layout_dir/ /path/to/out_g00/
+
 # Update an existing .g00 using an explicit reference
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/original_bg.g00
 
@@ -730,15 +736,78 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/orig
 #### Create Mode Notes
 
 - Create mode is selected when `--refer` is omitted.
-- Currently implemented create targets are **type0** and **type3** only.
-- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. You may also force `--type 0` or `--type 3`.
-- `type1` and `type2` create are not implemented yet.
+- Implemented create targets are **type0**, **type2**, and **type3**.
+- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. Use `--type 2` for JSON-driven type2 creation.
+- For type2 rebuilds produced by `-g --x`, pass the generated `.type2.json` directly to `-g --c`. Do not pass a single `*_cutNNN.png` file to create a multi-cut type2 archive.
+- `type1` create is still not implemented.
 
-#### Type2 Cut Naming Convention
+#### Type2 JSON Layout
 
-For multi-cut type2 `.g00` files, extracted images are named:
-- `<basename>.png` — if only one cut exists.
-- `<basename>_cut000.png`, `<basename>_cut001.png`, etc. — if multiple cuts exist.
+`type2` create is driven by a JSON layout, not by CutText or PSD metadata. The recommended strict schema is:
+
+```json
+{
+  "type": 2,
+  "canvas": { "width": 2048, "height": 2048 },
+  "default_center": { "x": 1023, "y": 0 },
+  "cuts": [
+    {
+      "index": 0,
+      "source": "face/base.png",
+      "canvas_rect": { "x": 0, "y": 0, "w": 2048, "h": 2048 }
+    },
+    {
+      "index": 1,
+      "source": "face/blink.png",
+      "canvas_rect": { "x": 0, "y": 0, "w": 2048, "h": 2048 }
+    }
+  ]
+}
+```
+
+Notes:
+- Root fields used by the strict schema are: `type`, `canvas`, optional `default_center`, and `cuts`.
+- `canvas` is the output type2 canvas size.
+- `cuts[]` is ordered by index. You may insert `null` to leave holes.
+- Each non-null cut should provide `source` and `canvas_rect`.
+- `source` is resolved relative to the JSON file.
+- `canvas_rect` is the cut rectangle written into the outer type2 cut table.
+- `source_rect` is optional. If omitted, the full source image is used. When both are present, they must have the same width and height.
+- `center` is optional per cut and defaults to `default_center` or `(0,0)`.
+- Recommended practice for strict, reproducible rebuilds: keep one JSON file beside the extracted PNG set and edit only the PNG pixels or the explicit rect/center fields you actually intend to change.
+- `alpha0_rgb` is no longer part of the recommended schema. The creator respects the source PNG exactly as provided: if hidden RGB under fully transparent pixels exists, it is preserved; if it does not exist, nothing is synthesized.
+- Older JSON files may still contain `"alpha0_rgb": "keep"`; this remains accepted for backward compatibility, but other values are rejected.
+
+#### Type2 Extract / Rebuild Asset Convention
+
+When `-g --x` extracts a type2 `.g00`, it always exports a JSON sidecar next to the images:
+- Single-cut: `<basename>.png` + `<basename>.type2.json`
+- Multi-cut: `<basename>_cut000.png`, `<basename>_cut001.png`, ... + `<basename>.type2.json`
+
+Notes:
+- Extracted type2 PNGs preserve RGB under fully transparent pixels (hidden RGB). This is the default extraction behavior for type2.
+- The generated `<basename>.type2.json` is the canonical rebuild layout for the extracted assets.
+- Rebuild mode respects the input PNG exactly as-is. No hidden-RGB recovery or synthesis step is applied during type2 creation.
+
+Direct rebuild from extracted assets:
+
+```bash
+# Step 1: extract a multi-cut type2 archive
+siglus-ssu -g --x /path/to/char_face.g00 /path/to/work/
+
+# Produces:
+#   /path/to/work/char_face.type2.json
+#   /path/to/work/char_face_cut000.png
+#   /path/to/work/char_face_cut001.png
+#   ...
+
+# Step 2: edit one or more extracted PNG files in place
+
+# Step 3: rebuild by passing the JSON file directly
+siglus-ssu -g --c --type 2 /path/to/work/char_face.type2.json /path/to/rebuilt/char_face.g00
+```
+
+For multi-cut type2 archives, the `.type2.json` file is the create input. The referenced PNG files are resolved from the JSON file location.
 
 To update a specific cut, place an image named `<basename>_cut###.png` in the input directory when running `--c --refer ...`.
 

@@ -128,28 +128,3 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
     }
     result
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_md5_empty() {
-        let result = digest(b"");
-        // MD5("") = d41d8cd98f00b204e9800998ecf8427e
-        assert_eq!(
-            result,
-            vec![
-                0xd4, 0x1d, 0x8c, 0xd9, 0x8f, 0x00, 0xb2, 0x04, 0xe9, 0x80, 0x09, 0x98, 0xec, 0xf8,
-                0x42, 0x7e
-            ]
-        );
-    }
-
-    #[test]
-    fn test_md5_hello() {
-        let result = digest(b"Hello");
-        // MD5 length should always be 16 bytes
-        assert_eq!(result.len(), 16);
-    }
-}

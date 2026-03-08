@@ -632,7 +632,7 @@ siglus-ssu -g --x <input_g00 | input_dir> <output_dir>
 siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] --o <output_dir>
 
 # 从图片创建新的 .g00，或基于显式参考 .g00 执行更新
-siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_dir> [output_g00 | output_dir]
+siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
 ```
 
 #### 参数
@@ -640,7 +640,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | 参数 | 说明 |
 |---|---|
 | `--a` | **分析**模式。打印类型、画布尺寸、LZSS 统计以及 type2 文件的每个 cut 的详细信息。 |
-| `--x` | **提取**模式。解码每个 `.g00` 并写入 PNG 或 JPEG 文件。 |
+| `--x` | **提取**模式。解码每个 `.g00` 并写入 PNG 或 JPEG 文件；对于 type2，还会额外导出一份可回灌的 `.type2.json` sidecar。 |
 | `--m` | **合并**模式。将多个 `.g00` 图片或 cut 合成为一张 PNG。 |
 | `--c` | **创建/更新**模式。不带 `--refer` 时创建新的 `.g00`；带 `--refer` 时，以参考 `.g00` 为 base 更新图片数据。 |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | （仅合并模式）合并后 PNG 的输出目录。 |
@@ -672,6 +672,12 @@ siglus-ssu -g --c /path/to/new_bg.png
 # 从 JPEG 创建新的 type3 .g00
 siglus-ssu -g --c /path/to/op.jpeg /path/to/op.g00
 
+# 直接使用 .type2.json 创建或回灌 type2 .g00
+siglus-ssu -g --c --type 2 /path/to/char_face.type2.json /path/to/char_face.g00
+
+# 从包含多份 .type2.json 的目录批量创建 type2 .g00
+siglus-ssu -g --c --type 2 /path/to/layout_dir/ /path/to/out_g00/
+
 # 基于显式参考更新现有 .g00
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/original_bg.g00
 
@@ -682,15 +688,79 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/orig
 #### 创建模式说明
 
 - 省略 `--refer` 时进入创建模式。
-- 当前仅实现 **type0** 与 **type3** 的创建。
-- 默认推断规则：`png` -> type0，`jpg/jpeg` -> type3。也可显式指定 `--type 0` 或 `--type 3`。
-- `type1` 与 `type2` 的创建暂未实现。
+- 当前已实现 **type0**、**type2** 与 **type3** 的创建。
+- 默认推断规则：`png` -> type0，`jpg/jpeg` -> type3。创建 type2 时请显式指定 `--type 2` 并直接输入 `.type2.json`。
+- 对于 `-g --x` 提取出的多 cut type2，回灌时的创建输入就是自动导出的 `.type2.json`，而不是单张 `*_cutNNN.png`。
+- `type1` 的创建仍未实现。
 
-#### type2 cut 命名规范
+#### type2 JSON 布局
 
-提取多 cut 的 type2 `.g00` 时，输出文件命名为：
-- `<basename>.png` — 仅一个 cut 时。
-- `<basename>_cut000.png`、`<basename>_cut001.png` 等 — 多个 cut 时。
+`type2` 创建由 JSON 布局驱动，不依赖 CutText 或 PSD 元数据。推荐采用下面这份严格 schema：
+
+```json
+{
+  "type": 2,
+  "canvas": { "width": 2048, "height": 2048 },
+  "default_center": { "x": 1023, "y": 0 },
+  "cuts": [
+    {
+      "index": 0,
+      "source": "face/base.png",
+      "canvas_rect": { "x": 0, "y": 0, "w": 2048, "h": 2048 }
+    },
+    {
+      "index": 1,
+      "source": "face/blink.png",
+      "canvas_rect": { "x": 0, "y": 0, "w": 2048, "h": 2048 }
+    }
+  ]
+}
+```
+
+说明：
+- 严格 schema 使用的根字段只有：`type`、`canvas`、可选 `default_center`、`cuts`。
+- `canvas` 是输出 type2 的画布尺寸。
+- `cuts[]` 按 index 排序；可插入 `null` 留空。
+- 每个非空 cut 建议显式提供 `source` 与 `canvas_rect`。
+- `source` 相对于 JSON 文件路径解析。
+- `canvas_rect` 会写入外层 type2 cut 表。
+- `source_rect` 为可选；省略时使用整张源图。若同时给出 `source_rect` 与 `canvas_rect`，两者宽高必须一致。
+- `center` 为可选，默认继承 `default_center` 或 `(0,0)`。
+- 若追求稳定可复现的回灌，建议保留提取时生成的 JSON，只改动明确需要修改的 PNG 像素或矩形/中心点字段。
+- `alpha0_rgb` 不再属于推荐 schema。创建器会严格尊重输入 PNG：若 **alpha=0** 像素下方本来就有 hidden RGB，就原样保留；若没有，就不会额外恢复或合成。
+- 为兼容旧版自动生成的布局，JSON 中若仍出现 `"alpha0_rgb": "keep"`，当前版本仍接受；除此之外的取值会被拒绝。
+
+#### type2 提取与回灌资产
+
+使用 `-g --x` 提取 type2 `.g00` 时，会固定同时导出 JSON sidecar：
+- `单 cut`：`<basename>.png` + `<basename>.type2.json`
+- `多 cut`：`<basename>_cut000.png`、`<basename>_cut001.png` ... + `<basename>.type2.json`
+
+说明：
+- 提取出的 type2 PNG 会**保留 alpha=0 像素下方的 hidden RGB**。
+- 自动生成的 `<basename>.type2.json` 是这组提取资产的标准重建布局。
+- 重新创建时，程序会**严格尊重输入 PNG 本身**；不会对 hidden RGB 进行恢复、推断或合成。
+- 对于只有一个 cut 的样本，若源 PNG 未被其他软件改写 hidden RGB，则当前实现已经能让 cut block 与原始样本逐字节一致。
+
+直接从提取结果回灌：
+
+```bash
+# 第一步：提取一个多 cut 的 type2 .g00
+siglus-ssu -g --x /path/to/char_face.g00 /path/to/work/
+
+# 会生成：
+#   /path/to/work/char_face.type2.json
+#   /path/to/work/char_face_cut000.png
+#   /path/to/work/char_face_cut001.png
+#   ...
+
+# 第二步：直接修改提取出来的 PNG
+
+# 第三步：把 .type2.json 直接作为 -g --c 的输入
+siglus-ssu -g --c --type 2 /path/to/work/char_face.type2.json /path/to/rebuilt/char_face.g00
+```
+
+对于多 cut type2，真正的创建输入是 `.type2.json`；其中引用的 PNG 会相对于 JSON 文件路径解析。
 
 使用 `--c --refer ...` 更新特定 cut 时，在输入目录中放置名为 `<basename>_cut###.png` 的图片。
 

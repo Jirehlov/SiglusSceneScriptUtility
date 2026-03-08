@@ -15,8 +15,13 @@ use std::time::{Duration, Instant};
 
 /// LZSS compression with default level (17)
 #[pyfunction]
-fn lzss_pack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result = lzss::pack(data);
+#[pyo3(signature = (data, suppress_empty_tail_group=false))]
+fn lzss_pack(
+    py: Python<'_>,
+    data: &[u8],
+    suppress_empty_tail_group: bool,
+) -> PyResult<Py<PyBytes>> {
+    let result = lzss::pack(data, suppress_empty_tail_group);
     Ok(PyBytes::new(py, &result).into())
 }
 
@@ -26,8 +31,14 @@ fn lzss_pack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
 /// - 2: Fastest compression, worst ratio
 /// - 17: Slowest compression, best ratio (default)
 #[pyfunction]
-fn lzss_pack_level(py: Python<'_>, data: &[u8], level: usize) -> PyResult<Py<PyBytes>> {
-    let result = lzss::pack_with_level(data, level);
+#[pyo3(signature = (data, level, suppress_empty_tail_group=false))]
+fn lzss_pack_level(
+    py: Python<'_>,
+    data: &[u8],
+    level: usize,
+    suppress_empty_tail_group: bool,
+) -> PyResult<Py<PyBytes>> {
+    let result = lzss::pack_with_level(data, level, suppress_empty_tail_group);
     Ok(PyBytes::new(py, &result).into())
 }
 

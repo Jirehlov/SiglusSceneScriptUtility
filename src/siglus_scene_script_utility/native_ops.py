@@ -176,7 +176,9 @@ class _LzssTreeFind:
                     break
 
 
-def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
+def _py_lzss_pack(
+    src: bytes, level: int = 17, suppress_empty_tail_group: bool = False
+) -> bytes:
     if not src:
         return b""
     INDEX_BITS = 12
@@ -229,8 +231,11 @@ def _py_lzss_pack(src: bytes, level: int = 17) -> bytes:
                 pack_data_count = 1
                 pack_data[0] = 0
         else:
-            pack_buf.extend(pack_data[:pack_data_count])
-            pack_buf_size += pack_data_count
+            if pack_data_count > 1 or (
+                pack_data_count == 1 and not suppress_empty_tail_group
+            ):
+                pack_buf.extend(pack_data[:pack_data_count])
+                pack_buf_size += pack_data_count
             break
     struct.pack_into("<II", pack_buf, 0, pack_buf_size, len(src))
     return bytes(pack_buf[:pack_buf_size])
@@ -416,15 +421,17 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
                 d[i : i + 4] = s[i : i + 4]
 
 
-def lzss_pack(src: bytes, level: int = 17) -> bytes:
+def lzss_pack(
+    src: bytes, level: int = 17, suppress_empty_tail_group: bool = False
+) -> bytes:
     if _USE_NATIVE:
         if level == 17:
-            return _native_lzss_pack(src)
+            return _native_lzss_pack(src, suppress_empty_tail_group)
         elif _native_lzss_pack_level is not None:
-            return _native_lzss_pack_level(src, level)
+            return _native_lzss_pack_level(src, level, suppress_empty_tail_group)
         else:
-            return _native_lzss_pack(src)
-    return _py_lzss_pack(src, level)
+            return _native_lzss_pack(src, suppress_empty_tail_group)
+    return _py_lzss_pack(src, level, suppress_empty_tail_group)
 
 
 def lzss_unpack(src: bytes) -> bytes:

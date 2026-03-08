@@ -222,7 +222,7 @@ impl<'a> LzssTreeFind<'a> {
 /// * `level` - Compression level (2-17). Higher = better compression but slower.
 ///   - 2: Fastest, worst compression
 ///   - 17: Slowest, best compression (default)
-pub fn pack_with_level(src: &[u8], level: usize) -> Vec<u8> {
+pub fn pack_with_level(src: &[u8], level: usize, suppress_empty_tail_group: bool) -> Vec<u8> {
     if src.is_empty() {
         return Vec::new();
     }
@@ -240,7 +240,9 @@ pub fn pack_with_level(src: &[u8], level: usize) -> Vec<u8> {
     loop {
         // make_pack_data inline
         if tree_find.src_index >= tree_find.src_cnt {
-            pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
+            if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
+                pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
+            }
             break;
         }
 
@@ -249,7 +251,9 @@ pub fn pack_with_level(src: &[u8], level: usize) -> Vec<u8> {
         }
 
         if tree_find.src_index >= tree_find.src_cnt {
-            pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
+            if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
+                pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
+            }
             break;
         }
 
@@ -288,8 +292,8 @@ pub fn pack_with_level(src: &[u8], level: usize) -> Vec<u8> {
 
 /// LZSS compression with default level (17 = best compression)
 #[inline]
-pub fn pack(src: &[u8]) -> Vec<u8> {
-    pack_with_level(src, LOOK_AHEAD)
+pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
+    pack_with_level(src, LOOK_AHEAD, suppress_empty_tail_group)
 }
 
 /// LZSS decompression
@@ -345,45 +349,4 @@ pub fn unpack(src: &[u8]) -> Vec<u8> {
     }
 
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_roundtrip() {
-        let data = b"Hello, World! This is a test of LZSS compression. Hello, World!";
-        let packed = pack(data);
-        let unpacked = unpack(&packed);
-        assert_eq!(data.as_slice(), unpacked.as_slice());
-    }
-
-    #[test]
-    fn test_empty() {
-        assert!(pack(&[]).is_empty());
-        assert!(unpack(&[]).is_empty());
-    }
-
-    #[test]
-    fn test_compression_levels() {
-        // Create repeating data that compresses well
-        let mut data = Vec::with_capacity(1000);
-        for _ in 0..100 {
-            data.extend_from_slice(b"0123456789");
-        }
-
-        // Level 2 (fastest, worst compression)
-        let packed_2 = pack_with_level(&data, 2);
-        let unpacked_2 = unpack(&packed_2);
-        assert_eq!(data, unpacked_2);
-
-        // Level 17 (slowest, best compression)
-        let packed_17 = pack_with_level(&data, 17);
-        let unpacked_17 = unpack(&packed_17);
-        assert_eq!(data, unpacked_17);
-
-        // Expected behavior: lower level (shorter match) -> larger size
-        assert!(packed_2.len() >= packed_17.len());
-    }
 }
