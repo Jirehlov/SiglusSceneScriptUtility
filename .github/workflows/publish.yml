@@ -17,6 +17,85 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: dist-sdist, path: dist/*.tar.gz }
 
+  pure-wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Build pure Python wheel
+        shell: bash
+        run: |
+          python -m pip install -U build
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+          import textwrap
+
+          root = Path.cwd()
+          temp = root / ".pure-wheel-build"
+          if temp.exists():
+              shutil.rmtree(temp)
+
+          pkg_src = root / "src" / "siglus_scene_script_utility"
+          pkg_dst = temp / "src" / "siglus_scene_script_utility"
+          pkg_dst.mkdir(parents=True, exist_ok=True)
+
+          for src in pkg_src.rglob("*"):
+              if src.is_dir():
+                  continue
+              rel = src.relative_to(pkg_src)
+              rel_posix = rel.as_posix()
+              if "__pycache__" in rel.parts:
+                  continue
+              if src.suffix in {".pyc", ".pyo"}:
+                  continue
+              if rel_posix == "const.py":
+                  continue
+              if rel.parts and rel.parts[0] == "rust":
+                  continue
+              dst = pkg_dst / rel
+              dst.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copy2(src, dst)
+
+          shutil.copy2(root / "README.md", temp / "README.md")
+
+          pyproject = textwrap.dedent(
+              """
+              [build-system]
+              requires = ["setuptools>=69", "wheel"]
+              build-backend = "setuptools.build_meta"
+
+              [project]
+              name = "siglus-ssu"
+              version = "0.1.11"
+              description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
+              readme = "README.md"
+              requires-python = ">=3.12"
+              authors = [{ name = "Jirehlov" }]
+              dependencies = []
+
+              [project.scripts]
+              siglus-ssu = "siglus_scene_script_utility.__main__:main"
+
+              [project.urls]
+              Repository = "https://github.com/Jirehlov/SiglusSceneScriptUtility"
+              Issues = "https://github.com/Jirehlov/SiglusSceneScriptUtility/issues"
+
+              [tool.setuptools]
+              include-package-data = false
+
+              [tool.setuptools.packages.find]
+              where = ["src"]
+              """
+          ).strip() + "\n"
+
+          (temp / "pyproject.toml").write_text(pyproject, encoding="utf-8", newline="\r\n")
+          PY
+          python -m build --wheel --outdir dist .pure-wheel-build
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-pure-wheel, path: dist/*-py3-none-any.whl }
+
   wheels-windows:
     runs-on: windows-latest
     steps:
@@ -98,6 +177,7 @@ jobs:
   publish:
     needs:
       - sdist
+      - pure-wheel
       - wheels-windows
       - wheels-windows-arm64
       - wheels-linux
