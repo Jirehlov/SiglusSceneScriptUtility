@@ -16,6 +16,7 @@
    - [方式二：从源码安装](#方式二从源码安装)
 3. [基本用法](#基本用法)
    - [全局选项](#全局选项)
+   - [命令别名](#命令别名)
    - [获取帮助](#获取帮助)
 4. [模式参考](#模式参考)
    - [init — 下载运行时常量](#init--下载运行时常量)
@@ -47,6 +48,8 @@
 - 解码和重新编码 `.nwa` / `.owp` / `.ovk` 音频文件
 - 提取和重新编译 `.omv` 视频文件
 - 为 `SiglusEngine.exe` 打补丁（修改密钥或语言设置）
+
+> **兼容性提醒：** 本项目不支持版本过低的 **SiglusEngine** 所使用的相关资源文件。如果某个游戏使用了非常老的引擎版本，则其部分资源格式或常量定义可能与当前支持范围不一致，本手册中的工具和流程可能无法正常工作。
 
 ---
 
@@ -111,6 +114,14 @@ siglus-ssu [-h] [-V | --version] [--legacy] <模式> [参数]
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 禁用 Rust 原生加速，使用纯 Python 回退实现。可用于调试。 |
 
+### 命令别名
+
+CLI 也接受几个便利用法：
+
+- `siglus-ssu help` 等同于 `siglus-ssu --help`
+- `siglus-ssu version` 等同于 `siglus-ssu --version`
+- `siglus-ssu --init ...` 等同于 `siglus-ssu init ...`
+
 ### 获取帮助
 
 ```bash
@@ -143,6 +154,8 @@ siglus-ssu init [--force | -f] [--ref <git-ref>]
 |---|---|
 | `--force`, `-f` | 即使已存在 `const.py` 也强制覆盖。 |
 | `--ref <git-ref>` | 从指定的 Git 分支、标签或提交哈希下载 `const.py`。默认：`main`。 |
+
+下载完成后，`const.py` 会与内置的 SHA-512 白名单进行校验。这意味着 `--ref` 可以指向旧版本或其他受信任修订，但只要下载结果不匹配任一允许哈希，初始化仍会失败。
 
 #### 示例
 
@@ -334,6 +347,22 @@ siglus-ssu -a /path/to/SiglusEngine.exe --angou
 siglus-ssu -a /path/to/game_dir/ --angou
 ```
 
+#### 输出格式（`.pck` 示例）
+
+```
+==== Analyze ====
+file: /path/to/Scene.pck
+type: pck
+size: 123456789 bytes (0x75BCD15)
+mtime: 2024-01-01 12:00:00
+sha1: a1b2c3d4...
+
+pck_version: 1
+file_count: 2048
+encryption: yes
+...
+```
+
 ---
 
 ### `-d` / `--db` — 导出和编译 `.dbs` 数据库
@@ -512,6 +541,9 @@ siglus-ssu -e /path/to/SiglusEngine.exe chapter2 5
 
 # .ss 扩展名会自动去除
 siglus-ssu -e /path/to/SiglusEngine.exe chapter2.ss z5
+
+# 显式使用 #z 前缀
+siglus-ssu -e /path/to/SiglusEngine.exe chapter2 "#z5"
 ```
 
 ---
@@ -656,6 +688,9 @@ siglus-ssu -g --a /path/to/sprite.g00
 
 # 将目录中所有 .g00 提取为 PNG/JPEG
 siglus-ssu -g --x /path/to/g00_dir/ /path/to/png_out/
+
+# 提取单个 .g00
+siglus-ssu -g --x /path/to/bg_clear.g00 /path/to/png_out/
 
 # 将两个图像图层合并为一张合成 PNG
 siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merged_out/
@@ -813,13 +848,29 @@ siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/ --trim /path/to/Gameexe.dat
 # 分析 .nwa 文件头
 siglus-ssu -s --a /path/to/bgm01.nwa
 
+# 分析 .ovk 归档表
+siglus-ssu -s --a /path/to/z0001.ovk
+
+# 分析 .owp 文件
+siglus-ssu -s --a /path/to/bgm01.owp
+
 # 将 .ogg 文件重新编码为 .owp
 siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 ```
 
+#### OVK 提取命名规则
+
+提取包含多个条目的 `.ovk` 时，输出文件命名为：
+- `<basename>.ogg` — 若只有一个条目。
+- `<basename>_<entry_no>.ogg` — 若有多个条目（例如 `z0001_0.ogg`、`z0001_1.ogg`）。
+
 #### OVK 创建命名规则
 
 从目录创建 `.ovk` 时，命名为 `<basename>_<N>.ogg`（N 为整数）的文件会被分组打包为单个 `<basename>.ovk`。不带数字后缀的文件单独编码为 `.owp`。
+
+#### `.owp` 裁剪细节
+
+`--trim` 会读取 Gameexe.dat 中的 BGM 表（条目格式为 `#BGM.N = "...", "filename", start, end, repeat`），并调用 **ffmpeg** 将每个解码得到的 `.ogg` 裁剪到 `repeat` 与 `end` 之间的采样区间。这对提取可无缝循环的背景音乐很有帮助。
 
 ---
 
@@ -845,7 +896,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | 参数 | 说明 |
 |---|---|
 | `--x` | **提取**模式。去除 SiglusEngine 包装层并写入纯 `.ogv` 文件。 |
-| `--a` | **分析**模式。打印详细头部信息，包括外层头字段、TableA 和 TableB 帧元数据。 |
+| `--a` | **分析**模式。打印详细头部信息，包括外层头字段、TableA 和 TableB 帧元数据；若可解析，还会输出 Theora 流信息，如 FPS、keyframe granule shift、pixel format 和画面尺寸。 |
 | `--c` | **创建**模式。用 SiglusEngine `.omv` 头包装纯 `.ogv`。 |
 | `--refer <ref.omv>` | 从现有的 `.omv` 参考文件复制头部 `mode` 和 TableB `flags_hi24`。若同时指定了 `--mode`/`--flags` 则会被覆盖。 |
 | `--mode N` | 覆盖 `mode` 字段（头部偏移 `0x28`）。接受十进制或 `0x...` 十六进制。 |
@@ -935,6 +986,9 @@ siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace
 # 使用 key.txt 修改 exe_el 密钥
 siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/SiglusEngine_patched.exe
 
+# 使用字面 16 字节密钥修改 exe_el
+siglus-ssu -p --altkey /path/to/SiglusEngine.exe "0xA9, 0x86, 0x77, 0xA4, 0xA6, 0x3D, 0xCE, 0x67, 0x8B, 0x52, 0x8E, 0x0B, 0xC3, 0x8B, 0x67, 0x5D"
+
 # 使用 暗号.dat 推导的密钥原地修改
 siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/暗号.dat --inplace
 
@@ -948,7 +1002,21 @@ siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
 siglus-ssu -p --lang '{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
 ```
 
+#### 输出
 
+patch 命令会在写入输出文件前，将变更摘要打印到 stdout：
+
+```
+Input : /path/to/SiglusEngine.exe
+Mode  : lang:eng
+SHA256(before): abc123...
+SHA256(after) : def456...
+Applied changes: 48 bytes
+ - lfCharSet: 0x80 -> 0x00 (4 bytes)
+ - Scene.pck -> Scene.eng (18 bytes)
+ - savedata -> saveeng (16 bytes)
+ - japanese -> english (16 bytes)
+```
 
 ## 提示与故障排除
 

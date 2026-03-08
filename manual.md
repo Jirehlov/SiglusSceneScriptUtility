@@ -16,6 +16,7 @@
    - [Option 2: Install from Source](#option-2-install-from-source)
 3. [General Usage](#general-usage)
    - [Global Options](#global-options)
+   - [Command Aliases](#command-aliases)
    - [Getting Help](#getting-help)
 4. [Modes Reference](#modes-reference)
    - [init — Download Required Constants](#init--download-required-constants)
@@ -47,6 +48,8 @@
 - Decoding and re-encoding `.nwa` / `.owp` / `.ovk` audio files
 - Extracting and recompiling `.omv` video files
 - Patching `SiglusEngine.exe` for alternative key or language settings
+
+> **Compatibility Notice:** Resource files from very old versions of **SiglusEngine** are not supported by this project. If a game uses an unusually old engine build, some related resource formats or constants may differ and the tools described in this manual may not work correctly.
 
 ---
 
@@ -111,6 +114,14 @@ siglus-ssu [-h] [-V | --version] [--legacy] <mode> [args]
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Disable the Rust native acceleration and use the pure Python fallback implementation. Useful for debugging. |
 
+### Command Aliases
+
+The CLI also accepts a few convenience aliases:
+
+- `siglus-ssu help` behaves the same as `siglus-ssu --help`
+- `siglus-ssu version` behaves the same as `siglus-ssu --version`
+- `siglus-ssu --init ...` behaves the same as `siglus-ssu init ...`
+
 ### Getting Help
 
 ```bash
@@ -144,6 +155,8 @@ siglus-ssu init [--force | -f] [--ref <git-ref>]
 |---|---|
 | `--force`, `-f` | Overwrite an existing `const.py` even if one already exists. |
 | `--ref <git-ref>` | Download the `const.py` from a specific Git branch, tag, or commit hash. Default: `main`. |
+
+After download, `const.py` is verified against a built-in SHA-512 allowlist. This means `--ref` can target older or alternate trusted revisions, but initialization still fails if the downloaded file does not match one of the allowed hashes.
 
 #### Examples
 
@@ -908,7 +921,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | Parameter | Description |
 |---|---|
 | `--x` | **Extract** mode. Strips the SiglusEngine wrapper and writes a plain `.ogv` file. |
-| `--a` | **Analyze** mode. Prints detailed header information including outer header fields, TableA, and TableB frame metadata. |
+| `--a` | **Analyze** mode. Prints detailed header information including outer header fields, TableA, and TableB frame metadata, plus parsed Theora stream info such as FPS, keyframe granule shift, pixel format, and frame size when available. |
 | `--c` | **Create** mode. Wraps a plain `.ogv` with the SiglusEngine `.omv` header. |
 | `--refer <ref.omv>` | Copy the header `mode` and TableB `flags_hi24` from an existing `.omv` reference. Useful for matching the exact header of the original. Overridden by `--mode` / `--flags` if both are specified. |
 | `--mode N` | Override the `mode` field (header offset `0x28`). Accepts decimal or `0x...` hex. |
