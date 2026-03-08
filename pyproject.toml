@@ -4,8 +4,8 @@ build-backend = "maturin"
 
 [project]
 name = "siglus-ssu"
-version = "0.1.11"
-description = "SiglusEngine scene script utility for compiling/extracting scripts and data (Rust-accelerated)."
+version = "0.1.12"
+description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [

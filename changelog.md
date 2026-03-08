@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+
+## [v0.1.12] - 2026-03-08
+
+- `-g --c` now supports true create mode: create new `.g00` files directly from PNG/JPEG/type2 JSON inputs (type0/type2/type3).
+- `init` now verifies downloaded `const.py` against a built-in SHA-512 allowlist before writing.
+- Release workflow now publishes an additional pure-Python wheel artifact (`py3-none-any`).
+- Textmapping mode is now more robust.
+
+
 ## [v0.1.11] - 2026-03-04
 
 - **New Mode:** `-p` (Patch Tool) for patching `SiglusEngine.exe` (altkey/lang translation).
