@@ -1,3 +1,5 @@
+import contextlib
+import io
 import os
 import re
 import struct
@@ -23,6 +25,7 @@ from .common import (
 )
 
 DAT_TXT_OUT_DIR = None
+_INC_ANALYSIS_CACHE = {}
 
 
 def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
@@ -79,6 +82,34 @@ def _unique_out_path(path):
         return path
 
 
+def _get_inc_analysis(dat_path):
+    try:
+        root = os.path.dirname(str(dat_path) or "") or "."
+        root = os.path.abspath(root)
+    except Exception:
+        return {}
+    cached = _INC_ANALYSIS_CACHE.get(root)
+    if cached is not None:
+        return cached
+    out = {}
+    try:
+        from .BS import build_ia_data
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            iad = build_ia_data({"scn_path": root})
+        out = {
+            "inc_property_cnt": int(iad.get("inc_property_cnt", 0) or 0),
+            "inc_command_cnt": int(iad.get("inc_command_cnt", 0) or 0),
+            "inc_property_defs": list(iad.get("property_list") or []),
+            "inc_command_defs": list(iad.get("command_list") or []),
+        }
+    except Exception:
+        out = {}
+    _INC_ANALYSIS_CACHE[root] = out
+    return out
+
+
 def _write_dat_disassembly(dat_path, blob, out_dir=None):
     try:
         if out_dir is None:
@@ -91,7 +122,7 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
             out_dir = os.path.dirname(str(dat_path)) or "."
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None
-        if len(blob) < getattr(C, "SCN_HDR_SIZE", 0):
+        if len(blob) < C.SCN_HDR_SIZE:
             return None
         secs, meta = _dat_sections(blob)
         h = meta.get("header") or {}
@@ -123,6 +154,7 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         read_flag_lines = _read_struct_list(
             blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
         )
+        inc_meta = _get_inc_analysis(dat_path)
         dis = disam.disassemble_scn_bytes(
             scn,
             str_list,
@@ -130,6 +162,14 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
             z_label_list,
             h.get("read_flag_cnt", 0),
             read_flag_lines,
+            cmd_label_list=meta.get("cmd_label_list"),
+            scn_prop_defs=meta.get("scn_prop_defs"),
+            scn_cmd_names=meta.get("scn_cmd_names"),
+            call_prop_names=meta.get("call_prop_names"),
+            inc_property_defs=inc_meta.get("inc_property_defs"),
+            inc_property_cnt=inc_meta.get("inc_property_cnt", 0),
+            inc_command_defs=inc_meta.get("inc_command_defs"),
+            inc_command_cnt=inc_meta.get("inc_command_cnt", 0),
         )
         if (not dis) or ("CD_EOF" not in dis[-1]):
             print(
@@ -183,12 +223,12 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         return None
 
 
-def _dat_disassembly_components(blob):
+def _dat_disassembly_components(blob, dat_path=None):
     try:
         if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
             return None
-        vals = struct.unpack_from("<" + "i" * len(C.SCN_HDR_FIELDS), blob, 0)
-        h = {k: int(v) for k, v in zip(C.SCN_HDR_FIELDS, vals)}
+        secs, meta = _dat_sections(blob)
+        h = meta.get("header") or {}
         so = h.get("scn_ofs", 0)
         ss = h.get("scn_size", 0)
         if not (
@@ -227,6 +267,7 @@ def _dat_disassembly_components(blob):
         read_flag_lines = _read_struct_list(
             blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
         )
+        inc_meta = _get_inc_analysis(dat_path) if dat_path else {}
         dis = disam.disassemble_scn_bytes(
             scn,
             str_list,
@@ -234,6 +275,14 @@ def _dat_disassembly_components(blob):
             z_label_list,
             h.get("read_flag_cnt", 0),
             read_flag_lines,
+            cmd_label_list=meta.get("cmd_label_list"),
+            scn_prop_defs=meta.get("scn_prop_defs"),
+            scn_cmd_names=meta.get("scn_cmd_names"),
+            call_prop_names=meta.get("call_prop_names"),
+            inc_property_defs=inc_meta.get("inc_property_defs"),
+            inc_property_cnt=inc_meta.get("inc_property_cnt", 0),
+            inc_command_defs=inc_meta.get("inc_command_defs"),
+            inc_command_cnt=inc_meta.get("inc_command_cnt", 0),
         )
         return (h, str_list, label_list, z_label_list, dis)
     except Exception:
@@ -361,12 +410,24 @@ def _dat_sections(blob):
         "C",
         "cmd_label_list (i32,i32)",
     )
+    cmd_label_list = _read_struct_list(
+        blob,
+        h.get("cmd_label_list_ofs", 0),
+        h.get("cmd_label_cnt", 0),
+        _I32_PAIR_STRUCT,
+    )
     sec_fixed(
         h.get("scn_prop_list_ofs", 0),
         h.get("scn_prop_cnt", 0),
         8,
         "P",
         "scn_prop_list (i32,i32)",
+    )
+    scn_prop_list = _read_struct_list(
+        blob,
+        h.get("scn_prop_list_ofs", 0),
+        h.get("scn_prop_cnt", 0),
+        _I32_PAIR_STRUCT,
     )
     sec_fixed(
         h.get("scn_prop_name_index_list_ofs", 0),
@@ -440,16 +501,32 @@ def _dat_sections(blob):
         "read_flag_list (i32)",
     )
     _add_gap_sections(secs, used, n)
+    scn_prop_names = (
+        _decode_utf16le_strings(
+            blob, spn_idx, h.get("scn_prop_name_list_ofs", 0), spn_end
+        )
+        if spn_idx
+        else []
+    )
     meta = {
         "header": h,
         "str_blob_end": str_blob_end,
-        "scn_prop_names": (
-            _decode_utf16le_strings(
-                blob, spn_idx, h.get("scn_prop_name_list_ofs", 0), spn_end
-            )
-            if spn_idx
-            else []
-        ),
+        "cmd_label_list": cmd_label_list,
+        "scn_prop_names": scn_prop_names,
+        "scn_prop_defs": [
+            {
+                "code": i,
+                "form": int(it[0]),
+                "extra": int(it[1]),
+                "name": (
+                    str(scn_prop_names[i])
+                    if 0 <= i < len(scn_prop_names) and scn_prop_names[i] is not None
+                    else ""
+                ),
+            }
+            for i, it in enumerate(scn_prop_list or [])
+            if isinstance(it, (list, tuple)) and len(it) >= 2
+        ],
         "scn_cmd_names": (
             _decode_utf16le_strings(
                 blob, scn_idx, h.get("scn_cmd_name_list_ofs", 0), scn_end
@@ -469,7 +546,7 @@ def _dat_sections(blob):
 
 
 def dat(path, blob: bytes) -> int:
-    if len(blob) < getattr(C, "SCN_HDR_SIZE", 0):
+    if len(blob) < C.SCN_HDR_SIZE:
         print("too small for dat header")
         return 1
     secs, meta = _dat_sections(blob)
@@ -728,8 +805,8 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
             print(f"failed to write: {p2}.txt")
 
     if out_dir:
-        c1 = _dat_disassembly_components(b1)
-        c2 = _dat_disassembly_components(b2)
+        c1 = _dat_disassembly_components(b1, p1)
+        c2 = _dat_disassembly_components(b2, p2)
         if c1 and c2 and c1[4] is not None and c2[4] is not None:
             print("")
             _print_scn_disassembly_diff(c1[4], c2[4], p1, p2, context=3)

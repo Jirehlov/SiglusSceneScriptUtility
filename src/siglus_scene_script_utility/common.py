@@ -688,9 +688,9 @@ def parse_gei_disam_args(argv, *, disam_action=None, allow_gei_disam: bool = Tru
 def _dn(name, width=None):
     s = str(name or "")
     try:
-        w = int(width) if width is not None else int(getattr(C, "NAME_W", 40))
+        w = int(width) if width is not None else int(C.NAME_W)
     except Exception:
-        w = 40
+        w = int(C.NAME_W)
     if len(s) <= w:
         return s
     if w <= 1:
@@ -911,7 +911,7 @@ def _add_gap_sections(secs, used, total):
 def _print_sections(secs, total):
     secs = [s for s in (secs or []) if s[1] > s[0]]
     secs.sort(key=lambda t: (t[0], -t[1], t[2], t[3]))
-    w = int(getattr(C, "NAME_W", 40) or 40)
+    w = int(C.NAME_W)
     print("==== Structure (ranges) ====")
     print("%3s  %-10s  %-10s  %10s  %-*s" % ("SYM", "START", "LAST", "SIZE", w, "NAME"))
     print(f"{'-' * 3:3s}  {'-' * 10:<10s}  {'-' * 10:<10s}  {'-' * 10:10s}  {'-' * w}")

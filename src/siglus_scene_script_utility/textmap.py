@@ -761,7 +761,7 @@ def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
     parsed = _parse_scn_dat(blob)
     if parsed:
         return parsed, blob, {"exe": False, "easy": False, "lzss": False}
-    easy_code = getattr(C, "EASY_ANGOU_CODE", b"") or b""
+    easy_code = C.EASY_ANGOU_CODE or b""
 
     def _try(b: bytes, used_exe: bool, used_easy: bool, used_lzss: bool):
         p = _parse_scn_dat(b)
@@ -814,7 +814,7 @@ def _encode_scn_dat(blob: bytes, enc: dict, exe_el: bytes) -> bytes:
     if enc and enc.get("lzss"):
         b = lzss_pack(b, level=17)
     if enc and enc.get("easy"):
-        code = getattr(C, "EASY_ANGOU_CODE", b"") or b""
+        code = C.EASY_ANGOU_CODE or b""
         if code:
             bt = bytearray(b)
             xor_cycle_inplace(bt, code, 0)

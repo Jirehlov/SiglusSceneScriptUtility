@@ -27,8 +27,8 @@ _SIMPLE_G00_TYPES = (0, 1, 3)
 _SIMPLE_EXT = {0: ".png", 1: ".png", 3: ".jpeg"}
 _SIMPLE_COMP = {0: "LZSS32", 1: "LZSS"}
 
-if len(getattr(C, "G00_XOR_T", b"")) != 256:
-    raise SystemExit(f"bad G00_XOR_T: {len(getattr(C, 'G00_XOR_T', b''))}")
+if len(C.G00_XOR_T) != 256:
+    raise SystemExit(f"bad G00_XOR_T: {len(C.G00_XOR_T)}")
 
 
 def need_pil():

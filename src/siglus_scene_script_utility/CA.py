@@ -24,7 +24,14 @@ def _iszen(c):
 
 
 def get_form_code_by_name(name):
-    return name if name in C.FORM_SET else -1
+    try:
+        forms = C._FORM_CODE
+        if not isinstance(forms, dict):
+            return -1
+        key = str(name)
+        return key if key in forms else -1
+    except Exception:
+        return -1
 
 
 def _rt():

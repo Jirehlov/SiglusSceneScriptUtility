@@ -350,7 +350,7 @@ def _pck_original_sources(blob, h, scn_data_end):
         pos = 0
     if pos < 0 or pos + os_hsz > len(blob):
         return out
-    ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+    ctx = {"source_angou": C.SOURCE_ANGOU}
     try:
         size_bytes, _ = source_angou_decrypt(blob[pos : pos + os_hsz], ctx)
     except Exception:
@@ -403,7 +403,7 @@ def pck(blob: bytes) -> int:
         _print_sections(secs, len(blob))
         return 0
 
-    if len(blob) < getattr(C, "PACK_HDR_SIZE", 0):
+    if len(blob) < C.PACK_HDR_SIZE:
         print("too small for pck header")
         return 1
     secs, meta = _pck_sections(blob, preview=True)
@@ -772,7 +772,7 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         pos = int(blob_end)
         if pos < 0 or pos + orig_hsz > len(dat):
             return b""
-        ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+        ctx = {"source_angou": C.SOURCE_ANGOU}
         size_list_enc = dat[pos : pos + orig_hsz]
         size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
         if not size_bytes or (len(size_bytes) % 4) != 0:
@@ -873,7 +873,7 @@ def _iter_exe_el_candidates(os_dir: str):
         pos = int(blob_end)
         if pos < 0 or pos + orig_hsz > len(dat):
             return
-        ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+        ctx = {"source_angou": C.SOURCE_ANGOU}
         size_list_enc = dat[pos : pos + orig_hsz]
         size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
         if not size_bytes or (len(size_bytes) % 4) != 0:
@@ -1010,7 +1010,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")
-    ctx = {"source_angou": getattr(C, "SOURCE_ANGOU", None)}
+    ctx = {"source_angou": C.SOURCE_ANGOU}
     orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
     if orig_hsz > 0:
         try:
@@ -1049,7 +1049,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             sys.stderr.write(
                 "Warning: scn_data_exe_angou_mod=1 but 暗号.dat not found/invalid under output folder; scene data may remain encrypted.\n"
             )
-    easy_code = getattr(C, "EASY_ANGOU_CODE", b"")
+    easy_code = C.EASY_ANGOU_CODE
     D = None
     if dat_txt:
         from . import dat as D

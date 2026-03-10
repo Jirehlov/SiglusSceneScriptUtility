@@ -131,7 +131,7 @@ def cgm(blob, path=None):
     print("")
     print("==== CGM Payload ====")
     print(f"entry_count: {len(es):d}")
-    n = getattr(C, "MAX_LIST_PREVIEW", 8)
+    n = C.MAX_LIST_PREVIEW
     for i, (name, flag, cec, codes) in enumerate(es[:n]):
         print(
             f"[{i:d}] flag_no={int(flag):d} code_exist_cnt={int(cec):d} code={int(codes[0]):d},{int(codes[1]):d},{int(codes[2]):d},{int(codes[3]):d},{int(codes[4]):d} name={name!r}"

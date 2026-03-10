@@ -38,10 +38,10 @@ def _parse_arg_spec(arg_spec):
             tok = tok.strip()
             if not tok:
                 continue
-            if tok == "__args":
+            if tok == C.FM___ARGS:
                 al.append({"form": C.FM___ARGS})
                 continue
-            if tok == "__argsref":
+            if tok == C.FM___ARGSREF:
                 al.append({"form": C.FM___ARGSREF})
                 continue
             parts = tok.split("=")
@@ -81,7 +81,7 @@ class FormTable:
         s._auto_prop_code = 0
 
     def _load_system_forms(s):
-        forms = getattr(C, "_FORM_CODE", {})
+        forms = C._FORM_CODE
         if isinstance(forms, dict):
             forms = forms.keys()
         for it in forms:
@@ -90,11 +90,7 @@ class FormTable:
                 s.f.setdefault(name, {})
 
     def _load_system_elements(s):
-        defs = (
-            getattr(C, "SYSTEM_ELEMENT_DEFS", None)
-            or getattr(C, "ELEMENT_DEF_LIST", None)
-            or []
-        )
+        defs = C.SYSTEM_ELEMENT_DEFS
         for it in defs:
             if isinstance(it, dict):
                 tp = it.get("type")
@@ -169,7 +165,7 @@ class FormTable:
         if nm in bucket:
             if (
                 fc == C.FM_CALL
-                and e.get("origin") == "call"
+                and e.get("origin") == C.FM_CALL
                 and e.get("type") == C.ET_PROPERTY
             ):
                 return
@@ -262,11 +258,7 @@ class MA:
         )
 
     def _is_sel_cmd(s, parent_form, element_code):
-        return bool(
-            getattr(C, "is_global_sel_command", lambda pf, ec: False)(
-                parent_form, element_code
-            )
-        )
+        return bool(C.is_global_sel_command(parent_form, element_code))
 
     def analize(s):
         s.psad["command_in"] = 0
@@ -426,7 +418,7 @@ class MA:
             "form": n.get("form_code", C.FM_INT),
             "size": sz,
             "arg_map": {},
-            "origin": "call",
+            "origin": C.FM_CALL,
         }
         s.ft.add(C.FM_CALL, e)
         n["prop_id"] = int(s.psad.get("total_call_prop_cnt", 0))
@@ -851,7 +843,7 @@ class MA:
         info, pf = s.ft.find(name)
         if not info:
             if name in C.FORM_SET or (hasattr(s.ft, "f") and name in s.ft.f):
-                fc = getattr(C, "_FORM_CODE", {}).get(name)
+                fc = C._FORM_CODE.get(name)
                 if not isinstance(fc, int):
                     return s.error(
                         "TNMSERR_MA_ELEMENT_UNKNOWN",

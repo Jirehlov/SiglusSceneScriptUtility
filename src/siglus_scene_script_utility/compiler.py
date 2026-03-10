@@ -209,18 +209,15 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
-DAT_HDR_SZ = 132
-
-
 def _read_scn_dat_header_bytes(path):
     b = read_bytes(path)
-    if len(b) < DAT_HDR_SZ:
+    if len(b) < C.SCN_HDR_SIZE:
         raise ValueError("bad dat header")
-    vals = struct.unpack_from("<" + "i" * 33, b, 0)
-    fields = list(getattr(C, "SCN_HDR_FIELDS", []) or [])
-    if len(fields) != 33:
+    fields = list(C.SCN_HDR_FIELDS or [])
+    if len(fields) * 4 != C.SCN_HDR_SIZE:
         raise ValueError("bad const.SCN_HDR_FIELDS")
-    h = {fields[i]: int(vals[i]) for i in range(33)}
+    vals = struct.unpack_from("<" + "i" * len(fields), b, 0)
+    h = {fields[i]: int(vals[i]) for i in range(len(fields))}
     return b, h
 
 
@@ -230,7 +227,7 @@ def _read_scn_dat_str_index(path):
     cnt = int(h.get("str_index_cnt", 0) or 0)
     if cnt < 0:
         raise ValueError("bad str_index_cnt")
-    if ofs < DAT_HDR_SZ or ofs + cnt * 8 > len(b):
+    if ofs < C.SCN_HDR_SIZE or ofs + cnt * 8 > len(b):
         raise ValueError("bad str_index_list")
     idx = [struct.unpack_from("<ii", b, ofs + i * 8) for i in range(cnt)]
     return b, h, idx
@@ -533,9 +530,9 @@ def main(argv=None):
         "source_angou_mode": (not a.no_angou),
         "original_source_mode": (not a.no_os and not a.no_angou),
         "easy_link": False,
-        "easy_angou_code": getattr(C, "EASY_ANGOU_CODE", None),
+        "easy_angou_code": C.EASY_ANGOU_CODE,
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
-        "source_angou": getattr(C, "SOURCE_ANGOU", None),
+        "source_angou": C.SOURCE_ANGOU,
         "defined_names": set(),
         "stop_after": "link",
         "debug": bool(a.debug),

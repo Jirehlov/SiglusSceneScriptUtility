@@ -822,7 +822,7 @@ def sav(blob, path=None):
         raise ValueError("not a .sav")
     if k["kind"] == "read":
         info = _parse_read_sav(blob)
-        w = int(getattr(C, "NAME_W", 40) or 40)
+        w = int(C.NAME_W)
         print("==== read.sav ====")
         print(f"version: {info['major']}.{info['minor']}")
         print(f"read_data_size: {info['data_size']}")
@@ -906,7 +906,7 @@ def sav(blob, path=None):
         return 0
 
     if k["kind"] == "local":
-        w = int(getattr(C, "NAME_W", 40) or 40)
+        w = int(C.NAME_W)
         print("==== local save (.sav) ====")
         print(f"version: {k['major']}.{k['minor']}")
         print(
@@ -965,7 +965,7 @@ def compare_sav(b1, b2):
     if k1["kind"] == "read":
         a = _parse_read_sav(b1)
         b = _parse_read_sav(b2)
-        w = int(getattr(C, "NAME_W", 40) or 40)
+        w = int(C.NAME_W)
         print("==== Compare read.sav ====")
         print(
             f"ver1: {a['major']}.{a['minor']}  scn1={a['scn_cnt']}  org1={a['org_size']}  sha1={a['unpacked_sha1']}"
@@ -1228,7 +1228,7 @@ def compare_sav(b1, b2):
     print("==== Compare .sav ====")
     print(f"kind: {k1['kind']}")
     if k1["kind"] == "local":
-        w = int(getattr(C, "NAME_W", 40) or 40)
+        w = int(C.NAME_W)
 
         def ts(k):
             return f"{k['year']:04d}-{k['month']:02d}-{k['day']:02d} {k['hour']:02d}:{k['minute']:02d}:{k['second']:02d}.{k['millisecond']:03d}"

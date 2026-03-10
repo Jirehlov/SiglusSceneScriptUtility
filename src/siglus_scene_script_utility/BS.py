@@ -33,6 +33,16 @@ def absp(p):
     return os.path.abspath(os.path.expanduser(p)) if p else p
 
 
+def _form_code(name):
+    try:
+        forms = C._FORM_CODE
+        if not isinstance(forms, dict):
+            return None
+        return int(forms[str(name)])
+    except Exception:
+        return None
+
+
 def is_value(form):
     try:
         if isinstance(form, str):
@@ -40,12 +50,15 @@ def is_value(form):
         code = int(form)
     except Exception:
         return False
-    return code in (
-        C._FORM_CODE.get(C.FM_VOID, 0),
-        C._FORM_CODE.get(C.FM_INT, 2),
-        C._FORM_CODE.get(C.FM_STR, 7),
-        C._FORM_CODE.get(C.FM_INTLIST, 3),
-        C._FORM_CODE.get(C.FM_STRLIST, 8),
+    return any(
+        isinstance(fc, int) and code == fc
+        for fc in (
+            _form_code(C.FM_VOID),
+            _form_code(C.FM_INT),
+            _form_code(C.FM_STR),
+            _form_code(C.FM_INTLIST),
+            _form_code(C.FM_STRLIST),
+        )
     )
 
 
@@ -64,35 +77,34 @@ def dereference(form):
         code = int(form)
     except Exception:
         return form
-    if code == C._FORM_CODE.get(C.FM_INTREF, 5):
-        return C._FORM_CODE.get(C.FM_INT, 2)
-    if code == C._FORM_CODE.get(C.FM_STRREF, 10):
-        return C._FORM_CODE.get(C.FM_STR, 7)
-    if code == C._FORM_CODE.get(C.FM_INTLISTREF, 6):
-        return C._FORM_CODE.get(C.FM_INTLIST, 3)
-    if code == C._FORM_CODE.get(C.FM_STRLISTREF, 11):
-        return C._FORM_CODE.get(C.FM_STRLIST, 8)
+    if code == _form_code(C.FM_INTREF):
+        return _form_code(C.FM_INT)
+    if code == _form_code(C.FM_STRREF):
+        return _form_code(C.FM_STR)
+    if code == _form_code(C.FM_INTLISTREF):
+        return _form_code(C.FM_INTLIST)
+    if code == _form_code(C.FM_STRLISTREF):
+        return _form_code(C.FM_STRLIST)
     return code
 
 
 def _fc(x):
-    return (
-        int(x)
-        if isinstance(x, int)
-        else int(C._FORM_CODE.get(x, -1))
-        if isinstance(x, str)
-        else -1
-    )
+    if isinstance(x, int):
+        return int(x)
+    if isinstance(x, str):
+        fc = _form_code(x)
+        return int(fc) if isinstance(fc, int) else -1
+    return -1
 
 
 def _to_int(v):
     try:
         return int(v)
     except Exception:
-        try:
-            return int(C._FORM_CODE.get(v, -1)) if isinstance(v, str) else 0
-        except Exception:
-            return 0
+        if isinstance(v, str):
+            fc = _form_code(v)
+            return int(fc) if isinstance(fc, int) else 0
+        return 0
 
 
 def get_elm_owner(code):
@@ -266,8 +278,8 @@ class BinaryStream:
 
 
 def _build_scn_dat(plad, out_scn):
-    b = bytearray(b"\0" * 132)
-    h = {"header_size": 132}
+    b = bytearray(b"\0" * C.SCN_HDR_SIZE)
+    h = {"header_size": C.SCN_HDR_SIZE}
 
     def sec(ok, ck, ofs, cnt):
         h[ok] = ofs
@@ -393,9 +405,10 @@ def _build_scn_dat(plad, out_scn):
         write_i32_le(
             b, int((it.get("line_no", 0) if isinstance(it, dict) else it) or 0)
         )
-    b[0:132] = struct.pack(
-        "<" + "i" * 33, *[int(h.get(k, 0)) for k in C.SCN_HDR_FIELDS]
+    hdr = struct.pack(
+        "<" + "i" * len(C.SCN_HDR_FIELDS), *[int(h.get(k, 0)) for k in C.SCN_HDR_FIELDS]
     )
+    b[0 : len(hdr)] = hdr
     return bytes(b)
 
 
@@ -519,11 +532,9 @@ class BS:
             p = (
                 int(parent_form)
                 if isinstance(parent_form, int)
-                else (
-                    int(C._FORM_CODE.get(parent_form, -1))
-                    if isinstance(parent_form, str)
-                    else -1
-                )
+                else _form_code(parent_form)
+                if isinstance(parent_form, str)
+                else -1
             )
         except Exception:
             p = -1
@@ -706,7 +717,7 @@ class BS:
                 s.scn_push_u8(C.CD_PUSH)
                 s.scn_push_i32(_fc(C.FM_INT))
                 s.scn_push_i32(0)
-        s.scn_push_u8(getattr(C, "CD_DEC_PROP", C.CD_DEC_PROP))
+        s.scn_push_u8(C.CD_DEC_PROP)
         s.scn_push_i32(_fc(form_code))
         s.scn_push_i32(int(def_prop.get("prop_id", 0) or 0))
         return True
@@ -865,8 +876,8 @@ class BS:
         for sb in sub:
             If = (sb.get("If") or {}).get("atom", {}) if isinstance(sb, dict) else {}
             if If.get("type") in (
-                getattr(C, "LA_T", {}).get("IF"),
-                getattr(C, "LA_T", {}).get("ELSEIF"),
+                C.LA_T["IF"],
+                C.LA_T["ELSEIF"],
             ):
                 label_no_if = len(s.out_scn["label_list"])
                 s.out_scn["label_list"].append(0)
@@ -1307,7 +1318,7 @@ class BS:
         s.scn_push_u8(C.CD_ELM_POINT)
         s.add_out_txt("CD_ELM_POINT")
         if elm_list.get("parent_form_code") == C.FM_CALL:
-            cur = getattr(C, "ELM_GLOBAL_CUR_CALL", None)
+            cur = C.ELM_GLOBAL_CUR_CALL
             if not isinstance(cur, int):
                 s.es = "Missing ELM_GLOBAL_CUR_CALL"
                 return False
@@ -1349,49 +1360,49 @@ class BS:
                 (el[-1] or {}).get("element_parent_form", 0) if el else 0
             )
             element_code = _to_int((el[-1] or {}).get("element_code", 0) if el else 0)
-            gm = _to_int(getattr(C, "FM_GLOBAL", C.FM_GLOBAL))
-            mw = _to_int(getattr(C, "FM_MWND", "mwnd"))
+            gm = _to_int(C.FM_GLOBAL)
+            mw = _to_int(C.FM_MWND)
             msg_cmds = {
-                (gm, getattr(C, "ELM_GLOBAL_KOE", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SET_FACE", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SET_NAMAE", None)),
-                (gm, getattr(C, "ELM_GLOBAL_PRINT", None)),
-                (gm, getattr(C, "ELM_GLOBAL_RUBY", None)),
-                (gm, getattr(C, "ELM_GLOBAL_NL", None)),
-                (gm, getattr(C, "ELM_GLOBAL_NLI", None)),
-                (mw, getattr(C, "ELM_MWND_KOE", None)),
-                (mw, getattr(C, "ELM_MWND_SET_FACE", None)),
-                (mw, getattr(C, "ELM_MWND_SET_NAMAE", None)),
-                (mw, getattr(C, "ELM_MWND_PRINT", None)),
-                (mw, getattr(C, "ELM_MWND_RUBY", None)),
-                (mw, getattr(C, "ELM_MWND_NL", None)),
-                (mw, getattr(C, "ELM_MWND_NLI", None)),
+                (gm, C.ELM_GLOBAL_KOE),
+                (gm, C.ELM_GLOBAL_SET_FACE),
+                (gm, C.ELM_GLOBAL_SET_NAMAE),
+                (gm, C.ELM_GLOBAL_PRINT),
+                (gm, C.ELM_GLOBAL_RUBY),
+                (gm, C.ELM_GLOBAL_NL),
+                (gm, C.ELM_GLOBAL_NLI),
+                (mw, C.ELM_MWND_KOE),
+                (mw, C.ELM_MWND_SET_FACE),
+                (mw, C.ELM_MWND_SET_NAMAE),
+                (mw, C.ELM_MWND_PRINT),
+                (mw, C.ELM_MWND_RUBY),
+                (mw, C.ELM_MWND_NL),
+                (mw, C.ELM_MWND_NLI),
             }
             if (parent_form_code, element_code) in msg_cmds:
                 s.bs_push_msg_block()
             if not s.bs_elm_list(elm_list):
                 return False
             read_cmds = {
-                (gm, getattr(C, "ELM_GLOBAL_PRINT", None)),
-                (gm, getattr(C, "ELM_GLOBAL_KOE", None)),
-                (gm, getattr(C, "ELM_GLOBAL_KOE_PLAY_WAIT", None)),
-                (gm, getattr(C, "ELM_GLOBAL_KOE_PLAY_WAIT_KEY", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SEL", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SEL_CANCEL", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SELMSG", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SELMSG_CANCEL", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SELBTN", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SELBTN_CANCEL", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SELBTN_START", None)),
-                (gm, getattr(C, "ELM_GLOBAL_SEL_IMAGE", None)),
-                (mw, getattr(C, "ELM_MWND_PRINT", None)),
-                (mw, getattr(C, "ELM_MWND_KOE", None)),
-                (mw, getattr(C, "ELM_MWND_KOE_PLAY_WAIT", None)),
-                (mw, getattr(C, "ELM_MWND_KOE_PLAY_WAIT_KEY", None)),
-                (mw, getattr(C, "ELM_MWND_SEL", None)),
-                (mw, getattr(C, "ELM_MWND_SEL_CANCEL", None)),
-                (mw, getattr(C, "ELM_MWND_SELMSG", None)),
-                (mw, getattr(C, "ELM_MWND_SELMSG_CANCEL", None)),
+                (gm, C.ELM_GLOBAL_PRINT),
+                (gm, C.ELM_GLOBAL_KOE),
+                (gm, C.ELM_GLOBAL_KOE_PLAY_WAIT),
+                (gm, C.ELM_GLOBAL_KOE_PLAY_WAIT_KEY),
+                (gm, C.ELM_GLOBAL_SEL),
+                (gm, C.ELM_GLOBAL_SEL_CANCEL),
+                (gm, C.ELM_GLOBAL_SELMSG),
+                (gm, C.ELM_GLOBAL_SELMSG_CANCEL),
+                (gm, C.ELM_GLOBAL_SELBTN),
+                (gm, C.ELM_GLOBAL_SELBTN_CANCEL),
+                (gm, C.ELM_GLOBAL_SELBTN_START),
+                (gm, C.ELM_GLOBAL_SEL_IMAGE),
+                (mw, C.ELM_MWND_PRINT),
+                (mw, C.ELM_MWND_KOE),
+                (mw, C.ELM_MWND_KOE_PLAY_WAIT),
+                (mw, C.ELM_MWND_KOE_PLAY_WAIT_KEY),
+                (mw, C.ELM_MWND_SEL),
+                (mw, C.ELM_MWND_SEL_CANCEL),
+                (mw, C.ELM_MWND_SELMSG),
+                (mw, C.ELM_MWND_SELMSG_CANCEL),
             }
             if (parent_form_code, element_code) in read_cmds:
                 s.scn_push_i32(s.cur_read_flag_no)
@@ -1489,7 +1500,7 @@ class BS:
         s.scn_push_u8(C.CD_ELM_POINT)
         s.scn_push_u8(C.CD_PUSH)
         s.scn_push_i32(_fc(C.FM_INT))
-        msg_block = getattr(C, "ELM_GLOBAL_MSG_BLOCK", None)
+        msg_block = C.ELM_GLOBAL_MSG_BLOCK
         if not isinstance(msg_block, int):
             msg_block = int(msg_block or 0)
         s.scn_push_i32(int(msg_block))
