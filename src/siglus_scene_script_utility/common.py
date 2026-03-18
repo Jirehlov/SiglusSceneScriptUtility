@@ -520,8 +520,56 @@ def parse_code(v):
     raise TypeError(f"Unsupported code type: {type(v).__name__}")
 
 
-def log_stage(stage, file_path):
-    name = os.path.basename(file_path) if file_path else ""
+def _scene_name_keys(file_path):
+    name = os.path.basename(str(file_path or ""))
+    if not name:
+        return "", ""
+    return name.casefold(), os.path.splitext(name)[0].casefold()
+
+
+def get_scene_ssid(ctx, file_path):
+    if not isinstance(ctx, dict):
+        return None
+    ssid_map = ctx.get("scn_ssid_map")
+    if not isinstance(ssid_map, dict):
+        return None
+    name = os.path.basename(str(file_path or ""))
+    ext = os.path.splitext(name)[1].casefold()
+    name_key, stem_key = _scene_name_keys(name)
+    if name_key and name_key in ssid_map:
+        return ssid_map.get(name_key)
+    if ext in ("", ".ss", ".dat", ".lzss") and stem_key and stem_key in ssid_map:
+        return ssid_map.get(stem_key)
+    return None
+
+
+def format_scene_name(file_path, ctx=None):
+    name = os.path.basename(str(file_path or ""))
+    if not name:
+        return ""
+    if not isinstance(ctx, dict):
+        return name
+    ssid_map = ctx.get("scn_ssid_map")
+    if not isinstance(ssid_map, dict):
+        return name
+    ext = os.path.splitext(name)[1].casefold()
+    name_key, stem_key = _scene_name_keys(name)
+    has_name = name_key in ssid_map
+    has_stem = ext in ("", ".ss", ".dat", ".lzss") and stem_key in ssid_map
+    if (not has_name) and (not has_stem):
+        return name
+    ssid = get_scene_ssid(ctx, name)
+    if ssid is None:
+        return f"---- {name}"
+    try:
+        tag = f"{int(ssid):04d}"
+    except Exception:
+        tag = "----"
+    return f"{tag} {name}"
+
+
+def log_stage(stage, file_path, ctx=None):
+    name = format_scene_name(file_path, ctx) if file_path else ""
     print(f"{stage}: {name}")
 
 

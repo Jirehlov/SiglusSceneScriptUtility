@@ -34,7 +34,7 @@ def _usage(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write("\n")
     out.write("Options:\n")
@@ -42,12 +42,13 @@ def _usage(out=None):
     out.write(
         "  --legacy        Force pure Python implementation (disable Rust accel)\n"
     )
+    out.write("  --const-profile Select const profile (0-2, default: 0)\n")
     out.write("\n")
     out.write("Modes:\n")
     out.write("  init            Download required const.py\n")
     out.write("  -c, --compile   Compile scripts\n")
     out.write(
-        "  -x, --extract   Extract .pck or restore Gameexe.ini from Gameexe.dat\n"
+        "  -x, --extract   Extract .pck, disassemble .dat, or restore Gameexe.ini from Gameexe.dat\n"
     )
     out.write("  -a, --analyze   Analyze/compare files\n")
     out.write("  -d, --db        Export/apply/analyze .dbs\n")
@@ -62,11 +63,13 @@ def _usage(out=None):
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
     out.write("    --force, -f   Overwrite existing const.py\n")
-    out.write("    --ref         Git ref (branch/tag/commit), default: main\n")
+    out.write(
+        "    --ref         Git ref (branch/tag/commit), default: current package version release ref\n"
+    )
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
     )
     out.write(
         f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
@@ -79,6 +82,7 @@ def _usage(out=None):
         "    --dat-repack    Repack existing .dat files in input_dir (skip .ss compilation)\n"
     )
     out.write("    --no-angou      Disable encryption/compression (header_size=0)\n")
+    out.write("    --no-lzss       Disable LZSS only (official easy link behavior)\n")
     out.write("    --parallel      Enable parallel compilation\n")
     out.write("    --max-workers   Limit parallel workers (default: auto)\n")
     out.write("    --lzss-level    LZSS compression level (2-17, default: 17)\n")
@@ -91,20 +95,28 @@ def _usage(out=None):
     )
     out.write("\n")
     out.write("Extract mode:\n")
-    out.write(f"  {p} -x [--disam] <input_pck> <output_dir>\n")
-    out.write(f"  {p} -x --gei <Gameexe.dat> <output_dir>\n")
-    out.write("    --disam        Dump .dat disassembly when extracting .pck\n")
+    out.write(f"  {p} -x [--disam] <input_pck|input_dir> [output_dir]\n")
+    out.write(f"  {p} -x --gei <Gameexe.dat|input_dir> [output_dir]\n")
+    out.write(
+        "    --disam        Dump .dat disassembly when extracting .pck or scanning a .dat directory\n"
+    )
     out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
+    out.write(
+        "    output_dir     Defaults to the input file directory or the input directory itself\n"
+    )
     out.write("\n")
     out.write("Analyze mode:\n")
     out.write(
-        f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
+        f"  {p} -a [--disam] [--readall] [--payload] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
     out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --disam        Write .dat disassembly to __DATDIR__\n")
     out.write(
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
+    )
+    out.write(
+        "    --payload      Compare decoded/decompressed scn_bytes SHA-1 payload hash; expensive\n"
     )
     out.write("    --angou        Parse as 暗号.dat and print derived exe_el key\n")
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
@@ -206,25 +218,65 @@ def _usage_short(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write(f"Try '{p} --help' for more information.\n")
 
 
-def _consume_legacy(argv):
+def _drop_const_module():
+    sys.modules.pop("siglus_scene_script_utility.const", None)
+    pkg = sys.modules.get("siglus_scene_script_utility")
+    if pkg is not None and hasattr(pkg, "const"):
+        delattr(pkg, "const")
+
+
+def _consume_global_options(argv):
     legacy = False
-    if "--legacy" in argv:
-        legacy = True
-        argv = [arg for arg in argv if arg != "--legacy"]
+    const_profile = None
+    out = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--legacy":
+            legacy = True
+            i += 1
+            continue
+        if arg == "--const-profile":
+            if i + 1 >= len(argv):
+                raise ValueError("--const-profile requires a value")
+            const_profile = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--const-profile="):
+            const_profile = arg.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
     if legacy:
         os.environ["SIGLUS_SSU_LEGACY"] = "1"
-    return argv
+    profile = None
+    if const_profile is not None:
+        try:
+            profile = int(str(const_profile).strip(), 0)
+        except Exception as exc:
+            raise ValueError(f"invalid --const-profile value: {const_profile}") from exc
+        if profile not in (0, 1, 2):
+            raise ValueError(
+                f"invalid --const-profile value: {const_profile} (expected 0, 1, or 2)"
+            )
+    return out, profile
 
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    argv = _consume_legacy(argv)
+    try:
+        argv, const_profile = _consume_global_options(argv)
+    except ValueError as exc:
+        sys.stderr.write(f"{_prog()}: {exc}\n")
+        return 2
+    _drop_const_module()
     if argv and argv[0] in ("-V", "--version", "version"):
         _print_version()
         return 0
@@ -242,7 +294,7 @@ def main(argv=None):
         from ._const_manager import download_const, load_const_module
 
         force = False
-        ref = "main"
+        ref = None
         it = iter(argv[1:])
         for a in it:
             if a in ("--force", "-f"):
@@ -261,7 +313,7 @@ def main(argv=None):
                 return 2
         try:
             path = download_const(ref=ref, force=force)
-            load_const_module(path)
+            load_const_module(path, profile=const_profile)
         except Exception as e:
             sys.stderr.write(f"{_prog()}: init failed: {e}\n")
             return 1
@@ -270,7 +322,7 @@ def main(argv=None):
     try:
         from ._const_manager import _const_path, load_const_module
 
-        load_const_module()
+        load_const_module(profile=const_profile)
     except Exception:
         p = _const_path()
         sys.stderr.write(

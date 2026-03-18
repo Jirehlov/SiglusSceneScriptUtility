@@ -138,6 +138,14 @@ def patch_altkey(data: bytearray, key_bytes: bytes):
     return changes
 
 
+def _is_charset_compare_tail(data: bytearray, i: int) -> bool:
+    if i + 5 <= len(data) and data[i + 4] in (0x74, 0x75):
+        return True
+    if i + 10 <= len(data) and data[i + 4] == 0x0F and data[i + 5] in (0x84, 0x85):
+        return True
+    return False
+
+
 def _find_charset_candidates(data: bytearray, accept_values):
     pat = b"\x80x\x17"
     candidates = []
@@ -146,7 +154,7 @@ def _find_charset_candidates(data: bytearray, accept_values):
         i = data.find(pat, start)
         if i == -1:
             break
-        if i + 5 <= len(data) and data[i + 4] == 117 and data[i + 3] in accept_values:
+        if data[i + 3] in accept_values and _is_charset_compare_tail(data, i):
             candidates.append(i)
         start = i + 1
     return candidates
@@ -179,7 +187,7 @@ def patch_lfcharset_any(data: bytearray, new_charset: int):
     candidates = _find_charset_candidates(data, accept_values)
     if not candidates:
         raise RuntimeError(
-            "Could not find charset-compare instruction signature (80 78 17 ?? 75); the engine version may differ."
+            "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
         )
     changes = []
     for i in candidates:
@@ -238,26 +246,17 @@ def replace_all_fixedlen(
 
 def patch_siglus_chs(data: bytearray):
     changes = []
-    pat = b"\x80x\x17"
-    candidates = []
-    start = 0
-    while True:
-        i = data.find(pat, start)
-        if i == -1:
-            break
-        if i + 5 <= len(data) and data[i + 4] == 117 and (data[i + 3] in (128, 134)):
-            candidates.append(i)
-        start = i + 1
+    candidates = _find_charset_candidates(data, {0, 128, 134})
     if not candidates:
         raise RuntimeError(
-            "Could not find charset-compare instruction signature (80 78 17 ?? 75); the engine version may differ."
+            "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
         )
     for i in candidates:
         off = i + 3
         old = data[off]
-        if old == 128:
+        if old != 134:
             data[off] = 134
-            changes.append((off, old, 134, "lfCharSet: 0x80 -> 0x86"))
+            changes.append((off, old, 134, "lfCharSet: -> 0x86"))
     changes.extend(
         replace_all_fixedlen(
             data, "Scene.pck", "Scene.chs", encoding="utf-16le", skip_standalone=False
@@ -291,7 +290,7 @@ def patch_siglus_eng(data: bytearray):
     candidates = _find_charset_candidates(data, accept_values)
     if not candidates:
         raise RuntimeError(
-            "Could not find charset-compare instruction signature (80 78 17 ?? 75); the engine version may differ."
+            "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
         )
     for i in candidates:
         off = i + 3

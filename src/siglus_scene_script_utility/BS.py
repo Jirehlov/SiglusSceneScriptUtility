@@ -10,6 +10,7 @@ from .LA import la_analize
 from .SA import SA
 from .MA import MA
 from .common import (
+    format_scene_name,
     log_stage,
     record_stage_time,
     set_stage_time,
@@ -177,7 +178,7 @@ def build_ia_data(ctx):
     start = time.time()
     for inc in inc_list:
         inc_path = inc if os.path.isabs(inc) else os.path.join(sp, inc)
-        log_stage("IA", inc_path)
+        log_stage("IA", inc_path, ctx)
         if not os.path.isfile(inc_path):
             raise FileNotFoundError(f"inc not found: {inc_path}")
         txt = read_text_auto(
@@ -523,29 +524,6 @@ class BS:
             if v == form:
                 return k
         return str(form)
-
-    def _ft_find_element_by_code(s, parent_form, code):
-        ft = (s.m_psad or {}).get("find_tree")
-        if not isinstance(ft, dict):
-            return None
-        try:
-            p = (
-                int(parent_form)
-                if isinstance(parent_form, int)
-                else _form_code(parent_form)
-                if isinstance(parent_form, str)
-                else -1
-            )
-        except Exception:
-            p = -1
-        try:
-            c = int(code)
-        except Exception:
-            c = 0
-        pm = ft.get(p)
-        if not isinstance(pm, dict):
-            return None
-        return pm.get(c)
 
     def _bs_write_cd_nl(s, node_line):
         s.scn_push_u8(C.CD_NL)
@@ -1240,8 +1218,13 @@ class BS:
                 )
                 if not s.bs_arg_list(arg_list, False):
                     return False
-                info = s._ft_find_element_by_code(
-                    element.get("element_parent_form"), element.get("element_code")
+                ft = (s.m_piad or {}).get("form_table")
+                info = (
+                    ft.get_element_by_code(
+                        element.get("element_parent_form"), element.get("element_code")
+                    )
+                    if ft is not None
+                    else None
                 )
                 aid = int(element.get("arg_list_id", 0) or 0)
                 temp_args = None
@@ -1360,51 +1343,11 @@ class BS:
                 (el[-1] or {}).get("element_parent_form", 0) if el else 0
             )
             element_code = _to_int((el[-1] or {}).get("element_code", 0) if el else 0)
-            gm = _to_int(C.FM_GLOBAL)
-            mw = _to_int(C.FM_MWND)
-            msg_cmds = {
-                (gm, C.ELM_GLOBAL_KOE),
-                (gm, C.ELM_GLOBAL_SET_FACE),
-                (gm, C.ELM_GLOBAL_SET_NAMAE),
-                (gm, C.ELM_GLOBAL_PRINT),
-                (gm, C.ELM_GLOBAL_RUBY),
-                (gm, C.ELM_GLOBAL_NL),
-                (gm, C.ELM_GLOBAL_NLI),
-                (mw, C.ELM_MWND_KOE),
-                (mw, C.ELM_MWND_SET_FACE),
-                (mw, C.ELM_MWND_SET_NAMAE),
-                (mw, C.ELM_MWND_PRINT),
-                (mw, C.ELM_MWND_RUBY),
-                (mw, C.ELM_MWND_NL),
-                (mw, C.ELM_MWND_NLI),
-            }
-            if (parent_form_code, element_code) in msg_cmds:
+            if (parent_form_code, element_code) in C.MESSAGE_BLOCK_COMMAND_CODES:
                 s.bs_push_msg_block()
             if not s.bs_elm_list(elm_list):
                 return False
-            read_cmds = {
-                (gm, C.ELM_GLOBAL_PRINT),
-                (gm, C.ELM_GLOBAL_KOE),
-                (gm, C.ELM_GLOBAL_KOE_PLAY_WAIT),
-                (gm, C.ELM_GLOBAL_KOE_PLAY_WAIT_KEY),
-                (gm, C.ELM_GLOBAL_SEL),
-                (gm, C.ELM_GLOBAL_SEL_CANCEL),
-                (gm, C.ELM_GLOBAL_SELMSG),
-                (gm, C.ELM_GLOBAL_SELMSG_CANCEL),
-                (gm, C.ELM_GLOBAL_SELBTN),
-                (gm, C.ELM_GLOBAL_SELBTN_CANCEL),
-                (gm, C.ELM_GLOBAL_SELBTN_START),
-                (gm, C.ELM_GLOBAL_SEL_IMAGE),
-                (mw, C.ELM_MWND_PRINT),
-                (mw, C.ELM_MWND_KOE),
-                (mw, C.ELM_MWND_KOE_PLAY_WAIT),
-                (mw, C.ELM_MWND_KOE_PLAY_WAIT_KEY),
-                (mw, C.ELM_MWND_SEL),
-                (mw, C.ELM_MWND_SEL_CANCEL),
-                (mw, C.ELM_MWND_SELMSG),
-                (mw, C.ELM_MWND_SELMSG_CANCEL),
-            }
-            if (parent_form_code, element_code) in read_cmds:
+            if (parent_form_code, element_code) in C.READ_FLAG_COMMAND_CODES:
                 s.scn_push_i32(s.cur_read_flag_no)
                 s.add_out_txt("\tread_flag_no = " + str(s.cur_read_flag_no))
                 s.cur_read_flag_no += 1
@@ -1656,9 +1599,10 @@ def compile_one_pipeline(
     )
     nm = os.path.splitext(os.path.basename(ss_path))[0]
     fname = os.path.basename(ss_path)
+    display_name = format_scene_name(ss_path, ctx)
 
     def fmt_err(code, line):
-        return f"{code} at {fname}:{int(line or 0)}"
+        return f"{code} at {display_name}:{int(line or 0)}"
 
     enc = "utf-8" if (isinstance(ctx, dict) and ctx.get("utf8")) else "cp932"
     scn = read_text_auto(
@@ -1679,7 +1623,7 @@ def compile_one_pipeline(
 
     ca = CharacterAnalizer()
     if log:
-        log_stage("CA", ss_path)
+        log_stage("CA", ss_path, ctx)
     t = time.time()
     if not ca.analize_file(scn, iad, pcad):
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
@@ -1693,7 +1637,7 @@ def compile_one_pipeline(
         )
 
     if log:
-        log_stage("LA", ss_path)
+        log_stage("LA", ss_path, ctx)
     t = time.time()
     lad, err = la_analize(pcad)
     if record_time:
@@ -1704,7 +1648,7 @@ def compile_one_pipeline(
         return None
 
     if log:
-        log_stage("SA", ss_path)
+        log_stage("SA", ss_path, ctx)
     t = time.time()
     sa = SA(iad, lad)
     ok, sad = sa.analize()
@@ -1721,7 +1665,7 @@ def compile_one_pipeline(
         return None
 
     if log:
-        log_stage("MA", ss_path)
+        log_stage("MA", ss_path, ctx)
     while True:
         t = time.time()
         ma = MA(iad, lad, sad)
@@ -1745,14 +1689,16 @@ def compile_one_pipeline(
                 unknown_name = None
             qname = str(ma.last.get("qname") or unknown_name or "")
             if unknown_name:
-                raise RuntimeError(f"{code}({qname or unknown_name}) at {fname}:{line}")
+                raise RuntimeError(
+                    f"{code}({qname or unknown_name}) at {display_name}:{line}"
+                )
         raise RuntimeError(fmt_err(code, line))
 
     if stop_after == "ma":
         return None
 
     if log:
-        log_stage("BS", ss_path)
+        log_stage("BS", ss_path, ctx)
     t = time.time()
     bs = BS()
     bsd = {}
@@ -1791,15 +1737,12 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
         return
 
     if parallel and len(ss_files) > 1:
-        try:
-            from .parallel import parallel_compile
+        from .parallel import parallel_compile
 
-            start = time.time()
-            parallel_compile(ctx, ss_files, stop_after, max_workers)
-            set_stage_time(ctx, "Compiling", time.time() - start)
-            return
-        except ImportError:
-            pass
+        start = time.time()
+        parallel_compile(ctx, ss_files, stop_after, max_workers)
+        set_stage_time(ctx, "Compiling", time.time() - start)
+        return
 
     for p in ss_files:
         compile_one(ctx, p, stop_after)

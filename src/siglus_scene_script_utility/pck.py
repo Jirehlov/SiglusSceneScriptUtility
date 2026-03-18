@@ -446,7 +446,7 @@ def pck(blob: bytes) -> int:
     return 0
 
 
-def compare_pck(b1: bytes, b2: bytes) -> int:
+def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -> int:
     s1, m1 = _pck_sections(b1, preview=False)
     s2, m2 = _pck_sections(b2, preview=False)
     h1 = m1.get("header") or {}
@@ -510,8 +510,77 @@ def compare_pck(b1: bytes, b2: bytes) -> int:
 
     sm1 = _scene_map(names1, idx1, h1.get("scn_data_list_ofs", 0), b1)
     sm2 = _scene_map(names2, idx2, h2.get("scn_data_list_ofs", 0), b2)
+
+    exe_el1 = b""
+    exe_el2 = b""
+    if compare_payload:
+        exe_el1 = _compute_exe_el("", os.path.dirname(str(p1 or "")))
+        exe_el2 = _compute_exe_el("", os.path.dirname(str(p2 or "")))
+
+    def _decode_scene_blob_for_compare(blob, hdr, exe_el):
+        if not isinstance(blob, (bytes, bytearray)) or not blob:
+            return None
+        try:
+            exe_mod = int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0)
+        except Exception:
+            return None
+        b = bytes(blob)
+        if exe_mod != 0:
+            if not exe_el:
+                return None
+            try:
+                _b = bytearray(b)
+                xor_cycle_inplace(_b, exe_el, 0)
+                b = bytes(_b)
+            except Exception:
+                return None
+        easy_code = C.EASY_ANGOU_CODE
+        lz = b""
+        cand = b""
+        if easy_code:
+            try:
+                _b = bytearray(b)
+                xor_cycle_inplace(_b, easy_code, 0)
+                cand = bytes(_b)
+            except Exception:
+                cand = b""
+        if cand and _looks_like_lzss(cand):
+            lz = cand
+        elif _looks_like_lzss(b):
+            lz = b
+        if lz:
+            try:
+                return lzss_unpack(lz)
+            except Exception:
+                return None
+        return b
+
+    def _cmp_payload(r1, r2):
+        if not (r1 and r2):
+            return "-"
+        try:
+            from . import dat as DAT
+
+            blob1 = _decode_scene_blob_for_compare(
+                b1[int(r1[0]) : int(r1[1])], h1, exe_el1
+            )
+            blob2 = _decode_scene_blob_for_compare(
+                b2[int(r2[0]) : int(r2[1])], h2, exe_el2
+            )
+            if not blob1 or not blob2:
+                return "-"
+            c1 = DAT._scn_payload_hash_bundle(blob1)
+            c2 = DAT._scn_payload_hash_bundle(blob2)
+            if not c1 or not c2:
+                return "-"
+            same = c1.get("size") == c2.get("size") and c1.get("sha1") == c2.get("sha1")
+            return "same" if same else "diff"
+        except Exception:
+            return "-"
+
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=lambda x: x.lower())
     rows = []
+    payload_cmp_counts = {"same": 0, "diff": 0, "-": 0}
     for k in keys:
         l1 = sm1.get(k, [])
         l2 = sm2.get(k, [])
@@ -528,7 +597,14 @@ def compare_pck(b1: bytes, b2: bytes) -> int:
             l1x = hx(r1[1] - 1) if r1 else "-"
             l2x = hx(r2[1] - 1) if r2 else "-"
             nm = k if i == 0 else f"{k}#{i:d}"
-            rows.append((nm, st1, l1x, s1z, st2, l2x, s2z))
+            if compare_payload:
+                payload_cmp = _cmp_payload(r1, r2)
+                payload_cmp_counts[payload_cmp] = (
+                    int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
+                )
+                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, payload_cmp))
+            else:
+                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z))
 
     os1 = _pck_original_sources(
         b1, h1, h1.get("scn_data_list_ofs", 0) + _max_pair_end(idx1)
@@ -563,7 +639,10 @@ def compare_pck(b1: bytes, b2: bytes) -> int:
             a2 = hx(r2[0]) if r2 else "-"
             l2x = hx(r2[1] - 1) if r2 else "-"
             nm = k if i == 0 else f"{k}#{i:d}"
-            orows.append((nm, a1, l1x, s1z, a2, l2x, s2z))
+            if compare_payload:
+                orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, "-"))
+            else:
+                orows.append((nm, a1, l1x, s1z, a2, l2x, s2z))
 
     allrows = rows + orows
     if not allrows:
@@ -574,20 +653,44 @@ def compare_pck(b1: bytes, b2: bytes) -> int:
     else:
         print("")
         print("Section differences:")
-        print(
-            "START1      LAST1       SIZE1       START2      LAST2       SIZE2       %-*s"
-            % (C.NAME_W, "NAME")
-        )
-        print(
-            f"----------  ----------  ----------  ----------  ----------  ----------  {'-' * C.NAME_W}"
-        )
-        for nm, a1, l1x, s1z, a2, l2x, s2z in allrows[:5000]:
+        if compare_payload:
             print(
-                "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-*s"
-                % (a1, l1x, s1z, a2, l2x, s2z, C.NAME_W, _dn(nm))
+                "START1      LAST1       SIZE1       START2      LAST2       SIZE2       PAYLOAD    %-*s"
+                % (C.NAME_W, "NAME")
             )
+            print(
+                f"----------  ----------  ----------  ----------  ----------  ----------  ---------  {'-' * C.NAME_W}"
+            )
+            for nm, a1, l1x, s1z, a2, l2x, s2z, payload_cmp in allrows[:5000]:
+                print(
+                    "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-9s  %-*s"
+                    % (a1, l1x, s1z, a2, l2x, s2z, payload_cmp, C.NAME_W, _dn(nm))
+                )
+        else:
+            print(
+                "START1      LAST1       SIZE1       START2      LAST2       SIZE2       %-*s"
+                % (C.NAME_W, "NAME")
+            )
+            print(
+                f"----------  ----------  ----------  ----------  ----------  ----------  {'-' * C.NAME_W}"
+            )
+            for nm, a1, l1x, s1z, a2, l2x, s2z in allrows[:5000]:
+                print(
+                    "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-*s"
+                    % (a1, l1x, s1z, a2, l2x, s2z, C.NAME_W, _dn(nm))
+                )
         if len(allrows) > 5000:
             print(f"... ({len(allrows) - 5000:d} rows omitted)")
+        if compare_payload and rows:
+            print("")
+            print(
+                "scene_data payload: same=%d diff=%d unavailable=%d"
+                % (
+                    int(payload_cmp_counts.get("same", 0) or 0),
+                    int(payload_cmp_counts.get("diff", 0) or 0),
+                    int(payload_cmp_counts.get("-", 0) or 0),
+                )
+            )
     return 0
 
 
@@ -1051,8 +1154,11 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             )
     easy_code = C.EASY_ANGOU_CODE
     D = None
+    disam_stats = None
     if dat_txt:
         from . import dat as D
+
+        disam_stats = {"disassembled": 0, "ended_unexpectedly": 0}
     for nm, blob in zip(scn_names, scn_data):
         if not nm:
             continue
@@ -1085,8 +1191,15 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         write_bytes(out_path, out_dat)
         if D:
             D._write_dat_disassembly(
-                out_path, out_dat, os.path.dirname(out_path) or bs_dir
+                out_path,
+                out_dat,
+                os.path.dirname(out_path) or bs_dir,
+                disam_stats,
             )
         ok_cnt += 1
     sys.stdout.write(f"Extracted scenes: {ok_cnt:d}\n")
+    if dat_txt and isinstance(disam_stats, dict):
+        sys.stdout.write(
+            f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
+        )
     return 0

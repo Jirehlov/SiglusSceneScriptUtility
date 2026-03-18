@@ -21,8 +21,3 @@ siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 ```
 
 See the manuals for more modes, options, and troubleshooting tips.
-
-## TODOs
-
-1. Support element list for Flix builds.
-2. GUI or WebUI supports.

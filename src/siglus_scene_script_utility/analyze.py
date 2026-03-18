@@ -159,7 +159,7 @@ def analyze_file(path, readall=False):
     return 0
 
 
-def compare_files(p1, p2):
+def compare_files(p1, p2, compare_payload=False):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
@@ -191,9 +191,9 @@ def compare_files(p1, p2):
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
     if t1 == "pck":
-        return pck.compare_pck(b1, b2)
+        return pck.compare_pck(p1, p2, b1, b2, compare_payload=compare_payload)
     if t1 == "dat":
-        return dat.compare_dat(p1, p2, b1, b2)
+        return dat.compare_dat(p1, p2, b1, b2, compare_payload=compare_payload)
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
     if t1 == "cgm":
@@ -221,6 +221,11 @@ def main(argv=None):
         args.remove("--readall")
         readall = True
 
+    compare_payload = False
+    if "--payload" in args:
+        args.remove("--payload")
+        compare_payload = True
+
     angou = False
     if "--angou" in args:
         args.remove("--angou")
@@ -243,7 +248,7 @@ def main(argv=None):
     if len(args) == 2:
         if readall:
             return 2
-        return compare_files(args[0], args[1])
+        return compare_files(args[0], args[1], compare_payload=compare_payload)
     return 2
 
 

@@ -35,6 +35,10 @@ def la_analize(pcad):
                 return k
         return -1
 
+    def to_i32(v):
+        v = int(v) & 0xFFFFFFFF
+        return v if v < 0x80000000 else v - 0x100000000
+
     i = 0
     while s[i] != "\0":
         i, ok = skip(i)
@@ -96,25 +100,26 @@ def la_analize(pcad):
             if c == "0" and s[i + 1] == "b":
                 i += 2
                 while s[i] in "01":
-                    v = v * 2 + (ord(s[i]) - 48)
+                    v = to_i32(v * 2 + (ord(s[i]) - 48))
                     i += 1
             elif c == "0" and s[i + 1] == "x":
                 i += 2
                 while ("0" <= s[i] <= "9") or ("a" <= s[i] <= "f"):
-                    v = v * 16 + (
-                        ord(s[i]) - 48 if "0" <= s[i] <= "9" else ord(s[i]) - 87
+                    v = to_i32(
+                        v * 16
+                        + (ord(s[i]) - 48 if "0" <= s[i] <= "9" else ord(s[i]) - 87)
                     )
                     i += 1
             else:
                 while "0" <= s[i] <= "9":
-                    v = v * 10 + (ord(s[i]) - 48)
+                    v = to_i32(v * 10 + (ord(s[i]) - 48))
                     i += 1
             a["type"] = C.LA_T["VAL_INT"]
-            a["opt"] = v
+            a["opt"] = to_i32(v)
         elif c == "'":
             ln = 2 if s[i + 1] == "\\" else 1
             a["type"] = C.LA_T["VAL_INT"]
-            a["opt"] = ord(s[i + ln])
+            a["opt"] = to_i32(ord(s[i + ln]))
             i += 2 + ln
         elif c == '"':
             i += 1

@@ -2,6 +2,40 @@ from . import const as C
 from .common import hx, read_i32_le
 
 
+def _resolve_form_code(value):
+    try:
+        if isinstance(value, int):
+            return int(value)
+        text = str(value or "").strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    try:
+        fn = getattr(C, "resolve_form_code", None)
+        if callable(fn):
+            out = fn(value)
+            if out is not None:
+                return int(out)
+    except Exception:
+        pass
+    try:
+        fm = C._FORM_CODE
+        if isinstance(fm, dict) and text in fm:
+            return int(fm[text])
+    except Exception:
+        pass
+    return None
+
+
+def _read_flag_command_codes():
+    try:
+        codes = getattr(C, "READ_FLAG_COMMAND_CODES")
+        return frozenset((int(a), int(b)) for a, b in (codes or ()))
+    except Exception:
+        return frozenset()
+
+
 def _invert_form_code_map():
     out = {}
     try:
@@ -23,8 +57,11 @@ def _build_system_element_index():
         defs = C.SYSTEM_ELEMENT_DEFS
         if not isinstance(defs, (list, tuple)):
             return out
-
         fm = C._FORM_CODE or {}
+        try:
+            from .MA import _parse_arg_spec
+        except Exception:
+            _parse_arg_spec = None
 
         def _to_code(t):
             try:
@@ -55,6 +92,17 @@ def _build_system_element_index():
                 return plain[0]
             return uniq[0]
 
+        def _decorate_entry(info):
+            one = dict(info or {})
+            one["q"] = (
+                (one.get("parent", "") + "." + one.get("name", ""))
+                if one.get("parent")
+                else one.get("name", "")
+            )
+            one["aliases"] = [one.get("name", "")]
+            one["is_alias"] = False
+            return one
+
         from collections import defaultdict
 
         bucket = defaultdict(list)
@@ -70,6 +118,11 @@ def _build_system_element_index():
                 group = int(it[5])
                 code = int(it[6])
                 spec = str(it[7]) if len(it) >= 8 else ""
+                arg_map = (
+                    _parse_arg_spec(spec)
+                    if callable(_parse_arg_spec) and isinstance(spec, str)
+                    else {}
+                )
                 parent_code = _to_code(parent)
                 if not isinstance(parent_code, int):
                     continue
@@ -82,31 +135,24 @@ def _build_system_element_index():
                         "name": name,
                         "ret": ret,
                         "spec": spec,
+                        "arg_map": arg_map,
                         "ec": ec,
                     }
                 )
             except Exception:
                 continue
-
         for key, items in bucket.items():
             if not items:
                 continue
             if len(items) == 1:
-                one = dict(items[0])
-                one["q"] = (
-                    (one.get("parent", "") + "." + one.get("name", ""))
-                    if one.get("parent")
-                    else one.get("name", "")
-                )
-                one["aliases"] = [one.get("name", "")]
-                one["is_alias"] = False
+                one = _decorate_entry(items[0])
                 out[key] = one
                 continue
             types = {int(x.get("type", -1)) for x in items}
             rets = {x.get("ret") for x in items}
             specs = {x.get("spec", "") for x in items}
             if len(types) == 1 and len(rets) == 1 and len(specs) == 1:
-                one = dict(items[0])
+                one = _decorate_entry(items[0])
                 names = [str(x.get("name", "")) for x in items if x.get("name")]
                 picked = _pick_name(names)
                 one["name"] = picked
@@ -117,6 +163,12 @@ def _build_system_element_index():
                 )
                 one["aliases"] = names
                 one["is_alias"] = len(names) > 1
+                out[key] = one
+                continue
+            if len(types) == 1 and len(specs) == 1:
+                variants = [_decorate_entry(x) for x in items]
+                one = dict(variants[0])
+                one["alts"] = variants
                 out[key] = one
                 continue
             out[key] = None
@@ -162,61 +214,6 @@ def _build_array_element_index():
     return out
 
 
-def _build_system_element_candidates():
-    out = {}
-    try:
-        defs = C.SYSTEM_ELEMENT_DEFS
-        if not isinstance(defs, (list, tuple)):
-            return out
-        fm = C._FORM_CODE or {}
-
-        def _to_code(t):
-            try:
-                t = str(t).strip()
-            except Exception:
-                return None
-            if not t:
-                return None
-            try:
-                if t in fm:
-                    return int(fm[t])
-            except Exception:
-                pass
-            return t
-
-        for it in defs:
-            try:
-                if not isinstance(it, (list, tuple)) or len(it) < 7:
-                    continue
-                parent = str(it[1])
-                parent_code = _to_code(parent)
-                ret = _to_code(it[2])
-                if not isinstance(parent_code, int):
-                    continue
-                owner = int(it[4])
-                group = int(it[5])
-                code = int(it[6])
-                name = str(it[3])
-                ec = C.create_elm_code(owner, group, code)
-                info = {
-                    "type": int(it[0]),
-                    "parent": parent,
-                    "parent_code": parent_code,
-                    "name": name,
-                    "ret": ret,
-                    "ec": ec,
-                    "q": f"{parent}.{name}" if parent else name,
-                    "aliases": [name],
-                    "is_alias": False,
-                }
-                out.setdefault((parent_code, ec), []).append(info)
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return out
-
-
 def _escape_preview(s):
     if s is None:
         return ""
@@ -238,10 +235,7 @@ def disassemble_scn_bytes(
     str_list,
     label_list,
     z_label_list=None,
-    read_flag_cnt=None,
-    read_flag_lines=None,
     *,
-    lossless=False,
     cmd_label_list=None,
     scn_prop_defs=None,
     scn_cmd_names=None,
@@ -285,30 +279,11 @@ def disassemble_scn_bytes(
             op_names[int(getattr(C, nm))] = nm
         except Exception:
             pass
+    read_flag_command_codes = _read_flag_command_codes()
 
     def _form_code(name):
-        try:
-            forms = C._FORM_CODE
-            if not isinstance(forms, dict):
-                return None
-            return int(forms[str(name)])
-        except Exception:
-            return None
+        return _resolve_form_code(name)
 
-    def _is_form(form, name):
-        code = _form_code(name)
-        if code is None:
-            return False
-        try:
-            return int(form) == int(code)
-        except Exception:
-            return False
-
-    known_forms = set()
-    try:
-        known_forms = {int(x) for x in form_rev.keys()}
-    except Exception:
-        known_forms = set()
     cd_none = C.CD_NONE
     cd_nl = C.CD_NL
     cd_push = C.CD_PUSH
@@ -352,8 +327,24 @@ def disassemble_scn_bytes(
     except Exception:
         pass
     elm_exact = _build_system_element_index()
-    elm_candidates = _build_system_element_candidates()
     elm_array_exact = _build_array_element_index()
+    receiver_forms = set()
+    try:
+        for key in elm_exact:
+            try:
+                receiver_forms.add(int(key[0]))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:
+        for key in elm_array_exact:
+            try:
+                receiver_forms.add(int(key))
+            except Exception:
+                continue
+    except Exception:
+        pass
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))
     except Exception:
@@ -374,7 +365,9 @@ def disassemble_scn_bytes(
             if not isinstance(it, dict):
                 continue
             code = inc_property_cnt + int(it.get("code", idx))
-            form = int(it.get("form"))
+            form = _form_code(it.get("form"))
+            if not isinstance(form, int):
+                continue
             name = str(it.get("name", "") or "")
             q = name if name else f"$prop_{code:d}"
             scn_prop_info[code] = {
@@ -396,7 +389,9 @@ def disassemble_scn_bytes(
             if not isinstance(it, dict):
                 continue
             code = int(it.get("id", idx))
-            form = int(it.get("form"))
+            form = _form_code(it.get("form"))
+            if not isinstance(form, int):
+                continue
             name = str(it.get("name", "") or "")
             q = name if name else f"$prop_{code:d}"
             inc_prop_info[code] = {
@@ -442,18 +437,62 @@ def disassemble_scn_bytes(
         except Exception:
             continue
     call_slot_info = {}
-    cmd_rf_exclude_ec = set()
-    try:
-        for e in (
-            C.ELM_GLOBAL_COLOR,
-            C.ELM_GLOBAL_RUBY,
-            C.ELM_GLOBAL_R,
-        ):
-            if e is None:
-                continue
-            cmd_rf_exclude_ec.add(int(e))
-    except Exception:
-        cmd_rf_exclude_ec = set()
+    call_decl_forms = []
+    fm_void = _form_code(C.FM_VOID)
+    fm_int = _form_code(C.FM_INT)
+    fm_str = _form_code(C.FM_STR)
+    fm_label = _form_code(C.FM_LABEL)
+    fm_list = _form_code(C.FM_LIST)
+    fm_intlist = _form_code(C.FM_INTLIST)
+    fm_strlist = _form_code(C.FM_STRLIST)
+    scalar_forms = {int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)}
+    unary_int_ops = {
+        int(x)
+        for x in (
+            getattr(C, "OP_PLUS", -1),
+            getattr(C, "OP_MINUS", -1),
+            getattr(C, "OP_TILDE", -1),
+        )
+        if isinstance(x, int)
+    }
+    string_cmp_ops = {
+        int(x)
+        for x in (
+            getattr(C, "OP_EQUAL", -1),
+            getattr(C, "OP_NOT_EQUAL", -1),
+            getattr(C, "OP_GREATER", -1),
+            getattr(C, "OP_GREATER_EQUAL", -1),
+            getattr(C, "OP_LESS", -1),
+            getattr(C, "OP_LESS_EQUAL", -1),
+        )
+        if isinstance(x, int)
+    }
+    unary_text = {
+        int(getattr(C, "OP_PLUS", -1)): "+",
+        int(getattr(C, "OP_MINUS", -1)): "-",
+        int(getattr(C, "OP_TILDE", -1)): "~",
+    }
+    binary_text = {
+        int(getattr(C, "OP_PLUS", -1)): "+",
+        int(getattr(C, "OP_MINUS", -1)): "-",
+        int(getattr(C, "OP_MULTIPLE", -1)): "*",
+        int(getattr(C, "OP_DIVIDE", -1)): "/",
+        int(getattr(C, "OP_AMARI", -1)): "%",
+        int(getattr(C, "OP_EQUAL", -1)): "==",
+        int(getattr(C, "OP_NOT_EQUAL", -1)): "!=",
+        int(getattr(C, "OP_GREATER", -1)): ">",
+        int(getattr(C, "OP_GREATER_EQUAL", -1)): ">=",
+        int(getattr(C, "OP_LESS", -1)): "<",
+        int(getattr(C, "OP_LESS_EQUAL", -1)): "<=",
+        int(getattr(C, "OP_LOGICAL_AND", -1)): "&&",
+        int(getattr(C, "OP_LOGICAL_OR", -1)): "||",
+        int(getattr(C, "OP_AND", -1)): "&",
+        int(getattr(C, "OP_OR", -1)): "|",
+        int(getattr(C, "OP_HAT", -1)): "^",
+        int(getattr(C, "OP_SL", -1)): "<<",
+        int(getattr(C, "OP_SR", -1)): ">>",
+        int(getattr(C, "OP_SR3", -1)): ">>>",
+    }
 
     def fmt_form(f):
         try:
@@ -461,6 +500,12 @@ def disassemble_scn_bytes(
         except Exception:
             return str(f)
         return f"{form_rev.get(fi, 'form')}({fi:d})"
+
+    def _command_reads_flag(parent_form, element_code):
+        try:
+            return (int(parent_form), int(element_code)) in read_flag_command_codes
+        except Exception:
+            return False
 
     def _stack_int_value(it):
         try:
@@ -482,41 +527,12 @@ def disassemble_scn_bytes(
             return (None, None)
         return ((code >> 24) & 0xFF, code & 0xFFFF)
 
-    def _alias_suffix(info):
-        try:
-            if not isinstance(info, dict) or not bool(info.get("is_alias")):
-                return ""
-            parent = str(info.get("parent", "") or "").strip()
-            vals = []
-            seen = set()
-            for name in info.get("aliases") or []:
-                nm = str(name or "").strip()
-                if not nm:
-                    continue
-                q = f"{parent}.{nm}" if parent else nm
-                if q in seen:
-                    continue
-                seen.add(q)
-                vals.append(q)
-            if not vals:
-                return ""
-            return " alias=" + ",".join(vals)
-        except Exception:
-            return ""
-
     def _array_element_info(parent_form):
         try:
             info = elm_array_exact.get(int(parent_form))
         except Exception:
             return None
         return info if isinstance(info, dict) else None
-
-    def _element_candidates(parent_form, code):
-        try:
-            vals = list(elm_candidates.get((int(parent_form), int(code))) or [])
-        except Exception:
-            vals = []
-        return [x for x in vals if isinstance(x, dict)]
 
     def _element_info(parent_form, code):
         try:
@@ -562,9 +578,62 @@ def disassemble_scn_bytes(
                         "ret": None,
                         "ec": code,
                         "q": name,
-                        "aliases": [name],
-                        "is_alias": False,
                     }
+        return None
+
+    def _info_variants(info):
+        if not isinstance(info, dict):
+            return []
+        alts = info.get("alts")
+        if isinstance(alts, list) and alts:
+            return [x for x in alts if isinstance(x, dict)]
+        return [info]
+
+    def _is_receiver_form(form):
+        try:
+            return int(form) in receiver_forms
+        except Exception:
+            return False
+
+    def _receiver_value_form(form):
+        try:
+            form = int(form)
+        except Exception:
+            return None
+        ref_to_val = {
+            _form_code(C.FM_INTREF): fm_int,
+            _form_code(C.FM_STRREF): fm_str,
+            _form_code(C.FM_INTLISTREF): fm_intlist,
+            _form_code(C.FM_STRLISTREF): fm_strlist,
+        }
+        return ref_to_val.get(form, form if form in scalar_forms else None)
+
+    def _unary_result_form(form, opr):
+        try:
+            if int(form) == fm_int and int(opr) in unary_int_ops:
+                return fm_int
+        except Exception:
+            return None
+        return None
+
+    def _binary_result_form(form_l, form_r, opr):
+        try:
+            form_l = int(form_l)
+            form_r = int(form_r)
+            opr = int(opr)
+        except Exception:
+            return None
+        if form_l == fm_int and form_r == fm_int:
+            return fm_int
+        if form_l == fm_str and form_r == fm_int:
+            if opr == int(getattr(C, "OP_MULTIPLE", -1)):
+                return fm_str
+            return None
+        if form_l == fm_str and form_r == fm_str:
+            if opr == int(getattr(C, "OP_PLUS", -1)):
+                return fm_str
+            if opr in string_cmp_ops:
+                return fm_int
         return None
 
     def _latest_elm_stack_start():
@@ -590,7 +659,7 @@ def disassemble_scn_bytes(
         elm_points = kept
         elm_point_pending_idx = None
 
-    def _collapse_value_expr(stack_start, out_form=None, receiver=False):
+    def _drop_stack_tail(stack_start):
         nonlocal elm_points, elm_point_pending_idx
         try:
             stack_start = int(stack_start)
@@ -602,33 +671,541 @@ def disassemble_scn_bytes(
             stack_start = len(stack)
         del stack[stack_start:]
         _trim_elm_points(stack_start)
+
+    def _pop_stack_top():
+        if not stack:
+            return None
+        it = stack.pop()
+        _trim_elm_points(len(stack))
+        return it
+
+    def _push_stack_value(form, val=None, receiver=None, expr=None, origin=None):
+        nonlocal elm_points, elm_point_pending_idx
         try:
-            form = _form_code(C.FM_INT) if out_form is None else int(out_form)
+            form = int(form)
         except Exception:
-            form = _form_code(C.FM_INT)
-        stack.append({"form": form, "val": None, "receiver": bool(receiver)})
-        if receiver:
+            stack.append(
+                {
+                    "form": None,
+                    "val": val,
+                    "receiver": False,
+                    "expr": expr,
+                    "origin": origin,
+                }
+            )
+            return
+        if receiver is None:
+            receiver = _is_receiver_form(form)
+        stack.append(
+            {
+                "form": form,
+                "val": val,
+                "receiver": bool(receiver),
+                "expr": expr,
+                "origin": origin,
+            }
+        )
+        if bool(receiver):
             elm_points.append(
-                {"ofs": None, "stack_len": stack_start, "first_int": None}
+                {"ofs": None, "stack_len": len(stack) - 1, "first_int": None}
             )
             elm_point_pending_idx = None
 
-    def _collapse_command_expr(stack_start, ret_form):
+    def _collapse_value_expr(stack_start, out_form=None, expr=None):
+        _drop_stack_tail(stack_start)
+        if out_form is None:
+            stack.append({"form": None, "val": None, "receiver": False, "expr": expr})
+            return
         try:
-            stack_start = int(stack_start)
+            if int(out_form) == fm_void:
+                return
         except Exception:
             return
-        if stack_start < 0:
-            stack_start = 0
-        if stack_start > len(stack):
-            stack_start = len(stack)
-        del stack[stack_start:]
-        _trim_elm_points(stack_start)
+        _push_stack_value(out_form, expr=expr, origin="property")
+
+    def _collapse_command_expr(stack_start, ret_form, expr=None, origin="command"):
+        _drop_stack_tail(stack_start)
         try:
-            if ret_form is not None and int(ret_form) != _form_code(C.FM_VOID):
-                stack.append({"form": int(ret_form), "val": None})
+            if ret_form is not None and int(ret_form) != fm_void:
+                _push_stack_value(ret_form, expr=expr, origin=origin)
         except Exception:
             pass
+
+    def _copy_scalar(form):
+        if not stack:
+            return
+        top = stack[-1]
+        try:
+            want = int(form)
+            have = int(top.get("form"))
+        except Exception:
+            return
+        if want == fm_str and have == fm_str:
+            stack.append(dict(top))
+            return
+        if want in (fm_int, fm_label) and have in (fm_int, fm_label):
+            stack.append(dict(top))
+
+    def _copy_element():
+        nonlocal elm_points, elm_point_pending_idx
+        stack_start = _latest_elm_stack_start()
+        if stack_start is None or stack_start < 0 or stack_start >= len(stack):
+            return
+        seg = [dict(it) for it in stack[stack_start:]]
+        if not seg:
+            return
+        new_start = len(stack)
+        stack.extend(seg)
+        first_int = None
+        for it in seg:
+            v = _stack_int_value(it)
+            if v is not None:
+                first_int = int(v)
+                break
+        elm_points.append({"ofs": None, "stack_len": new_start, "first_int": first_int})
+        elm_point_pending_idx = None
+
+    def _consume_element():
+        stack_start = _latest_elm_stack_start()
+        if stack_start is None:
+            _pop_stack_top()
+            return
+        _drop_stack_tail(stack_start)
+
+    def _consume_arg_value(arg_info):
+        if not isinstance(arg_info, dict):
+            return
+        try:
+            form = int(arg_info.get("form"))
+        except Exception:
+            return
+        if form == fm_list:
+            for sub in reversed(list(arg_info.get("sub") or [])):
+                _consume_arg_value(sub)
+            return
+        if form in scalar_forms:
+            _pop_stack_top()
+            return
+        _consume_element()
+
+    def _quote_ss_text(text):
+        try:
+            s = str(text or "")
+        except Exception:
+            s = ""
+        s = (
+            s.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\r", "\\r")
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+        )
+        return f'"{s}"'
+
+    def _item_expr(it, expect_form=None):
+        if not isinstance(it, dict):
+            return "<?>"
+        expr = it.get("expr")
+        if isinstance(expr, str) and expr:
+            return expr
+        try:
+            form = int(it.get("form"))
+        except Exception:
+            form = None
+        try:
+            val = int(it.get("val"))
+        except Exception:
+            val = None
+        if expect_form == fm_label:
+            if val is not None:
+                return f"L{val:d}"
+            return "label(?)"
+        if form == fm_str:
+            if val is not None and 0 <= val < len(str_list or []):
+                return _quote_ss_text(str_list[val])
+            if val is not None:
+                return f"$str[{val:d}]"
+            return '""'
+        if form in (fm_int, fm_label):
+            if val is not None:
+                return str(val)
+            return "0"
+        if form is not None:
+            return fmt_form(form)
+        return "<?>"
+
+    def _pop_scalar_expr(expect_form=None):
+        if not stack:
+            return "<?>"
+        return _item_expr(_pop_stack_top(), expect_form)
+
+    def _format_unary_expr(opr, rhs):
+        try:
+            op_txt = unary_text.get(int(opr))
+        except Exception:
+            op_txt = None
+        if not op_txt:
+            return None
+        return f"({op_txt}{rhs})"
+
+    def _format_binary_expr(opr, lhs, rhs):
+        try:
+            op_txt = binary_text.get(int(opr))
+        except Exception:
+            op_txt = None
+        if not op_txt:
+            return None
+        return f"({lhs} {op_txt} {rhs})"
+
+    def _member_name(info):
+        try:
+            name = str((info or {}).get("name", "") or "").strip()
+        except Exception:
+            name = ""
+        if name:
+            return name
+        try:
+            q = str((info or {}).get("q", "") or "").strip()
+        except Exception:
+            q = ""
+        if "." in q:
+            return q.rsplit(".", 1)[-1]
+        return q
+
+    def _render_property_expr_items(items):
+        parent_form = _form_code(C.FM_GLOBAL)
+        if not items:
+            return None
+        idx = 0
+        base = ""
+        last_info = None
+        last_ret = None
+        while idx < len(items):
+            it = items[idx]
+            code = _stack_int_value(it)
+            if code is None:
+                try:
+                    if not bool((it or {}).get("receiver")):
+                        return None
+                    parent_form = int((it or {}).get("form"))
+                except Exception:
+                    return None
+                base = _item_expr(it)
+                idx += 1
+                continue
+            if int(code) == C.ELM_ARRAY:
+                info = _array_element_info(parent_form)
+                if not isinstance(info, dict) or idx + 1 >= len(items):
+                    return None
+                base = f"{base}[{_item_expr(items[idx + 1])}]"
+                last_info = info
+                last_ret = info.get("ret")
+                if not isinstance(last_ret, int):
+                    return None
+                parent_form = int(last_ret)
+                idx += 2
+                continue
+            info = _element_info(parent_form, code)
+            if not isinstance(info, dict) or int(info.get("type", -1)) != C.ET_PROPERTY:
+                return None
+            name = _member_name(info)
+            if base:
+                base = f"{base}.{name}" if name else base
+            else:
+                try:
+                    base = str(info.get("q", "") or "")
+                except Exception:
+                    base = name
+            last_info = info
+            last_ret = info.get("ret")
+            if idx == len(items) - 1:
+                return {
+                    "expr": base or "<?property>",
+                    "info": last_info,
+                    "ret_form": last_ret,
+                }
+            if not isinstance(last_ret, int):
+                return None
+            parent_form = int(last_ret)
+            idx += 1
+        if base:
+            return {"expr": base, "info": last_info, "ret_form": last_ret}
+        return None
+
+    def _render_command_expr_items(items, arg_exprs, info_hint=None):
+        parent_form = _form_code(C.FM_GLOBAL)
+        if not items:
+            return None
+        idx = 0
+        base = ""
+        while idx < len(items):
+            it = items[idx]
+            code = _stack_int_value(it)
+            if code is None:
+                try:
+                    if not bool((it or {}).get("receiver")):
+                        return None
+                    parent_form = int((it or {}).get("form"))
+                except Exception:
+                    return None
+                base = _item_expr(it)
+                idx += 1
+                continue
+            if int(code) == C.ELM_ARRAY:
+                info = _array_element_info(parent_form)
+                if not isinstance(info, dict) or idx + 1 >= len(items):
+                    return None
+                base = f"{base}[{_item_expr(items[idx + 1])}]"
+                ret_form = info.get("ret")
+                if not isinstance(ret_form, int):
+                    return None
+                parent_form = int(ret_form)
+                idx += 2
+                continue
+            info = (
+                info_hint
+                if idx == len(items) - 1 and isinstance(info_hint, dict)
+                else _element_info(parent_form, code)
+            )
+            if not isinstance(info, dict):
+                return None
+            variants = _info_variants(info)
+            if len(variants) > 1:
+                chosen = None
+                next_code = (
+                    _stack_int_value(items[idx + 1]) if idx + 1 < len(items) else None
+                )
+                for cand in variants:
+                    try:
+                        ret_form = int(cand.get("ret"))
+                    except Exception:
+                        continue
+                    if idx + 1 >= len(items):
+                        chosen = cand
+                        break
+                    if next_code == C.ELM_ARRAY:
+                        if isinstance(_array_element_info(ret_form), dict):
+                            chosen = cand
+                            break
+                        continue
+                    next_info = (
+                        info_hint
+                        if idx + 1 == len(items) - 1 and isinstance(info_hint, dict)
+                        else _element_info(ret_form, next_code)
+                    )
+                    for nxt in _info_variants(next_info):
+                        if not isinstance(nxt, dict):
+                            continue
+                        if idx + 1 == len(items) - 1 and isinstance(info_hint, dict):
+                            try:
+                                if int(nxt.get("type", -1)) != int(
+                                    info_hint.get("type", -2)
+                                ):
+                                    continue
+                            except Exception:
+                                continue
+                            ec_match = False
+                            try:
+                                ec_match = int(nxt.get("ec")) == int(
+                                    info_hint.get("ec")
+                                )
+                            except Exception:
+                                ec_match = False
+                            if (not ec_match) and (
+                                _member_name(nxt) != _member_name(info_hint)
+                            ):
+                                continue
+                        chosen = cand
+                        break
+                    if chosen is not None:
+                        break
+                info = chosen if isinstance(chosen, dict) else variants[0]
+            tp = int(info.get("type", -1))
+            if tp == C.ET_PROPERTY:
+                name = _member_name(info)
+                if base:
+                    base = f"{base}.{name}" if name else base
+                else:
+                    try:
+                        base = str(info.get("q", "") or "")
+                    except Exception:
+                        base = name
+                ret_form = info.get("ret")
+                if not isinstance(ret_form, int):
+                    return None
+                parent_form = int(ret_form)
+                idx += 1
+                continue
+            if tp != C.ET_COMMAND:
+                return None
+            name = _member_name(info)
+            if base:
+                call_name = f"{base}.{name}" if name else base
+            else:
+                try:
+                    call_name = str(info.get("q", "") or "")
+                except Exception:
+                    call_name = name
+            return {
+                "expr": None,
+                "info": info,
+                "ret_form": info.get("ret"),
+                "call_name": call_name or "<?command>",
+            }
+        return None
+
+    def _format_command_arg_exprs(info, arg_exprs, named_ids):
+        args = list(arg_exprs or [])
+        ids = list(named_ids or [])
+        if not ids or not isinstance(info, dict):
+            return args
+        pos_cnt = len(args) - len(ids)
+        if pos_cnt < 0:
+            return args
+        arg_map = info.get("arg_map") or {}
+        named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
+        named_list = (
+            named_spec.get("arg_list")
+            if isinstance(named_spec, dict)
+            else (named_spec if isinstance(named_spec, list) else [])
+        )
+        if not isinstance(named_list, list):
+            return args
+        name_by_id = {}
+        for item in named_list:
+            if not isinstance(item, dict):
+                continue
+            try:
+                nid = int(item.get("id", -1))
+            except Exception:
+                continue
+            nm = str(item.get("name") or "")
+            if nm:
+                name_by_id[nid] = nm
+        if not name_by_id:
+            return args
+        out = list(args[:pos_cnt])
+        ordered_ids = list(reversed(ids))
+        for expr, nid in zip(args[pos_cnt:], ordered_ids):
+            try:
+                key = int(nid)
+            except Exception:
+                out.append(expr)
+                continue
+            nm = name_by_id.get(key)
+            out.append(f"{nm}={expr}" if nm else expr)
+        if len(args) > pos_cnt + len(ordered_ids):
+            out.extend(args[pos_cnt + len(ordered_ids) :])
+        return out
+
+    def _pop_element_expr():
+        stack_start = _latest_elm_stack_start()
+        if stack_start is None:
+            if stack:
+                rendered = _render_property_expr_items([stack[-1]])
+                expr = rendered.get("expr") if isinstance(rendered, dict) else None
+                if expr:
+                    _pop_stack_top()
+                    return expr
+            return _pop_scalar_expr()
+        items = stack[stack_start:]
+        rendered = _render_property_expr_items(items)
+        expr = rendered.get("expr") if isinstance(rendered, dict) else None
+        if not expr:
+            expr = _item_expr(items[-1]) if items else "<?>"
+        _drop_stack_tail(stack_start)
+        return expr
+
+    def _pop_arg_expr(arg_info):
+        if not isinstance(arg_info, dict):
+            return "<?>"
+        try:
+            form = int(arg_info.get("form"))
+        except Exception:
+            return "<?>"
+        if form == fm_list:
+            vals = []
+            for sub in reversed(list(arg_info.get("sub") or [])):
+                vals.append(_pop_arg_expr(sub))
+            vals.reverse()
+            return "[" + ", ".join(vals) + "]"
+        if form == fm_label:
+            return _pop_scalar_expr(fm_label)
+        if form in scalar_forms:
+            return _pop_scalar_expr(form)
+        return _pop_element_expr()
+
+    def _pop_arg_expr_list(arg_forms):
+        vals = []
+        for arg_info in reversed(list(arg_forms or [])):
+            vals.append(_pop_arg_expr(arg_info))
+        vals.reverse()
+        return vals
+
+    def _snapshot_state():
+        return (
+            [dict(it) if isinstance(it, dict) else it for it in stack],
+            [dict(it) if isinstance(it, dict) else it for it in elm_points],
+            elm_point_pending_idx,
+        )
+
+    def _restore_state(state):
+        nonlocal stack, elm_points, elm_point_pending_idx
+        stack, elm_points, elm_point_pending_idx = state
+
+    def _peek_arg_expr_list(arg_forms):
+        saved = _snapshot_state()
+        try:
+            return _pop_arg_expr_list(arg_forms)
+        finally:
+            _restore_state(saved)
+
+    def _peek_assign_expr(right_form):
+        saved = _snapshot_state()
+        try:
+            right = _pop_arg_expr({"form": int(right_form)})
+            left = _pop_element_expr()
+            if left and right:
+                return f"{left} = {right}"
+        except Exception:
+            return None
+        finally:
+            _restore_state(saved)
+        return None
+
+    def _peek_branch_expr():
+        saved = _snapshot_state()
+        try:
+            if not stack:
+                return None
+            return _pop_arg_expr({"form": fm_int})
+        finally:
+            _restore_state(saved)
+
+    def _peek_command_expr(cmd_stack_start, arg_forms, info_hint=None, named_ids=None):
+        if cmd_stack_start is None:
+            return None
+        saved = _snapshot_state()
+        try:
+            arg_exprs = _pop_arg_expr_list(arg_forms)
+            if cmd_stack_start < 0 or cmd_stack_start > len(stack):
+                return None
+            rendered = _render_command_expr_items(
+                stack[cmd_stack_start:], arg_exprs, info_hint=info_hint
+            )
+            if isinstance(rendered, dict):
+                expr = rendered.get("expr")
+                if not expr:
+                    call_name = str(rendered.get("call_name") or "<?command>")
+                    args2 = _format_command_arg_exprs(
+                        rendered.get("info"), arg_exprs, named_ids
+                    )
+                    expr = f"{call_name}({', '.join(args2)})"
+                if isinstance(expr, str) and expr:
+                    return expr
+        finally:
+            _restore_state(saved)
+        return None
 
     def _scan_property_slice(items):
         parent_form = _form_code(C.FM_GLOBAL)
@@ -645,6 +1222,8 @@ def disassemble_scn_bytes(
                     parent_form = int((it or {}).get("form"))
                 except Exception:
                     return None
+                if idx == len(items) - 1:
+                    return {"ret_form": _receiver_value_form(parent_form), "info": None}
                 idx += 1
                 continue
             if int(code) == C.ELM_ARRAY:
@@ -728,30 +1307,26 @@ def disassemble_scn_bytes(
                 parent_form = int(ret_form)
                 idx += 2
                 continue
-            infos = []
             info = _element_info(parent_form, code)
-            if isinstance(info, dict):
-                infos = [info]
-            else:
-                infos = _element_candidates(parent_form, code)
-            if not infos:
+            if not isinstance(info, dict):
                 return None
-            if len(infos) > 1:
-                matches = []
-                for cand in infos:
+            variants = _info_variants(info)
+            if len(variants) > 1:
+                for cand in variants:
                     try:
                         tp = int(cand.get("type", -1))
                     except Exception:
                         continue
                     if tp == C.ET_PROPERTY:
-                        ret_form = cand.get("ret")
-                        if not isinstance(ret_form, int):
+                        try:
+                            ret_form = int(cand.get("ret"))
+                        except Exception:
                             continue
-                        res = _scan_command_from(
-                            items, idx + 1, int(ret_form), argc, expected_ret
+                        sub = _scan_command_from(
+                            items, idx + 1, ret_form, argc, expected_ret
                         )
-                        if res is not None:
-                            matches.append(res)
+                        if sub is not None:
+                            return sub
                         continue
                     if tp != C.ET_COMMAND:
                         continue
@@ -763,20 +1338,15 @@ def disassemble_scn_bytes(
                         ):
                             continue
                     except Exception:
-                        pass
+                        continue
                     if len(items) - idx - 1 < argc:
                         continue
-                    matches.append(
-                        {
-                            "stack_start": None,
-                            "element_code": int(code),
-                            "info": cand,
-                        }
-                    )
-                if len(matches) == 1:
-                    return matches[0]
+                    return {
+                        "stack_start": None,
+                        "element_code": int(code),
+                        "info": cand,
+                    }
                 return None
-            info = infos[0]
             tp = int(info.get("type", -1))
             if tp == C.ET_PROPERTY:
                 ret_form = info.get("ret")
@@ -829,162 +1399,6 @@ def disassemble_scn_bytes(
             return res
         return None
 
-    def _build_decompile_note(stack, argc, ename):
-        try:
-            argc = int(argc)
-        except Exception:
-            return ""
-        if argc <= 0 or not stack:
-            return ""
-        try:
-            args = stack[-argc:] if len(stack) >= argc else []
-        except Exception:
-            args = []
-        qname = (ename or "").strip()
-        if qname:
-            qname = qname.split(" ", 1)[0]
-            qname = qname.split("{", 1)[0].strip()
-
-        def _get_str(a):
-            try:
-                if int((a or {}).get("form", -1)) != _form_code(C.FM_STR):
-                    return None
-                sid = (a or {}).get("val")
-                if sid is None:
-                    return None
-                sid = int(sid)
-                if sid < 0 or sid >= len(str_list or []):
-                    return None
-                return str_list[sid]
-            except Exception:
-                return None
-
-        def _get_int(a):
-            try:
-                if int((a or {}).get("form", -1)) != _form_code(C.FM_INT):
-                    return None
-                v = (a or {}).get("val")
-                if v is None:
-                    return None
-                return int(v)
-            except Exception:
-                return None
-
-        if qname in ("global.koe", "global.exkoe") or (
-            qname.endswith(".koe") or qname.endswith(".exkoe")
-        ):
-            if "wait_key" not in qname:
-                ints = []
-                for a in args:
-                    v = _get_int(a)
-                    if v is not None:
-                        ints.append(v)
-                if len(ints) >= 2:
-                    vid = ints[0]
-                    ch = ints[1]
-                    if 999000000 <= vid < 1000000000:
-                        vid -= 999000000
-                    if 0 <= vid <= 999999999 and 0 <= ch <= 999:
-                        return f"KOE({vid:09d},{ch:03d})"
-                    if 0 <= vid <= 999999999:
-                        return f"KOE({vid:09d},{ch:d})"
-                    return f"KOE({vid:d},{ch:d})"
-        res = None
-        res_l = None
-        for a in args:
-            s = _get_str(a)
-            if not s:
-                continue
-            sl = str(s).lower()
-            if sl.startswith(
-                (
-                    "bg_",
-                    "cg_",
-                    "ev_",
-                    "se_",
-                    "se-",
-                    "bgm",
-                    "music_",
-                    "koe",
-                    "voice",
-                    "mov",
-                    "movie",
-                    "ef_",
-                )
-            ):
-                res = str(s)
-                res_l = sl
-                break
-        if res is None:
-            for a in reversed(stack):
-                s = _get_str(a)
-                if not s:
-                    continue
-                sl = str(s).lower()
-                if sl.startswith(
-                    (
-                        "bg_",
-                        "cg_",
-                        "ev_",
-                        "se_",
-                        "se-",
-                        "bgm",
-                        "music_",
-                        "koe",
-                        "voice",
-                        "mov",
-                        "movie",
-                        "ef_",
-                    )
-                ):
-                    res = str(s)
-                    res_l = sl
-                    break
-        if res is None:
-            return ""
-        tag = "RES"
-        if res_l.startswith(("bg_", "cg_", "ev_")):
-            tag = "BG"
-        elif res_l.startswith(("se_", "se-")):
-            tag = "SE"
-        elif res_l.startswith(("bgm", "music_")):
-            tag = "BGM"
-        elif res_l.startswith(("mov", "movie")):
-            tag = "MOV"
-        elif res_l.startswith(("ef_",)):
-            tag = "EF"
-        elif res_l.startswith(("koe", "voice")):
-            tag = "KOE"
-        parts = []
-        for a in args:
-            s = _get_str(a)
-            if s is not None:
-                sl = str(s).lower()
-                if sl.startswith(
-                    (
-                        "bg_",
-                        "cg_",
-                        "ev_",
-                        "se_",
-                        "se-",
-                        "bgm",
-                        "music_",
-                        "koe",
-                        "voice",
-                        "mov",
-                        "movie",
-                        "ef_",
-                    )
-                ):
-                    parts.append(f'"{_escape_preview(s)}"')
-                    continue
-            v = _get_int(a)
-            if v is not None:
-                parts.append(str(v))
-        if not parts:
-            parts = [f'"{_escape_preview(res)}"']
-        return f"{tag}({', '.join(parts)})"
-
     def read_u8(p):
         if p < 0 or p >= len(scn):
             return None
@@ -994,129 +1408,52 @@ def disassemble_scn_bytes(
         v = read_i32_le(scn, p, default=None)
         return v
 
-    def _probe_ok(pos, max_ops=5):
-        p = int(pos)
-        for _ in range(max_ops):
-            op0 = read_u8(p)
-            if op0 is None:
-                return False
-            p += 1
-            if op0 == cd_eof:
-                return True
-            if op0 in (
-                cd_none,
-                cd_property,
-                cd_copy_elm,
-                cd_elm_point,
-                cd_arg,
-                cd_sel_block_start,
-                cd_sel_block_end,
-            ):
-                continue
-            if op0 in (
-                cd_nl,
-                cd_pop,
-                cd_copy,
-                cd_goto,
-                cd_goto_true,
-                cd_goto_false,
-                cd_text,
-            ):
-                v = read_i32(p)
-                if v is None:
-                    return False
-                if op0 in (cd_pop, cd_copy):
-                    if int(v) not in known_forms:
-                        return False
-                if op0 == cd_nl and (int(v) < 0 or int(v) > 10000000):
-                    return False
-                p += 4
-                continue
-            if op0 == cd_push:
-                f = read_i32(p)
-                v = read_i32(p + 4)
-                if f is None or v is None:
-                    return False
-                if int(f) not in known_forms:
-                    return False
-                p += 8
-                continue
-            if op0 == cd_return:
-                h = read_i32(p)
-                if h is None:
-                    return False
-                p += 4
-                if int(h) != 0:
-                    f = read_i32(p)
-                    if f is None or int(f) not in known_forms:
-                        return False
-                    p += 4
-                continue
-            return True
-        return True
-
-    def _will_hit_text_rf(pos, target_rf, line_no):
-        p = int(pos)
-        lim = min(len(scn), p + 0x120)
-        ln_ref = None
+    def _read_arg_layout(p):
+        argc = read_i32(p)
+        if argc is None:
+            return (None, None)
+        p += 4
         try:
-            ln_ref = int(line_no) if line_no is not None else None
+            argc_i = max(0, int(argc))
         except Exception:
-            ln_ref = None
-        while p < lim:
-            op0 = read_u8(p)
-            if op0 is None:
-                return False
-            p += 1
-            if op0 == cd_nl:
-                ln = read_i32(p)
-                if ln is None:
-                    return False
-                p += 4
-                if ln_ref is not None and int(ln) != ln_ref:
-                    return False
-                continue
-            if op0 == cd_text:
-                v = read_i32(p)
-                return v is not None and int(v) == int(target_rf)
+            return (None, None)
+        args = [None] * argc_i
+        for idx in range(argc_i - 1, -1, -1):
+            form = read_i32(p)
+            if form is None:
+                return (None, None)
+            p += 4
+            try:
+                form_i = int(form)
+            except Exception:
+                return (None, None)
+            info = {"form": form_i}
+            if form_i == fm_list:
+                p, sub = _read_arg_layout(p)
+                if p is None:
+                    return (None, None)
+                info["sub"] = sub
+            args[idx] = info
+        return (p, args)
 
-            if op0 in (
-                cd_pop,
-                cd_copy,
-                cd_goto,
-                cd_goto_true,
-                cd_goto_false,
-            ):
-                p += 4
+    def _format_arg_layout(args):
+        out_forms = []
+        for arg in args or []:
+            if not isinstance(arg, dict):
+                out_forms.append(str(arg))
                 continue
-            if op0 == cd_push:
-                p += 8
+            try:
+                form = int(arg.get("form"))
+            except Exception:
+                out_forms.append(str(arg))
                 continue
-        return False
-
-    def _emit_db(ofs, data, note=None):
-        if not data:
-            return
-        try:
-            b = bytes(data)
-        except Exception:
-            b = bytes(int(x) & 255 for x in list(data))
-        base = int(ofs) & 0xFFFFFFFF
-        n = len(b)
-        dd_cnt = n // 4
-        if dd_cnt:
-            vals = []
-            for k in range(dd_cnt):
-                chunk = b[k * 4 : k * 4 + 4]
-                vals.append(str(int.from_bytes(chunk, "little", signed=True)))
-            suffix = (" ; " + str(note)) if note else ""
-            out.append(f"{base:08X}: DD {', '.join(vals)}{suffix}")
-            base = (base + dd_cnt * 4) & 0xFFFFFFFF
-        rem = b[dd_cnt * 4 :]
-        if rem:
-            bs = ", ".join(f"0x{x:02X}" for x in rem)
-            suffix = (" ; " + str(note)) if (note and not dd_cnt) else ""
-            out.append(f"{base:08X}: DB {bs}{suffix}")
+            if form == fm_list:
+                out_forms.append(
+                    f"list[{', '.join(_format_arg_layout(arg.get('sub') or []))}]"
+                )
+                continue
+            out_forms.append(fmt_form(form))
+        return out_forms
 
     out = []
     i = 0
@@ -1124,21 +1461,12 @@ def disassemble_scn_bytes(
     stack = []
     elm_points = []
     elm_point_pending_idx = None
-    read_flags_seen = []
     call_slot_next = 0
-    try:
-        rf_lines = [int(x) for x in (read_flag_lines or [])]
-    except Exception:
-        rf_lines = []
-
-    def stack_pop():
-        if stack:
-            stack.pop()
-
     while i < len(scn):
         ofs = i
         if ofs in cmd_label_offsets:
             call_slot_info = {}
+            call_decl_forms = []
             call_slot_next = 0
         if ofs in labels_at:
             out.append(f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
@@ -1147,50 +1475,6 @@ def disassemble_scn_bytes(
             break
         i += 1
         opname = op_names.get(op, f"OP_{op:02X}")
-        if (
-            i + 8 <= len(scn)
-            and scn[i + 3] == cd_pop
-            and scn[i + 4 : i + 8] == b"\x00\x00\x00\x00"
-        ):
-            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
-            if lossless:
-                _emit_db(i, scn[i : i + 3], "skip")
-            i += 3
-            continue
-        if (
-            op == 0x0D
-            and i + 16 <= len(scn)
-            and scn[i : i + 3] == b"\x00\x00\x00"
-            and scn[i + 16] == cd_elm_point
-        ):
-            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
-            if lossless:
-                _emit_db(i, scn[i : i + 16], "skip")
-            i += 16
-            continue
-        if (
-            opname[0] == "O"
-            and i + 22 <= len(scn)
-            and scn[i + 3] == 0x20
-            and scn[i + 4] == 0x0D
-            and scn[i + 21] == cd_elm_point
-        ):
-            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
-            if lossless:
-                _emit_db(i, scn[i : i + 21], "skip")
-            i += 21
-            continue
-        if (
-            opname[0] == "O"
-            and i + 5 <= len(scn)
-            and scn[i + 3] == cd_elm_point
-            and scn[i + 4] == cd_push
-        ):
-            out.append(f"{ofs:08X}: {'OP_%02X' % op} (unknown)")
-            if lossless:
-                _emit_db(i, scn[i : i + 3], "skip")
-            i += 3
-            continue
         if op == cd_none:
             out.append(f"{ofs:08X}: {opname}")
             continue
@@ -1198,14 +1482,9 @@ def disassemble_scn_bytes(
             ln = read_i32(i)
             if ln is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
             cur_line = int(ln)
-            stack = []
-            elm_points = []
-            elm_point_pending_idx = None
             out.append(f"{ofs:08X}: {opname} {cur_line:d}")
             continue
         if op == cd_push:
@@ -1213,8 +1492,6 @@ def disassemble_scn_bytes(
             val = read_i32(i + 4)
             if form is None or val is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 8
             s = ""
@@ -1223,7 +1500,7 @@ def disassemble_scn_bytes(
             ):
                 s = f' ; "{_escape_preview(str_list[int(val)])}"'
             out.append(f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
-            stack.append({"form": int(form), "val": int(val)})
+            _push_stack_value(form, int(val), receiver=False)
             if elm_point_pending_idx is not None and int(form) == _form_code(C.FM_INT):
                 try:
                     if (
@@ -1239,22 +1516,24 @@ def disassemble_scn_bytes(
             form = read_i32(i)
             if form is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
             out.append(f"{ofs:08X}: {opname} {fmt_form(form)}")
-            stack_pop()
+            try:
+                form_i = int(form)
+            except Exception:
+                form_i = None
+            if form_i in scalar_forms:
+                _pop_stack_top()
             continue
         if op == cd_copy:
             v = read_i32(i)
             if v is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
             out.append(f"{ofs:08X}: {opname} {fmt_form(v)}")
+            _copy_scalar(v)
             continue
         if op in (
             cd_property,
@@ -1264,41 +1543,81 @@ def disassemble_scn_bytes(
             cd_sel_block_start,
             cd_sel_block_end,
         ):
-            out.append(f"{ofs:08X}: {opname}")
+            prop_expr = None
             if op == cd_property:
                 prop_res = _resolve_property_expr()
                 if prop_res is not None:
+                    rendered = _render_property_expr_items(
+                        stack[prop_res.get("stack_start", 0) :]
+                    )
+                    if isinstance(rendered, dict):
+                        prop_expr = rendered.get("expr")
                     _collapse_value_expr(
                         prop_res.get("stack_start"),
                         prop_res.get("ret_form"),
-                        receiver=True,
+                        expr=prop_expr,
                     )
                 else:
                     stack_start = _latest_elm_stack_start()
                     if stack_start is not None:
-                        _collapse_value_expr(stack_start, None)
+                        rendered = _render_property_expr_items(stack[stack_start:])
+                        prop_expr = (
+                            rendered.get("expr") if isinstance(rendered, dict) else None
+                        )
+                        out_form = (
+                            rendered.get("ret_form")
+                            if isinstance(rendered, dict)
+                            else None
+                        )
+                        if out_form is None and stack_start < len(stack):
+                            try:
+                                form_i = int((stack[stack_start] or {}).get("form"))
+                            except Exception:
+                                form_i = None
+                            out_form = _receiver_value_form(form_i)
+                        _collapse_value_expr(stack_start, out_form, expr=prop_expr)
                     else:
-                        stack_pop()
-                        stack.append({"form": _form_code(C.FM_INT), "val": None})
+                        _pop_stack_top()
             elif op == cd_copy_elm:
-                if stack:
-                    stack.append(dict(stack[-1]))
+                _copy_element()
+            elif op == cd_arg:
+                for form in reversed(call_decl_forms):
+                    _consume_arg_value(form)
             elif op == cd_elm_point:
                 elm_points.append(
                     {"ofs": ofs, "stack_len": len(stack), "first_int": None}
                 )
                 elm_point_pending_idx = len(elm_points) - 1
+            expr_s = f" ; expr={prop_expr}" if prop_expr else ""
+            out.append(f"{ofs:08X}: {opname}{expr_s}")
             continue
         if op == cd_dec_prop:
             a = read_i32(i)
             b = read_i32(i + 4)
             if a is None or b is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 8
-            out.append(f"{ofs:08X}: {opname} {int(a):d}, {int(b):d}")
+            size_s = ""
+            size_expr_s = ""
+            try:
+                form_i = int(a)
+            except Exception:
+                form_i = None
+            if form_i in (fm_intlist, fm_strlist):
+                size_expr = None
+                try:
+                    size_exprs = _peek_arg_expr_list([{"form": _form_code(C.FM_INT)}])
+                    if size_exprs:
+                        size_expr = size_exprs[0]
+                except Exception:
+                    size_expr = None
+                size_val = _stack_int_value(stack[-1]) if stack else None
+                if size_val is not None:
+                    size_s = f" size={int(size_val):d}"
+                if size_expr:
+                    size_expr_s = f" ; expr={size_expr}"
+                _pop_stack_top()
             name = ""
             try:
                 bi = int(b)
@@ -1306,6 +1625,10 @@ def disassemble_scn_bytes(
                     name = str(call_prop_names[bi] or "")
             except Exception:
                 name = ""
+            name_s = f" name={name}" if name else ""
+            out.append(
+                f"{ofs:08X}: {opname} {fmt_form(a)}, {int(b):d}{size_s}{name_s}{size_expr_s}"
+            )
             q = name if name else f"$slot_{call_slot_next:d}"
             call_slot_info[call_slot_next] = {
                 "type": C.ET_PROPERTY,
@@ -1315,9 +1638,8 @@ def disassemble_scn_bytes(
                 "ret": int(a),
                 "ec": C.create_elm_code(C.ELM_OWNER_CALL_PROP, 0, call_slot_next),
                 "q": q,
-                "aliases": [q],
-                "is_alias": False,
             }
+            call_decl_forms.append({"form": int(a)})
             call_slot_next += 1
             continue
         if op in (
@@ -1328,8 +1650,6 @@ def disassemble_scn_bytes(
             lid = read_i32(i)
             if lid is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
             dest = ""
@@ -1339,28 +1659,24 @@ def disassemble_scn_bytes(
                     dest = f" -> {int(label_list[li]):08X}"
             except Exception:
                 dest = ""
-            out.append(f"{ofs:08X}: {opname} L{int(lid):d}{dest}")
+            cond_expr = (
+                _peek_branch_expr() if op in (cd_goto_true, cd_goto_false) else None
+            )
+            cond_s = f" ; cond={cond_expr}" if cond_expr else ""
+            out.append(f"{ofs:08X}: {opname} L{int(lid):d}{dest}{cond_s}")
             if op in (cd_goto_true, cd_goto_false):
-                stack_pop()
+                _pop_stack_top()
             continue
         if op in (cd_gosub, cd_gosubstr):
             lid = read_i32(i)
-            argc = read_i32(i + 4)
-            if lid is None or argc is None:
+            if lid is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
-            i += 8
-            forms = []
-            for _k in range(max(0, int(argc))):
-                f = read_i32(i)
-                if f is None:
-                    out.append(f"{ofs:08X}: {opname} <truncated>")
-                    i = len(scn)
-                    break
-                i += 4
-                forms.append(int(f))
+            p_next, arg_forms = _read_arg_layout(i + 4)
+            if p_next is None:
+                out.append(f"{ofs:08X}: {opname} <truncated>")
+                break
+            i = p_next
             dest = ""
             try:
                 li = int(lid)
@@ -1368,30 +1684,39 @@ def disassemble_scn_bytes(
                     dest = f" -> {int(label_list[li]):08X}"
             except Exception:
                 dest = ""
-            out.append(
-                f"{ofs:08X}: {opname} L{int(lid):d} argc={int(argc):d} forms=[{', '.join([fmt_form(f) for f in forms])}]{dest}"
+            gosub_exprs = _peek_arg_expr_list(arg_forms)
+            gosub_kw = "gosub" if op == cd_gosub else "gosubstr"
+            gosub_ss = (
+                f" ; expr={gosub_kw} L{int(lid):d}({', '.join(gosub_exprs)})"
+                if gosub_exprs
+                else f" ; expr={gosub_kw} L{int(lid):d}"
             )
+            out.append(
+                f"{ofs:08X}: {opname} L{int(lid):d} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{dest}{gosub_ss}"
+            )
+            for arg_info in reversed(list(arg_forms or [])):
+                _consume_arg_value(arg_info)
+            _push_stack_value(fm_int if op == cd_gosub else fm_str, receiver=False)
             continue
         if op == cd_return:
-            has_arg = read_i32(i)
-            if has_arg is None:
+            p_next, arg_forms = _read_arg_layout(i)
+            if p_next is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
-            i += 4
-            extra = ""
-            if int(has_arg) != 0:
-                form = read_i32(i)
-                if form is None:
-                    out.append(f"{ofs:08X}: {opname} <truncated>")
-                    if lossless:
-                        _emit_db(i, scn[i:], "truncated")
-                    break
-                i += 4
-                extra = f" {fmt_form(form)}"
-            out.append(f"{ofs:08X}: {opname} {int(has_arg):d}{extra}")
+            i = p_next
+            ret_exprs = _peek_arg_expr_list(arg_forms)
+            if ret_exprs:
+                ret_s = f" ; expr=return ({ret_exprs[0]})"
+            else:
+                ret_s = " ; expr=return"
+            out.append(
+                f"{ofs:08X}: {opname} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{ret_s}"
+            )
+            for arg_info in reversed(list(arg_forms or [])):
+                _consume_arg_value(arg_info)
             stack = []
+            elm_points = []
+            elm_point_pending_idx = None
             continue
         if op == cd_assign:
             a = read_i32(i)
@@ -1399,28 +1724,40 @@ def disassemble_scn_bytes(
             c = read_i32(i + 8)
             if a is None or b is None or c is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 12
+            assign_expr = _peek_assign_expr(b)
+            assign_s = f" ; expr={assign_expr}" if assign_expr else ""
             out.append(
-                f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}"
+                f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}{assign_s}"
             )
-            stack_pop()
-            stack_pop()
+            stack_start = _latest_elm_stack_start()
+            if stack_start is not None:
+                _drop_stack_tail(stack_start)
+            else:
+                _pop_stack_top()
             continue
         if op == cd_operate_1:
             form = read_i32(i)
             opr = read_u8(i + 4)
             if form is None or opr is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 5
             out.append(f"{ofs:08X}: {opname} {fmt_form(form)} op={int(opr):d}")
-            stack_pop()
-            stack.append({"form": int(form), "val": None})
+            rhs_expr = _peek_arg_expr_list([{"form": int(form)}])
+            _pop_stack_top()
+            res_form = _unary_result_form(form, opr)
+            if res_form is not None:
+                _push_stack_value(
+                    res_form,
+                    receiver=False,
+                    expr=(
+                        _format_unary_expr(opr, rhs_expr[0])
+                        if rhs_expr and rhs_expr[0]
+                        else None
+                    ),
+                )
             continue
         if op == cd_operate_2:
             fl = read_i32(i)
@@ -1428,23 +1765,28 @@ def disassemble_scn_bytes(
             opr = read_u8(i + 8)
             if fl is None or fr is None or opr is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 9
             out.append(
                 f"{ofs:08X}: {opname} {fmt_form(fl)}, {fmt_form(fr)} op={int(opr):d}"
             )
-            stack_pop()
-            stack_pop()
-            stack.append({"form": int(fl), "val": None})
+            pair_expr = _peek_arg_expr_list([{"form": int(fl)}, {"form": int(fr)}])
+            _pop_stack_top()
+            _pop_stack_top()
+            res_form = _binary_result_form(fl, fr, opr)
+            if res_form is not None:
+                lhs = pair_expr[0] if len(pair_expr) >= 1 else None
+                rhs = pair_expr[1] if len(pair_expr) >= 2 else None
+                _push_stack_value(
+                    res_form,
+                    receiver=False,
+                    expr=(_format_binary_expr(opr, lhs, rhs) if lhs and rhs else None),
+                )
             continue
         if op == cd_text:
             rf = read_i32(i)
             if rf is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
             txt = ""
@@ -1453,8 +1795,7 @@ def disassemble_scn_bytes(
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     txt = f' ; "{_escape_preview(str_list[int(sid)])}"'
             out.append(f"{ofs:08X}: {opname} read_flag={int(rf):d}{txt}")
-            read_flags_seen.append((ofs, int(rf)))
-            stack_pop()
+            _pop_stack_top()
             continue
         if op == cd_name:
             nm = ""
@@ -1463,54 +1804,22 @@ def disassemble_scn_bytes(
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     nm = f' "{_escape_preview(str_list[int(sid)])}"'
             out.append(f"{ofs:08X}: {opname}{nm}")
-            stack_pop()
+            _pop_stack_top()
             continue
         if op == cd_command:
             arg_list_id = read_i32(i)
-            argc = read_i32(i + 4)
-            if arg_list_id is None or argc is None:
+            if arg_list_id is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
-            i += 8
-            arg_forms = []
-            for _k in range(max(0, int(argc))):
-                f = read_i32(i)
-                if f is None:
-                    out.append(f"{ofs:08X}: {opname} <truncated>")
-                    i = len(scn)
-                    break
-                i += 4
-                f = int(f)
-                if f == _form_code(C.FM_LIST):
-                    nsub = read_i32(i)
-                    if nsub is None:
-                        out.append(f"{ofs:08X}: {opname} <truncated>")
-                        i = len(scn)
-                        break
-                    i += 4
-                    sub = []
-                    for _j in range(max(0, int(nsub))):
-                        sf = read_i32(i)
-                        if sf is None:
-                            out.append(f"{ofs:08X}: {opname} <truncated>")
-                            i = len(scn)
-                            break
-                        i += 4
-                        sub.append(int(sf))
-                    arg_forms.append({"form": f, "sub": sub})
-                else:
-                    arg_forms.append({"form": f})
-            if i >= len(scn):
+            p_next, arg_forms = _read_arg_layout(i + 4)
+            if p_next is None:
+                out.append(f"{ofs:08X}: {opname} <truncated>")
                 break
-            named_cnt = read_i32(i)
+            named_cnt = read_i32(p_next)
             if named_cnt is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
-            i += 4
+            i = p_next + 4
             named_ids = []
             for _k in range(max(0, int(named_cnt))):
                 ni = read_i32(i)
@@ -1525,131 +1834,64 @@ def disassemble_scn_bytes(
             ret_form = read_i32(i)
             if ret_form is None:
                 out.append(f"{ofs:08X}: {opname} <truncated>")
-                if lossless:
-                    _emit_db(i, scn[i:], "truncated")
                 break
             i += 4
-            trf = None
             element_code = None
             ename = ""
-            qname = ""
-            alias_s = ""
-            resolved_cmd = _resolve_command_expr(argc, ret_form)
+            resolved_cmd = _resolve_command_expr(len(arg_forms or []), ret_form)
             cmd_stack_start = _latest_elm_stack_start()
+            cmd_parent_form = None
             if resolved_cmd is not None:
                 cmd_stack_start = resolved_cmd.get("stack_start")
                 element_code = resolved_cmd.get("element_code")
                 info = resolved_cmd.get("info") or {}
+                cmd_parent_form = info.get("parent_code")
                 try:
                     qname = str(info.get("q", "") or "")
                 except Exception:
                     qname = ""
-                alias_s = _alias_suffix(info)
                 if qname:
-                    ename = " " + qname + alias_s
-
+                    ename = " " + qname
+            read_flag = None
             if (
-                read_flag_cnt
-                and resolved_cmd is not None
-                and i + 4 <= len(scn)
-                and int(element_code) not in cmd_rf_exclude_ec
-                and qname not in {"global.color", "global.ruby", "global.r"}
+                cmd_parent_form is not None
+                and element_code is not None
+                and _command_reads_flag(cmd_parent_form, element_code)
             ):
-                next_rf = len(read_flags_seen)
-                rf0 = read_i32(i)
-                line_ok = True
-                if rf_lines and next_rf < len(rf_lines):
-                    line_ok = cur_line == rf_lines[next_rf]
-                if (
-                    rf0 is not None
-                    and 0 <= int(rf0) < int(read_flag_cnt)
-                    and int(rf0) == next_rf
-                    and line_ok
-                ):
-                    next_op = read_u8(i + 4)
-                    if (
-                        next_op != cd_text
-                        and (not _will_hit_text_rf(i + 4, next_rf, cur_line))
-                        and _probe_ok(i + 4)
-                    ):
-                        trf = int(rf0)
-                        read_flags_seen.append((i, trf))
-                        i += 4
-            rf_s = (f" read_flag={trf:d}") if trf is not None else ""
+                read_flag = read_i32(i)
+                if read_flag is None:
+                    out.append(f"{ofs:08X}: {opname} <truncated>")
+                    break
+                i += 4
+            cmd_expr = _peek_command_expr(
+                cmd_stack_start,
+                arg_forms,
+                info_hint=(
+                    resolved_cmd.get("info") if isinstance(resolved_cmd, dict) else None
+                ),
+                named_ids=named_ids,
+            )
+            rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""
             ec_s = (f" ec={hx(element_code)}") if element_code is not None else ""
-            hint_s = ""
-            try:
-                res0 = None
-                for it in reversed(stack):
-                    if not isinstance(it, dict):
-                        continue
-                    if int(it.get("form", -1)) != _form_code(C.FM_STR):
-                        continue
-                    vi = it.get("val")
-                    if vi is None:
-                        continue
-                    vi = int(vi)
-                    if vi < 0 or vi >= len(str_list or []):
-                        continue
-                    s0 = str(str_list[vi])
-                    sl = s0.lower()
-                    if sl.startswith(
-                        (
-                            "bg_",
-                            "cg_",
-                            "ev_",
-                            "se_",
-                            "bgm",
-                            "koe",
-                            "voice",
-                            "mov",
-                            "movie",
-                            "ef_",
-                        )
-                    ):
-                        res0 = sl
-                        break
-                if res0:
-                    if res0.startswith(("bg_", "cg_", "ev_")):
-                        hint_s = " hint=@bg"
-                    elif res0.startswith("se_"):
-                        hint_s = " hint=@se"
-                    elif res0.startswith("bgm"):
-                        hint_s = " hint=@bgm"
-                    elif res0.startswith(("koe", "voice")):
-                        hint_s = " hint=@koe"
-                    elif res0.startswith(("mov", "movie")):
-                        hint_s = " hint=@mov"
-            except Exception:
-                hint_s = ""
-            af = []
-            for af0 in arg_forms:
-                if not isinstance(af0, dict):
-                    af.append(str(af0))
-                    continue
-                f = int(af0.get("form", 0) or 0)
-                if f == _form_code(C.FM_LIST):
-                    af.append(
-                        f"list[{','.join([fmt_form(x) for x in af0.get('sub') or []])}]"
-                    )
-                else:
-                    af.append(fmt_form(f))
-            line = f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} argc={int(argc):d} args=[{', '.join(af)}] named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{hint_s}"
-            note = _build_decompile_note(stack, argc, ename)
-            if note:
-                line += " // " + note
+            expr_s = f" ; expr={cmd_expr}" if cmd_expr else ""
+            line = (
+                f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} "
+                f"argc={len(arg_forms or []):d} args=[{', '.join(_format_arg_layout(arg_forms))}] "
+                f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
+            )
             out.append(line)
             if cmd_stack_start is not None:
-                _collapse_command_expr(cmd_stack_start, ret_form)
+                _collapse_command_expr(cmd_stack_start, ret_form, expr=cmd_expr)
             else:
-                for _k in range(min(len(stack), int(argc) + 1)):
-                    stack.pop()
-                if int(ret_form) != _form_code(C.FM_VOID):
-                    stack.append({"form": int(ret_form), "val": None})
+                for arg_info in reversed(list(arg_forms or [])):
+                    _consume_arg_value(arg_info)
+                _consume_element()
+                if int(ret_form) != fm_void:
+                    _push_stack_value(ret_form, expr=cmd_expr)
             continue
         if op == cd_eof:
             out.append(f"{ofs:08X}: {opname}")
             break
-        out.append(f"{ofs:08X}: {opname} (unknown)")
-        continue
+        out.append(f"{ofs:08X}: {opname}")
+        break
     return out

@@ -534,47 +534,6 @@ class CharacterAnalizer:
         if not ia.step2():
             self.error(ia.el, "inc: " + ia.es)
             return 0
-        lines = scn.split("\n")
-        defs = []
-        decl_prefixes = (
-            "#replace",
-            "#define",
-            "#define_s",
-            "#macro",
-            "#property",
-            "#command",
-            "#expand",
-        )
-        i = 0
-        while i < len(lines):
-            ls = lines[i].lstrip()
-            if ls.startswith(decl_prefixes) and not ls.startswith("##"):
-                j = i + 1
-                while j < len(lines):
-                    ls2 = lines[j].lstrip()
-                    if ls2.startswith(decl_prefixes) and not ls2.startswith("##"):
-                        break
-                    j += 1
-                defs.extend(lines[i:j])
-                for k in range(i, j):
-                    lines[k] = ""
-                i = j
-            else:
-                i += 1
-        if defs:
-            ia_def = IncAnalyzer(
-                "\n".join(defs),
-                C.FM_SCENE,
-                piad,
-                {"pt": [], "pl": [], "ct": [], "cl": []},
-            )
-            if not ia_def.step1():
-                self.error(ia_def.el, ia_def.es)
-                return 0
-            if not ia_def.step2():
-                self.error(ia_def.el, ia_def.es)
-                return 0
-        scn = "\n".join(lines)
         t = scn + ("\0" * 256)
         self.m_line = 1
         loop = 0

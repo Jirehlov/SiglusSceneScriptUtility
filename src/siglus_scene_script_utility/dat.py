@@ -1,7 +1,6 @@
 import contextlib
 import io
 import os
-import re
 import struct
 import sys
 
@@ -110,26 +109,18 @@ def _get_inc_analysis(dat_path):
     return out
 
 
-def _write_dat_disassembly(dat_path, blob, out_dir=None):
+def _disassembly_ended_unexpectedly(dis):
+    return (not dis) or ("CD_EOF" not in dis[-1])
+
+
+def _dat_disassembly_bundle(blob, dat_path=None):
     try:
-        if out_dir is None:
-            out_dir = globals().get("DAT_TXT_OUT_DIR")
-        if not out_dir:
-            return None
-        if not dat_path or not isinstance(blob, (bytes, bytearray)):
-            return None
-        if out_dir == "__DATDIR__":
-            out_dir = os.path.dirname(str(dat_path)) or "."
-        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
-        if len(blob) < C.SCN_HDR_SIZE:
+        bounds = _scn_payload_bounds(blob)
+        if bounds is None:
             return None
         secs, meta = _dat_sections(blob)
         h = meta.get("header") or {}
-        so = int(h.get("scn_ofs", 0) or 0)
-        ss = int(h.get("scn_size", 0) or 0)
-        if so < 0 or ss <= 0 or so + ss > len(blob):
-            return None
+        so, ss = bounds
         scn = blob[so : so + ss]
         str_idx = _read_struct_list(
             blob,
@@ -151,17 +142,12 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         z_label_list = _read_struct_list(
             blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
         )
-        read_flag_lines = _read_struct_list(
-            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
-        )
-        inc_meta = _get_inc_analysis(dat_path)
+        inc_meta = _get_inc_analysis(dat_path) if dat_path else {}
         dis = disam.disassemble_scn_bytes(
             scn,
             str_list,
             label_list,
             z_label_list,
-            h.get("read_flag_cnt", 0),
-            read_flag_lines,
             cmd_label_list=meta.get("cmd_label_list"),
             scn_prop_defs=meta.get("scn_prop_defs"),
             scn_cmd_names=meta.get("scn_cmd_names"),
@@ -171,7 +157,50 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
             inc_command_defs=inc_meta.get("inc_command_defs"),
             inc_command_cnt=inc_meta.get("inc_command_cnt", 0),
         )
-        if (not dis) or ("CD_EOF" not in dis[-1]):
+        return {
+            "header": h,
+            "meta": meta,
+            "scn": scn,
+            "str_list": str_list,
+            "label_list": label_list,
+            "z_label_list": z_label_list,
+            "inc_meta": inc_meta,
+            "dis": dis,
+        }
+    except Exception:
+        return None
+
+
+def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
+    try:
+        if out_dir is None:
+            out_dir = globals().get("DAT_TXT_OUT_DIR")
+        if not out_dir:
+            return None
+        if not dat_path or not isinstance(blob, (bytes, bytearray)):
+            return None
+        if out_dir == "__DATDIR__":
+            out_dir = os.path.dirname(str(dat_path)) or "."
+        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
+            return None
+        bundle = _dat_disassembly_bundle(blob, dat_path)
+        if not isinstance(bundle, dict):
+            return None
+        h = bundle.get("header") or {}
+        str_list = bundle.get("str_list") or []
+        label_list = bundle.get("label_list") or []
+        z_label_list = bundle.get("z_label_list") or []
+        dis = bundle.get("dis") or []
+        so = int(h.get("scn_ofs", 0) or 0)
+        ss = int(h.get("scn_size", 0) or 0)
+        ended_unexpectedly = _disassembly_ended_unexpectedly(dis)
+        if isinstance(stats, dict):
+            stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
+            if ended_unexpectedly:
+                stats["ended_unexpectedly"] = (
+                    int(stats.get("ended_unexpectedly", 0) or 0) + 1
+                )
+        if ended_unexpectedly:
             print(
                 f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly."
             )
@@ -223,141 +252,37 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None):
         return None
 
 
-def _dat_disassembly_components(blob, dat_path=None):
+def _scn_payload_bounds(blob):
+    if (
+        not isinstance(blob, (bytes, bytearray, memoryview))
+        or len(blob) < C.SCN_HDR_SIZE
+    ):
+        return None
     try:
-        if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
-            return None
-        secs, meta = _dat_sections(blob)
-        h = meta.get("header") or {}
-        so = h.get("scn_ofs", 0)
-        ss = h.get("scn_size", 0)
-        if not (
-            isinstance(so, int)
-            and isinstance(ss, int)
-            and so >= 0
-            and ss > 0
-            and so + ss <= len(blob)
-        ):
-            return None
-        scn = blob[so : so + ss]
-        str_list = []
-        try:
-            str_idx = _read_struct_list(
-                blob,
-                h.get("str_index_list_ofs", 0),
-                h.get("str_index_cnt", 0),
-                _I32_PAIR_STRUCT,
-            )
-            str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
-            str_list = (
-                _decode_xor_utf16le_strings(
-                    blob, str_idx, h.get("str_list_ofs", 0), str_blob_end
-                )
-                if str_idx
-                else []
-            )
-        except Exception:
-            str_list = []
-        label_list = _read_struct_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
-        )
-        z_label_list = _read_struct_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
-        )
-        read_flag_lines = _read_struct_list(
-            blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
-        )
-        inc_meta = _get_inc_analysis(dat_path) if dat_path else {}
-        dis = disam.disassemble_scn_bytes(
-            scn,
-            str_list,
-            label_list,
-            z_label_list,
-            h.get("read_flag_cnt", 0),
-            read_flag_lines,
-            cmd_label_list=meta.get("cmd_label_list"),
-            scn_prop_defs=meta.get("scn_prop_defs"),
-            scn_cmd_names=meta.get("scn_cmd_names"),
-            call_prop_names=meta.get("call_prop_names"),
-            inc_property_defs=inc_meta.get("inc_property_defs"),
-            inc_property_cnt=inc_meta.get("inc_property_cnt", 0),
-            inc_command_defs=inc_meta.get("inc_command_defs"),
-            inc_command_cnt=inc_meta.get("inc_command_cnt", 0),
-        )
-        return (h, str_list, label_list, z_label_list, dis)
+        h, _, _, _, _, _ = build_sections(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
+        so = int(h.get("scn_ofs", 0) or 0)
+        ss = int(h.get("scn_size", 0) or 0)
     except Exception:
         return None
+    if so < 0 or ss <= 0 or (so + ss) > len(blob):
+        return None
+    return so, ss
 
 
-_re_scn_ofs = re.compile(r"^[0-9A-Fa-f]{8}:\s*")
+def _scn_payload_bytes(blob):
+    bounds = _scn_payload_bounds(blob)
+    if bounds is None:
+        return None
+    so, ss = bounds
+    return bytes(memoryview(blob)[so : so + ss])
 
 
-def _strip_scn_ofs_prefix(line):
-    try:
-        return _re_scn_ofs.sub("", str(line)).rstrip()
-    except Exception:
-        return str(line).rstrip()
-
-
-def _print_scn_disassembly_diff(dis1, dis2, name1, name2, context=3):
-    import difflib
-
-    a = [_strip_scn_ofs_prefix(x) for x in (dis1 or [])]
-    b = [_strip_scn_ofs_prefix(x) for x in (dis2 or [])]
-    if a == b:
-        print("scn_bytes disassembly: identical (ignoring offsets)")
-        return
-    print("---- scn_bytes disassembly diff (ignoring offsets) ----")
-    print(f"--- {name1}")
-    print(f"+++ {name2}")
-    sm = difflib.SequenceMatcher(None, a, b)
-    opcodes = [op for op in sm.get_opcodes() if op[0] != "equal"]
-    if not opcodes:
-        print("(differences detected but diff hunks not generated)")
-        return
-    hunks = []
-    for tag, i1, i2, j1, j2 in opcodes:
-        ha1 = max(i1 - context, 0)
-        ha2 = min(i2 + context, len(a))
-        hb1 = max(j1 - context, 0)
-        hb2 = min(j2 + context, len(b))
-        if not hunks:
-            hunks.append([ha1, ha2, hb1, hb2])
-        else:
-            pa1, pa2, pb1, pb2 = hunks[-1]
-            if ha1 <= pa2 and hb1 <= pb2:
-                hunks[-1] = [min(pa1, ha1), max(pa2, ha2), min(pb1, hb1), max(pb2, hb2)]
-            else:
-                hunks.append([ha1, ha2, hb1, hb2])
-    for ha1, ha2, hb1, hb2 in hunks:
-        print(f"@@ -{ha1 + 1:d},{ha2 - ha1:d} +{hb1 + 1:d},{hb2 - hb1:d} @@")
-        suba = a[ha1:ha2]
-        subb = b[hb1:hb2]
-        sm2 = difflib.SequenceMatcher(None, suba, subb)
-        for tag, i1, i2, j1, j2 in sm2.get_opcodes():
-            if tag == "equal":
-                ln = i2 - i1
-                for p in range(ln):
-                    la = ha1 + i1 + p + 1
-                    lb = hb1 + j1 + p + 1
-                    txt = suba[i1 + p]
-                    print(f"  {la:5d} {lb:5d} | {txt}")
-            elif tag == "replace":
-                for p in range(i1, i2):
-                    la = ha1 + p + 1
-                    print(f"- {la:5d} {'':5s} | {suba[p]}")
-                for p in range(j1, j2):
-                    lb = hb1 + p + 1
-                    print(f"+ {'':5s} {lb:5d} | {subb[p]}")
-            elif tag == "delete":
-                for p in range(i1, i2):
-                    la = ha1 + p + 1
-                    print(f"- {la:5d} {'':5s} | {suba[p]}")
-            elif tag == "insert":
-                for p in range(j1, j2):
-                    lb = hb1 + p + 1
-                    print(f"+ {'':5s} {lb:5d} | {subb[p]}")
-        print("")
+def _scn_payload_hash_bundle(blob):
+    bounds = _scn_payload_bounds(blob)
+    if bounds is None:
+        return None
+    so, ss = bounds
+    return {"size": ss, "sha1": _sha1(memoryview(blob)[so : so + ss])}
 
 
 def _dat_sections(blob):
@@ -396,12 +321,18 @@ def _dat_sections(blob):
     sec_fixed(
         h.get("label_list_ofs", 0), h.get("label_cnt", 0), 4, "L", "label_list (i32)"
     )
+    label_list = _read_struct_list(
+        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
+    )
     sec_fixed(
         h.get("z_label_list_ofs", 0),
         h.get("z_label_cnt", 0),
         4,
         "Z",
         "z_label_list (i32)",
+    )
+    z_label_list = _read_struct_list(
+        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
     )
     sec_fixed(
         h.get("cmd_label_list_ofs", 0),
@@ -454,6 +385,9 @@ def _dat_sections(blob):
         "K",
         "scn_cmd_list (i32)",
     )
+    scn_cmd_list = _read_struct_list(
+        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
+    )
     sec_fixed(
         h.get("scn_cmd_name_index_list_ofs", 0),
         h.get("scn_cmd_name_index_cnt", 0),
@@ -493,12 +427,18 @@ def _dat_sections(blob):
     sec_fixed(
         h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), 4, "N", "namae_list (i32)"
     )
+    namae_list = _read_struct_list(
+        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
+    )
     sec_fixed(
         h.get("read_flag_list_ofs", 0),
         h.get("read_flag_cnt", 0),
         4,
         "R",
         "read_flag_list (i32)",
+    )
+    read_flag_list = _read_struct_list(
+        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
     )
     _add_gap_sections(secs, used, n)
     scn_prop_names = (
@@ -511,8 +451,13 @@ def _dat_sections(blob):
     meta = {
         "header": h,
         "str_blob_end": str_blob_end,
+        "str_index_list": str_idx,
+        "label_list": label_list,
+        "z_label_list": z_label_list,
         "cmd_label_list": cmd_label_list,
+        "scn_prop_list": scn_prop_list,
         "scn_prop_names": scn_prop_names,
+        "scn_prop_name_index_list": spn_idx,
         "scn_prop_defs": [
             {
                 "code": i,
@@ -527,6 +472,7 @@ def _dat_sections(blob):
             for i, it in enumerate(scn_prop_list or [])
             if isinstance(it, (list, tuple)) and len(it) >= 2
         ],
+        "scn_cmd_list": scn_cmd_list,
         "scn_cmd_names": (
             _decode_utf16le_strings(
                 blob, scn_idx, h.get("scn_cmd_name_list_ofs", 0), scn_end
@@ -534,6 +480,7 @@ def _dat_sections(blob):
             if scn_idx
             else []
         ),
+        "scn_cmd_name_index_list": scn_idx,
         "call_prop_names": (
             _decode_utf16le_strings(
                 blob, cpn_idx, h.get("call_prop_name_list_ofs", 0), cpn_end
@@ -541,6 +488,9 @@ def _dat_sections(blob):
             if cpn_idx
             else []
         ),
+        "call_prop_name_index_list": cpn_idx,
+        "namae_list": namae_list,
+        "read_flag_list": read_flag_list,
     }
     return secs, meta
 
@@ -730,7 +680,7 @@ def compare_gameexe_dat(p1, p2):
     return 0
 
 
-def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
+def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
     s1, m1 = _dat_sections(b1)
     s2, m2 = _dat_sections(b2)
     h1 = m1.get("header") or {}
@@ -746,22 +696,6 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
             print("  " + d)
     else:
         print("Header: identical")
-    so1, ss1 = h1.get("scn_ofs", 0), h1.get("scn_size", 0)
-    so2, ss2 = h2.get("scn_ofs", 0), h2.get("scn_size", 0)
-    if (
-        so1 >= 0
-        and ss1 > 0
-        and so1 + ss1 <= len(b1)
-        and so2 >= 0
-        and ss2 > 0
-        and so2 + ss2 <= len(b2)
-    ):
-        sh1 = _sha1(b1[so1 : so1 + ss1])
-        sh2 = _sha1(b2[so2 : so2 + ss2])
-        same = ss1 == ss2 and sh1 == sh2
-        print(f"scn_bytes: size1={ss1:d} sha1_1={sh1}")
-        print(f"          size2={ss2:d} sha1_2={sh2}")
-        print(f"          {('identical' if same else 'different')}")
 
     def _cmp_list(title, a, b):
         if a == b:
@@ -789,6 +723,21 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
         m1.get("call_prop_names") or [],
         m2.get("call_prop_names") or [],
     )
+    c1 = None
+    c2 = None
+    if compare_payload:
+        c1 = _scn_payload_hash_bundle(b1)
+        c2 = _scn_payload_hash_bundle(b2)
+        if c1 and c2:
+            payload_same = c1.get("size") == c2.get("size") and c1.get(
+                "sha1"
+            ) == c2.get("sha1")
+            print(
+                "payload compare (scn_bytes sha1): "
+                + ("identical" if payload_same else "different")
+            )
+        else:
+            print("payload compare (scn_bytes sha1): unavailable")
     out_dir = globals().get("DAT_TXT_OUT_DIR")
     if out_dir:
         out1 = _write_dat_disassembly(p1, b1, out_dir)
@@ -804,15 +753,4 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes) -> int:
         else:
             print(f"failed to write: {p2}.txt")
 
-    if out_dir:
-        c1 = _dat_disassembly_components(b1, p1)
-        c2 = _dat_disassembly_components(b2, p2)
-        if c1 and c2 and c1[4] is not None and c2[4] is not None:
-            print("")
-            _print_scn_disassembly_diff(c1[4], c2[4], p1, p2, context=3)
-        else:
-            print("")
-            print(
-                "scn_bytes disassembly diff: unavailable (failed to disassemble one or both files)"
-            )
     return 0

@@ -7,21 +7,14 @@ from dataclasses import dataclass
 from typing import Iterator, List, Tuple
 
 from .common import read_u32_le_from_file
-
-try:
-    from .native_ops import _legacy_mode_enabled
-except Exception:
-    from native_ops import _legacy_mode_enabled
+from .native_ops import _legacy_mode_enabled
 
 _LEGACY_MODE = _legacy_mode_enabled()
 
 try:
     if _LEGACY_MODE:
         raise ImportError("Legacy mode requested")
-    try:
-        from . import native_accel
-    except Exception:
-        import native_accel
+    from . import native_accel
 
     _native_nwa_decode_pcm = getattr(native_accel, "nwa_decode_pcm", None)
     _USE_NATIVE_NWA = _native_nwa_decode_pcm is not None

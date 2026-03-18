@@ -119,17 +119,12 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
     bs_dir = os.path.join(tmp, "bs")
 
     if parallel and lzss_mode and len(scn_names) > 1:
-        try:
-            from .parallel import parallel_lzss_compress
+        from .parallel import parallel_lzss_compress
 
-            start = time.time()
-            result = parallel_lzss_compress(
-                ctx, scn_names, bs_dir, lzss_mode, max_workers
-            )
-            set_stage_time(ctx, "LZSS", time.time() - start)
-            return result
-        except ImportError:
-            pass
+        start = time.time()
+        result = parallel_lzss_compress(ctx, scn_names, bs_dir, lzss_mode, max_workers)
+        set_stage_time(ctx, "LZSS", time.time() - start)
+        return result
 
     from . import compiler as _m
 
@@ -157,7 +152,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             lz = bytes(b)
             write_bytes(lz_path, lz)
             record_stage_time(ctx, "LZSS", time.time() - t)
-            log_stage("LZSS", nm + ".ss")
+            log_stage("LZSS", nm + ".ss", ctx)
             lzss_list.append(lz)
         else:
             dat = read_bytes(dat_path)
@@ -296,23 +291,18 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         return (0, [])
 
     if parallel and len(rel_list) > 1:
-        try:
-            from .parallel import parallel_source_encrypt
+        from .parallel import parallel_source_encrypt
 
-            start = time.time()
-            sizes, chunks = parallel_source_encrypt(
-                ctx, rel_list, scn_path, tmp_path, skip, max_workers
-            )
-            set_stage_time(ctx, "OS", time.time() - start)
-            if not sizes:
-                return (0, [])
-            size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
-            size_list_enc = _m.source_angou_encrypt(
-                size_list_bytes, "__DummyName__", ctx
-            )
-            return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
-        except ImportError:
-            pass
+        start = time.time()
+        sizes, chunks = parallel_source_encrypt(
+            ctx, rel_list, scn_path, tmp_path, skip, max_workers
+        )
+        set_stage_time(ctx, "OS", time.time() - start)
+        if not sizes:
+            return (0, [])
+        size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
+        size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
+        return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
 
     sizes = []
     chunks = []
@@ -321,7 +311,7 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         if not os.path.isfile(src_path):
             continue
         start = time.time()
-        log_stage("OS", rel)
+        log_stage("OS", rel, ctx)
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )

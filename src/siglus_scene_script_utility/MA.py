@@ -15,6 +15,18 @@ def _form_name(f):
     return f
 
 
+def _form_code(f):
+    if isinstance(f, int):
+        return f
+    try:
+        code = C._FORM_CODE.get(_form_name(f))
+        if isinstance(code, int):
+            return code
+    except Exception:
+        pass
+    return None
+
+
 def _parse_arg_spec(arg_spec):
     if not arg_spec:
         return {}
@@ -76,18 +88,40 @@ def _parse_arg_spec(arg_spec):
 
 class FormTable:
     def __init__(s):
-        s.f = {}
+        s.form_map_by_name = {}
+        s.form_map_by_code = {}
         s.call_base = None
-        s._auto_prop_code = 0
+
+    def _new_form(s, fc):
+        name = _form_name(fc)
+        code = _form_code(fc)
+        return {
+            "name": name,
+            "code": code,
+            "element_map_by_name": {},
+            "element_map_by_code": {},
+        }
+
+    def _ensure_form(s, fc):
+        name = _form_name(fc)
+        if not name:
+            return None
+        info = s.form_map_by_name.get(name)
+        if not isinstance(info, dict):
+            info = s._new_form(name)
+            s.form_map_by_name[name] = info
+        code = _form_code(fc)
+        if isinstance(code, int):
+            info["code"] = code
+            s.form_map_by_code[code] = info
+        return info
 
     def _load_system_forms(s):
         forms = C._FORM_CODE
         if isinstance(forms, dict):
             forms = forms.keys()
         for it in forms:
-            name = _form_name(it)
-            if name:
-                s.f.setdefault(name, {})
+            s._ensure_form(it)
 
     def _load_system_elements(s):
         defs = C.SYSTEM_ELEMENT_DEFS
@@ -121,7 +155,6 @@ class FormTable:
             )
             if not name or et is None:
                 continue
-            s.f.setdefault(parent or C.FM_SCENE, {})
             am = args if isinstance(args, dict) else {}
             if am and any(not isinstance(v, dict) for v in am.values()):
                 am = _parse_arg_spec(args)
@@ -150,29 +183,67 @@ class FormTable:
             C.FM___ARGS,
             C.FM___ARGSREF,
         }:
-            s.f.setdefault(k, {})
+            s._ensure_form(k)
         s._load_system_forms()
         s._load_system_elements()
-        s.call_base = copy.deepcopy(s.f.get(C.FM_CALL, {}))
+        s.call_base = copy.deepcopy(s.get_form_by_name(C.FM_CALL))
 
     def reset_call(s):
-        s.f[C.FM_CALL] = copy.deepcopy(s.call_base if s.call_base is not None else {})
+        base = copy.deepcopy(
+            s.call_base if isinstance(s.call_base, dict) else s._new_form(C.FM_CALL)
+        )
+        s.form_map_by_name[C.FM_CALL] = base
+        if isinstance(base.get("code"), int):
+            s.form_map_by_code[int(base.get("code"))] = base
+
+    def get_form_by_name(s, name):
+        return s.form_map_by_name.get(_form_name(name))
+
+    def get_form_by_code(s, code):
+        fc = _form_code(code)
+        if not isinstance(fc, int):
+            return None
+        return s.form_map_by_code.get(fc)
 
     def add(s, fc, e):
-        bucket = s.f.setdefault(fc, {})
+        form = s._ensure_form(fc)
+        if not isinstance(form, dict):
+            return
+        bucket = form.get("element_map_by_name") or {}
+        code_bucket = form.get("element_map_by_code") or {}
         nm = e.get("name")
 
         if nm in bucket:
             if (
-                fc == C.FM_CALL
+                _form_name(fc) == C.FM_CALL
                 and e.get("origin") == C.FM_CALL
                 and e.get("type") == C.ET_PROPERTY
             ):
                 return
         bucket[nm] = e
+        form["element_map_by_name"] = bucket
+        try:
+            code_bucket[int(e.get("code", 0) or 0)] = e
+        except Exception:
+            pass
+        form["element_map_by_code"] = code_bucket
 
     def get(s, fc, name):
-        return s.f.get(fc, {}).get(name)
+        form = s.get_form_by_name(fc)
+        if not isinstance(form, dict):
+            return None
+        return (form.get("element_map_by_name") or {}).get(name)
+
+    def get_element_by_code(s, fc, code):
+        form = s.get_form_by_code(fc)
+        if not isinstance(form, dict):
+            form = s.get_form_by_name(fc)
+        if not isinstance(form, dict):
+            return None
+        try:
+            return (form.get("element_map_by_code") or {}).get(int(code))
+        except Exception:
+            return None
 
     def find(s, name):
         for fc in (C.FM_CALL, C.FM_SCENE, C.FM_GLOBAL):
@@ -402,10 +473,10 @@ class MA:
                 "TNMSERR_MA_PROPERTY_OUT_OF_COMMAND",
                 (n or {}).get("Property", {}).get("atom"),
             )
-        if isinstance(n, dict):
-            n["node_form"] = C.FM_VOID
         if n.get("form") and not s.ma_form(n.get("form")):
             return 0
+        if isinstance(n, dict):
+            n["node_form"] = C.FM_VOID
         u = s.plad.get("unknown_list", [])
         name = u[n.get("name", {}).get("atom", {}).get("opt", 0)] if u else ""
         sz = 0
@@ -842,47 +913,17 @@ class MA:
         name = u[(e0.get("name") or {}).get("atom", {}).get("opt", 0)] if u else ""
         info, pf = s.ft.find(name)
         if not info:
-            if name in C.FORM_SET or (hasattr(s.ft, "f") and name in s.ft.f):
-                fc = C._FORM_CODE.get(name)
-                if not isinstance(fc, int):
-                    return s.error(
-                        "TNMSERR_MA_ELEMENT_UNKNOWN",
-                        (e0.get("name") or {}).get("atom"),
-                        qname=name,
-                        parent_form=C.FM_GLOBAL,
-                        element_name=name,
-                        elm_chain=elm_chain,
-                        unknown_pos=0,
-                        expected_type=C.ET_PROPERTY,
-                    )
-                if isinstance(e0, dict):
-                    e0["node_form"] = name
-                    e0["element_code"] = int(fc)
-                    e0["element_type"] = C.ET_PROPERTY
-                    e0["element_parent_form"] = C.FM_GLOBAL
-                    e0["arg_list_id"] = 0
-                n["parent_form_code"] = C.FM_GLOBAL
-                parent = name
-                n["node_form"] = name
-                n["element_type"] = C.ET_PROPERTY
-                for el in els[1:]:
-                    if not s.ma_element(parent, el, sel):
-                        return 0
-                    n["node_form"] = el.get("node_form")
-                    n["element_type"] = el.get("element_type")
-                    parent = n["node_form"]
-            else:
-                is_cmd = isinstance(e0, dict) and e0.get("arg_list") is not None
-                return s.error(
-                    "TNMSERR_MA_ELEMENT_UNKNOWN",
-                    (e0.get("name") or {}).get("atom"),
-                    qname=(str(C.FM_GLOBAL) + "." + str(name)) if name else str(name),
-                    parent_form=C.FM_GLOBAL,
-                    element_name=name,
-                    elm_chain=elm_chain,
-                    unknown_pos=0,
-                    expected_type=(C.ET_COMMAND if is_cmd else C.ET_PROPERTY),
-                )
+            is_cmd = isinstance(e0, dict) and e0.get("arg_list") is not None
+            return s.error(
+                "TNMSERR_MA_ELEMENT_UNKNOWN",
+                (e0.get("name") or {}).get("atom"),
+                qname=(str(C.FM_GLOBAL) + "." + str(name)) if name else str(name),
+                parent_form=C.FM_GLOBAL,
+                element_name=name,
+                elm_chain=elm_chain,
+                unknown_pos=0,
+                expected_type=(C.ET_COMMAND if is_cmd else C.ET_PROPERTY),
+            )
         else:
             n["parent_form_code"] = pf
             parent = pf

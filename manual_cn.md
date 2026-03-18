@@ -2,8 +2,8 @@
 
 *本文档由 Claude Opus 4.6 Thinking 生成。*
 
-**版本：** 见 `siglus-ssu --version`  
-**仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility  
+**版本：** 见 `siglus-ssu --version`
+**仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 **英文版：** [manual.md](manual.md)
 
 ---
@@ -103,7 +103,7 @@ siglus-ssu init
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] <模式> [参数]
+siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] <模式> [参数]
 ```
 
 ### 全局选项
@@ -113,6 +113,7 @@ siglus-ssu [-h] [-V | --version] [--legacy] <模式> [参数]
 | `-h`, `--help` | 显示帮助信息并退出。 |
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 禁用 Rust 原生加速，使用纯 Python 回退实现。可用于调试。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。 |
 
 ### 命令别名
 
@@ -153,21 +154,21 @@ siglus-ssu init [--force | -f] [--ref <git-ref>]
 | 参数 | 说明 |
 |---|---|
 | `--force`, `-f` | 即使已存在 `const.py` 也强制覆盖。 |
-| `--ref <git-ref>` | 从指定的 Git 分支、标签或提交哈希下载 `const.py`。默认：`main`。 |
+| `--ref <git-ref>` | 从指定的 Git 分支、标签或提交哈希下载 `const.py`。默认会优先尝试当前包版本对应的发布 ref，再尝试匹配的标签名。 |
 
-下载完成后，`const.py` 会与内置的 SHA-512 白名单进行校验。这意味着 `--ref` 可以指向旧版本或其他受信任修订，但只要下载结果不匹配任一允许哈希，初始化仍会失败。
+下载完成后，`const.py` 会与内置的 SHA-512 白名单进行校验。内置的默认 ref 映射现在只跟踪当前支持的包版本；显式传入的 `--ref` 只要最终解析到同一份白名单内的 `const.py` 内容，仍然可以使用。
 
 #### 示例
 
 ```bash
-# 基本初始化（从 main 分支下载）
+# 基本初始化（下载与当前包版本对应的 const.py）
 siglus-ssu init
 
 # 覆盖已有的 const.py
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.1.12
+siglus-ssu init --ref v0.1.13
 ```
 
 ---
@@ -200,8 +201,9 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等），并打印各阶段耗时统计。 |
 | `--charset ENC` | 强制指定源文件编码。接受值：`jis`、`cp932`、`sjis`、`shift_jis`（均等价于 Shift-JIS）或 `utf8`、`utf-8`。省略时自动检测。 |
 | `--no-os` | 跳过 OS（原始源码）打包阶段。编译后的 `.dat` 放入输出目录但不打包为 `.pck`。不影响文件本身的加密或压缩。 |
-| `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 中现有的 `.dat` 文件并将它们直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。兼容且只能与 `--no-os` 结合使用。不能与 `--test-shuffle` 同用。 |
+| `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 中现有的 `.dat` 文件并将它们直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密（`header_size=0`）。可用于调试或无加密的引擎。 |
+| `--no-lzss` | 仅禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。这对应官方的“easy link”式输出。 |
 | `--parallel` | 启用多进程并行编译以加速大型项目。 |
 | `--max-workers N` | 最大并行工作进程数。默认为 CPU 核心数。 |
 | `--lzss-level N` | LZSS 压缩级别，`2`（快，文件大）到 `17`（慢，文件最小）。默认：`17`。 |
@@ -231,6 +233,9 @@ siglus-ssu -c --test-shuffle 12345 /path/to/src /path/to/out/ /path/to/original_
 # 将现有 .dat 文件直接重新打包
 siglus-ssu -c --dat-repack /path/to/dat_dir /path/to/Scene_repacked.pck
 
+# 将现有 .dat 文件直接重新打包，并且不做 LZSS
+siglus-ssu -c --dat-repack --no-lzss /path/to/dat_dir /path/to/Scene_repacked.pck
+
 # 仅生成 Gameexe.dat
 siglus-ssu -c --gei /path/to/src /path/to/out/
 
@@ -254,7 +259,10 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 ```bash
 # 提取 .pck 文件
-siglus-ssu -x [--disam] <input_pck> <output_dir>
+siglus-ssu -x [--disam] <input_pck> [output_dir]
+
+# 对目录中的 .dat 批量反汇编
+siglus-ssu -x --disam <input_dir> [output_dir]
 
 # 从 Gameexe.dat 还原 Gameexe.ini
 siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
@@ -265,8 +273,9 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
 | 参数 | 说明 |
 |---|---|
 | `<input_pck>` | 要提取的 `.pck` 文件路径。 |
-| `<output_dir>` | 提取文件的输出目录。提取 `.pck` 时必需供应，但对于 `--gei` 模式是可选的（省略时默认输出在输入文件所在目录）。 |
-| `--disam` | 除提取 `.ss` 源文件外，还将每个编译后的 `.dat` 文件的可读反汇编写入 `__DATDIR__` 子目录。不能与 `--gei` 同用。 |
+| `<input_dir>` | 启用 `--disam` 时，用来扫描 `.dat` 的目录路径。只处理该目录当前层的 `.dat` 文件。 |
+| `<output_dir>` | 提取文件的输出目录。对所有 `-x` 模式都可省略；省略时默认输出到输入文件所在目录，若输入本身是目录，则默认输出到该目录。 |
+| `--disam` | 对 `.pck` 输入时，除提取 `.ss` 源文件外，还会在每个提取出的编译后 `.dat` 旁边写出可读反汇编。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
 | `--gei` | 不提取 `.pck`，而是将 `Gameexe.dat` 二进制文件解码还原为 `Gameexe.ini` 明文文件。输入参数可以是 `.dat` 文件本身或其父目录。自动检测附近的 `SiglusEngine*.exe` 或 `key.txt` 以推导解密密钥。 |
 
 #### 示例
@@ -275,8 +284,14 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
 # 将 Scene.pck 提取到 translation_work 目录
 siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/
 
-# 提取并附带 .dat 反汇编（创建 __DATDIR__ 子文件夹）
+# 将 Scene.pck 提取到输入文件同目录
+siglus-ssu -x /path/to/Scene.pck
+
+# 提取并附带 .dat 反汇编
 siglus-ssu -x --disam /path/to/Scene.pck /path/to/translation_work/
+
+# 对单个目录当前层的 .dat 批量输出反汇编
+siglus-ssu -x --disam /path/to/scene_dir/
 
 # 从 Gameexe.dat 还原 Gameexe.ini
 siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
@@ -296,10 +311,10 @@ siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 
 ```
 # 分析单个文件
-siglus-ssu -a [--disam] [--readall] <input_file>
+siglus-ssu -a [--disam] [--readall] [--payload] <input_file>
 
 # 比较两个同类型文件
-siglus-ssu -a <input_file_1> <input_file_2>
+siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
 # 从 暗号.dat / SiglusEngine.exe / 目录 分析或推导 exe_el 密钥
 siglus-ssu -a <暗号.dat路径 | SiglusEngine.exe路径 | 目录> --angou
@@ -316,6 +331,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | 用于结构比较的可选第二个文件。两个文件必须类型相同。 |
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写入 `__DATDIR__` 子目录，而非打印到 stdout。 |
 | `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
+| `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“解码/解压后的 `scn_bytes` payload 的 SHA-1 哈希”比较。这比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
 
@@ -330,6 +346,9 @@ siglus-ssu -a /path/to/script.dat
 
 # 比较两个版本的 Scene.pck — 报告文件增删和变化
 siglus-ssu -a /path/to/Scene_original.pck /path/to/Scene_translated.pck
+
+# 比较两个 Scene.pck 的解码后 `scn_bytes` SHA-1 payload 哈希
+siglus-ssu -a --payload /path/to/Scene_original.pck /path/to/Scene_translated.pck
 
 # 将 .dat 反汇编写入磁盘以供检查
 siglus-ssu -a --disam /path/to/script.dat
@@ -1057,6 +1076,20 @@ siglus-ssu -c --set-shuffle <找到的种子> /path/to/src/ /path/to/out/
 ```
 
 > **注意：** 在极少数情况下，单个初始种子可能无法完全逐字节复现位置混淆。这可能是因为原开发者在构建时使用了增量编译（我们也通过 `--tmp` 选项支持），这会改变文件的编译顺序，从而改变 `rand()` 调用的顺序。
+
+### 兼容性提示：字符串乘整数的异构乘法
+
+官方编译器在普通二元 `*` 表达式上，会把右侧 form 按左操作数 (`exp_1`) 写入。本项目有意改为语义上更自然的右操作数 form (`exp_2`)。
+
+有问题的语法，具体是指“作为取值使用的普通二元 `*` 表达式，并且其左操作数解引用后是字符串类、右操作数解引用后是整数类”。例如 `set_namae("ABC" * 3)`、`set_namae(s[0] * a[0])`、`s[0] = "ABC" * 3` 都属于这一类。
+
+如果您需要一种在官方 `exp_1` 与本项目 `exp_2` 下都会编译出相同结果的源码写法，经验证可用的兼容写法是：先落到字符串引用上，再使用 `*=`。这个改写可以保持在同一行：
+
+```ss
+s[0] = "ABC" s[0] *= 3 set_namae(s[0])
+```
+
+不要改写成 `s[0] = s[0] * 3`，因为它仍然属于同一种有问题的普通二元 `*` 表达式。
 
 ### 未安装 Pillow（G00 模式）
 

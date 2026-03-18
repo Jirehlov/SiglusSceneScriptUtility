@@ -33,6 +33,8 @@ from .common import (
     norm_charset,
 )
 
+SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
+
 
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
@@ -265,13 +267,41 @@ def _read_scn_dat_str_pool(path):
     return out
 
 
+def _read_scene_ssid(path):
+    try:
+        with open(path, "rb") as fh:
+            line = fh.readline(1024)
+    except Exception:
+        return None
+    if (not line.startswith(SCENE_SCRIPT_ID_PREFIX)) or (
+        len(line) < (len(SCENE_SCRIPT_ID_PREFIX) + 4)
+    ):
+        return None
+    raw = line[len(SCENE_SCRIPT_ID_PREFIX) : len(SCENE_SCRIPT_ID_PREFIX) + 4]
+    if len(raw) != 4 or any((b < 48) or (b > 57) for b in raw):
+        return None
+    try:
+        return int(raw.decode("ascii"))
+    except Exception:
+        return None
+
+
 def _scan_dir(p):
     fs = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
     fs.sort(key=lambda x: x.lower())
     ini = [f for f in fs if os.path.splitext(f)[1].lower() in (".ini", ".dat")]
     inc = [f for f in fs if f.lower().endswith(".inc")]
-    ss = [os.path.join(p, f) for f in fs if f.lower().endswith(".ss")]
-    return ini, inc, ss
+    ss = []
+    scn_ssid_map = {}
+    for f in fs:
+        if not f.lower().endswith(".ss"):
+            continue
+        fp = os.path.join(p, f)
+        ss.append(fp)
+        ssid = _read_scene_ssid(fp)
+        scn_ssid_map[f.casefold()] = ssid
+        scn_ssid_map[os.path.splitext(f)[0].casefold()] = ssid
+    return ini, inc, ss, scn_ssid_map
 
 
 def _is_jp_char(ch):
@@ -336,6 +366,7 @@ def _print_summary(ctx):
 def main(argv=None):
     import argparse
 
+    prog = "siglus-ssu -c"
     test_shuffle = False
     test_seed0 = 0
     test_seed0_given = False
@@ -365,10 +396,10 @@ def main(argv=None):
     if dat_repack:
         if test_shuffle:
             sys.stderr.write(
-                "sse: error: --dat-repack is not compatible with --test-shuffle\n"
+                f"{prog}: error: --dat-repack is not compatible with --test-shuffle\n"
             )
             return 2
-        allowed = {"--dat-repack", "--no-os"}
+        allowed = {"--dat-repack", "--no-os", "--no-lzss"}
         bad = []
         for t in argv:
             s = str(t)
@@ -377,7 +408,7 @@ def main(argv=None):
         if bad:
             bad = sorted(set(bad))
             sys.stderr.write(
-                f"sse: error: --dat-repack only supports being used alone or with --no-os (got: {', '.join(bad)})\n"
+                f"{prog}: error: --dat-repack only supports being used alone or with --no-os/--no-lzss (got: {', '.join(bad)})\n"
             )
             return 2
 
@@ -387,7 +418,7 @@ def main(argv=None):
         def error(self, message):
             raise ValueError(message)
 
-    ap = _ArgParser(prog="sse", add_help=False)
+    ap = _ArgParser(prog=prog, add_help=False)
     if test_shuffle:
         ap.add_argument("input_dir")
         ap.add_argument("output_pck")
@@ -416,6 +447,11 @@ def main(argv=None):
     )
     ap.add_argument(
         "--no-angou", action="store_true", help="No encrypt/compress (header_size=0)."
+    )
+    ap.add_argument(
+        "--no-lzss",
+        action="store_true",
+        help="Disable LZSS only (official easy link behavior).",
     )
     ap.add_argument(
         "--parallel",
@@ -499,7 +535,7 @@ def main(argv=None):
                 out, "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
             )
             os.makedirs(tmp, exist_ok=True)
-    ini, inc, ss = _scan_dir(inp)
+    ini, inc, ss, scn_ssid_map = _scan_dir(inp)
     charset = (
         norm_charset(a.charset, keep_unknown=True)
         if getattr(a, "charset", None)
@@ -517,6 +553,7 @@ def main(argv=None):
         "gameexe_ini": gei_ini,
         "exe_path": None,
         "scn_list": [os.path.basename(x) for x in ss],
+        "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,
         "ini_list": ini,
         "utf8": bool(use_utf8),
@@ -529,7 +566,7 @@ def main(argv=None):
         "exe_angou_str": None,
         "source_angou_mode": (not a.no_angou),
         "original_source_mode": (not a.no_os and not a.no_angou),
-        "easy_link": False,
+        "easy_link": bool(a.no_lzss),
         "easy_angou_code": C.EASY_ANGOU_CODE,
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "source_angou": C.SOURCE_ANGOU,

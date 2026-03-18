@@ -2,6 +2,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict
 
+from .common import format_scene_name
+
 
 def get_max_workers(max_workers: Optional[int] = None) -> int:
     if max_workers is not None and max_workers > 0:
@@ -12,7 +14,12 @@ def get_max_workers(max_workers: Optional[int] = None) -> int:
 
 
 def _compile_one_process(
-    ss_path: str, tmp_path: str, stop_after: str, ia_data: Dict, enc: str
+    ss_path: str,
+    tmp_path: str,
+    stop_after: str,
+    ia_data: Dict,
+    enc: str,
+    display_name: str,
 ) -> Tuple[str, Optional[str]]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
@@ -32,46 +39,52 @@ def _compile_one_process(
 
         ca = CharacterAnalizer()
         if not ca.analize_file(scn, iad, pcad):
-            return (fname, f"CA error at {fname}:{ca.get_error_line()}")
+            return (display_name, f"CA error at {display_name}:{ca.get_error_line()}")
 
         lad, err = la_analize(pcad)
         if err:
-            return (fname, f"LA error at {fname}:{err.get('line', 0)}")
+            return (display_name, f"LA error at {display_name}:{err.get('line', 0)}")
 
         if stop_after == "la":
-            return (fname, None)
+            return (display_name, None)
 
         sa = SA(iad, lad)
         ok, sad = sa.analize()
         if not ok:
             line = (sa.last.get("atom") or {}).get("line", 0)
-            return (fname, f"{sa.last.get('type') or 'SA_ERROR'} at {fname}:{line}")
+            return (
+                display_name,
+                f"{sa.last.get('type') or 'SA_ERROR'} at {display_name}:{line}",
+            )
 
         if stop_after == "sa":
-            return (fname, None)
+            return (display_name, None)
 
         ma = MA(iad, lad, sad)
         ok, mad = ma.analize()
         if not ok:
             line = (ma.last.get("atom") or {}).get("line", 0)
             code = ma.last.get("type") or "MA_ERROR"
-            return (fname, f"{code} at {fname}:{line}")
+            return (display_name, f"{code} at {display_name}:{line}")
 
         if stop_after == "ma":
-            return (fname, None)
+            return (display_name, None)
 
         bs = BS()
         bsd = {}
         if not bs.compile(iad, lad, mad, bsd, False):
-            return (fname, f"{bs.get_error_code()} at {fname}:{bs.get_error_line()}")
+            return (
+                display_name,
+                f"{bs.get_error_code()} at {display_name}:{bs.get_error_line()}",
+            )
 
         out_path = os.path.join(tmp_path, "bs", nm + ".dat")
         write_bytes(out_path, bsd["out_scn"])
 
-        return (fname, None)
+        return (display_name, None)
 
     except Exception as e:
-        return (fname, str(e))
+        return (display_name, str(e))
 
 
 def parallel_compile(
@@ -102,25 +115,31 @@ def parallel_compile(
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(
-                _compile_one_process, ss_path, tmp_path, stop, ia_data, enc
+                _compile_one_process,
+                ss_path,
+                tmp_path,
+                stop,
+                ia_data,
+                enc,
+                format_scene_name(ss_path, ctx),
             ): ss_path
             for ss_path in ss_files
         }
 
         for future in as_completed(futures):
             _ = futures[future]
-            fname, error = future.result()
+            display_name, error = future.result()
             completed += 1
 
             if error:
-                errors.append((fname, error))
-                print(f"  [{completed}/{total}] FAIL: {fname}")
+                errors.append((display_name, error))
+                print(f"  [{completed}/{total}] FAIL: {display_name}")
             else:
-                print(f"  [{completed}/{total}] OK: {fname}")
+                print(f"  [{completed}/{total}] OK: {display_name}")
 
     if errors:
-        for fname, err in errors:
-            print(f"  ERROR in {fname}: {err}")
+        for display_name, err in errors:
+            print(f"  ERROR in {display_name}: {err}")
 
         raise RuntimeError(str(errors[0][1]))
 
@@ -209,7 +228,7 @@ def parallel_lzss_compress(
                 errors.append((nm, error))
             else:
                 results[nm] = (dat, lz)
-                print(f"  LZSS: {nm}.ss")
+                print(f"  LZSS: {format_scene_name(nm + '.ss', ctx)}")
 
     if errors:
         raise RuntimeError(str(errors[0][1]))

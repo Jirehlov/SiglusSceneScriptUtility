@@ -2,14 +2,22 @@ import base64
 import hashlib
 import json
 import os
+import re
+import subprocess
 import sys
 import urllib.request
+from urllib import error as urlerror
 from importlib import util as iu
 from pathlib import Path
 
 _API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_scene_script_utility/const.py?ref={ref}"
+_COMMITS_API = (
+    "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/commits"
+    "?per_page={per_page}&page={page}"
+)
 _CONST_SHA512_ALLOWED = {
-    "363ddb5660089611b6116c035a14d721558a648c90d27ad81a56aad9d4267e6f4672e6ccbd42119c61cdd48de192a7c3626ed685e904c21b3f0ea57f6730c0d7"
+    "363ddb5660089611b6116c035a14d721558a648c90d27ad81a56aad9d4267e6f4672e6ccbd42119c61cdd48de192a7c3626ed685e904c21b3f0ea57f6730c0d7",
+    "127e60b5010cd5c09c9391ab1f15fd832d12b723282f0b4a422b8e6e1227baf712ee79f519eabe93f09171cbedd647ad54ad048d64b1a306c8fbb029034db333",
 }
 
 
@@ -25,7 +33,7 @@ def const_exists() -> bool:
     return _const_path().is_file()
 
 
-def load_const_module(path: Path | None = None) -> None:
+def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
     name = "siglus_scene_script_utility.const"
     if name in sys.modules:
         return
@@ -38,24 +46,188 @@ def load_const_module(path: Path | None = None) -> None:
     if not spec or not spec.loader:
         raise RuntimeError(f"Failed to create import spec for const.py at {p}")
     m = iu.module_from_spec(spec)
+    if profile is not None:
+        m.__dict__["_SIGLUS_SSU_CONST_PROFILE"] = profile
     sys.modules[name] = m
     spec.loader.exec_module(m)
 
 
-def download_const(ref: str = "main", force: bool = False) -> Path:
+def _package_version() -> str:
+    try:
+        from importlib.metadata import version as _pkg_version
+
+        return str(_pkg_version("siglus-ssu") or "").strip()
+    except Exception:
+        try:
+            from . import __version__ as _v
+
+            return str(_v or "").strip()
+        except Exception:
+            return ""
+
+
+def _repo_root() -> Path | None:
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _version_subject_pattern(version: str):
+    if not version:
+        return None
+    try:
+        vv = re.escape(str(version).lstrip("vV"))
+    except Exception:
+        return None
+    if not vv:
+        return None
+    return re.compile(rf"^v?{vv}\b")
+
+
+def _git_version_refs(version: str) -> tuple[str, ...]:
+    pattern = _version_subject_pattern(version)
+    if pattern is None:
+        return ()
+    root = _repo_root()
+    if root is None:
+        return ()
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(root), "log", "--all", "--format=%H%x09%s"],
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return ()
+    refs = []
+    seen = set()
+    for line in out.splitlines():
+        if "\t" not in line:
+            continue
+        commit, subject = line.split("\t", 1)
+        commit = str(commit).strip()
+        subject = str(subject).strip()
+        if not commit or not pattern.match(subject) or commit in seen:
+            continue
+        seen.add(commit)
+        refs.append(commit)
+    return tuple(refs)
+
+
+def _github_api_json(url: str):
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "siglus-ssu"},
+    )
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def _remote_version_refs(
+    version: str, *, per_page: int = 100, max_pages: int = 10
+) -> tuple[str, ...]:
+    pattern = _version_subject_pattern(version)
+    if pattern is None:
+        return ()
+    refs = []
+    seen = set()
+    try:
+        per_page = max(1, min(int(per_page), 100))
+        max_pages = max(1, int(max_pages))
+    except Exception:
+        return ()
+    for page in range(1, max_pages + 1):
+        try:
+            payload = _github_api_json(
+                _COMMITS_API.format(per_page=per_page, page=page)
+            )
+        except Exception:
+            return tuple(refs)
+        if not isinstance(payload, list) or not payload:
+            break
+        for item in payload:
+            try:
+                commit = item.get("commit") or {}
+                msg = str(commit.get("message") or "")
+                subject = msg.splitlines()[0].strip() if msg else ""
+                sha = str(item.get("sha") or "").strip()
+            except Exception:
+                continue
+            if not sha or not subject or not pattern.match(subject) or sha in seen:
+                continue
+            seen.add(sha)
+            refs.append(sha)
+        if refs or len(payload) < per_page:
+            break
+    return tuple(refs)
+
+
+def _default_const_refs() -> tuple[str, ...]:
+    version = _package_version()
+    if not version:
+        return ()
+    refs = []
+    refs.extend(_git_version_refs(version))
+    refs.extend(_remote_version_refs(version))
+    if version.startswith("v"):
+        refs.append(version)
+        refs.append(version[1:])
+    else:
+        refs.append(f"v{version}")
+        refs.append(version)
+    seen = set()
+    out = []
+    for ref in refs:
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        out.append(ref)
+    return tuple(out)
+
+
+def _fetch_const_payload(ref: str) -> bytes:
+    payload = _github_api_json(_API.format(ref=ref))
+    if payload.get("encoding") != "base64" or "content" not in payload:
+        raise RuntimeError("Unexpected GitHub API response (missing base64 content).")
+    return base64.b64decode(payload["content"].replace("\n", ""))
+
+
+def _resolve_const_ref(ref: str | None) -> tuple[str, bytes]:
+    if ref is not None and str(ref).strip():
+        chosen = str(ref).strip()
+        try:
+            return chosen, _fetch_const_payload(chosen)
+        except urlerror.HTTPError as exc:
+            if exc.code == 404:
+                raise RuntimeError(f"const.py ref not found: {chosen}") from exc
+            raise
+    refs = _default_const_refs()
+    if not refs:
+        raise RuntimeError(
+            "Unable to determine package version for const.py ref. Pass --ref explicitly."
+        )
+    for chosen in refs:
+        try:
+            return chosen, _fetch_const_payload(chosen)
+        except urlerror.HTTPError as exc:
+            if exc.code == 404:
+                continue
+            raise
+    version = _package_version() or "unknown"
+    tried = ", ".join(refs)
+    raise RuntimeError(
+        f"No const.py ref matched package version {version}. Tried: {tried}. Pass --ref explicitly."
+    )
+
+
+def download_const(ref: str | None = None, force: bool = False) -> Path:
     dst = _const_path()
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and not force:
         return dst
-    req = urllib.request.Request(
-        _API.format(ref=ref),
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "siglus-ssu"},
-    )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        payload = json.loads(r.read().decode("utf-8", "replace"))
-    if payload.get("encoding") != "base64" or "content" not in payload:
-        raise RuntimeError("Unexpected GitHub API response (missing base64 content).")
-    data = base64.b64decode(payload["content"].replace("\n", ""))
+    _, data = _resolve_const_ref(ref)
     if hashlib.sha512(data).hexdigest() not in _CONST_SHA512_ALLOWED:
         raise RuntimeError("const.py sha512 mismatch.")
     text = data.decode("utf-8", "strict")
