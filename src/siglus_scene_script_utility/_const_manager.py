@@ -230,8 +230,7 @@ def download_const(ref: str | None = None, force: bool = False) -> Path:
     _, data = _resolve_const_ref(ref)
     if hashlib.sha512(data).hexdigest() not in _CONST_SHA512_ALLOWED:
         raise RuntimeError("const.py sha512 mismatch.")
-    text = data.decode("utf-8", "strict")
     tmp = dst.with_suffix(".py.tmp")
-    tmp.write_text(text, encoding="utf-8", newline="\r\n")
+    tmp.write_bytes(data)
     tmp.replace(dst)
     return dst
