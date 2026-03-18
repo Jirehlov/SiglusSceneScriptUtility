@@ -19,7 +19,7 @@ jobs:
         run: |
           git config --global core.autocrlf true
           git config --global core.eol crlf
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -77,7 +77,7 @@ jobs:
         run: |
           git config --global core.autocrlf true
           git config --global core.eol crlf
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

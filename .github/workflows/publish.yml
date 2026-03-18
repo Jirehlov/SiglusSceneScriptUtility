@@ -7,21 +7,21 @@ jobs:
   sdist:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - name: Build sdist
         run: |
           python -m pip install -U build
           python -m build --sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-sdist, path: dist/*.tar.gz }
 
   pure-wheel:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - name: Build pure Python wheel
         shell: bash
@@ -29,14 +29,14 @@ jobs:
           python -m pip install -U build
           python scripts/build_pure_wheel.py
           python -m build --wheel --outdir dist .pure-wheel-build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-pure-wheel, path: dist/*-py3-none-any.whl }
 
   wheels-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (win32 + win_amd64)
@@ -45,14 +45,14 @@ jobs:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_WINDOWS: "x86 AMD64"
           CIBW_BEFORE_ALL_WINDOWS: "rustup target add i686-pc-windows-msvc"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-windows, path: wheelhouse/*.whl }
 
   wheels-windows-arm64:
     runs-on: windows-11-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (win_arm64)
@@ -60,14 +60,14 @@ jobs:
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_WINDOWS: "ARM64"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-windows-arm64, path: wheelhouse/*.whl }
 
   wheels-linux:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - name: Build wheels (manylinux x86_64)
         uses: pypa/cibuildwheel@v3.3.1
@@ -77,14 +77,14 @@ jobs:
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BEFORE_ALL_LINUX: "curl -sSfL https://sh.rustup.rs | sh -s -- -y"
           CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-linux, path: wheelhouse/*.whl }
 
   wheels-macos-intel:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (macOS x86_64)
@@ -92,14 +92,14 @@ jobs:
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_MACOS: "x86_64"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-macos-intel, path: wheelhouse/*.whl }
 
   wheels-macos-arm64:
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
       - uses: dtolnay/rust-toolchain@stable
       - name: Build wheels (macOS arm64)
@@ -107,7 +107,7 @@ jobs:
         env:
           CIBW_BUILD: "cp312-* cp313-* cp314-*"
           CIBW_ARCHS_MACOS: "arm64"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-macos-arm64, path: wheelhouse/*.whl }
 
   publish:
@@ -125,7 +125,7 @@ jobs:
       contents: read
     environment: pypi
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { path: dist, merge-multiple: true }
 
       - name: Publish to PyPI
