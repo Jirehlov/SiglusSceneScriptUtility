@@ -23,6 +23,7 @@ from .common import (
     read_bytes,
     is_named_filename,
     unique_out_path,
+    write_text,
     ANGOU_DAT_NAME,
     write_status,
 )
@@ -211,117 +212,167 @@ def _dat_disassembly_bundle(
         return None
 
 
-def _write_dat_disassembly(
-    dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
-):
+def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
     try:
         if out_dir is None:
             out_dir = globals().get("DAT_TXT_OUT_DIR")
         if not out_dir:
-            return None
-        if not dat_path or not isinstance(blob, (bytes, bytearray)):
-            return None
+            return None, None
+        if not dat_path:
+            return None, None
         if out_dir == "__DATDIR__":
             out_dir = os.path.dirname(str(dat_path)) or "."
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
+            return None, None
         if not isinstance(bundle, dict):
+            if not isinstance(blob, (bytes, bytearray)):
+                return None, None
             bundle = _dat_disassembly_bundle(blob, dat_path)
         if not isinstance(bundle, dict):
+            return None, None
+        return out_dir, bundle
+    except Exception:
+        return None, None
+
+
+def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
+    h = bundle.get("header") or {}
+    str_list = bundle.get("str_list") or []
+    label_list = bundle.get("label_list") or []
+    z_label_list = bundle.get("z_label_list") or []
+    namae_defs = bundle.get("namae_defs") or []
+    read_flag_defs = bundle.get("read_flag_defs") or []
+    dis = bundle.get("dis") or []
+    so = int(h.get("scn_ofs", 0) or 0)
+    ss = int(h.get("scn_size", 0) or 0)
+    ended_unexpectedly = _disassembly_ended_unexpectedly(dis)
+    if isinstance(stats, dict):
+        stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
+        if ended_unexpectedly:
+            stats["ended_unexpectedly"] = (
+                int(stats.get("ended_unexpectedly", 0) or 0) + 1
+            )
+    if ended_unexpectedly:
+        print(f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly.")
+    out_name = os.path.basename(str(dat_path)) + ".txt"
+    out_path = os.path.join(str(out_dir), out_name)
+    os.makedirs(str(out_dir), exist_ok=True)
+    out_path = unique_out_path(out_path)
+    lines = []
+    lines.append("==== DAT DISASSEMBLY ====")
+    lines.append(f"file: {dat_path}")
+    lines.append(f"size: {len(blob):d}")
+    lines.append(f"header_size: {int(h.get('header_size', 0) or 0):d}")
+    lines.append(f"scn_ofs: {hx(so)}")
+    lines.append(f"scn_size: {ss:d}")
+    lines.append(f"str_cnt: {int(h.get('str_cnt', 0) or 0):d}")
+    lines.append(f"label_cnt: {int(h.get('label_cnt', 0) or 0):d}")
+    lines.append(f"z_label_cnt: {int(h.get('z_label_cnt', 0) or 0):d}")
+    lines.append(f"cmd_label_cnt: {int(h.get('cmd_label_cnt', 0) or 0):d}")
+    lines.append(f"scn_prop_cnt: {int(h.get('scn_prop_cnt', 0) or 0):d}")
+    lines.append(f"scn_cmd_cnt: {int(h.get('scn_cmd_cnt', 0) or 0):d}")
+    lines.append(f"namae_cnt: {int(h.get('namae_cnt', 0) or 0):d}")
+    lines.append(f"read_flag_cnt: {int(h.get('read_flag_cnt', 0) or 0):d}")
+    if bundle.get("scene_no") is not None:
+        try:
+            lines.append(f"scene_no: {int(bundle.get('scene_no')):d}")
+        except Exception:
+            lines.append(f"scene_no: {bundle.get('scene_no')!r}")
+    if bundle.get("scene_name") not in (None, ""):
+        lines.append(f"scene_name: {bundle.get('scene_name')}")
+    lines.append("")
+    lines.append("---- str_list (xor utf16le) ----")
+    for i, s in enumerate(str_list or []):
+        lines.append(f"[{i:d}] {repr(s)}")
+    lines.append("")
+    lines.append("---- namae_list ----")
+    for it in namae_defs:
+        if not isinstance(it, dict):
+            continue
+        sid = it.get("str_id")
+        text = it.get("text")
+        lines.append(
+            f"[{int(it.get('id', 0) or 0):d}] str[{int(sid):d}] {repr(text) if text is not None else ''}".rstrip()
+        )
+    lines.append("")
+    lines.append("---- read_flag_list ----")
+    for it in read_flag_defs:
+        if not isinstance(it, dict):
+            continue
+        lines.append(
+            f"[{int(it.get('id', 0) or 0):d}] line {int(it.get('line', 0) or 0):d}"
+        )
+    lines.append("")
+    lines.append("---- label_list ----")
+    for i, ofs in enumerate(label_list or []):
+        try:
+            lines.append(f"L{i:d} = {int(ofs):08X}")
+        except Exception:
+            lines.append(f"L{i:d} = {ofs!r}")
+    lines.append("")
+    lines.append("---- z_label_list ----")
+    for i, ofs in enumerate(z_label_list or []):
+        try:
+            lines.append(f"Z{i:d} = {int(ofs):08X}")
+        except Exception:
+            lines.append(f"Z{i:d} = {ofs!r}")
+    lines.append("")
+    lines.append("---- scn_bytes disassembly ----")
+    lines.extend(dis)
+    lines.append("")
+    write_text(out_path, "\n".join(lines), enc="utf-8")
+    return out_path
+
+
+def _write_dat_txt(dat_path, blob, out_dir=None, stats=None, bundle=None):
+    try:
+        out_dir, bundle = _resolve_dat_output(
+            dat_path, blob=blob, out_dir=out_dir, bundle=bundle
+        )
+        if not out_dir or not isinstance(bundle, dict):
             return None
         if bool(bundle.get("decompiler_excluded")):
             return None
-        h = bundle.get("header") or {}
-        str_list = bundle.get("str_list") or []
-        label_list = bundle.get("label_list") or []
-        z_label_list = bundle.get("z_label_list") or []
-        namae_defs = bundle.get("namae_defs") or []
-        read_flag_defs = bundle.get("read_flag_defs") or []
-        dis = bundle.get("dis") or []
-        so = int(h.get("scn_ofs", 0) or 0)
-        ss = int(h.get("scn_size", 0) or 0)
-        ended_unexpectedly = _disassembly_ended_unexpectedly(dis)
-        if isinstance(stats, dict):
-            stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
-            if ended_unexpectedly:
-                stats["ended_unexpectedly"] = (
-                    int(stats.get("ended_unexpectedly", 0) or 0) + 1
-                )
-        if ended_unexpectedly:
-            print(
-                f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly."
-            )
-        out_name = os.path.basename(str(dat_path)) + ".txt"
-        out_path = os.path.join(str(out_dir), out_name)
-        os.makedirs(str(out_dir), exist_ok=True)
-        out_path = unique_out_path(out_path)
-        lines = []
-        lines.append("==== DAT DISASSEMBLY ====")
-        lines.append(f"file: {dat_path}")
-        lines.append(f"size: {len(blob):d}")
-        lines.append(f"header_size: {int(h.get('header_size', 0) or 0):d}")
-        lines.append(f"scn_ofs: {hx(so)}")
-        lines.append(f"scn_size: {ss:d}")
-        lines.append(f"str_cnt: {int(h.get('str_cnt', 0) or 0):d}")
-        lines.append(f"label_cnt: {int(h.get('label_cnt', 0) or 0):d}")
-        lines.append(f"z_label_cnt: {int(h.get('z_label_cnt', 0) or 0):d}")
-        lines.append(f"cmd_label_cnt: {int(h.get('cmd_label_cnt', 0) or 0):d}")
-        lines.append(f"scn_prop_cnt: {int(h.get('scn_prop_cnt', 0) or 0):d}")
-        lines.append(f"scn_cmd_cnt: {int(h.get('scn_cmd_cnt', 0) or 0):d}")
-        lines.append(f"namae_cnt: {int(h.get('namae_cnt', 0) or 0):d}")
-        lines.append(f"read_flag_cnt: {int(h.get('read_flag_cnt', 0) or 0):d}")
-        if bundle.get("scene_no") is not None:
-            try:
-                lines.append(f"scene_no: {int(bundle.get('scene_no')):d}")
-            except Exception:
-                lines.append(f"scene_no: {bundle.get('scene_no')!r}")
-        if bundle.get("scene_name") not in (None, ""):
-            lines.append(f"scene_name: {bundle.get('scene_name')}")
-        lines.append("")
-        lines.append("---- str_list (xor utf16le) ----")
-        for i, s in enumerate(str_list or []):
-            lines.append(f"[{i:d}] {repr(s)}")
-        lines.append("")
-        lines.append("---- namae_list ----")
-        for it in namae_defs:
-            if not isinstance(it, dict):
-                continue
-            sid = it.get("str_id")
-            text = it.get("text")
-            lines.append(
-                f"[{int(it.get('id', 0) or 0):d}] str[{int(sid):d}] {repr(text) if text is not None else ''}".rstrip()
-            )
-        lines.append("")
-        lines.append("---- read_flag_list ----")
-        for it in read_flag_defs:
-            if not isinstance(it, dict):
-                continue
-            lines.append(
-                f"[{int(it.get('id', 0) or 0):d}] line {int(it.get('line', 0) or 0):d}"
-            )
-        lines.append("")
-        lines.append("---- label_list ----")
-        for i, ofs in enumerate(label_list or []):
-            try:
-                lines.append(f"L{i:d} = {int(ofs):08X}")
-            except Exception:
-                lines.append(f"L{i:d} = {ofs!r}")
-        lines.append("")
-        lines.append("---- z_label_list ----")
-        for i, ofs in enumerate(z_label_list or []):
-            try:
-                lines.append(f"Z{i:d} = {int(ofs):08X}")
-            except Exception:
-                lines.append(f"Z{i:d} = {ofs!r}")
-        lines.append("")
-        lines.append("---- scn_bytes disassembly ----")
-        lines.extend(dis)
-        lines.append("")
-        with open(out_path, "w", encoding="utf-8", newline="\r\n") as f:
-            f.write("\n".join(lines))
-        if not bool(bundle.get("decompiler_excluded")):
-            write_status(f"Decompiling {os.path.basename(str(dat_path))} ...")
-            write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
+        return _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
+    except Exception:
+        return None
+
+
+def _write_dat_decompiled(
+    dat_path, blob=None, out_dir=None, bundle=None, decompile_hints=None
+):
+    try:
+        out_dir, bundle = _resolve_dat_output(
+            dat_path, blob=blob, out_dir=out_dir, bundle=bundle
+        )
+        if not out_dir or not isinstance(bundle, dict):
+            return None
+        if bool(bundle.get("decompiler_excluded")):
+            return None
+        write_status(f"Decompiling {os.path.basename(str(dat_path))} ...")
+        return write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
+    except Exception:
+        return None
+
+
+def _write_dat_disassembly(
+    dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
+):
+    try:
+        out_dir, bundle = _resolve_dat_output(
+            dat_path, blob=blob, out_dir=out_dir, bundle=bundle
+        )
+        if not out_dir or not isinstance(bundle, dict):
+            return None
+        if bool(bundle.get("decompiler_excluded")):
+            return None
+        out_path = _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
+        _write_dat_decompiled(
+            dat_path,
+            out_dir=out_dir,
+            bundle=bundle,
+            decompile_hints=decompile_hints,
+        )
         return out_path
     except Exception:
         return None

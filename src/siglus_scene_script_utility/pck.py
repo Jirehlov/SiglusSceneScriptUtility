@@ -1271,6 +1271,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         ok_cnt += 1
     if D and dat_items:
         bundles = []
+        ready_bundles = []
         for dat_path, blob, scn_no, nm in dat_items:
             write_status(f"Disassembling {os.path.basename(str(dat_path))} ...")
             bundle = D._dat_disassembly_bundle(
@@ -1283,13 +1284,21 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             if not isinstance(bundle, dict):
                 continue
             bundles.append((dat_path, blob, bundle))
-        decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
-        for dat_path, blob, bundle in bundles:
-            D._write_dat_disassembly(
+            out_dir = os.path.dirname(dat_path) or bs_dir
+            out_path = D._write_dat_txt(
                 dat_path,
                 blob,
-                os.path.dirname(dat_path) or bs_dir,
+                out_dir,
                 disam_stats,
+                bundle=bundle,
+            )
+            if out_path:
+                ready_bundles.append((dat_path, blob, bundle))
+        decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
+        for dat_path, blob, bundle in ready_bundles:
+            D._write_dat_decompiled(
+                dat_path,
+                out_dir=os.path.dirname(dat_path) or bs_dir,
                 bundle=bundle,
                 decompile_hints=decompile_hints,
             )

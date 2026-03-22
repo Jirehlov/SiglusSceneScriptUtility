@@ -31,6 +31,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
         sys.stderr.write("No .dat files found\n")
         return 1
     bundles = []
+    ready_bundles = []
     ok_cnt = 0
     skip_cnt = 0
     fail_cnt = 0
@@ -52,16 +53,12 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             fail_cnt += 1
             continue
         bundles.append((dat_path, blob, bundle))
-    decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
-    for dat_path, blob, bundle in bundles:
-        name = os.path.basename(dat_path)
-        out_path = D._write_dat_disassembly(
+        out_path = D._write_dat_txt(
             dat_path,
             blob,
             output_dir,
             disam_stats,
             bundle=bundle,
-            decompile_hints=decompile_hints,
         )
         if not out_path:
             sys.stderr.write(f"Failed: {name}\n")
@@ -69,6 +66,15 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             continue
         sys.stdout.write(f"Wrote: {out_path}\n")
         ok_cnt += 1
+        ready_bundles.append((dat_path, blob, bundle))
+    decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
+    for dat_path, blob, bundle in ready_bundles:
+        D._write_dat_decompiled(
+            dat_path,
+            out_dir=output_dir,
+            bundle=bundle,
+            decompile_hints=decompile_hints,
+        )
     if ok_cnt:
         sys.stdout.write(f"Disassembled scenes: {ok_cnt:d}\n")
         sys.stdout.write(
