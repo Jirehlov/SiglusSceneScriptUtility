@@ -1,5 +1,5 @@
 from . import const as C
-from .common import hx, read_i32_le
+from .common import hx, invert_form_code_map, read_i32_le
 
 
 def _resolve_form_code(value):
@@ -34,21 +34,6 @@ def _read_flag_command_codes():
         return frozenset((int(a), int(b)) for a, b in (codes or ()))
     except Exception:
         return frozenset()
-
-
-def _invert_form_code_map():
-    out = {}
-    try:
-        fm = C._FORM_CODE
-        if isinstance(fm, dict):
-            for k, v in fm.items():
-                try:
-                    out[int(v)] = str(k)
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return out
 
 
 def _build_system_element_index():
@@ -276,7 +261,7 @@ def disassemble_scn_bytes(
                     scene_name = str(scene_names[sn_i] or "")
         except Exception:
             scene_name = ""
-    form_rev = _invert_form_code_map()
+    form_rev = invert_form_code_map()
     op_names = {}
     for nm in (
         "CD_NONE",

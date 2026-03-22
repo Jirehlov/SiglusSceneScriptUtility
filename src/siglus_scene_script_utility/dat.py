@@ -22,6 +22,7 @@ from .common import (
     build_sections,
     read_bytes,
     is_named_filename,
+    unique_out_path,
     ANGOU_DAT_NAME,
     write_status,
 )
@@ -65,22 +66,6 @@ def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
         except Exception:
             out.append("")
     return out
-
-
-def _unique_out_path(path):
-    try:
-        if not path:
-            return path
-        if not os.path.exists(path):
-            return path
-        root, ext = os.path.splitext(path)
-        for i in range(1, 1000):
-            p = f"{root}.{i:d}{ext}"
-            if not os.path.exists(p):
-                return p
-        return path
-    except Exception:
-        return path
 
 
 def _disassembly_ended_unexpectedly(dis):
@@ -269,7 +254,7 @@ def _write_dat_disassembly(
         out_name = os.path.basename(str(dat_path)) + ".txt"
         out_path = os.path.join(str(out_dir), out_name)
         os.makedirs(str(out_dir), exist_ok=True)
-        out_path = _unique_out_path(out_path)
+        out_path = unique_out_path(out_path)
         lines = []
         lines.append("==== DAT DISASSEMBLY ====")
         lines.append(f"file: {dat_path}")

@@ -11,6 +11,37 @@ ANGOU_DAT_NAME = "暗号.dat"
 KEY_TXT_NAME = "key.txt"
 
 
+def invert_form_code_map():
+    out = {}
+    try:
+        fm = C._FORM_CODE
+        if isinstance(fm, dict):
+            for k, v in fm.items():
+                try:
+                    out[int(v)] = str(k)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
+
+
+def unique_out_path(path):
+    try:
+        if not path:
+            return path
+        if not os.path.exists(path):
+            return path
+        root, ext = os.path.splitext(path)
+        for i in range(1, 1000):
+            p = f"{root}.{i:d}{ext}"
+            if not os.path.exists(p):
+                return p
+        return path
+    except Exception:
+        return path
+
+
 def find_siglus_engine_exe(base_dir: str) -> str:
     base_dir = _safe_abspath(base_dir)
     if not base_dir or (not os.path.isdir(base_dir)):

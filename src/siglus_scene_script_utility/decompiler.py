@@ -3,7 +3,7 @@ import os
 import re
 from . import const as C
 from . import disam
-from .common import write_text
+from .common import invert_form_code_map, unique_out_path, write_text
 
 _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"
@@ -47,38 +47,7 @@ def _materialize_lines(lines):
     return out
 
 
-def _unique_out_path(path):
-    try:
-        if not path:
-            return path
-        if not os.path.exists(path):
-            return path
-        root, ext = os.path.splitext(path)
-        for i in range(1, 1000):
-            p = f"{root}.{i:d}{ext}"
-            if not os.path.exists(p):
-                return p
-        return path
-    except Exception:
-        return path
-
-
-def _invert_form_code_map():
-    out = {}
-    try:
-        fm = C._FORM_CODE
-        if isinstance(fm, dict):
-            for k, v in fm.items():
-                try:
-                    out[int(v)] = str(k)
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    return out
-
-
-_FORM_REV = _invert_form_code_map()
+_FORM_REV = invert_form_code_map()
 
 
 def _form_name(form):
@@ -155,6 +124,71 @@ _SYMBOLIC_STR_KEYWORDS = frozenset(
         "default",
     }
 )
+
+_ELEMENT_INDEX_CACHE_KEY = None
+_ELEMENT_INDEX_CACHE = None
+_SYMBOLIC_STRING_BLOCKER_CACHE_KEY = None
+_SYMBOLIC_STRING_BLOCKER_CACHE = None
+
+
+def _element_index_cache_key():
+    return (
+        id(getattr(C, "SYSTEM_ELEMENT_DEFS", None)),
+        id(getattr(C, "_FORM_CODE", None)),
+    )
+
+
+def _element_indexes():
+    global _ELEMENT_INDEX_CACHE_KEY, _ELEMENT_INDEX_CACHE
+    cache_key = _element_index_cache_key()
+    if _ELEMENT_INDEX_CACHE is None or cache_key != _ELEMENT_INDEX_CACHE_KEY:
+        try:
+            elm_exact = dict(getattr(disam, "_build_system_element_index")() or {})
+        except Exception:
+            elm_exact = {}
+        try:
+            elm_array_exact = dict(getattr(disam, "_build_array_element_index")() or {})
+        except Exception:
+            elm_array_exact = {}
+        receiver_forms = set()
+        for key in elm_exact.keys():
+            try:
+                receiver_forms.add(int(key[0]))
+            except Exception:
+                continue
+        for key in elm_array_exact.keys():
+            try:
+                receiver_forms.add(int(key))
+            except Exception:
+                continue
+        _ELEMENT_INDEX_CACHE = (elm_exact, elm_array_exact, frozenset(receiver_forms))
+        _ELEMENT_INDEX_CACHE_KEY = cache_key
+    return _ELEMENT_INDEX_CACHE
+
+
+def _system_symbolic_string_blockers():
+    global _SYMBOLIC_STRING_BLOCKER_CACHE_KEY, _SYMBOLIC_STRING_BLOCKER_CACHE
+    cache_key = _element_index_cache_key()
+    if (
+        _SYMBOLIC_STRING_BLOCKER_CACHE is None
+        or cache_key != _SYMBOLIC_STRING_BLOCKER_CACHE_KEY
+    ):
+        out = set(_SYMBOLIC_STR_KEYWORDS)
+        elm_exact, elm_array_exact, _ = _element_indexes()
+        for index in (elm_exact, elm_array_exact):
+            for info in index.values():
+                if not isinstance(info, dict):
+                    continue
+                for key in ("name", "q"):
+                    s = str(info.get(key) or "").strip()
+                    if not s:
+                        continue
+                    out.add(s)
+                    if "." in s:
+                        out.add(s.rsplit(".", 1)[-1])
+        _SYMBOLIC_STRING_BLOCKER_CACHE = frozenset(out)
+        _SYMBOLIC_STRING_BLOCKER_CACHE_KEY = cache_key
+    return _SYMBOLIC_STRING_BLOCKER_CACHE
 
 
 def _decompiled_dir(root):
@@ -1195,6 +1229,9 @@ class _Decompiler:
                 pass
         self.symbolic_string_blockers = self._build_symbolic_string_blockers()
         self._annotate_event_fields()
+        self.return_event_offsets, self.return_event_forms = (
+            self._build_return_form_index()
+        )
         self.command_def_info = self._collect_command_def_info()
         self.command_call_forms = self._collect_command_call_forms()
         self.scene_prop_lines = self._build_scene_prop_lines()
@@ -1247,7 +1284,7 @@ class _Decompiler:
         return str(ev.get("_size_expr") or "")
 
     def _build_symbolic_string_blockers(self):
-        out = set(_SYMBOLIC_STR_KEYWORDS)
+        out = set(_system_symbolic_string_blockers())
 
         def _add_name(name):
             s = str(name or "").strip()
@@ -1278,19 +1315,6 @@ class _Decompiler:
         for info in list(self.global_property_hints.values()):
             if isinstance(info, dict):
                 _add_name(info.get("name"))
-        for builder_name in (
-            "_build_system_element_index",
-            "_build_array_element_index",
-        ):
-            try:
-                index = dict(getattr(disam, builder_name)() or {})
-            except Exception:
-                index = {}
-            for info in index.values():
-                if not isinstance(info, dict):
-                    continue
-                _add_name(info.get("name"))
-                _add_name(info.get("q"))
         return out
 
     def _can_emit_symbolic_string(self, text):
@@ -1313,25 +1337,7 @@ class _Decompiler:
         _form_code = getattr(disam, "_resolve_form_code", None)
         if not callable(_form_code):
             return
-        try:
-            elm_exact = dict(getattr(disam, "_build_system_element_index")() or {})
-        except Exception:
-            elm_exact = {}
-        try:
-            elm_array_exact = dict(getattr(disam, "_build_array_element_index")() or {})
-        except Exception:
-            elm_array_exact = {}
-        receiver_forms = set()
-        for key in elm_exact.keys():
-            try:
-                receiver_forms.add(int(key[0]))
-            except Exception:
-                continue
-        for key in elm_array_exact.keys():
-            try:
-                receiver_forms.add(int(key))
-            except Exception:
-                continue
+        elm_exact, elm_array_exact, receiver_forms = _element_indexes()
         cmd_label_offsets = set()
         for it in _clone_pairs(self.meta.get("cmd_label_list") or []):
             try:
@@ -2582,6 +2588,34 @@ class _Decompiler:
                     last = i
         return last + 1 if last >= 0 else 0
 
+    def _build_return_form_index(self):
+        offsets = []
+        forms = []
+        for ev in self.events:
+            if str(ev.get("op") or "") != "CD_RETURN":
+                continue
+            arg_layout = list(ev.get("arg_layout") or [])
+            if not arg_layout:
+                continue
+            try:
+                offsets.append(int(ev.get("ofs", -1) or -1))
+                forms.append(int((arg_layout[0] or {}).get("form", 0) or 0))
+            except Exception:
+                continue
+        return offsets, forms
+
+    def _return_forms_in_range(self, start_ofs, end_ofs):
+        if not self.return_event_offsets:
+            return set()
+        try:
+            start_ofs_i = int(start_ofs)
+            end_ofs_i = int(end_ofs)
+        except Exception:
+            return set()
+        start_idx = bisect.bisect_left(self.return_event_offsets, start_ofs_i)
+        end_idx = bisect.bisect_left(self.return_event_offsets, end_ofs_i)
+        return {self.return_event_forms[idx] for idx in range(start_idx, end_idx)}
+
     def _collect_command_call_forms(self):
         out = {}
         for ev in self.events:
@@ -2619,29 +2653,14 @@ class _Decompiler:
             except Exception:
                 cmd_id = -1
             if cmd_id >= 0:
-                ret_forms = set()
-                for ev in self.events:
-                    ofs = int(ev.get("ofs", -1) or -1)
-                    if ofs < int(parsed.get("body_ofs", 0) or 0) or ofs >= int(
-                        parsed.get("trim_end_ofs", 0) or 0
-                    ):
-                        continue
-                    if str(ev.get("op") or "") != "CD_RETURN":
-                        continue
-                    arg_layout = list(ev.get("arg_layout") or [])
-                    if not arg_layout:
-                        continue
-                    try:
-                        ret_forms.add(int((arg_layout[0] or {}).get("form", 0) or 0))
-                    except Exception:
-                        continue
+                ret_forms = self._return_forms_in_range(
+                    parsed.get("body_ofs", 0) or 0,
+                    parsed.get("trim_end_ofs", 0) or 0,
+                )
                 info = parsed.get("info") or {}
                 out[cmd_id] = {
                     "name": str(info.get("name", "") or ""),
-                    "arg_layout": _copy_arg_layout(
-                        {"form": int(p.get("form", 0) or 0)}
-                        for p in list(parsed.get("params") or [])
-                    ),
+                    "arg_layout": _copy_arg_layout(parsed.get("params") or []),
                     "ret_forms": ret_forms,
                     "ret_form": None,
                 }
@@ -3478,23 +3497,10 @@ class _Decompiler:
         picked = _prefer_return_form(vals)
         if picked is not None:
             return picked
-        body_vals = set()
         if body_range is not None:
-            start_ofs, end_ofs = body_range
-            for ev in self.events:
-                ofs = int(ev.get("ofs", -1) or -1)
-                if ofs < int(start_ofs) or ofs >= int(end_ofs):
-                    continue
-                if str(ev.get("op") or "") != "CD_RETURN":
-                    continue
-                arg_layout = list(ev.get("arg_layout") or [])
-                if not arg_layout:
-                    continue
-                try:
-                    body_vals.add(int((arg_layout[0] or {}).get("form", 0) or 0))
-                except Exception:
-                    continue
-        picked = _prefer_return_form(body_vals)
+            picked = _prefer_return_form(self._return_forms_in_range(*body_range))
+        else:
+            picked = None
         if picked is not None:
             return picked
         return _default_return_form()
@@ -4071,9 +4077,7 @@ class _Decompiler:
             slot = dict((self.command_def_info or {}).get(cmd_id) or {})
             slot["name"] = str(info.get("name", "") or "")
             slot["ret_form"] = ret_form
-            slot["arg_layout"] = [
-                {"form": int(p.get("form", 0) or 0)} for p in list(params or [])
-            ]
+            slot["arg_layout"] = _copy_arg_layout(params)
             self.command_def_info[cmd_id] = slot
         head = (
             _format_command_decl(
@@ -4546,7 +4550,7 @@ def write_decompiled_ss(dat_path, bundle, out_dir=None, hints=None):
         out_root = os.path.join(root, "decompiled")
         os.makedirs(out_root, exist_ok=True)
         stem = os.path.splitext(os.path.basename(str(dat_path)))[0]
-        out_path = _unique_out_path(os.path.join(out_root, stem + ".ss"))
+        out_path = unique_out_path(os.path.join(out_root, stem + ".ss"))
         dec = _Decompiler(bundle, hints=hints)
         write_text(out_path, dec.decompile(), enc="utf-8")
         inc_lines = dec.external_inc_lines or _support_inc_lines_from_hints(hints)
