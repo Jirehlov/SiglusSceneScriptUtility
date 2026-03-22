@@ -30,6 +30,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
     if not dat_paths:
         sys.stderr.write("No .dat files found\n")
         return 1
+    bundles = []
     ok_cnt = 0
     skip_cnt = 0
     fail_cnt = 0
@@ -37,11 +38,31 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
     for dat_path in dat_paths:
         blob = read_bytes(dat_path)
         name = os.path.basename(dat_path)
+        if D._is_decompiler_excluded_dat(dat_path):
+            sys.stdout.write(f"Skipped: {name}\n")
+            skip_cnt += 1
+            continue
         if not looks_like_siglus_dat(blob):
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
-        out_path = D._write_dat_disassembly(dat_path, blob, output_dir, disam_stats)
+        bundle = D._dat_disassembly_bundle(blob, dat_path)
+        if not isinstance(bundle, dict):
+            sys.stderr.write(f"Failed: {name}\n")
+            fail_cnt += 1
+            continue
+        bundles.append((dat_path, blob, bundle))
+    decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
+    for dat_path, blob, bundle in bundles:
+        name = os.path.basename(dat_path)
+        out_path = D._write_dat_disassembly(
+            dat_path,
+            blob,
+            output_dir,
+            disam_stats,
+            bundle=bundle,
+            decompile_hints=decompile_hints,
+        )
         if not out_path:
             sys.stderr.write(f"Failed: {name}\n")
             fail_cnt += 1

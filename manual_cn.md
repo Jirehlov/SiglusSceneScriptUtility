@@ -331,7 +331,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | 用于结构比较的可选第二个文件。两个文件必须类型相同。 |
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写入 `__DATDIR__` 子目录，而非打印到 stdout。 |
 | `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
-| `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“解码/解压后的 `scn_bytes` payload 的 SHA-1 哈希”比较。这比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
+| `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
 
@@ -347,7 +347,7 @@ siglus-ssu -a /path/to/script.dat
 # 比较两个版本的 Scene.pck — 报告文件增删和变化
 siglus-ssu -a /path/to/Scene_original.pck /path/to/Scene_translated.pck
 
-# 比较两个 Scene.pck 的解码后 `scn_bytes` SHA-1 payload 哈希
+# 比较两个 Scene.pck 的规范化解码 `scn_bytes` 语义
 siglus-ssu -a --payload /path/to/Scene_original.pck /path/to/Scene_translated.pck
 
 # 将 .dat 反汇编写入磁盘以供检查

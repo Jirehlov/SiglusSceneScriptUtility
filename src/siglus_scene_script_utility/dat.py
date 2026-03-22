@@ -1,5 +1,4 @@
-import contextlib
-import io
+import json
 import os
 import struct
 import sys
@@ -7,6 +6,7 @@ import sys
 from . import const as C
 from . import disam
 from . import pck
+from .decompiler import build_decompile_hints, write_decompiled_ss
 from .common import (
     hx,
     _fmt_ts,
@@ -21,10 +21,12 @@ from .common import (
     _diff_kv,
     build_sections,
     read_bytes,
+    is_named_filename,
+    ANGOU_DAT_NAME,
+    write_status,
 )
 
 DAT_TXT_OUT_DIR = None
-_INC_ANALYSIS_CACHE = {}
 
 
 def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
@@ -81,40 +83,79 @@ def _unique_out_path(path):
         return path
 
 
-def _get_inc_analysis(dat_path):
-    try:
-        root = os.path.dirname(str(dat_path) or "") or "."
-        root = os.path.abspath(root)
-    except Exception:
-        return {}
-    cached = _INC_ANALYSIS_CACHE.get(root)
-    if cached is not None:
-        return cached
-    out = {}
-    try:
-        from .BS import build_ia_data
-
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            iad = build_ia_data({"scn_path": root})
-        out = {
-            "inc_property_cnt": int(iad.get("inc_property_cnt", 0) or 0),
-            "inc_command_cnt": int(iad.get("inc_command_cnt", 0) or 0),
-            "inc_property_defs": list(iad.get("property_list") or []),
-            "inc_command_defs": list(iad.get("command_list") or []),
-        }
-    except Exception:
-        out = {}
-    _INC_ANALYSIS_CACHE[root] = out
-    return out
-
-
 def _disassembly_ended_unexpectedly(dis):
     return (not dis) or ("CD_EOF" not in dis[-1])
 
 
-def _dat_disassembly_bundle(blob, dat_path=None):
+def _build_decompile_hints(bundles):
     try:
+        return build_decompile_hints(
+            [
+                x
+                for x in list(bundles or [])
+                if isinstance(x, dict) and not bool(x.get("decompiler_excluded"))
+            ]
+        )
+    except Exception:
+        return {}
+
+
+def _is_decompiler_excluded_dat(dat_path=None, scene_name=None):
+    names = []
+    if dat_path:
+        try:
+            names.append(os.path.basename(str(dat_path)))
+        except Exception:
+            pass
+    if scene_name not in (None, ""):
+        try:
+            scene_text = str(scene_name)
+        except Exception:
+            scene_text = ""
+        if scene_text:
+            names.append(scene_text)
+            names.append(scene_text + ".dat")
+    for name in names:
+        try:
+            if is_named_filename(name, ANGOU_DAT_NAME):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _build_namae_defs(namae_list, str_list):
+    out = []
+    for idx, raw in enumerate(namae_list or []):
+        try:
+            sid = int(raw)
+        except Exception:
+            continue
+        text = None
+        if 0 <= sid < len(str_list or []):
+            try:
+                text = str(str_list[sid])
+            except Exception:
+                text = None
+        out.append({"id": int(idx), "str_id": sid, "text": text})
+    return out
+
+
+def _build_read_flag_defs(read_flag_list):
+    out = []
+    for idx, raw in enumerate(read_flag_list or []):
+        try:
+            out.append({"id": int(idx), "line": int(raw)})
+        except Exception:
+            continue
+    return out
+
+
+def _dat_disassembly_bundle(
+    blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
+):
+    try:
+        decompiler_excluded = _is_decompiler_excluded_dat(dat_path, scene_name)
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
@@ -142,8 +183,9 @@ def _dat_disassembly_bundle(blob, dat_path=None):
         z_label_list = _read_struct_list(
             blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
         )
-        inc_meta = _get_inc_analysis(dat_path) if dat_path else {}
-        dis = disam.disassemble_scn_bytes(
+        namae_defs = _build_namae_defs(meta.get("namae_list"), str_list)
+        read_flag_defs = _build_read_flag_defs(meta.get("read_flag_list"))
+        dis_res = disam.disassemble_scn_bytes(
             scn,
             str_list,
             label_list,
@@ -152,11 +194,17 @@ def _dat_disassembly_bundle(blob, dat_path=None):
             scn_prop_defs=meta.get("scn_prop_defs"),
             scn_cmd_names=meta.get("scn_cmd_names"),
             call_prop_names=meta.get("call_prop_names"),
-            inc_property_defs=inc_meta.get("inc_property_defs"),
-            inc_property_cnt=inc_meta.get("inc_property_cnt", 0),
-            inc_command_defs=inc_meta.get("inc_command_defs"),
-            inc_command_cnt=inc_meta.get("inc_command_cnt", 0),
+            pack_context=pack_context,
+            scene_no=scene_no,
+            scene_name=scene_name,
+            namae_defs=namae_defs,
+            read_flag_defs=read_flag_defs,
+            with_trace=True,
         )
+        if isinstance(dis_res, tuple) and len(dis_res) >= 2:
+            dis, trace = dis_res[0], dis_res[1]
+        else:
+            dis, trace = dis_res, []
         return {
             "header": h,
             "meta": meta,
@@ -164,14 +212,23 @@ def _dat_disassembly_bundle(blob, dat_path=None):
             "str_list": str_list,
             "label_list": label_list,
             "z_label_list": z_label_list,
-            "inc_meta": inc_meta,
+            "pack_context": dict(pack_context or {}),
+            "scene_no": scene_no,
+            "scene_name": scene_name,
+            "dat_path": dat_path,
+            "decompiler_excluded": decompiler_excluded,
+            "namae_defs": namae_defs,
+            "read_flag_defs": read_flag_defs,
+            "trace": trace,
             "dis": dis,
         }
     except Exception:
         return None
 
 
-def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
+def _write_dat_disassembly(
+    dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
+):
     try:
         if out_dir is None:
             out_dir = globals().get("DAT_TXT_OUT_DIR")
@@ -183,13 +240,18 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
             out_dir = os.path.dirname(str(dat_path)) or "."
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None
-        bundle = _dat_disassembly_bundle(blob, dat_path)
         if not isinstance(bundle, dict):
+            bundle = _dat_disassembly_bundle(blob, dat_path)
+        if not isinstance(bundle, dict):
+            return None
+        if bool(bundle.get("decompiler_excluded")):
             return None
         h = bundle.get("header") or {}
         str_list = bundle.get("str_list") or []
         label_list = bundle.get("label_list") or []
         z_label_list = bundle.get("z_label_list") or []
+        namae_defs = bundle.get("namae_defs") or []
+        read_flag_defs = bundle.get("read_flag_defs") or []
         dis = bundle.get("dis") or []
         so = int(h.get("scn_ofs", 0) or 0)
         ss = int(h.get("scn_size", 0) or 0)
@@ -223,10 +285,35 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
         lines.append(f"scn_cmd_cnt: {int(h.get('scn_cmd_cnt', 0) or 0):d}")
         lines.append(f"namae_cnt: {int(h.get('namae_cnt', 0) or 0):d}")
         lines.append(f"read_flag_cnt: {int(h.get('read_flag_cnt', 0) or 0):d}")
+        if bundle.get("scene_no") is not None:
+            try:
+                lines.append(f"scene_no: {int(bundle.get('scene_no')):d}")
+            except Exception:
+                lines.append(f"scene_no: {bundle.get('scene_no')!r}")
+        if bundle.get("scene_name") not in (None, ""):
+            lines.append(f"scene_name: {bundle.get('scene_name')}")
         lines.append("")
         lines.append("---- str_list (xor utf16le) ----")
         for i, s in enumerate(str_list or []):
             lines.append(f"[{i:d}] {repr(s)}")
+        lines.append("")
+        lines.append("---- namae_list ----")
+        for it in namae_defs:
+            if not isinstance(it, dict):
+                continue
+            sid = it.get("str_id")
+            text = it.get("text")
+            lines.append(
+                f"[{int(it.get('id', 0) or 0):d}] str[{int(sid):d}] {repr(text) if text is not None else ''}".rstrip()
+            )
+        lines.append("")
+        lines.append("---- read_flag_list ----")
+        for it in read_flag_defs:
+            if not isinstance(it, dict):
+                continue
+            lines.append(
+                f"[{int(it.get('id', 0) or 0):d}] line {int(it.get('line', 0) or 0):d}"
+            )
         lines.append("")
         lines.append("---- label_list ----")
         for i, ofs in enumerate(label_list or []):
@@ -247,6 +334,9 @@ def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
         lines.append("")
         with open(out_path, "w", encoding="utf-8", newline="\r\n") as f:
             f.write("\n".join(lines))
+        if not bool(bundle.get("decompiler_excluded")):
+            write_status(f"Decompiling {os.path.basename(str(dat_path))} ...")
+            write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
         return out_path
     except Exception:
         return None
@@ -277,12 +367,72 @@ def _scn_payload_bytes(blob):
     return bytes(memoryview(blob)[so : so + ss])
 
 
-def _scn_payload_hash_bundle(blob):
-    bounds = _scn_payload_bounds(blob)
-    if bounds is None:
+_PAYLOAD_COMPARE_DROP_KEYS = frozenset(
+    {
+        "ofs",
+        "labels",
+        "target_ofs",
+        "str_id",
+        "namae_id",
+        "namae_ids",
+        "read_flag_line",
+        "read_flag_ids",
+        "scene_no",
+        "scene_name",
+        "namae_defs",
+        "read_flag_defs",
+        "arg_list_id",
+        "named_ids",
+    }
+)
+
+
+def _payload_trace_normalize_value(ev, key, value):
+    if key in _PAYLOAD_COMPARE_DROP_KEYS:
         return None
-    so, ss = bounds
-    return {"size": ss, "sha1": _sha1(memoryview(blob)[so : so + ss])}
+    if key == "value" and ev.get("text") is not None:
+        return None
+    if isinstance(value, dict):
+        out = {}
+        for sub_key in sorted(value):
+            sub_val = _payload_trace_normalize_value(ev, sub_key, value[sub_key])
+            if sub_val is not None:
+                out[sub_key] = sub_val
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            sub_val = _payload_trace_normalize_value(ev, key, item)
+            if sub_val is not None:
+                out.append(sub_val)
+        return out
+    return value
+
+
+def _payload_trace_lines(trace):
+    lines = []
+    for ev in trace or []:
+        if not isinstance(ev, dict):
+            continue
+        norm = {}
+        for key in sorted(ev):
+            if str(key).startswith("_"):
+                continue
+            val = _payload_trace_normalize_value(ev, key, ev.get(key))
+            if val is not None:
+                norm[str(key)] = val
+        if norm:
+            lines.append(json.dumps(norm, ensure_ascii=False, sort_keys=True))
+    return lines
+
+
+def _scn_payload_hash_bundle(blob):
+    bundle = _dat_disassembly_bundle(blob)
+    if not isinstance(bundle, dict):
+        return None
+    lines = _payload_trace_lines(bundle.get("trace") or [])
+    data = "\n".join(lines).encode("utf-8", "surrogatepass")
+    return {"size": len(data), "sha1": _sha1(data)}
 
 
 def _dat_sections(blob):
@@ -733,11 +883,11 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
                 "sha1"
             ) == c2.get("sha1")
             print(
-                "payload compare (scn_bytes sha1): "
+                "payload compare (normalized scn_bytes semantics): "
                 + ("identical" if payload_same else "different")
             )
         else:
-            print("payload compare (scn_bytes sha1): unavailable")
+            print("payload compare (normalized scn_bytes semantics): unavailable")
     out_dir = globals().get("DAT_TXT_OUT_DIR")
     if out_dir:
         out1 = _write_dat_disassembly(p1, b1, out_dir)

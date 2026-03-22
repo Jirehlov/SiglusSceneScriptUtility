@@ -244,8 +244,38 @@ def disassemble_scn_bytes(
     inc_property_cnt=0,
     inc_command_defs=None,
     inc_command_cnt=0,
+    pack_context=None,
+    scene_no=None,
+    scene_name=None,
+    namae_defs=None,
+    read_flag_defs=None,
+    with_trace=False,
 ):
     z_label_list = z_label_list or []
+    pack_context = dict(pack_context or {})
+    if inc_property_defs is None:
+        inc_property_defs = pack_context.get("inc_property_defs")
+    if inc_command_defs is None:
+        inc_command_defs = pack_context.get("inc_command_defs")
+    if not inc_property_cnt:
+        try:
+            inc_property_cnt = int(pack_context.get("inc_property_cnt", 0) or 0)
+        except Exception:
+            inc_property_cnt = 0
+    if not inc_command_cnt:
+        try:
+            inc_command_cnt = int(pack_context.get("inc_command_cnt", 0) or 0)
+        except Exception:
+            inc_command_cnt = 0
+    if scene_name in (None, ""):
+        try:
+            if scene_no is not None:
+                sn_i = int(scene_no)
+                scene_names = list(pack_context.get("scene_names") or [])
+                if 0 <= sn_i < len(scene_names):
+                    scene_name = str(scene_names[sn_i] or "")
+        except Exception:
+            scene_name = ""
     form_rev = _invert_form_code_map()
     op_names = {}
     for nm in (
@@ -359,6 +389,8 @@ def disassemble_scn_bytes(
     cmd_label_list = list(cmd_label_list or [])
     inc_property_defs = list(inc_property_defs or [])
     inc_command_defs = list(inc_command_defs or [])
+    namae_defs = list(namae_defs or [])
+    read_flag_defs = list(read_flag_defs or [])
     scn_prop_info = {}
     for idx, it in enumerate(scn_prop_defs):
         try:
@@ -427,6 +459,28 @@ def disassemble_scn_bytes(
                 "aliases": [name],
                 "is_alias": False,
             }
+        except Exception:
+            continue
+    namae_ids_by_str = {}
+    for idx, it in enumerate(namae_defs):
+        try:
+            if not isinstance(it, dict):
+                continue
+            nid = int(it.get("id", idx))
+            sid = int(it.get("str_id"))
+            namae_ids_by_str.setdefault(sid, []).append(nid)
+        except Exception:
+            continue
+    read_flag_line_by_id = {}
+    read_flag_ids_by_line = {}
+    for idx, it in enumerate(read_flag_defs):
+        try:
+            if not isinstance(it, dict):
+                continue
+            rid = int(it.get("id", idx))
+            line = int(it.get("line"))
+            read_flag_line_by_id[rid] = line
+            read_flag_ids_by_line.setdefault(line, []).append(rid)
         except Exception:
             continue
     cmd_label_offsets = set()
@@ -506,6 +560,45 @@ def disassemble_scn_bytes(
             return (int(parent_form), int(element_code)) in read_flag_command_codes
         except Exception:
             return False
+
+    def _clone_side_defs(defs):
+        out_defs = []
+        for idx, it in enumerate(defs or []):
+            if not isinstance(it, dict):
+                continue
+            one = {}
+            for key in sorted(it):
+                val = it.get(key)
+                if isinstance(val, bool):
+                    one[str(key)] = bool(val)
+                elif isinstance(val, int):
+                    one[str(key)] = int(val)
+                elif val is None:
+                    one[str(key)] = None
+                else:
+                    one[str(key)] = str(val)
+            if "id" not in one:
+                one["id"] = int(idx)
+            out_defs.append(one)
+        return out_defs
+
+    def _namae_ids_for_str(str_id):
+        try:
+            return list(namae_ids_by_str.get(int(str_id), []) or [])
+        except Exception:
+            return []
+
+    def _read_flag_line(flag_id):
+        try:
+            return read_flag_line_by_id.get(int(flag_id))
+        except Exception:
+            return None
+
+    def _read_flag_ids_for_line(line_no):
+        try:
+            return list(read_flag_ids_by_line.get(int(line_no), []) or [])
+        except Exception:
+            return []
 
     def _stack_int_value(it):
         try:
@@ -1455,7 +1548,34 @@ def disassemble_scn_bytes(
             out_forms.append(fmt_form(form))
         return out_forms
 
+    def _clone_arg_layout(args):
+        out_args = []
+        for arg in args or []:
+            if not isinstance(arg, dict):
+                out_args.append(arg)
+                continue
+            one = {"form": int(arg.get("form", 0) or 0)}
+            if int(one["form"]) == fm_list:
+                one["sub"] = _clone_arg_layout(arg.get("sub") or [])
+            out_args.append(one)
+        return out_args
+
     out = []
+    trace = [] if with_trace else None
+
+    def _trace(opname, ofs, **fields):
+        if trace is None:
+            return
+        one = {
+            "op": str(opname or ""),
+            "ofs": int(ofs),
+            "line": (int(cur_line) if cur_line is not None else None),
+            "labels": list(labels_at.get(int(ofs), []) or []),
+        }
+        for key, value in fields.items():
+            one[key] = value
+        trace.append(one)
+
     i = 0
     cur_line = None
     stack = []
@@ -1477,6 +1597,7 @@ def disassemble_scn_bytes(
         opname = op_names.get(op, f"OP_{op:02X}")
         if op == cd_none:
             out.append(f"{ofs:08X}: {opname}")
+            _trace(opname, ofs)
             continue
         if op == cd_nl:
             ln = read_i32(i)
@@ -1486,6 +1607,11 @@ def disassemble_scn_bytes(
             i += 4
             cur_line = int(ln)
             out.append(f"{ofs:08X}: {opname} {cur_line:d}")
+            nl_fields = {"value": int(cur_line)}
+            rf_ids = _read_flag_ids_for_line(cur_line)
+            if rf_ids:
+                nl_fields["read_flag_ids"] = rf_ids
+            _trace(opname, ofs, **nl_fields)
             continue
         if op == cd_push:
             form = read_i32(i)
@@ -1500,6 +1626,18 @@ def disassemble_scn_bytes(
             ):
                 s = f' ; "{_escape_preview(str_list[int(val)])}"'
             out.append(f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
+            _trace(
+                opname,
+                ofs,
+                form=int(form),
+                value=int(val),
+                text=(
+                    str(str_list[int(val)])
+                    if int(form) == _form_code(C.FM_STR)
+                    and 0 <= int(val) < len(str_list or [])
+                    else None
+                ),
+            )
             _push_stack_value(form, int(val), receiver=False)
             if elm_point_pending_idx is not None and int(form) == _form_code(C.FM_INT):
                 try:
@@ -1523,6 +1661,7 @@ def disassemble_scn_bytes(
                 form_i = int(form)
             except Exception:
                 form_i = None
+            _trace(opname, ofs, form=form_i)
             if form_i in scalar_forms:
                 _pop_stack_top()
             continue
@@ -1533,6 +1672,7 @@ def disassemble_scn_bytes(
                 break
             i += 4
             out.append(f"{ofs:08X}: {opname} {fmt_form(v)}")
+            _trace(opname, ofs, form=int(v))
             _copy_scalar(v)
             continue
         if op in (
@@ -1590,6 +1730,7 @@ def disassemble_scn_bytes(
                 elm_point_pending_idx = len(elm_points) - 1
             expr_s = f" ; expr={prop_expr}" if prop_expr else ""
             out.append(f"{ofs:08X}: {opname}{expr_s}")
+            _trace(opname, ofs)
             continue
         if op == cd_dec_prop:
             a = read_i32(i)
@@ -1600,6 +1741,7 @@ def disassemble_scn_bytes(
             i += 8
             size_s = ""
             size_expr_s = ""
+            size_val = None
             try:
                 form_i = int(a)
             except Exception:
@@ -1628,6 +1770,14 @@ def disassemble_scn_bytes(
             name_s = f" name={name}" if name else ""
             out.append(
                 f"{ofs:08X}: {opname} {fmt_form(a)}, {int(b):d}{size_s}{name_s}{size_expr_s}"
+            )
+            _trace(
+                opname,
+                ofs,
+                form=int(a),
+                prop_id=int(b),
+                size=(int(size_val) if size_val is not None else None),
+                name=(name or ""),
             )
             q = name if name else f"$slot_{call_slot_next:d}"
             call_slot_info[call_slot_next] = {
@@ -1664,6 +1814,16 @@ def disassemble_scn_bytes(
             )
             cond_s = f" ; cond={cond_expr}" if cond_expr else ""
             out.append(f"{ofs:08X}: {opname} L{int(lid):d}{dest}{cond_s}")
+            _trace(
+                opname,
+                ofs,
+                label_id=int(lid),
+                target_ofs=(
+                    int(label_list[int(lid)])
+                    if 0 <= int(lid) < len(label_list or [])
+                    else None
+                ),
+            )
             if op in (cd_goto_true, cd_goto_false):
                 _pop_stack_top()
             continue
@@ -1694,6 +1854,17 @@ def disassemble_scn_bytes(
             out.append(
                 f"{ofs:08X}: {opname} L{int(lid):d} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{dest}{gosub_ss}"
             )
+            _trace(
+                opname,
+                ofs,
+                label_id=int(lid),
+                target_ofs=(
+                    int(label_list[int(lid)])
+                    if 0 <= int(lid) < len(label_list or [])
+                    else None
+                ),
+                arg_layout=_clone_arg_layout(arg_forms),
+            )
             for arg_info in reversed(list(arg_forms or [])):
                 _consume_arg_value(arg_info)
             _push_stack_value(fm_int if op == cd_gosub else fm_str, receiver=False)
@@ -1711,6 +1882,11 @@ def disassemble_scn_bytes(
                 ret_s = " ; expr=return"
             out.append(
                 f"{ofs:08X}: {opname} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{ret_s}"
+            )
+            _trace(
+                opname,
+                ofs,
+                arg_layout=_clone_arg_layout(arg_forms),
             )
             for arg_info in reversed(list(arg_forms or [])):
                 _consume_arg_value(arg_info)
@@ -1731,6 +1907,13 @@ def disassemble_scn_bytes(
             out.append(
                 f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}{assign_s}"
             )
+            _trace(
+                opname,
+                ofs,
+                left_form=int(a),
+                right_form=int(b),
+                arg_list_id=int(c),
+            )
             stack_start = _latest_elm_stack_start()
             if stack_start is not None:
                 _drop_stack_tail(stack_start)
@@ -1746,6 +1929,12 @@ def disassemble_scn_bytes(
             i += 5
             out.append(f"{ofs:08X}: {opname} {fmt_form(form)} op={int(opr):d}")
             rhs_expr = _peek_arg_expr_list([{"form": int(form)}])
+            _trace(
+                opname,
+                ofs,
+                form=int(form),
+                opr=int(opr),
+            )
             _pop_stack_top()
             res_form = _unary_result_form(form, opr)
             if res_form is not None:
@@ -1771,6 +1960,13 @@ def disassemble_scn_bytes(
                 f"{ofs:08X}: {opname} {fmt_form(fl)}, {fmt_form(fr)} op={int(opr):d}"
             )
             pair_expr = _peek_arg_expr_list([{"form": int(fl)}, {"form": int(fr)}])
+            _trace(
+                opname,
+                ofs,
+                left_form=int(fl),
+                right_form=int(fr),
+                opr=int(opr),
+            )
             _pop_stack_top()
             _pop_stack_top()
             res_form = _binary_result_form(fl, fr, opr)
@@ -1790,20 +1986,69 @@ def disassemble_scn_bytes(
                 break
             i += 4
             txt = ""
+            sid = None
             if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     txt = f' ; "{_escape_preview(str_list[int(sid)])}"'
             out.append(f"{ofs:08X}: {opname} read_flag={int(rf):d}{txt}")
+            rf_line = _read_flag_line(rf)
+            text_fields = {
+                "read_flag": int(rf),
+                "text": (
+                    str(str_list[int(sid)])
+                    if stack
+                    and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR)
+                    and sid is not None
+                    and 0 <= int(sid) < len(str_list or [])
+                    else None
+                ),
+            }
+            if sid is not None:
+                try:
+                    text_fields["str_id"] = int(sid)
+                except Exception:
+                    pass
+            if rf_line is not None:
+                text_fields["read_flag_line"] = int(rf_line)
+            _trace(
+                opname,
+                ofs,
+                **text_fields,
+            )
             _pop_stack_top()
             continue
         if op == cd_name:
             nm = ""
+            sid = None
             if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
                 sid = stack[-1].get("val")
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     nm = f' "{_escape_preview(str_list[int(sid)])}"'
             out.append(f"{ofs:08X}: {opname}{nm}")
+            name_fields = {
+                "text": (
+                    str(str_list[int(sid)])
+                    if sid is not None and 0 <= int(sid) < len(str_list or [])
+                    else None
+                ),
+            }
+            if sid is not None:
+                try:
+                    sid_i = int(sid)
+                    name_fields["str_id"] = sid_i
+                    name_ids = _namae_ids_for_str(sid_i)
+                    if name_ids:
+                        name_fields["namae_ids"] = list(name_ids)
+                        if len(name_ids) == 1:
+                            name_fields["namae_id"] = int(name_ids[0])
+                except Exception:
+                    pass
+            _trace(
+                opname,
+                ofs,
+                **name_fields,
+            )
             _pop_stack_top()
             continue
         if op == cd_command:
@@ -1880,6 +2125,21 @@ def disassemble_scn_bytes(
                 f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
             )
             out.append(line)
+            _trace(
+                opname,
+                ofs,
+                arg_list_id=int(arg_list_id),
+                arg_layout=_clone_arg_layout(arg_forms),
+                named_ids=list(named_ids),
+                ret_form=int(ret_form),
+                read_flag=(int(read_flag) if read_flag is not None else None),
+                read_flag_line=(
+                    int(_read_flag_line(read_flag))
+                    if _read_flag_line(read_flag) is not None
+                    else None
+                ),
+                element_code=(int(element_code) if element_code is not None else None),
+            )
             if cmd_stack_start is not None:
                 _collapse_command_expr(cmd_stack_start, ret_form, expr=cmd_expr)
             else:
@@ -1891,7 +2151,27 @@ def disassemble_scn_bytes(
             continue
         if op == cd_eof:
             out.append(f"{ofs:08X}: {opname}")
+            _trace(opname, ofs)
             break
         out.append(f"{ofs:08X}: {opname}")
+        _trace(opname, ofs)
         break
+    if trace is not None and trace:
+        tail = trace[-1]
+        if scene_no is not None:
+            try:
+                tail["scene_no"] = int(scene_no)
+            except Exception:
+                tail["scene_no"] = scene_no
+        if scene_name not in (None, ""):
+            try:
+                tail["scene_name"] = str(scene_name)
+            except Exception:
+                pass
+        if namae_defs:
+            tail["namae_defs"] = _clone_side_defs(namae_defs)
+        if read_flag_defs:
+            tail["read_flag_defs"] = _clone_side_defs(read_flag_defs)
+    if trace is not None:
+        return out, trace
     return out

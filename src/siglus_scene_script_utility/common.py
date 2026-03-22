@@ -358,6 +358,11 @@ def write_text(path: str, text: str, enc: str = "utf-8") -> None:
         f.write(text)
 
 
+def write_status(text: str) -> None:
+    sys.stdout.write(str(text or "") + "\n")
+    sys.stdout.flush()
+
+
 def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 

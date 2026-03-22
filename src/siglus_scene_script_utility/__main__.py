@@ -116,7 +116,7 @@ def _usage(out=None):
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
     )
     out.write(
-        "    --payload      Compare decoded/decompressed scn_bytes SHA-1 payload hash; expensive\n"
+        "    --payload      Compare normalized decoded/decompressed scn_bytes semantics (ignores string-pool ids when text matches); expensive\n"
     )
     out.write("    --angou        Parse as 暗号.dat and print derived exe_el key\n")
     out.write("    --gei          Analyze/compare Gameexe.dat\n")

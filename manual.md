@@ -332,7 +332,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | Optional second file for structural comparison. Both files must be the same type. |
 | `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to a `__DATDIR__` subdirectory instead of printing to stdout. |
 | `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
-| `--payload` | For `.pck` and `.dat` comparisons, additionally compare the SHA-1 hash of the decoded/decompressed `scn_bytes` payload. This is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
+| `--payload` | For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
 
@@ -348,7 +348,7 @@ siglus-ssu -a /path/to/script.dat
 # Compare two versions of Scene.pck — reports file additions, removals, and changes
 siglus-ssu -a /path/to/Scene_original.pck /path/to/Scene_translated.pck
 
-# Compare two Scene.pck files by decoded `scn_bytes` SHA-1 payload hash
+# Compare two Scene.pck files by normalized decoded `scn_bytes` semantics
 siglus-ssu -a --payload /path/to/Scene_original.pck /path/to/Scene_translated.pck
 
 # Write .dat disassembly to disk for inspection

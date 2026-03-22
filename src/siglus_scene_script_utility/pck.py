@@ -35,6 +35,7 @@ from .common import (
     find_siglus_engine_exe,
     read_siglus_engine_exe_el,
     looks_like_siglus_pck,
+    write_status,
 )
 
 MAX_SCENE_LIST = 2000
@@ -1036,6 +1037,77 @@ def _compute_exe_el(os_dir: str, alt_dir: str = ""):
     return b""
 
 
+def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):
+    try:
+        if not isinstance(blob, (bytes, bytearray, memoryview)):
+            return {}
+        if not hdr:
+            hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+        if not hdr:
+            return {}
+        if not isinstance(meta, dict) or any(
+            key not in meta for key in ("inc_prop_names", "inc_cmd_names", "scn_names")
+        ):
+            _, auto_meta = _pck_sections(blob, preview=False)
+            if isinstance(meta, dict):
+                merged = dict(auto_meta or {})
+                merged.update(meta)
+                meta = merged
+            else:
+                meta = auto_meta
+        inc_prop_list = _read_struct_list(
+            blob,
+            hdr.get("inc_prop_list_ofs", 0),
+            hdr.get("inc_prop_cnt", 0),
+            _I32_PAIR_STRUCT,
+        )
+        inc_cmd_list = _read_struct_list(
+            blob,
+            hdr.get("inc_cmd_list_ofs", 0),
+            hdr.get("inc_cmd_cnt", 0),
+            _I32_PAIR_STRUCT,
+        )
+        inc_prop_names = list((meta or {}).get("inc_prop_names") or [])
+        inc_cmd_names = list((meta or {}).get("inc_cmd_names") or [])
+        scn_names = list((meta or {}).get("scn_names") or [])
+        return {
+            "scene_names": scn_names,
+            "inc_property_cnt": int(hdr.get("inc_prop_cnt", 0) or 0),
+            "inc_property_defs": [
+                {
+                    "id": int(i),
+                    "form": int(it[0]),
+                    "size": int(it[1]),
+                    "name": (
+                        str(inc_prop_names[i])
+                        if 0 <= i < len(inc_prop_names)
+                        and inc_prop_names[i] is not None
+                        else ""
+                    ),
+                }
+                for i, it in enumerate(inc_prop_list or [])
+                if isinstance(it, (list, tuple)) and len(it) >= 2
+            ],
+            "inc_command_cnt": int(hdr.get("inc_cmd_cnt", 0) or 0),
+            "inc_command_defs": [
+                {
+                    "id": int(i),
+                    "name": (
+                        str(inc_cmd_names[i])
+                        if 0 <= i < len(inc_cmd_names) and inc_cmd_names[i] is not None
+                        else ""
+                    ),
+                    "scn_no": int(it[0]),
+                    "offset": int(it[1]),
+                }
+                for i, it in enumerate(inc_cmd_list or [])
+                if isinstance(it, (list, tuple)) and len(it) >= 2
+            ],
+        }
+    except Exception:
+        return {}
+
+
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
@@ -1155,11 +1227,16 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     easy_code = C.EASY_ANGOU_CODE
     D = None
     disam_stats = None
+    dat_items = []
+    pack_context = {}
     if dat_txt:
         from . import dat as D
 
         disam_stats = {"disassembled": 0, "ended_unexpectedly": 0}
-    for nm, blob in zip(scn_names, scn_data):
+        pack_context = _build_disam_pack_context(
+            dat, hdr=hdr, meta={"scn_names": scn_names}
+        )
+    for scn_no, (nm, blob) in enumerate(zip(scn_names, scn_data)):
         if not nm:
             continue
         b = blob
@@ -1189,14 +1266,33 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         out_name = os.path.basename(rel) or rel
         out_path = _unique_outpath(bs_dir, out_name)
         write_bytes(out_path, out_dat)
-        if D:
-            D._write_dat_disassembly(
-                out_path,
-                out_dat,
-                os.path.dirname(out_path) or bs_dir,
-                disam_stats,
-            )
+        if D and (not D._is_decompiler_excluded_dat(out_path, nm)):
+            dat_items.append((out_path, out_dat, scn_no, nm))
         ok_cnt += 1
+    if D and dat_items:
+        bundles = []
+        for dat_path, blob, scn_no, nm in dat_items:
+            write_status(f"Disassembling {os.path.basename(str(dat_path))} ...")
+            bundle = D._dat_disassembly_bundle(
+                blob,
+                dat_path,
+                pack_context=pack_context,
+                scene_no=scn_no,
+                scene_name=nm,
+            )
+            if not isinstance(bundle, dict):
+                continue
+            bundles.append((dat_path, blob, bundle))
+        decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
+        for dat_path, blob, bundle in bundles:
+            D._write_dat_disassembly(
+                dat_path,
+                blob,
+                os.path.dirname(dat_path) or bs_dir,
+                disam_stats,
+                bundle=bundle,
+                decompile_hints=decompile_hints,
+            )
     sys.stdout.write(f"Extracted scenes: {ok_cnt:d}\n")
     if dat_txt and isinstance(disam_stats, dict):
         sys.stdout.write(
