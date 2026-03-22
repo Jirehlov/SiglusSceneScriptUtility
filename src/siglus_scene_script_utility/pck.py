@@ -515,8 +515,8 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
     exe_el1 = b""
     exe_el2 = b""
     if compare_payload:
-        exe_el1 = _compute_exe_el("", os.path.dirname(str(p1 or "")))
-        exe_el2 = _compute_exe_el("", os.path.dirname(str(p2 or "")))
+        exe_el1 = _compute_exe_el("", os.path.dirname(os.path.abspath(str(p1 or ""))))
+        exe_el2 = _compute_exe_el("", os.path.dirname(os.path.abspath(str(p2 or ""))))
 
     def _decode_scene_blob_for_compare(blob, hdr, exe_el):
         if not isinstance(blob, (bytes, bytearray)) or not blob:
