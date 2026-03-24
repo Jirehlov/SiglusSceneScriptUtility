@@ -47,6 +47,10 @@ def _materialize_lines(lines):
     return out
 
 
+def _copy_lines(lines):
+    return [_line_item(_line_text(line), _line_target(line)) for line in (lines or [])]
+
+
 _FORM_REV = invert_form_code_map()
 
 
@@ -129,6 +133,50 @@ _ELEMENT_INDEX_CACHE_KEY = None
 _ELEMENT_INDEX_CACHE = None
 _SYMBOLIC_STRING_BLOCKER_CACHE_KEY = None
 _SYMBOLIC_STRING_BLOCKER_CACHE = None
+_DECOMPILER_CACHE_KEY = "_decompiler_cache"
+
+
+def _line_label_refs(lines):
+    return set(_LABEL_REF_RE.findall("\n".join(_line_text(x) for x in (lines or []))))
+
+
+def _decompiler_cache(bundle):
+    if not isinstance(bundle, dict):
+        return None
+    cache = bundle.get(_DECOMPILER_CACHE_KEY)
+    if isinstance(cache, dict):
+        return cache
+    cache = {}
+    bundle[_DECOMPILER_CACHE_KEY] = cache
+    return cache
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def _annotation_cache_signature(
+    global_property_count,
+    global_property_max_id,
+    global_property_hints,
+):
+    out = []
+    for key, info in sorted((global_property_hints or {}).items()):
+        idx = _int_or_none(key)
+        if idx is None:
+            continue
+        form = None
+        if isinstance(info, dict) and info.get("form") is not None:
+            form = _int_or_none(info.get("form"))
+        out.append((idx, form))
+    return (
+        _int_or_none(global_property_count),
+        _int_or_none(global_property_max_id),
+        tuple(out),
+    )
 
 
 def _element_index_cache_key():
@@ -498,7 +546,14 @@ def _merge_head_with_first_line(head, body_lines):
 
 def _merge_same_target_lines(lines):
     out = []
-    kept = [_line_item(_line_text(line), _line_target(line)) for line in (lines or [])]
+    kept = _copy_lines(lines)
+    next_targets = [None] * len(kept)
+    next_target = None
+    for idx in range(len(kept) - 1, -1, -1):
+        next_targets[idx] = next_target
+        target = _line_target(kept[idx])
+        if target is not None:
+            next_target = int(target)
     for idx, line in enumerate(kept):
         text = _line_text(line)
         target = _line_target(line)
@@ -523,11 +578,7 @@ def _merge_same_target_lines(lines):
                 prev_has_open = "{" in str(prev_label.group(3) or "")
             else:
                 prev_has_open = "{" in prev_text
-            next_target = None
-            for nxt in kept[idx + 1 :]:
-                next_target = _line_target(nxt)
-                if next_target is not None:
-                    break
+            next_target = next_targets[idx]
             if (
                 prev_text
                 and prev_target is not None
@@ -568,7 +619,7 @@ def _merge_same_target_lines(lines):
 
 def _filter_unused_line_labels(lines, keep_labels=None):
     keep = set(str(x or "") for x in (keep_labels or []))
-    refs = set(_LABEL_REF_RE.findall("\n".join(_line_text(x) for x in (lines or []))))
+    refs = _line_label_refs(lines)
     out = []
     for line in lines or []:
         text = _line_text(line)
@@ -927,7 +978,7 @@ def build_decompile_hints(bundles):
                 prop_max = prop_id
             _prop_slot(prop_id)
             _add_prop_form(prop_id, form)
-        dec = _Decompiler(bundle, hints=seed)
+        dec = _Decompiler(bundle, hints=seed, analysis_only=True)
         if global_count is not None:
             for cmd_id, forms in (dec.command_call_forms or {}).items():
                 try:
@@ -942,8 +993,8 @@ def build_decompile_hints(bundles):
                         one["call_forms"].add(int(form))
                     except Exception:
                         continue
-            for ev in dec.events:
-                if str(ev.get("op") or "") != "CD_COMMAND":
+            for ev_idx, ev in enumerate(dec.events):
+                if dec.event_ops[ev_idx] != "CD_COMMAND":
                     continue
                 ec = ev.get("element_code")
                 if ec is None:
@@ -1041,8 +1092,8 @@ def build_decompile_hints(bundles):
                 return
             _add_prop_form(ids[0], form)
 
-        for ev in dec.events:
-            if str(ev.get("op") or "") != "CD_PUSH":
+        for ev_idx, ev in enumerate(dec.events):
+            if dec.event_ops[ev_idx] != "CD_PUSH":
                 continue
             try:
                 form = int(ev.get("form", -1))
@@ -1059,9 +1110,10 @@ def build_decompile_hints(bundles):
             if prop_max is None or int(code_idx) > int(prop_max):
                 prop_max = int(code_idx)
             _prop_slot(code_idx)
-        for ev in dec.events:
-            if str(ev.get("op") or "") != "CD_ASSIGN":
-                if str(ev.get("op") or "") == "CD_OPERATE_2":
+        for ev_idx, ev in enumerate(dec.events):
+            op = dec.event_ops[ev_idx]
+            if op != "CD_ASSIGN":
+                if op == "CD_OPERATE_2":
                     _add_value_prop_forms(
                         ev.get("_lhs_prop_ids"),
                         ev.get("left_form"),
@@ -1123,60 +1175,85 @@ def build_decompile_hints(bundles):
 
 
 class _Decompiler:
-    def __init__(self, bundle, hints=None):
+    def __init__(self, bundle, hints=None, analysis_only=False):
         self.bundle = bundle or {}
         self.hints = hints or {}
+        self.analysis_only = bool(analysis_only)
         self.meta = self.bundle.get("meta") or {}
         self.pack_context = dict(self.bundle.get("pack_context") or {})
+        self._bundle_cache = _decompiler_cache(self.bundle)
         self.trace = self._build_trace()
-        self.events = [dict(x) for x in (self.trace or []) if isinstance(x, dict)]
+        self._trace_token = (
+            (id(self.trace), len(self.trace))
+            if isinstance(self.trace, list)
+            else (None, 0)
+        )
+        self.events = self.trace if isinstance(self.trace, list) else []
+        if any(not isinstance(ev, dict) for ev in self.events):
+            self.events = [ev for ev in self.events if isinstance(ev, dict)]
         self.event_offsets = [int(ev.get("ofs", -1) or -1) for ev in self.events]
         self.event_ops = [str(ev.get("op") or "") for ev in self.events]
-        self.event_lines = []
-        for ev in self.events:
-            try:
-                self.event_lines.append(int(ev.get("line")))
-            except Exception:
-                self.event_lines.append(None)
         self.offset_to_index = {
             int(ev.get("ofs", -1)): i for i, ev in enumerate(self.events)
         }
         self._end_index_cache = {}
-        self._range_inline_cache = {}
-        self._range_contains_op_cache = {}
-        self._op_prefix_cache = {}
-        self.next_nl_index = [len(self.events)] * len(self.events)
-        next_nl = len(self.events)
-        for idx in range(len(self.events) - 1, -1, -1):
-            if self.event_ops[idx] == "CD_NL":
-                next_nl = idx
-            self.next_nl_index[idx] = next_nl
         self.str_list = [str(x) for x in list(self.bundle.get("str_list") or [])]
-        self.label_list = [
-            int(x)
-            for x in list(
-                self.bundle.get("label_list") or self.meta.get("label_list") or []
-            )
-        ]
-        self.z_label_list = [
-            int(x)
-            for x in list(
-                self.bundle.get("z_label_list") or self.meta.get("z_label_list") or []
-            )
-        ]
-        self.active_z_label_count = self._active_z_label_count()
-        self.local_command_by_ofs = self._build_local_command_index()
-        try:
-            self.global_command_count = self.hints.get("global_command_count")
-        except Exception:
-            self.global_command_count = None
-        if self.global_command_count is None:
-            try:
-                self.global_command_count = int(
-                    self.pack_context.get("inc_command_cnt", 0) or 0
+        if self.analysis_only:
+            self.event_lines, self.event_targets, self.event_conds = [], [], []
+            (
+                self._range_inline_cache,
+                self._range_contains_op_cache,
+                self._op_prefix_cache,
+            ) = {}, {}, {}
+            self.next_nl_index, self.goto_indexes = [], []
+            self.next_goto_false_index, self.next_goto_true_index = [], []
+            self.for_candidates, self.for_candidate_indexes = [], []
+            self.label_list, self.z_label_list, self.active_z_label_count = [], [], 0
+        else:
+            self.event_lines = [_int_or_none(ev.get("line")) for ev in self.events]
+            self.event_targets = [
+                _int_or_none(ev.get("target_ofs")) for ev in self.events
+            ]
+            self.event_conds = [str(ev.get("_cond") or "") for ev in self.events]
+            (
+                self._range_inline_cache,
+                self._range_contains_op_cache,
+                self._op_prefix_cache,
+            ) = {}, {}, {}
+            self.next_nl_index = [len(self.events)] * len(self.events)
+            next_nl = len(self.events)
+            for idx in range(len(self.events) - 1, -1, -1):
+                if self.event_ops[idx] == "CD_NL":
+                    next_nl = idx
+                self.next_nl_index[idx] = next_nl
+            self.goto_indexes = [
+                i for i, op in enumerate(self.event_ops) if op == "CD_GOTO"
+            ]
+            self.next_goto_false_index = self._build_next_op_index("CD_GOTO_FALSE")
+            self.next_goto_true_index = self._build_next_op_index("CD_GOTO_TRUE")
+            self.for_candidates = self._build_for_candidates()
+            self.for_candidate_indexes = [x[0] for x in self.for_candidates]
+            self.label_list = [
+                int(x)
+                for x in list(
+                    self.bundle.get("label_list") or self.meta.get("label_list") or []
                 )
-            except Exception:
-                self.global_command_count = None
+            ]
+            self.z_label_list = [
+                int(x)
+                for x in list(
+                    self.bundle.get("z_label_list")
+                    or self.meta.get("z_label_list")
+                    or []
+                )
+            ]
+            self.active_z_label_count = self._active_z_label_count()
+        self.local_command_by_ofs = self._build_local_command_index()
+        self.global_command_count = self.hints.get("global_command_count")
+        if self.global_command_count is None:
+            self.global_command_count = _int_or_none(
+                self.pack_context.get("inc_command_cnt", 0) or 0
+            )
         if self.global_command_count is None:
             self.global_command_count = self._infer_global_command_count()
         self.local_command_ids = {
@@ -1191,30 +1268,18 @@ class _Decompiler:
         }
         self.global_command_hints = dict(self.hints.get("global_commands") or {})
         self.global_property_hints = dict(self.hints.get("global_properties") or {})
-        try:
-            self.global_property_count = self.hints.get("global_property_count")
-        except Exception:
-            self.global_property_count = None
+        self.global_property_count = self.hints.get("global_property_count")
         if self.global_property_count is None:
-            try:
-                self.global_property_count = int(
-                    self.pack_context.get("inc_property_cnt", 0) or 0
-                )
-            except Exception:
-                self.global_property_count = None
-        try:
-            self.global_property_max_id = self.hints.get("global_property_max_id")
-        except Exception:
-            self.global_property_max_id = None
-        if self.global_property_max_id is None:
-            try:
-                if (
-                    self.global_property_count is not None
-                    and int(self.global_property_count) > 0
-                ):
-                    self.global_property_max_id = int(self.global_property_count) - 1
-            except Exception:
-                self.global_property_max_id = None
+            self.global_property_count = _int_or_none(
+                self.pack_context.get("inc_property_cnt", 0) or 0
+            )
+        self.global_property_max_id = self.hints.get("global_property_max_id")
+        if (
+            self.global_property_max_id is None
+            and self.global_property_count is not None
+            and int(self.global_property_count) > 0
+        ):
+            self.global_property_max_id = int(self.global_property_count) - 1
         for it in list(self.pack_context.get("inc_property_defs") or []):
             try:
                 if not isinstance(it, dict):
@@ -1228,19 +1293,33 @@ class _Decompiler:
             except Exception:
                 pass
         self.symbolic_string_blockers = self._build_symbolic_string_blockers()
-        self._annotate_event_fields()
+        self._ensure_event_annotations()
         self.return_event_offsets, self.return_event_forms = (
-            self._build_return_form_index()
+            self._get_cached_trace_value(
+                "return_form_index",
+                self._build_return_form_index,
+            )
         )
-        self.command_def_info = self._collect_command_def_info()
-        self.command_call_forms = self._collect_command_call_forms()
-        self.scene_prop_lines = self._build_scene_prop_lines()
+        self.command_def_info = self._get_cached_trace_value(
+            "command_def_info",
+            self._collect_command_def_info,
+        )
+        self.command_call_forms = self._get_cached_trace_value(
+            "command_call_forms",
+            self._collect_command_call_forms,
+        )
+        self.scene_prop_lines = self._get_cached_trace_value(
+            "scene_prop_lines",
+            self._build_scene_prop_lines,
+        )
         self.external_inc_lines = []
         self.suppressed_label_offsets = set()
 
     def _build_trace(self):
         trace = self.bundle.get("trace")
-        if isinstance(trace, list) and trace:
+        if isinstance(trace, list) and (
+            trace or bool((self._bundle_cache or {}).get("trace_ready"))
+        ):
             return trace
         scn = bytes(self.bundle.get("scn") or b"")
         if not scn:
@@ -1261,27 +1340,49 @@ class _Decompiler:
             read_flag_defs=self.bundle.get("read_flag_defs"),
             with_trace=True,
         )
-        return trace or []
+        trace = trace or []
+        self.bundle["trace"] = trace
+        if isinstance(self._bundle_cache, dict):
+            self._bundle_cache["trace_ready"] = True
+        return trace
 
-    def _event_expr(self, ev):
-        if not isinstance(ev, dict):
-            return ""
-        return str(ev.get("_expr") or "")
+    def _trace_cache_hit(self):
+        return isinstance(self._bundle_cache, dict) and (
+            self._bundle_cache.get("trace_token") == self._trace_token
+        )
 
-    def _event_cond(self, ev):
-        if not isinstance(ev, dict):
-            return ""
-        return str(ev.get("_cond") or "")
+    def _build_next_op_index(self, opname):
+        out = [len(self.events)] * len(self.events)
+        next_idx = len(self.events)
+        for idx in range(len(self.events) - 1, -1, -1):
+            if self.event_ops[idx] == opname:
+                next_idx = idx
+            out[idx] = next_idx
+        return out
 
-    def _event_call_name(self, ev):
-        if not isinstance(ev, dict):
-            return ""
-        return str(ev.get("_call_name") or "")
+    def _get_cached_trace_value(self, key, factory):
+        if self._trace_cache_hit() and key in self._bundle_cache:
+            return self._bundle_cache.get(key)
+        value = factory()
+        if isinstance(self._bundle_cache, dict):
+            self._bundle_cache["trace_token"] = self._trace_token
+            self._bundle_cache[key] = value
+        return value
 
-    def _event_size_expr(self, ev):
-        if not isinstance(ev, dict):
-            return ""
-        return str(ev.get("_size_expr") or "")
+    def _ensure_event_annotations(self):
+        signature = _annotation_cache_signature(
+            self.global_property_count,
+            self.global_property_max_id,
+            self.global_property_hints,
+        )
+        if self._trace_cache_hit() and (
+            self._bundle_cache.get("annotation_signature") == signature
+        ):
+            return
+        self._annotate_event_fields()
+        if isinstance(self._bundle_cache, dict):
+            self._bundle_cache["trace_token"] = self._trace_token
+            self._bundle_cache["annotation_signature"] = signature
 
     def _build_symbolic_string_blockers(self):
         out = set(_system_symbolic_string_blockers())
@@ -1331,6 +1432,26 @@ class _Decompiler:
             return s
         return _quote_ss_text(s)
 
+    def _build_for_candidates(self):
+        out = []
+        for g_idx in self.goto_indexes:
+            if g_idx + 1 >= len(self.events):
+                continue
+            cond_ofs = self.event_targets[g_idx]
+            if cond_ofs is None:
+                continue
+            cond_idx = self.offset_to_index.get(cond_ofs)
+            loop_ofs = self.event_offsets[g_idx + 1]
+            if cond_idx is None or not (
+                self.event_offsets[g_idx] < loop_ofs <= cond_ofs
+            ):
+                continue
+            gf_idx = self._scan_stmt_until(cond_idx, 1 << 30, "CD_GOTO_FALSE")
+            if gf_idx is None:
+                continue
+            out.append((g_idx, gf_idx, loop_ofs, cond_ofs))
+        return out
+
     def _annotate_event_fields(self):
         if not self.events:
             return
@@ -1344,6 +1465,19 @@ class _Decompiler:
                 cmd_label_offsets.add(int(it.get("offset", -1)))
             except Exception:
                 continue
+        fm_void = _form_code(C.FM_VOID)
+        fm_int = _form_code(C.FM_INT)
+        fm_str = _form_code(C.FM_STR)
+        fm_call = _form_code(C.FM_CALL)
+        fm_global = _form_code(C.FM_GLOBAL)
+        fm_label = _form_code(C.FM_LABEL)
+        fm_list = _form_code(C.FM_LIST)
+        fm_intlist = _form_code(C.FM_INTLIST)
+        fm_strlist = _form_code(C.FM_STRLIST)
+        fm_intref = _form_code(C.FM_INTREF)
+        fm_strref = _form_code(C.FM_STRREF)
+        fm_intlistref = _form_code(C.FM_INTLISTREF)
+        fm_strlistref = _form_code(C.FM_STRLISTREF)
         scn_prop_info = {}
         for idx, it in enumerate(self.meta.get("scn_prop_defs") or []):
             try:
@@ -1356,7 +1490,7 @@ class _Decompiler:
                 name = str(it.get("name", "") or "")
                 scn_prop_info[code] = {
                     "type": C.ET_PROPERTY,
-                    "parent_code": _form_code(C.FM_GLOBAL),
+                    "parent_code": fm_global,
                     "name": name,
                     "ret": form,
                     "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code),
@@ -1364,17 +1498,14 @@ class _Decompiler:
                 }
             except Exception:
                 continue
-        fm_void = _form_code(C.FM_VOID)
-        fm_int = _form_code(C.FM_INT)
-        fm_str = _form_code(C.FM_STR)
-        fm_call = _form_code(C.FM_CALL)
-        fm_global = _form_code(C.FM_GLOBAL)
-        fm_label = _form_code(C.FM_LABEL)
-        fm_list = _form_code(C.FM_LIST)
-        fm_intlist = _form_code(C.FM_INTLIST)
-        fm_strlist = _form_code(C.FM_STRLIST)
         scalar_forms = {
             int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)
+        }
+        ref_to_val = {
+            fm_intref: fm_int,
+            fm_strref: fm_str,
+            fm_intlistref: fm_intlist,
+            fm_strlistref: fm_strlist,
         }
         unary_int_ops = {
             int(x)
@@ -1458,15 +1589,9 @@ class _Decompiler:
             if code_i == C.ELM_ARRAY:
                 return None
             owner, code_idx = _element_owner(code_i)
-            if (
-                parent_form_i == int(_form_code(C.FM_CALL))
-                and owner == C.ELM_OWNER_CALL_PROP
-            ):
+            if parent_form_i == int(fm_call) and owner == C.ELM_OWNER_CALL_PROP:
                 return call_slot_info.get(code_idx)
-            if (
-                parent_form_i == int(_form_code(C.FM_GLOBAL))
-                and owner == C.ELM_OWNER_USER_PROP
-            ):
+            if parent_form_i == int(fm_global) and owner == C.ELM_OWNER_USER_PROP:
                 if self.global_property_count is not None:
                     if int(code_idx) < int(self.global_property_count):
                         hint = (self.global_property_hints or {}).get(code_idx)
@@ -1477,7 +1602,7 @@ class _Decompiler:
                             name = f"$prop_{code_idx:d}"
                             return {
                                 "type": C.ET_PROPERTY,
-                                "parent_code": _form_code(C.FM_GLOBAL),
+                                "parent_code": fm_global,
                                 "name": name,
                                 "ret": (hint or {}).get("form"),
                                 "ec": C.create_elm_code(
@@ -1502,23 +1627,20 @@ class _Decompiler:
                     name = f"$prop_{code_idx:d}"
                     return {
                         "type": C.ET_PROPERTY,
-                        "parent_code": _form_code(C.FM_GLOBAL),
+                        "parent_code": fm_global,
                         "name": name,
                         "ret": (hint or {}).get("form"),
                         "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code_idx),
                         "q": name,
                     }
                 return None
-            if (
-                parent_form_i == int(_form_code(C.FM_GLOBAL))
-                and owner == C.ELM_OWNER_USER_CMD
-            ):
+            if parent_form_i == int(fm_global) and owner == C.ELM_OWNER_USER_CMD:
                 name = str(self.local_command_name_by_id.get(code_idx, "") or "")
                 if not name:
                     name = f"__cmd_{code_idx:d}"
                 return {
                     "type": C.ET_COMMAND,
-                    "parent_code": _form_code(C.FM_GLOBAL),
+                    "parent_code": fm_global,
                     "name": name,
                     "ret": None,
                     "ec": code_i,
@@ -1540,12 +1662,6 @@ class _Decompiler:
                 form_i = int(form)
             except Exception:
                 return None
-            ref_to_val = {
-                _form_code(C.FM_INTREF): fm_int,
-                _form_code(C.FM_STRREF): fm_str,
-                _form_code(C.FM_INTLISTREF): fm_intlist,
-                _form_code(C.FM_STRLISTREF): fm_strlist,
-            }
             return ref_to_val.get(form_i, form_i if form_i in scalar_forms else None)
 
         def _latest_elm_stack_start():
@@ -1792,7 +1908,7 @@ class _Decompiler:
             return name or str((info or {}).get("q", "") or "")
 
         def _render_property_expr_items(items):
-            parent_form = _form_code(C.FM_GLOBAL)
+            parent_form = fm_global
             if not items:
                 return None
             idx = 0
@@ -1849,7 +1965,7 @@ class _Decompiler:
             )
 
         def _render_command_expr_items(items, info_hint=None):
-            parent_form = _form_code(C.FM_GLOBAL)
+            parent_form = fm_global
             if not items:
                 return None
             idx = 0
@@ -2030,7 +2146,7 @@ class _Decompiler:
                 elm_point_pending_idx = saved_pending
 
         def _scan_property_slice(items):
-            parent_form = _form_code(C.FM_GLOBAL)
+            parent_form = fm_global
             if not items:
                 return None
             idx = 0
@@ -2099,7 +2215,7 @@ class _Decompiler:
             return None
 
         def _left_property_info(items):
-            parent_form = _form_code(C.FM_GLOBAL)
+            parent_form = fm_global
             prop_ids = []
             has_array = any(
                 _stack_int_value(it) == int(C.ELM_ARRAY) for it in list(items or [])
@@ -2213,7 +2329,7 @@ class _Decompiler:
                 if stack_start < 0 or stack_start > len(stack):
                     continue
                 res = _scan_command_from(
-                    stack[stack_start:], 0, _form_code(C.FM_GLOBAL), argc, expected_ret
+                    stack[stack_start:], 0, fm_global, argc, expected_ret
                 )
                 if res is None:
                     continue
@@ -2355,7 +2471,7 @@ class _Decompiler:
                 q = name if name else f"$slot_{call_slot_next:d}"
                 call_slot_info[call_slot_next] = {
                     "type": C.ET_PROPERTY,
-                    "parent_code": _form_code(C.FM_CALL),
+                    "parent_code": fm_call,
                     "name": name,
                     "ret": form_i,
                     "ec": C.create_elm_code(C.ELM_OWNER_CALL_PROP, 0, call_slot_next),
@@ -2591,8 +2707,8 @@ class _Decompiler:
     def _build_return_form_index(self):
         offsets = []
         forms = []
-        for ev in self.events:
-            if str(ev.get("op") or "") != "CD_RETURN":
+        for idx, ev in enumerate(self.events):
+            if self.event_ops[idx] != "CD_RETURN":
                 continue
             arg_layout = list(ev.get("arg_layout") or [])
             if not arg_layout:
@@ -2618,16 +2734,16 @@ class _Decompiler:
 
     def _collect_command_call_forms(self):
         out = {}
-        for ev in self.events:
-            if str(ev.get("op") or "") != "CD_COMMAND":
+        for ev_idx, ev in enumerate(self.events):
+            if self.event_ops[ev_idx] != "CD_COMMAND":
                 continue
             ec = ev.get("element_code")
             if ec is None:
                 continue
-            owner, idx = _element_owner(ec)
+            owner, cmd_id = _element_owner(ec)
             if owner != C.ELM_OWNER_USER_CMD:
                 continue
-            forms = out.setdefault(int(idx), set())
+            forms = out.setdefault(int(cmd_id), set())
             try:
                 rf = int(ev.get("ret_form"))
             except Exception:
@@ -2641,7 +2757,7 @@ class _Decompiler:
         idx = 0
         end_ofs = 1 << 30
         while idx < len(self.events):
-            if str(self.events[idx].get("op") or "") != "CD_NL":
+            if self.event_ops[idx] != "CD_NL":
                 idx += 1
                 continue
             parsed = self._read_command_def(idx, end_ofs)
@@ -2771,7 +2887,7 @@ class _Decompiler:
         for ev in self.events:
             if str(ev.get("op") or "") != "CD_COMMAND":
                 continue
-            call_name = self._event_call_name(ev).strip()
+            call_name = str(ev.get("_call_name") or "").strip()
             ec = ev.get("element_code")
             idx = None
             if ec is not None:
@@ -2846,15 +2962,17 @@ class _Decompiler:
         return lines
 
     def _idx_for_ofs(self, ofs):
-        try:
-            return self.offset_to_index[int(ofs)]
-        except Exception:
-            return None
+        if isinstance(ofs, int):
+            return self.offset_to_index.get(ofs)
+        ofs_i = _int_or_none(ofs)
+        return self.offset_to_index.get(ofs_i) if ofs_i is not None else None
 
     def _end_index_for_ofs(self, end_ofs):
-        try:
-            end_ofs_i = int(end_ofs)
-        except Exception:
+        if isinstance(end_ofs, int):
+            end_ofs_i = end_ofs
+        else:
+            end_ofs_i = _int_or_none(end_ofs)
+        if end_ofs_i is None:
             return len(self.events)
         cached = self._end_index_cache.get(end_ofs_i)
         if cached is not None:
@@ -2956,7 +3074,7 @@ class _Decompiler:
 
     def _with_labels(self, labels, lines, target_line=None):
         labs = self._label_lines(labels)
-        out = [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+        out = _copy_lines(lines)
         if labs and out:
             first_target = _line_target(out[0])
             label_target = None
@@ -3101,7 +3219,7 @@ class _Decompiler:
         return out, cur
 
     def _restore_missing_l_labels(self, lines):
-        out = [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+        out = _copy_lines(lines)
         label_events = {}
         for ev in self.events:
             for lab in self._event_labels(ev):
@@ -3121,7 +3239,7 @@ class _Decompiler:
                 label = str(m.group(2) or "")
                 if label.startswith("#l"):
                     defs.add(label)
-            refs = set(_LABEL_REF_RE.findall("\n".join(_line_text(x) for x in out)))
+            refs = _line_label_refs(out)
             missing = [
                 label
                 for label in sorted(refs, key=lambda s: int(str(s or "")[2:] or 0))
@@ -3164,7 +3282,7 @@ class _Decompiler:
         return out
 
     def _dedupe_l_label_defs(self, lines):
-        kept = [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+        kept = _copy_lines(lines)
         best = {}
         drop = set()
         for idx, line in enumerate(kept):
@@ -3189,12 +3307,12 @@ class _Decompiler:
     def _standalone_l_label_targets(self):
         out = {}
         for idx in range(1, len(self.events)):
+            if self.event_ops[idx - 1] != "CD_NL":
+                continue
+            if self.event_ops[idx] != "CD_NL":
+                continue
             prev = self.events[idx - 1]
             ev = self.events[idx]
-            if str((prev or {}).get("op") or "") != "CD_NL":
-                continue
-            if str((ev or {}).get("op") or "") != "CD_NL":
-                continue
             raw_labels = [str(x or "") for x in list((ev or {}).get("labels") or [])]
             if not raw_labels or any(not s.startswith("L") for s in raw_labels):
                 continue
@@ -3222,12 +3340,8 @@ class _Decompiler:
     def _restore_standalone_l_labels(self, lines):
         standalone = self._standalone_l_label_targets()
         if not standalone:
-            return [
-                _line_item(_line_text(x), _line_target(x)) for x in (lines or [])
-            ], set()
-        refs = set(
-            _LABEL_REF_RE.findall("\n".join(_line_text(x) for x in (lines or [])))
-        )
+            return _copy_lines(lines), set()
+        refs = _line_label_refs(lines)
         out = []
         keep = set()
         emitted = set()
@@ -3260,12 +3374,12 @@ class _Decompiler:
         specs = []
         seen = set()
         for idx in range(1, len(self.events)):
+            if self.event_ops[idx - 1] != "CD_NL":
+                continue
+            if self.event_ops[idx] != "CD_NL":
+                continue
             prev = self.events[idx - 1]
             ev = self.events[idx]
-            if str((prev or {}).get("op") or "") != "CD_NL":
-                continue
-            if str((ev or {}).get("op") or "") != "CD_NL":
-                continue
             prev_raw = [str(x or "") for x in list((prev or {}).get("labels") or [])]
             cur_raw = [str(x or "") for x in list((ev or {}).get("labels") or [])]
             if not cur_raw:
@@ -3327,7 +3441,7 @@ class _Decompiler:
     def _restore_synthetic_gap_labels(self, lines):
         specs = self._synthetic_gap_label_specs()
         if not specs:
-            return [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+            return _copy_lines(lines)
         label_to_spec = {}
         ref_map = {}
         for spec in specs:
@@ -3360,7 +3474,7 @@ class _Decompiler:
         return out
 
     def _restore_empty_cd_nl_sentences(self, lines):
-        out = [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+        out = _copy_lines(lines)
         seen_targets = set()
         for line in out:
             target = _line_target(line)
@@ -3368,7 +3482,7 @@ class _Decompiler:
                 seen_targets.add(int(target))
         gap_lines = []
         for idx, ev in enumerate(self.events):
-            if str((ev or {}).get("op") or "") != "CD_NL":
+            if self.event_ops[idx] != "CD_NL":
                 continue
             try:
                 line_no = int(ev.get("line", -1) or -1)
@@ -3380,7 +3494,7 @@ class _Decompiler:
             empty_sentence = True
             next_op = ""
             while j < len(self.events):
-                next_op = str((self.events[j] or {}).get("op") or "")
+                next_op = self.event_ops[j]
                 if next_op in ("CD_NL", "CD_EOF"):
                     break
                 empty_sentence = False
@@ -3416,7 +3530,7 @@ class _Decompiler:
     def _preserved_unreferenced_l_labels(self):
         out = set()
         for idx, ev in enumerate(self.events):
-            if str((ev or {}).get("op") or "") != "CD_NL":
+            if self.event_ops[idx] != "CD_NL":
                 continue
             raw_labels = [str(x or "") for x in list((ev or {}).get("labels") or [])]
             if not raw_labels or any(not s.startswith("L") for s in raw_labels):
@@ -3430,7 +3544,7 @@ class _Decompiler:
             if idx + 1 >= len(self.events):
                 continue
             nxt = self.events[idx + 1]
-            if str((nxt or {}).get("op") or "") != "CD_NL":
+            if self.event_ops[idx + 1] != "CD_NL":
                 continue
             next_raw = [str(x or "") for x in list((nxt or {}).get("labels") or [])]
             if next_raw:
@@ -3449,11 +3563,12 @@ class _Decompiler:
         return out
 
     def _restore_terminal_eof_line(self, lines):
-        out = [_line_item(_line_text(x), _line_target(x)) for x in (lines or [])]
+        out = _copy_lines(lines)
         eof_line = -1
-        for ev in reversed(self.events):
-            if str((ev or {}).get("op") or "") != "CD_EOF":
+        for idx in range(len(self.events) - 1, -1, -1):
+            if self.event_ops[idx] != "CD_EOF":
                 continue
+            ev = self.events[idx]
             try:
                 eof_line = int(ev.get("line", -1) or -1)
             except Exception:
@@ -3462,7 +3577,13 @@ class _Decompiler:
         target_line = int(eof_line) - 1
         if target_line <= 0:
             return out
-        if len(_materialize_lines(out)) >= target_line:
+        cur = 1
+        for line in out:
+            target = _line_target(line)
+            if target is not None and target > cur:
+                cur = target
+            cur += 1
+        if (cur - 1) >= target_line:
             return out
         out.append(_line_item("", target_line))
         return out
@@ -3510,7 +3631,7 @@ class _Decompiler:
         if j >= len(self.events):
             return None
         ev = self.events[j]
-        if str(ev.get("op") or "") != "CD_GOTO":
+        if self.event_ops[j] != "CD_GOTO":
             return None
         body_idx = j + 1
         if body_idx >= len(self.events):
@@ -3524,10 +3645,10 @@ class _Decompiler:
             return None
         i = body_idx
         params = []
-        while i < end_idx and str(self.events[i].get("op") or "") == "CD_DEC_PROP":
+        while i < end_idx and self.event_ops[i] == "CD_DEC_PROP":
             params.append(self.events[i])
             i += 1
-        if i >= end_idx or str(self.events[i].get("op") or "") != "CD_ARG":
+        if i >= end_idx or self.event_ops[i] != "CD_ARG":
             return None
         body_start_idx = i + 1
         body_end_ofs = int(self.events[end_idx].get("ofs", 0) or 0)
@@ -3537,9 +3658,9 @@ class _Decompiler:
         if end_idx > body_start_idx:
             tail = self.events[end_idx - 1]
             if (
-                str(tail.get("op") or "") == "CD_RETURN"
+                self.event_ops[end_idx - 1] == "CD_RETURN"
                 and not list(tail.get("arg_layout") or [])
-                and not self._event_expr(tail)
+                and not str(tail.get("_expr") or "")
             ):
                 tail_is_terminal_return = True
                 trim_end_ofs = int(tail.get("ofs", 0) or 0)
@@ -3566,7 +3687,7 @@ class _Decompiler:
         form = _form_name(ev.get("form", 0))
         tail = ""
         if form in (C.FM_INTLIST, C.FM_STRLIST):
-            size_expr = self._expr(self._event_size_expr(ev), ctx)
+            size_expr = self._expr(str(ev.get("_size_expr") or ""), ctx)
             try:
                 size_val = int(ev.get("size"))
             except Exception:
@@ -3633,22 +3754,22 @@ class _Decompiler:
             elif op == "CD_DEC_PROP":
                 part = self._render_decl_stmt(ev, ctx)
             elif op == "CD_ASSIGN":
-                part = self._expr(self._event_expr(ev), assign_ctx)
+                part = self._expr(str(ev.get("_expr") or ""), assign_ctx)
             elif op == "CD_RETURN":
-                expr = self._expr(self._event_expr(ev), ctx)
+                expr = self._expr(str(ev.get("_expr") or ""), ctx)
                 if expr or not parts:
                     part = f"return({expr})" if expr else "return"
             elif op == "CD_GOTO":
                 part = self._goto_stmt(ev, ctx)
             elif op in ("CD_GOTO_TRUE", "CD_GOTO_FALSE"):
-                cond = self._cond_expr(self._event_cond(ev), ctx)
+                cond = self._cond_expr(str(ev.get("_cond") or ""), ctx)
                 tgt = self._goto_stmt(ev, None)
                 if op == "CD_GOTO_TRUE":
                     part = f"if({cond}){{{tgt}}}"
                 else:
                     part = f"if(({cond})==0){{{tgt}}}"
             elif op == "CD_POP":
-                part = self._expr(self._event_expr(ev), ctx)
+                part = self._expr(str(ev.get("_expr") or ""), ctx)
                 if not part:
                     prev = ops[idx - 1] if idx > 0 else None
                     if (
@@ -3656,7 +3777,7 @@ class _Decompiler:
                         and str(prev.get("op") or "") == "CD_COMMAND"
                     ):
                         if not self._command_is_msg_block(prev):
-                            part = self._expr(self._event_expr(prev), ctx)
+                            part = self._expr(str(prev.get("_expr") or ""), ctx)
             elif op == "CD_COMMAND":
                 if self._command_is_msg_block(ev):
                     part = ""
@@ -3668,7 +3789,7 @@ class _Decompiler:
                     next_ev = self._next_meaningful_simple_op(ops, idx)
                     next_op = str((next_ev or {}).get("op") or "")
                     if ret_form == fm_void and next_op != "CD_POP":
-                        part = self._expr(self._event_expr(ev), ctx)
+                        part = self._expr(str(ev.get("_expr") or ""), ctx)
             if part:
                 if not parts or parts[-1] != part:
                     parts.append(part)
@@ -3862,17 +3983,26 @@ class _Decompiler:
         return found
 
     def _scan_stmt_until(self, start_idx, end_ofs, opname):
-        idx = int(start_idx)
+        try:
+            idx = int(start_idx)
+        except Exception:
+            return None
         stop_idx = self._end_index_for_ofs(end_ofs)
-        want = str(opname or "")
-        while idx < stop_idx:
-            op = self.event_ops[idx]
-            if op == "CD_NL":
-                return None
-            if op == want:
-                return idx
-            idx += 1
-        return None
+        if idx < 0 or idx >= stop_idx:
+            return None
+        next_indexes = (
+            self.next_goto_false_index
+            if opname == "CD_GOTO_FALSE"
+            else self.next_goto_true_index
+            if opname == "CD_GOTO_TRUE"
+            else None
+        )
+        if next_indexes is None:
+            return None
+        hit = next_indexes[idx]
+        if hit >= stop_idx or self.next_nl_index[idx] <= hit:
+            return None
+        return hit
 
     def _parse_body_with_inline(self, start_idx, end_ofs, ctx, source_line):
         body_lines, _ = self._parse_block(start_idx, end_ofs, ctx)
@@ -3911,7 +4041,7 @@ class _Decompiler:
         if idx <= 0 or idx > len(self.events):
             return None
         tail = self.events[idx - 1]
-        if str(tail.get("op") or "") != "CD_GOTO":
+        if self.event_ops[idx - 1] != "CD_GOTO":
             return None
         if target_ofs is not None:
             try:
@@ -3986,15 +4116,15 @@ class _Decompiler:
             lines.append(self._goto_stmt(ev, ctx))
             return self._with_event(idx, lines), idx + 1
         if op == "CD_GOTO_TRUE":
-            cond = self._cond_expr(self._event_cond(ev), ctx)
+            cond = self._cond_expr(str(ev.get("_cond") or ""), ctx)
             lines.append(f"if({cond}){{{self._goto_stmt(ev, None)}}}")
             return self._with_event(idx, lines), idx + 1
         if op == "CD_GOTO_FALSE":
-            cond = self._cond_expr(self._event_cond(ev), ctx)
+            cond = self._cond_expr(str(ev.get("_cond") or ""), ctx)
             lines.append(f"if(({cond})==0){{{self._goto_stmt(ev, None)}}}")
             return self._with_event(idx, lines), idx + 1
         if op == "CD_RETURN":
-            expr = self._expr(self._event_expr(ev), ctx)
+            expr = self._expr(str(ev.get("_expr") or ""), ctx)
             lines.append(f"return({expr})" if expr else "return")
             return self._with_event(idx, lines), idx + 1
         if op == "CD_DEC_PROP":
@@ -4069,16 +4199,6 @@ class _Decompiler:
         sig = ", ".join(
             self._render_param(k, p, body_ctx) for k, p in enumerate(params)
         )
-        try:
-            cmd_id = int(info.get("cmd_id", -1))
-        except Exception:
-            cmd_id = -1
-        if cmd_id >= 0:
-            slot = dict((self.command_def_info or {}).get(cmd_id) or {})
-            slot["name"] = str(info.get("name", "") or "")
-            slot["ret_form"] = ret_form
-            slot["arg_layout"] = _copy_arg_layout(params)
-            self.command_def_info[cmd_id] = slot
         head = (
             _format_command_decl(
                 "command",
@@ -4108,7 +4228,7 @@ class _Decompiler:
             gf_idx = self._scan_stmt_until(cur_idx, end_ofs, "CD_GOTO_FALSE")
             if gf_idx is None:
                 return None
-            false_ofs = self.events[gf_idx].get("target_ofs")
+            false_ofs = self.event_targets[gf_idx]
             false_idx = self._idx_for_ofs(false_ofs)
             if false_idx is None or false_idx <= gf_idx:
                 return None
@@ -4132,11 +4252,11 @@ class _Decompiler:
             )
             clauses.append(
                 {
-                    "cond": self._cond_expr(self._event_cond(self.events[gf_idx]), ctx),
+                    "cond": self._cond_expr(self.event_conds[gf_idx], ctx),
                     "body": body_lines,
                     "inline": inline_body,
-                    "source_line": self.events[cur_idx].get("line"),
-                    "close_line": self.events[false_idx].get("line"),
+                    "source_line": self.event_lines[cur_idx],
+                    "close_line": self.event_lines[false_idx],
                     "inline_same_line": inline_same_line,
                 }
             )
@@ -4146,7 +4266,7 @@ class _Decompiler:
             cur_idx = false_idx
             if cur_idx >= len(self.events):
                 return None
-            if str(self.events[cur_idx].get("op") or "") == "CD_NL":
+            if self.event_ops[cur_idx] == "CD_NL":
                 else_lines, inline_else, inline_else_same_line = (
                     self._parse_body_with_inline(
                         cur_idx,
@@ -4161,8 +4281,8 @@ class _Decompiler:
                         "cond": None,
                         "body": else_lines,
                         "inline": inline_else,
-                        "source_line": self.events[cur_idx].get("line"),
-                        "close_line": self.events[end_idx].get("line")
+                        "source_line": self.event_lines[cur_idx],
+                        "close_line": self.event_lines[end_idx]
                         if end_idx is not None
                         else None,
                         "inline_same_line": inline_else_same_line,
@@ -4242,25 +4362,25 @@ class _Decompiler:
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None
-        if str(self.events[j].get("op") or "") == "CD_NL":
+        if self.event_ops[j] == "CD_NL":
             return None
         gf_idx = self._scan_stmt_until(j, end_ofs, "CD_GOTO_FALSE")
         if gf_idx is None:
             return None
-        out_ofs = self.events[gf_idx].get("target_ofs")
+        out_ofs = self.event_targets[gf_idx]
         parsed = self._parse_guarded_block(
             gf_idx,
             out_ofs,
-            self.events[j].get("ofs", 0),
+            self.event_offsets[j],
             ctx,
-            self.events[start_idx].get("line"),
+            self.event_lines[start_idx],
         )
         if parsed is None:
             return None
         out_idx, body_lines, inline_body = parsed
-        self._add_suppressed_offsets(self.events[j].get("ofs", 0), out_ofs)
+        self._add_suppressed_offsets(self.event_offsets[j], out_ofs)
         out = self._wrap_block(
-            f"while({self._cond_expr(self._event_cond(self.events[gf_idx]), ctx)})",
+            f"while({self._cond_expr(self.event_conds[gf_idx], ctx)})",
             body_lines,
             inline_body,
         )
@@ -4272,42 +4392,36 @@ class _Decompiler:
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None
-        for g_idx in range(j, len(self.events)):
-            ofs = int(self.events[g_idx].get("ofs", 0) or 0)
-            if ofs >= int(end_ofs):
+        stop_idx = self._end_index_for_ofs(end_ofs)
+        pos = bisect.bisect_left(self.for_candidate_indexes, j)
+        while pos < len(self.for_candidates):
+            g_idx, gf_idx, loop_ofs, cond_ofs = self.for_candidates[pos]
+            if g_idx >= stop_idx:
                 return None
-            if str(self.events[g_idx].get("op") or "") != "CD_GOTO":
+            if gf_idx >= stop_idx:
+                pos += 1
                 continue
-            if g_idx + 1 >= len(self.events):
-                continue
-            loop_ofs = int(self.events[g_idx + 1].get("ofs", 0) or 0)
-            cond_ofs = int(self.events[g_idx].get("target_ofs", -1) or -1)
-            cond_idx = self._idx_for_ofs(cond_ofs)
-            if cond_idx is None:
-                continue
-            if not (ofs < loop_ofs <= cond_ofs):
-                continue
-            gf_idx = self._scan_stmt_until(cond_idx, end_ofs, "CD_GOTO_FALSE")
-            if gf_idx is None:
-                continue
-            out_ofs = int(self.events[gf_idx].get("target_ofs", -1) or -1)
+            ofs = self.event_offsets[g_idx]
+            out_ofs = self.event_targets[gf_idx]
             parsed = self._parse_guarded_block(
                 gf_idx,
                 out_ofs,
                 loop_ofs,
                 ctx,
-                self.events[start_idx].get("line"),
+                self.event_lines[start_idx],
             )
             if parsed is None:
+                pos += 1
                 continue
             out_idx, body_lines, inline_body = parsed
-            header_line = self.events[g_idx].get("line")
+            header_line = self.event_lines[g_idx]
             head_event_idx = g_idx
             prefix_init_lines = []
             if j == g_idx:
                 init_lines = []
             else:
                 if self._range_contains_op(j, ofs, "CD_DEC_PROP"):
+                    pos += 1
                     continue
                 if any(
                     self._range_contains_op(j, ofs, op)
@@ -4320,6 +4434,7 @@ class _Decompiler:
                         "CD_NAME",
                     )
                 ):
+                    pos += 1
                     continue
                 init_split = self._split_inline_region_by_line(
                     j,
@@ -4328,6 +4443,7 @@ class _Decompiler:
                     inline_line=header_line,
                 )
                 if init_split[0] is None:
+                    pos += 1
                     continue
                 prefix_init_lines, init_lines, init_head_idx = init_split
                 if init_head_idx is not None:
@@ -4350,13 +4466,14 @@ class _Decompiler:
                 if loop_lines is None:
                     if added_loop_label:
                         self.suppressed_label_offsets.discard(int(loop_ofs))
+                    pos += 1
                     continue
             self._add_suppressed_offsets(loop_ofs, cond_ofs, out_ofs)
             head = (
                 "for("
                 + _join_inline_sentences(init_lines)
                 + ", "
-                + self._cond_expr(self._event_cond(self.events[gf_idx]), ctx)
+                + self._cond_expr(self.event_conds[gf_idx], ctx)
                 + ", "
                 + _join_inline_sentences(loop_lines)
                 + ")"
@@ -4368,6 +4485,7 @@ class _Decompiler:
                 out = self._with_event(start_idx, []) + out
             out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
             return out, tramp_idx
+
         return None
 
     def _match_switch(self, start_idx, end_ofs, ctx):
@@ -4375,7 +4493,7 @@ class _Decompiler:
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None
-        if str(self.events[j].get("op") or "") == "CD_NL":
+        if self.event_ops[j] == "CD_NL":
             return None
         head_idx = j
         cases = []
@@ -4385,7 +4503,7 @@ class _Decompiler:
             ofs = int(self.events[head_idx].get("ofs", 0) or 0)
             if ofs >= int(end_ofs):
                 return None
-            op = str(self.events[head_idx].get("op") or "")
+            op = self.event_ops[head_idx]
             if op == "CD_NL":
                 return None
             if op == "CD_COPY":
@@ -4394,10 +4512,10 @@ class _Decompiler:
                     return None
                 if gt_idx - 1 <= head_idx:
                     return None
-                if str(self.events[gt_idx - 1].get("op") or "") != "CD_OPERATE_2":
+                if self.event_ops[gt_idx - 1] != "CD_OPERATE_2":
                     return None
                 left, right = _split_top_eq(
-                    self._expr(self._event_expr(self.events[gt_idx - 1]), ctx)
+                    self._expr(str(self.events[gt_idx - 1].get("_expr") or ""), ctx)
                 )
                 if not left or not right:
                     return None
@@ -4408,9 +4526,7 @@ class _Decompiler:
                 cases.append(
                     {
                         "value": right,
-                        "target_ofs": int(
-                            self.events[gt_idx].get("target_ofs", -1) or -1
-                        ),
+                        "target_ofs": int(self.event_targets[gt_idx] or -1),
                     }
                 )
                 head_idx = gt_idx + 1
@@ -4418,14 +4534,14 @@ class _Decompiler:
             if op == "CD_POP":
                 if head_idx + 1 >= len(self.events):
                     return None
-                if str(self.events[head_idx + 1].get("op") or "") != "CD_GOTO":
+                if self.event_ops[head_idx + 1] != "CD_GOTO":
                     return None
                 final_goto_idx = head_idx + 1
                 break
             head_idx += 1
         if not cases or final_goto_idx is None or not cond_expr:
             return None
-        default_or_out = int(self.events[final_goto_idx].get("target_ofs", -1) or -1)
+        default_or_out = int(self.event_targets[final_goto_idx] or -1)
         out_ofs = None
         case_blocks = []
         ordered = sorted(cases, key=lambda x: int(x.get("target_ofs", -1) or -1))
@@ -4442,7 +4558,7 @@ class _Decompiler:
             boundary_idx = self._idx_for_ofs(boundary)
             if boundary_idx is None or boundary_idx <= start_idx2:
                 return None
-            if str(self.events[start_idx2].get("op") or "") != "CD_POP":
+            if self.event_ops[start_idx2] != "CD_POP":
                 return None
             tail = self._tail_goto(boundary_idx)
             if tail is None:
@@ -4533,7 +4649,7 @@ class _Decompiler:
         text = "\n".join(materialized)
         eof_line = None
         try:
-            if self.events and str(self.events[-1].get("op") or "") == "CD_EOF":
+            if self.events and self.event_ops[-1] == "CD_EOF":
                 eof_line = int(self.events[-1].get("line", 0) or 0)
         except Exception:
             eof_line = None
