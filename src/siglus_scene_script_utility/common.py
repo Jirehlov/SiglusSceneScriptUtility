@@ -394,6 +394,35 @@ def write_status(text: str) -> None:
     sys.stdout.flush()
 
 
+def format_elapsed_seconds(seconds) -> str:
+    try:
+        return f"{float(seconds):.3f}s"
+    except Exception:
+        return "0.000s"
+
+
+def new_disam_stats() -> dict:
+    return {
+        "disassembled": 0,
+        "ended_unexpectedly": 0,
+        "disassembly_seconds": 0.0,
+        "decompile_seconds": 0.0,
+    }
+
+
+def add_elapsed_seconds(stats, key: str, seconds) -> None:
+    if not isinstance(stats, dict):
+        return
+    try:
+        elapsed = max(0.0, float(seconds))
+    except Exception:
+        return
+    try:
+        stats[str(key or "")] = float(stats.get(key, 0.0) or 0.0) + elapsed
+    except Exception:
+        return
+
+
 def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 

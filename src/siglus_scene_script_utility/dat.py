@@ -2,6 +2,7 @@ import json
 import os
 import struct
 import sys
+import time
 
 from . import const as C
 from . import disam
@@ -25,6 +26,9 @@ from .common import (
     unique_out_path,
     write_text,
     ANGOU_DAT_NAME,
+    new_disam_stats,
+    add_elapsed_seconds,
+    format_elapsed_seconds,
     write_status,
 )
 
@@ -339,7 +343,7 @@ def _write_dat_txt(dat_path, blob, out_dir=None, stats=None, bundle=None):
 
 
 def _write_dat_decompiled(
-    dat_path, blob=None, out_dir=None, bundle=None, decompile_hints=None
+    dat_path, blob=None, out_dir=None, bundle=None, decompile_hints=None, stats=None
 ):
     try:
         out_dir, bundle = _resolve_dat_output(
@@ -349,8 +353,12 @@ def _write_dat_decompiled(
             return None
         if bool(bundle.get("decompiler_excluded")):
             return None
-        write_status(f"Decompiling {os.path.basename(str(dat_path))} ...")
-        return write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
+        name = os.path.basename(str(dat_path))
+        write_status(f"Decompiling {name} ...")
+        started = time.perf_counter()
+        out_path = write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
+        add_elapsed_seconds(stats, "decompile_seconds", time.perf_counter() - started)
+        return out_path
     except Exception:
         return None
 
@@ -359,6 +367,9 @@ def _write_dat_disassembly(
     dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
 ):
     try:
+        name = os.path.basename(str(dat_path))
+        write_status(f"Disassembling {name} ...")
+        started = time.perf_counter()
         out_dir, bundle = _resolve_dat_output(
             dat_path, blob=blob, out_dir=out_dir, bundle=bundle
         )
@@ -367,11 +378,13 @@ def _write_dat_disassembly(
         if bool(bundle.get("decompiler_excluded")):
             return None
         out_path = _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
+        add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
         _write_dat_decompiled(
             dat_path,
             out_dir=out_dir,
             bundle=bundle,
             decompile_hints=decompile_hints,
+            stats=stats,
         )
         return out_path
     except Exception:
@@ -720,10 +733,17 @@ def dat(path, blob: bytes) -> int:
         )
     print("")
     _print_sections(secs, len(blob))
-    out_txt = _write_dat_disassembly(path, blob)
+    disam_stats = new_disam_stats()
+    out_txt = _write_dat_disassembly(path, blob, stats=disam_stats)
     if out_txt:
         print("")
         print(f"wrote: {out_txt}")
+        print(
+            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
+        )
+        print(
+            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
+        )
     return 0
 
 
@@ -926,8 +946,9 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
             print("payload compare (normalized scn_bytes semantics): unavailable")
     out_dir = globals().get("DAT_TXT_OUT_DIR")
     if out_dir:
-        out1 = _write_dat_disassembly(p1, b1, out_dir)
-        out2 = _write_dat_disassembly(p2, b2, out_dir)
+        disam_stats = new_disam_stats()
+        out1 = _write_dat_disassembly(p1, b1, out_dir, stats=disam_stats)
+        out2 = _write_dat_disassembly(p2, b2, out_dir, stats=disam_stats)
         if out1 or out2:
             print("")
         if out1:
@@ -938,5 +959,11 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
             print(f"wrote: {out2}")
         else:
             print(f"failed to write: {p2}.txt")
+        print(
+            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
+        )
+        print(
+            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
+        )
 
     return 0

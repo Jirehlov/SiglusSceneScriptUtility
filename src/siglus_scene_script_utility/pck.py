@@ -35,6 +35,9 @@ from .common import (
     find_siglus_engine_exe,
     read_siglus_engine_exe_el,
     looks_like_siglus_pck,
+    new_disam_stats,
+    add_elapsed_seconds,
+    format_elapsed_seconds,
     write_status,
 )
 
@@ -1232,7 +1235,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     if dat_txt:
         from . import dat as D
 
-        disam_stats = {"disassembled": 0, "ended_unexpectedly": 0}
+        disam_stats = new_disam_stats()
         pack_context = _build_disam_pack_context(
             dat, hdr=hdr, meta={"scn_names": scn_names}
         )
@@ -1273,7 +1276,9 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         bundles = []
         ready_bundles = []
         for dat_path, blob, scn_no, nm in dat_items:
-            write_status(f"Disassembling {os.path.basename(str(dat_path))} ...")
+            name = os.path.basename(str(dat_path))
+            write_status(f"Disassembling {name} ...")
+            started = time.perf_counter()
             bundle = D._dat_disassembly_bundle(
                 blob,
                 dat_path,
@@ -1282,6 +1287,9 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
                 scene_name=nm,
             )
             if not isinstance(bundle, dict):
+                add_elapsed_seconds(
+                    disam_stats, "disassembly_seconds", time.perf_counter() - started
+                )
                 continue
             bundles.append((dat_path, blob, bundle))
             out_dir = os.path.dirname(dat_path) or bs_dir
@@ -1292,8 +1300,12 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
                 disam_stats,
                 bundle=bundle,
             )
+            add_elapsed_seconds(
+                disam_stats, "disassembly_seconds", time.perf_counter() - started
+            )
             if out_path:
                 ready_bundles.append((dat_path, blob, bundle))
+        started = time.perf_counter()
         decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
         for dat_path, blob, bundle in ready_bundles:
             D._write_dat_decompiled(
@@ -1302,9 +1314,18 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
                 bundle=bundle,
                 decompile_hints=decompile_hints,
             )
+        add_elapsed_seconds(
+            disam_stats, "decompile_seconds", time.perf_counter() - started
+        )
     sys.stdout.write(f"Extracted scenes: {ok_cnt:d}\n")
     if dat_txt and isinstance(disam_stats, dict):
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
+        )
+        sys.stdout.write(
+            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}\n"
+        )
+        sys.stdout.write(
+            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}\n"
         )
     return 0

@@ -1,7 +1,16 @@
 import os
 import sys
+import time
 
-from .common import looks_like_siglus_dat, parse_gei_disam_args, read_bytes
+from .common import (
+    looks_like_siglus_dat,
+    parse_gei_disam_args,
+    read_bytes,
+    new_disam_stats,
+    add_elapsed_seconds,
+    format_elapsed_seconds,
+    write_status,
+)
 from . import GEI
 from . import pck
 
@@ -35,7 +44,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
     ok_cnt = 0
     skip_cnt = 0
     fail_cnt = 0
-    disam_stats = {"disassembled": 0, "ended_unexpectedly": 0}
+    disam_stats = new_disam_stats()
     for dat_path in dat_paths:
         blob = read_bytes(dat_path)
         name = os.path.basename(dat_path)
@@ -47,8 +56,13 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
+        write_status(f"Disassembling {name} ...")
+        started = time.perf_counter()
         bundle = D._dat_disassembly_bundle(blob, dat_path)
         if not isinstance(bundle, dict):
+            add_elapsed_seconds(
+                disam_stats, "disassembly_seconds", time.perf_counter() - started
+            )
             sys.stderr.write(f"Failed: {name}\n")
             fail_cnt += 1
             continue
@@ -60,6 +74,9 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             disam_stats,
             bundle=bundle,
         )
+        add_elapsed_seconds(
+            disam_stats, "disassembly_seconds", time.perf_counter() - started
+        )
         if not out_path:
             sys.stderr.write(f"Failed: {name}\n")
             fail_cnt += 1
@@ -67,6 +84,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
         sys.stdout.write(f"Wrote: {out_path}\n")
         ok_cnt += 1
         ready_bundles.append((dat_path, blob, bundle))
+    started = time.perf_counter()
     decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
     for dat_path, blob, bundle in ready_bundles:
         D._write_dat_decompiled(
@@ -75,10 +93,17 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             bundle=bundle,
             decompile_hints=decompile_hints,
         )
+    add_elapsed_seconds(disam_stats, "decompile_seconds", time.perf_counter() - started)
     if ok_cnt:
         sys.stdout.write(f"Disassembled scenes: {ok_cnt:d}\n")
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
+        )
+        sys.stdout.write(
+            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}\n"
+        )
+        sys.stdout.write(
+            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}\n"
         )
     if skip_cnt:
         sys.stdout.write(f"Skipped non-scene .dat files: {skip_cnt:d}\n")
