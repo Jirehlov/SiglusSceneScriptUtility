@@ -1,4 +1,5 @@
 import bisect
+import functools
 import os
 import re
 from . import const as C
@@ -18,13 +19,24 @@ def _line_item(text, target_line=None):
 
 
 def _line_text(line):
-    if isinstance(line, (list, tuple)) and line:
+    if type(line) is tuple:
+        return str(line[0] or "") if line else ""
+    if type(line) is str:
+        return line
+    if isinstance(line, list) and line:
         return str(line[0] or "")
     return str(line or "")
 
 
 def _line_target(line):
-    if isinstance(line, (list, tuple)) and len(line) >= 2:
+    if type(line) is tuple:
+        if len(line) < 2:
+            return None
+        try:
+            return int(line[1])
+        except Exception:
+            return None
+    if isinstance(line, list) and len(line) >= 2:
         try:
             return int(line[1])
         except Exception:
@@ -48,7 +60,7 @@ def _materialize_lines(lines):
 
 
 def _copy_lines(lines):
-    return [_line_item(_line_text(line), _line_target(line)) for line in (lines or [])]
+    return list(lines or [])
 
 
 _FORM_REV = invert_form_code_map()
@@ -665,18 +677,18 @@ def _rewrite_label_refs(text, mapping):
     return _LABEL_REF_SUB_RE.sub(_repl, s)
 
 
+@functools.lru_cache(maxsize=65536)
 def _expr_to_source(expr):
     if not expr:
         return ""
-    src = str(expr)
-    src = re.sub(
+    return re.sub(
         r"\b([LZ])(\d+)\b",
         lambda m: "#" + m.group(1).lower() + m.group(2),
-        src,
+        str(expr),
     )
-    return src
 
 
+@functools.lru_cache(maxsize=65536)
 def _split_top_eq(expr):
     s = str(expr or "").strip()
     if s.startswith("(") and s.endswith(")"):
@@ -698,6 +710,7 @@ def _split_top_eq(expr):
     return None, None
 
 
+@functools.lru_cache(maxsize=65536)
 def _strip_outer_parens(expr):
     s = str(expr or "").strip()
     while s.startswith("(") and s.endswith(")"):
@@ -740,6 +753,7 @@ def _parse_int_literal(expr):
         return None
 
 
+@functools.lru_cache(maxsize=65536)
 def _split_top_assign(expr):
     s = str(expr or "").strip()
     depth = 0
@@ -776,6 +790,7 @@ def _split_top_assign(expr):
     return None, None
 
 
+@functools.lru_cache(maxsize=131072)
 def _split_top_binary(expr, op):
     s = _strip_outer_parens(expr)
     depth = 0
@@ -814,8 +829,9 @@ def _split_top_binary(expr, op):
     return None, None
 
 
+@functools.lru_cache(maxsize=131072)
 def _rewrite_compound_assign(expr, force=False):
-    left, right = _split_top_assign(expr)
+    left, right = _split_top_assign(str(expr or ""))
     if not left or not right:
         return str(expr or "")
     rhs = _strip_outer_parens(right)
@@ -1205,9 +1221,11 @@ class _Decompiler:
                 self._range_contains_op_cache,
                 self._op_prefix_cache,
             ) = {}, {}, {}
-            self.next_nl_index, self.goto_indexes = [], []
+            self._simple_line_cache = {}
+            self.next_nl_index, self.goto_indexes, self.next_goto_index = [], [], []
             self.next_goto_false_index, self.next_goto_true_index = [], []
-            self.for_candidates, self.for_candidate_indexes = [], []
+            self.for_candidates = []
+            self.for_candidate_by_goto_index = {}
             self.label_list, self.z_label_list, self.active_z_label_count = [], [], 0
         else:
             self.event_lines = [_int_or_none(ev.get("line")) for ev in self.events]
@@ -1220,6 +1238,7 @@ class _Decompiler:
                 self._range_contains_op_cache,
                 self._op_prefix_cache,
             ) = {}, {}, {}
+            self._simple_line_cache = {}
             self.next_nl_index = [len(self.events)] * len(self.events)
             next_nl = len(self.events)
             for idx in range(len(self.events) - 1, -1, -1):
@@ -1229,10 +1248,11 @@ class _Decompiler:
             self.goto_indexes = [
                 i for i, op in enumerate(self.event_ops) if op == "CD_GOTO"
             ]
+            self.next_goto_index = self._build_next_op_index("CD_GOTO")
             self.next_goto_false_index = self._build_next_op_index("CD_GOTO_FALSE")
             self.next_goto_true_index = self._build_next_op_index("CD_GOTO_TRUE")
             self.for_candidates = self._build_for_candidates()
-            self.for_candidate_indexes = [x[0] for x in self.for_candidates]
+            self.for_candidate_by_goto_index = {x[0]: x for x in self.for_candidates}
             self.label_list = [
                 int(x)
                 for x in list(
@@ -2988,6 +3008,15 @@ class _Decompiler:
         out.update(kw)
         return out
 
+    def _simple_ctx_sig(self, ctx):
+        if not isinstance(ctx, dict):
+            return False, None, None
+        return (
+            bool(ctx.get("allow_compound_assign")),
+            _int_or_none(ctx.get("break_ofs")),
+            _int_or_none(ctx.get("continue_ofs")),
+        )
+
     def _expr(self, expr, ctx=None):
         src = _expr_to_source(expr)
         src = _rewrite_compound_assign(
@@ -3013,19 +3042,19 @@ class _Decompiler:
     def _skip_sel_start(self, idx, end_ofs):
         if idx >= len(self.events):
             return idx
-        if int(self.events[idx].get("ofs", 0) or 0) >= int(end_ofs):
+        end_ofs_i = end_ofs if isinstance(end_ofs, int) else _int_or_none(end_ofs)
+        if end_ofs_i is not None and self.event_offsets[idx] >= end_ofs_i:
             return idx
-        if str(self.events[idx].get("op") or "") == "CD_SEL_BLOCK_START":
+        if self.event_ops[idx] == "CD_SEL_BLOCK_START":
             return idx + 1
         return idx
 
-    def _trim_sel_end(self, ops):
-        ops = list(ops or [])
-        while ops and str(ops[-1].get("op") or "") == "CD_SEL_BLOCK_END":
-            ops.pop()
-        while ops and str(ops[0].get("op") or "") == "CD_SEL_BLOCK_START":
-            ops.pop(0)
-        return ops
+    def _trim_sel_bounds(self, start_idx, end_idx):
+        while end_idx > start_idx and self.event_ops[end_idx - 1] == "CD_SEL_BLOCK_END":
+            end_idx -= 1
+        while start_idx < end_idx and self.event_ops[start_idx] == "CD_SEL_BLOCK_START":
+            start_idx += 1
+        return start_idx, end_idx
 
     def _range_is_inline(self, start_idx, end_ofs, source_line):
         try:
@@ -3797,14 +3826,24 @@ class _Decompiler:
             return ""
         return "\t".join(parts)
 
+    def _render_simple_line_range(self, stmt_idx, next_idx, ctx):
+        key = (int(stmt_idx), int(next_idx), self._simple_ctx_sig(ctx))
+        cached = self._simple_line_cache.get(key)
+        if cached is not None:
+            return cached
+        stmt_idx, next_idx = self._trim_sel_bounds(int(stmt_idx), int(next_idx))
+        ops = self.events[stmt_idx:next_idx]
+        value = (bool(ops), self._render_simple_line(ops, ctx) if ops else "")
+        self._simple_line_cache[key] = value
+        return value
+
     def _render_simple_from(self, stmt_idx, end_ofs, ctx, inline=False):
         next_idx = self._next_stmt_idx(stmt_idx, end_ofs)
-        ops = self._trim_sel_end(self.events[stmt_idx:next_idx])
-        if not ops:
+        has_ops, line = self._render_simple_line_range(stmt_idx, next_idx, ctx)
+        if not has_ops:
             if inline:
                 return "", next_idx
             return [], next_idx
-        line = self._render_simple_line(ops, ctx)
         if inline:
             if self._has_inline_blocking_labels(self.events[stmt_idx]):
                 return None, stmt_idx
@@ -3824,12 +3863,11 @@ class _Decompiler:
 
     def _render_simple(self, start_idx, end_ofs, ctx, inline=False):
         next_idx = self._next_stmt_idx(start_idx + 1, end_ofs)
-        ops = self._trim_sel_end(self.events[start_idx + 1 : next_idx])
-        if not ops:
+        has_ops, line = self._render_simple_line_range(start_idx + 1, next_idx, ctx)
+        if not has_ops:
             if inline:
                 return "", next_idx
             return self._with_event(start_idx, []), next_idx
-        line = self._render_simple_line(ops, ctx)
         if inline:
             if self._has_inline_blocking_labels(self.events[start_idx]):
                 return None, start_idx
@@ -3911,20 +3949,14 @@ class _Decompiler:
         inline_lines = []
         inline_start_idx = None
         idx = start_idx
+        stop_idx = self._end_index_for_ofs(end_ofs)
         try:
             wanted_line = int(inline_line)
         except Exception:
             wanted_line = None
-        while idx < len(self.events):
-            ofs = int(self.events[idx].get("ofs", 0) or 0)
-            if ofs >= int(end_ofs):
-                break
-            try:
-                stmt_line = int(self.events[idx].get("line"))
-            except Exception:
-                stmt_line = None
-            inline_ok = wanted_line is not None and stmt_line == wanted_line
-            if str(self.events[idx].get("op") or "") == "CD_NL":
+        while idx < stop_idx:
+            inline_ok = wanted_line is not None and self.event_lines[idx] == wanted_line
+            if self.event_ops[idx] == "CD_NL":
                 if inline_ok:
                     line, idx2 = self._render_simple(idx, end_ofs, ctx, inline=True)
                     if line is not None and idx2 > idx:
@@ -3957,8 +3989,8 @@ class _Decompiler:
             idx = idx2
         return prefix_lines, inline_lines, inline_start_idx
 
-    def _range_contains_op(self, start_idx, end_ofs, opname):
-        want = str(opname or "")
+    def _range_contains_any_op(self, start_idx, end_ofs, opnames):
+        want = tuple(str(x or "") for x in tuple(opnames or ()))
         try:
             end_ofs_i = int(end_ofs)
         except Exception:
@@ -3971,8 +4003,9 @@ class _Decompiler:
         if prefix is None:
             prefix = [0]
             count = 0
+            wanted = set(want)
             for op in self.event_ops:
-                if op == want:
+                if op in wanted:
                     count += 1
                 prefix.append(count)
             self._op_prefix_cache[want] = prefix
@@ -4090,11 +4123,9 @@ class _Decompiler:
     def _parse_block(self, start_idx, end_ofs, ctx=None):
         lines = []
         idx = start_idx
-        while idx < len(self.events):
-            ofs = int(self.events[idx].get("ofs", 0) or 0)
-            if ofs >= int(end_ofs):
-                break
-            if str(self.events[idx].get("op") or "") != "CD_NL":
+        stop_idx = self._end_index_for_ofs(end_ofs)
+        while idx < stop_idx:
+            if self.event_ops[idx] != "CD_NL":
                 raw_lines, idx2 = self._parse_raw(idx, end_ofs, ctx)
                 if idx2 <= idx:
                     break
@@ -4248,7 +4279,7 @@ class _Decompiler:
                 gf_idx + 1,
                 tail_ofs,
                 ctx,
-                self.events[cur_idx].get("line"),
+                self.event_lines[cur_idx],
             )
             clauses.append(
                 {
@@ -4272,7 +4303,7 @@ class _Decompiler:
                         cur_idx,
                         end_target,
                         ctx,
-                        self.events[cur_idx].get("line"),
+                        self.event_lines[cur_idx],
                     )
                 )
                 end_idx = self._idx_for_ofs(end_target)
@@ -4393,100 +4424,94 @@ class _Decompiler:
         if j >= len(self.events):
             return None
         stop_idx = self._end_index_for_ofs(end_ofs)
-        pos = bisect.bisect_left(self.for_candidate_indexes, j)
-        while pos < len(self.for_candidates):
-            g_idx, gf_idx, loop_ofs, cond_ofs = self.for_candidates[pos]
-            if g_idx >= stop_idx:
+        g_idx = self.next_goto_index[j]
+        if g_idx >= stop_idx:
+            return None
+        candidate = self.for_candidate_by_goto_index.get(g_idx)
+        if candidate is None:
+            return None
+        _, gf_idx, loop_ofs, cond_ofs = candidate
+        if gf_idx >= stop_idx:
+            return None
+        ofs = self.event_offsets[g_idx]
+        out_ofs = self.event_targets[gf_idx]
+        parsed = self._parse_guarded_block(
+            gf_idx,
+            out_ofs,
+            loop_ofs,
+            ctx,
+            self.event_lines[start_idx],
+        )
+        if parsed is None:
+            return None
+        out_idx, body_lines, inline_body = parsed
+        header_line = self.event_lines[g_idx]
+        head_event_idx = g_idx
+        prefix_init_lines = []
+        if j == g_idx:
+            init_lines = []
+        else:
+            if self._range_contains_any_op(
+                j,
+                ofs,
+                (
+                    "CD_DEC_PROP",
+                    "CD_GOTO",
+                    "CD_GOTO_FALSE",
+                    "CD_GOTO_TRUE",
+                    "CD_RETURN",
+                    "CD_TEXT",
+                    "CD_NAME",
+                ),
+            ):
                 return None
-            if gf_idx >= stop_idx:
-                pos += 1
-                continue
-            ofs = self.event_offsets[g_idx]
-            out_ofs = self.event_targets[gf_idx]
-            parsed = self._parse_guarded_block(
-                gf_idx,
-                out_ofs,
-                loop_ofs,
+            init_split = self._split_inline_region_by_line(
+                j,
+                ofs,
                 ctx,
-                self.event_lines[start_idx],
+                inline_line=header_line,
             )
-            if parsed is None:
-                pos += 1
-                continue
-            out_idx, body_lines, inline_body = parsed
-            header_line = self.event_lines[g_idx]
-            head_event_idx = g_idx
-            prefix_init_lines = []
-            if j == g_idx:
-                init_lines = []
-            else:
-                if self._range_contains_op(j, ofs, "CD_DEC_PROP"):
-                    pos += 1
-                    continue
-                if any(
-                    self._range_contains_op(j, ofs, op)
-                    for op in (
-                        "CD_GOTO",
-                        "CD_GOTO_FALSE",
-                        "CD_GOTO_TRUE",
-                        "CD_RETURN",
-                        "CD_TEXT",
-                        "CD_NAME",
-                    )
-                ):
-                    pos += 1
-                    continue
-                init_split = self._split_inline_region_by_line(
-                    j,
-                    ofs,
-                    ctx,
-                    inline_line=header_line,
-                )
-                if init_split[0] is None:
-                    pos += 1
-                    continue
-                prefix_init_lines, init_lines, init_head_idx = init_split
-                if init_head_idx is not None:
-                    head_event_idx = init_head_idx
-            loop_idx = g_idx + 1
-            added_loop_label = False
-            if loop_idx >= len(self.events) or int(
-                self.events[loop_idx].get("ofs", 0) or 0
-            ) >= int(cond_ofs):
-                loop_lines = []
-            else:
-                if int(loop_ofs) not in self.suppressed_label_offsets:
-                    self.suppressed_label_offsets.add(int(loop_ofs))
-                    added_loop_label = True
-                loop_lines, _ = self._parse_inline_block(
-                    loop_idx,
-                    cond_ofs,
-                    ctx,
-                )
-                if loop_lines is None:
-                    if added_loop_label:
-                        self.suppressed_label_offsets.discard(int(loop_ofs))
-                    pos += 1
-                    continue
-            self._add_suppressed_offsets(loop_ofs, cond_ofs, out_ofs)
-            head = (
-                "for("
-                + _join_inline_sentences(init_lines)
-                + ", "
-                + self._cond_expr(self.event_conds[gf_idx], ctx)
-                + ", "
-                + _join_inline_sentences(loop_lines)
-                + ")"
+            if init_split[0] is None:
+                return None
+            prefix_init_lines, init_lines, init_head_idx = init_split
+            if init_head_idx is not None:
+                head_event_idx = init_head_idx
+        loop_idx = g_idx + 1
+        added_loop_label = False
+        if loop_idx >= len(self.events) or self.event_offsets[loop_idx] >= int(
+            cond_ofs
+        ):
+            loop_lines = []
+        else:
+            if int(loop_ofs) not in self.suppressed_label_offsets:
+                self.suppressed_label_offsets.add(int(loop_ofs))
+                added_loop_label = True
+            loop_lines, _ = self._parse_inline_block(
+                loop_idx,
+                cond_ofs,
+                ctx,
             )
-            loop_out = self._wrap_block(head, body_lines, inline_body)
-            out = list(prefix_init_lines)
-            out.extend(self._with_event(head_event_idx, loop_out))
-            if not prefix_init_lines and head_event_idx != start_idx:
-                out = self._with_event(start_idx, []) + out
-            out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
-            return out, tramp_idx
-
-        return None
+            if loop_lines is None:
+                if added_loop_label:
+                    self.suppressed_label_offsets.discard(int(loop_ofs))
+                return None
+        self._add_suppressed_offsets(loop_ofs, cond_ofs, out_ofs)
+        head = (
+            "for("
+            + _join_inline_sentences(init_lines)
+            + ", "
+            + self._cond_expr(self.event_conds[gf_idx], ctx)
+            + ", "
+            + _join_inline_sentences(loop_lines)
+            + ")"
+        )
+        loop_out = self._wrap_block(head, body_lines, inline_body)
+        out = list(prefix_init_lines)
+        out.extend(self._with_event(head_event_idx, loop_out))
+        if not prefix_init_lines and head_event_idx != start_idx:
+            out = self._with_event(start_idx, []) + out
+        out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
+        return out, tramp_idx
 
     def _match_switch(self, start_idx, end_ofs, ctx):
         _ = ctx
