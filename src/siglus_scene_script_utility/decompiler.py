@@ -63,6 +63,38 @@ def _copy_lines(lines):
     return list(lines or [])
 
 
+def _scene_prop_block_lines(scene_prop_lines):
+    if not scene_prop_lines:
+        return []
+    return [
+        "#inc_start",
+        *(str(x or "") for x in list(scene_prop_lines or [])),
+        "#inc_end",
+        "",
+    ]
+
+
+def _inject_lines_into_blank_run(lines, block_lines):
+    out = [str(x or "") for x in list(lines or [])]
+    block = [str(x or "") for x in list(block_lines or [])]
+    if not block:
+        return out
+    need = len(block)
+    i = 0
+    while i < len(out):
+        if out[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(out) and not out[j]:
+            j += 1
+        if (j - i) >= need:
+            out[i : i + need] = block
+            return out
+        i = j
+    return block + out
+
+
 _FORM_REV = invert_form_code_map()
 
 
@@ -679,13 +711,38 @@ def _rewrite_label_refs(text, mapping):
 
 @functools.lru_cache(maxsize=65536)
 def _expr_to_source(expr):
-    if not expr:
+    s = str(expr or "")
+    if not s:
         return ""
-    return re.sub(
-        r"\b([LZ])(\d+)\b",
-        lambda m: "#" + m.group(1).lower() + m.group(2),
-        str(expr),
-    )
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        j = s.find('"', i)
+        if j < 0:
+            j = n
+        if j > i:
+            out.append(
+                re.sub(
+                    r"\b([LZ])(\d+)\b",
+                    lambda m: "#" + m.group(1).lower() + m.group(2),
+                    s[i:j],
+                )
+            )
+        if j >= n:
+            break
+        k = j + 1
+        while k < n:
+            if s[k] == "\\":
+                k += 2
+                continue
+            if s[k] == '"':
+                k += 1
+                break
+            k += 1
+        out.append(s[j:k])
+        i = k
+    return "".join(out)
 
 
 @functools.lru_cache(maxsize=65536)
@@ -3212,6 +3269,29 @@ class _Decompiler:
                     return f"#z{zid:02d}"
         return _label_token(label_id)
 
+    def _is_fallthrough_goto(self, ev):
+        if str((ev or {}).get("op") or "") != "CD_GOTO":
+            return False
+        try:
+            ofs = int((ev or {}).get("ofs", -1) or -1)
+            target = int((ev or {}).get("target_ofs", -1) or -1)
+        except Exception:
+            return False
+        if ofs < 0 or target < 0:
+            return False
+        idx = self._idx_for_ofs(ofs)
+        if idx is None:
+            return False
+        for next_idx in range(int(idx) + 1, len(self.events)):
+            try:
+                next_ofs = int(self.events[next_idx].get("ofs", -1) or -1)
+            except Exception:
+                continue
+            if next_ofs <= ofs:
+                continue
+            return next_ofs == target
+        return False
+
     def _goto_stmt(self, ev, ctx):
         target = ev.get("target_ofs")
         if isinstance(ctx, dict):
@@ -3789,7 +3869,8 @@ class _Decompiler:
                 if expr or not parts:
                     part = f"return({expr})" if expr else "return"
             elif op == "CD_GOTO":
-                part = self._goto_stmt(ev, ctx)
+                if not self._is_fallthrough_goto(ev):
+                    part = self._goto_stmt(ev, ctx)
             elif op in ("CD_GOTO_TRUE", "CD_GOTO_FALSE"):
                 cond = self._cond_expr(str(ev.get("_cond") or ""), ctx)
                 tgt = self._goto_stmt(ev, None)
@@ -3799,13 +3880,21 @@ class _Decompiler:
                     part = f"if(({cond})==0){{{tgt}}}"
             elif op == "CD_POP":
                 part = self._expr(str(ev.get("_expr") or ""), ctx)
+                if part and not any(
+                    str((ops[j] or {}).get("op") or "") == "CD_COMMAND"
+                    for j in range(idx)
+                ):
+                    part = ""
                 if not part:
                     prev = ops[idx - 1] if idx > 0 else None
-                    if (
-                        isinstance(prev, dict)
-                        and str(prev.get("op") or "") == "CD_COMMAND"
+                    if isinstance(prev, dict) and str(prev.get("op") or "") in (
+                        "CD_COMMAND",
+                        "CD_GOSUB",
+                        "CD_GOSUBSTR",
                     ):
-                        if not self._command_is_msg_block(prev):
+                        if str(
+                            prev.get("op") or ""
+                        ) != "CD_COMMAND" or not self._command_is_msg_block(prev):
                             part = self._expr(str(prev.get("_expr") or ""), ctx)
             elif op == "CD_COMMAND":
                 if self._command_is_msg_block(ev):
@@ -4506,10 +4595,11 @@ class _Decompiler:
             + ")"
         )
         loop_out = self._wrap_block(head, body_lines, inline_body)
-        out = list(prefix_init_lines)
+        prefix_out = list(prefix_init_lines)
+        if head_event_idx != start_idx:
+            prefix_out = self._with_event(start_idx, prefix_out)
+        out = list(prefix_out)
         out.extend(self._with_event(head_event_idx, loop_out))
-        if not prefix_init_lines and head_event_idx != start_idx:
-            out = self._with_event(start_idx, []) + out
         out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
         return out, tramp_idx
 
@@ -4602,6 +4692,9 @@ class _Decompiler:
                 {
                     "value": cs.get("value"),
                     "body": body_lines,
+                    "sort_line": self._first_target_line(
+                        body_lines, self.event_lines[start_idx2]
+                    ),
                 }
             )
         if out_ofs is None:
@@ -4631,18 +4724,47 @@ class _Decompiler:
         if out_idx is None:
             return None
         out = [_line_item(f"switch({self._cond_expr(cond_expr, ctx)})" + "{")]
-        for cs in case_blocks:
-            case_head = f"    case({self._expr(cs.get('value') or '', ctx)})"
-            case_body = cs.get("body") or []
-            out.extend(
-                _merge_head_with_first_line(
-                    case_head, _indent_lines(_indent_lines(case_body))
-                )
-            )
+        switch_items = [
+            {
+                "kind": "case",
+                "value": cs.get("value"),
+                "body": cs.get("body") or [],
+                "sort_line": cs.get("sort_line"),
+                "order": idx,
+            }
+            for idx, cs in enumerate(case_blocks)
+        ]
         if default_lines is not None:
+            switch_items.append(
+                {
+                    "kind": "default",
+                    "body": default_lines,
+                    "sort_line": self._first_target_line(
+                        default_lines,
+                        self.event_lines[default_idx]
+                        if default_idx is not None
+                        else None,
+                    ),
+                    "order": len(switch_items),
+                }
+            )
+        switch_items.sort(
+            key=lambda item: (
+                1 << 30
+                if item.get("sort_line") is None
+                else int(item.get("sort_line") or 0),
+                int(item.get("order") or 0),
+            )
+        )
+        for item in switch_items:
+            head = (
+                f"    case({self._expr(item.get('value') or '', ctx)})"
+                if item.get("kind") == "case"
+                else "    default"
+            )
             out.extend(
                 _merge_head_with_first_line(
-                    "    default", _indent_lines(_indent_lines(default_lines))
+                    head, _indent_lines(_indent_lines(item.get("body") or []))
                 )
             )
         out.append(_line_item("}"))
@@ -4650,12 +4772,6 @@ class _Decompiler:
         return self._with_event(start_idx, out), tramp_idx
 
     def decompile(self):
-        lines = []
-        if self.scene_prop_lines:
-            lines.append(_line_item("#inc_start"))
-            lines.extend(_line_item(x) for x in self.scene_prop_lines)
-            lines.append(_line_item("#inc_end"))
-            lines.append(_line_item(""))
         body_lines, _ = self._parse_block(0, 1 << 30, None)
         body_lines = self._restore_missing_l_labels(body_lines)
         body_lines = self._dedupe_l_label_defs(body_lines)
@@ -4666,11 +4782,13 @@ class _Decompiler:
         body_lines = _filter_unused_line_labels(body_lines, keep_labels=keep_labels)
         body_lines = _merge_same_target_lines(body_lines)
         body_lines = self._restore_terminal_eof_line(body_lines)
-        lines.extend(body_lines)
         self.external_inc_lines = _support_inc_lines_from_hints(self.hints)
         if not self.external_inc_lines:
             self.external_inc_lines = self._build_inc_lines()
-        materialized = _materialize_lines(lines)
+        materialized = _materialize_lines(body_lines)
+        materialized = _inject_lines_into_blank_run(
+            materialized, _scene_prop_block_lines(self.scene_prop_lines)
+        )
         text = "\n".join(materialized)
         eof_line = None
         try:
