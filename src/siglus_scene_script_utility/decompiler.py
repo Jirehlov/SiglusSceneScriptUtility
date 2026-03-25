@@ -149,6 +149,10 @@ _LABEL_REF_SUB_RE = re.compile(
     r"(\b(?:goto\s+|gosub(?:str)?(?:\([^)]*\))?\s+))(#l\d+)\b"
 )
 _LINE_LABEL_RE = re.compile(r"^(\s*)(#(?:z\d+|l\d+))(?:\t(.*))?$")
+_SYNTH_LABEL_REF_SUB_RE = re.compile(
+    r"(\b(?:goto\s+|gosub(?:str)?(?:\([^)]*\))?\s+))(#__(?:gap_l\d+|cdnl_gap_\d+))\b"
+)
+_SYNTH_LINE_LABEL_RE = re.compile(r"^(\s*)(#__(?:gap_l\d+|cdnl_gap_\d+))(?:\t(.*))?$")
 _DECL_CMD_ID_RE = re.compile(r"^\s*#command\s+__cmd_(\d+)\b")
 _DECL_PROP_ID_RE = re.compile(r"^\s*#property\s+(?:\$prop_|__prop_)(\d+)\b")
 _SYMBOLIC_STR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
@@ -646,8 +650,10 @@ def _merge_same_target_lines(lines):
             cur_label = _LINE_LABEL_RE.match(text)
             if prev_text and prev_label and (not cur_label):
                 indent, label, tail = prev_label.groups()
-                if tail:
-                    merged_tail = _join_inline_sentences([tail, text.lstrip()])
+                merged_tail = _join_inline_sentences(
+                    [tail, text.lstrip()] if tail else [text.lstrip()]
+                )
+                if merged_tail:
                     out[-1] = _line_item(indent + label + "\t" + merged_tail, target)
                     continue
             if prev_text and (not prev_label) and (not cur_label):
@@ -681,6 +687,58 @@ def _filter_unused_line_labels(lines, keep_labels=None):
     return out
 
 
+def _drop_terminal_l_before_eof(lines, eof_line):
+    try:
+        eof_target = int(eof_line)
+    except Exception:
+        return _copy_lines(lines)
+    refs = _line_label_refs(lines)
+    out = []
+    last_target_idx = -1
+    kept = _copy_lines(lines)
+    for idx, line in enumerate(kept):
+        if _line_target(line) is not None:
+            last_target_idx = idx
+    for idx, line in enumerate(kept):
+        text = _line_text(line)
+        target = _line_target(line)
+        m = _LINE_LABEL_RE.match(text)
+        if (
+            m
+            and idx == last_target_idx
+            and target is not None
+            and int(target) == eof_target
+        ):
+            _, label, tail = m.groups()
+            if label.startswith("#l") and (not tail) and label not in refs:
+                continue
+        out.append(_line_item(text, target))
+    return out
+
+
+def _drop_terminal_command_return(lines):
+    out = _copy_lines(lines)
+    for idx, line in enumerate(out):
+        text = _line_text(line)
+        if not text or "\treturn}" not in text:
+            continue
+        next_text = ""
+        for j in range(idx + 1, len(out)):
+            cand = str(_line_text(out[j]) or "").strip()
+            if cand:
+                next_text = cand
+                break
+        if next_text and not (
+            next_text.startswith("command ") or next_text.startswith("#command ")
+        ):
+            continue
+        out[idx] = _line_item(
+            re.sub(r"\treturn(\}+)\s*$", r"\1", text),
+            _line_target(line),
+        )
+    return out
+
+
 def _element_owner(code):
     try:
         code = int(code)
@@ -696,6 +754,13 @@ def _label_token(label_id):
         return "#l0"
 
 
+def _z_label_token(label_id):
+    try:
+        return f"#z{int(label_id):02d}"
+    except Exception:
+        return "#z00"
+
+
 def _rewrite_label_refs(text, mapping):
     s = str(text or "")
     if (not mapping) or ("#l" not in s):
@@ -707,6 +772,19 @@ def _rewrite_label_refs(text, mapping):
         return prefix + str(mapping.get(label, label))
 
     return _LABEL_REF_SUB_RE.sub(_repl, s)
+
+
+def _rewrite_synth_label_refs(text, mapping):
+    s = str(text or "")
+    if (not mapping) or ("#__" not in s):
+        return s
+
+    def _repl(m):
+        prefix = str(m.group(1) or "")
+        label = str(m.group(2) or "")
+        return prefix + str(mapping.get(label, label))
+
+    return _SYNTH_LABEL_REF_SUB_RE.sub(_repl, s)
 
 
 @functools.lru_cache(maxsize=65536)
@@ -3190,6 +3268,15 @@ class _Decompiler:
             out[0] = _line_item(_line_text(out[0]), target_line)
         return out
 
+    def _is_empty_cd_nl_sentence(self, idx):
+        if idx < 0 or idx >= len(self.events):
+            return False
+        if self.event_ops[idx] != "CD_NL":
+            return False
+        if idx + 1 >= len(self.events):
+            return True
+        return self.event_ops[idx + 1] in ("CD_NL", "CD_EOF")
+
     def _with_event(self, event_idx, lines):
         ev = self.events[event_idx]
         labels = self._event_labels(ev)
@@ -3212,6 +3299,27 @@ class _Decompiler:
                     if z_labels:
                         out.extend(self._with_labels(z_labels, [], prev_line))
                         labels = [x for x in labels if not str(x).startswith("Z")]
+                        if lines:
+                            moved_z_ids = set()
+                            for z in z_labels:
+                                try:
+                                    moved_z_ids.add(int(str(z)[1:]))
+                                except Exception:
+                                    continue
+                            if moved_z_ids:
+                                kept = []
+                                for lab in labels:
+                                    s = str(lab or "")
+                                    if not s.startswith("L"):
+                                        kept.append(lab)
+                                        continue
+                                    try:
+                                        if int(s[1:]) in moved_z_ids:
+                                            continue
+                                    except Exception:
+                                        pass
+                                    kept.append(lab)
+                                labels = kept
         out.extend(self._with_labels(labels, lines, line))
         return out
 
@@ -3584,6 +3692,7 @@ class _Decompiler:
 
     def _restore_empty_cd_nl_sentences(self, lines):
         out = _copy_lines(lines)
+        keep = set()
         seen_targets = set()
         for line in out:
             target = _line_target(line)
@@ -3597,34 +3706,58 @@ class _Decompiler:
                 line_no = int(ev.get("line", -1) or -1)
             except Exception:
                 continue
-            if line_no <= 0 or line_no in seen_targets:
+            if line_no <= 0:
                 continue
-            j = idx + 1
-            empty_sentence = True
-            next_op = ""
-            while j < len(self.events):
-                next_op = self.event_ops[j]
-                if next_op in ("CD_NL", "CD_EOF"):
-                    break
-                empty_sentence = False
-                break
-            if not empty_sentence:
+            if not self._is_empty_cd_nl_sentence(idx):
                 continue
-            if next_op == "CD_EOF" and (not list((ev or {}).get("labels") or [])):
+            next_op = self.event_ops[idx + 1] if idx + 1 < len(self.events) else ""
+            raw_labels = [str(x or "") for x in list((ev or {}).get("labels") or [])]
+            if next_op == "CD_EOF" and (not raw_labels):
+                continue
+            l_labels = []
+            has_z_label = False
+            for lab in raw_labels:
+                if lab.startswith("Z"):
+                    has_z_label = True
+                if not lab.startswith("L"):
+                    continue
+                try:
+                    l_labels.append(_label_token(int(lab[1:])))
+                except Exception:
+                    continue
+            if line_no in seen_targets:
+                if has_z_label and len(l_labels) == 1:
+                    for pos, line in enumerate(out):
+                        target = _line_target(line)
+                        if target is None or int(target) != int(line_no):
+                            continue
+                        text = str(_line_text(line) or "").strip()
+                        if text == l_labels[0]:
+                            keep.add(l_labels[0])
+                            break
+                        if text:
+                            continue
+                        out[pos] = _line_item(l_labels[0], line_no)
+                        keep.add(l_labels[0])
+                        break
                 continue
             seen_targets.add(line_no)
-            gap_lines.append(int(line_no))
+            gap_lines.append((int(line_no), l_labels))
         if not gap_lines:
-            return out
+            return out, keep
         used = set(_line_text(line) for line in out)
         seq = 0
-        for line_no in gap_lines:
-            while True:
-                name = f"#__cdnl_gap_{seq:04d}"
-                seq += 1
-                if name not in used:
-                    used.add(name)
-                    break
+        for line_no, l_labels in gap_lines:
+            if len(l_labels) == 1:
+                name = l_labels[0]
+                keep.add(name)
+            else:
+                while True:
+                    name = f"#__cdnl_gap_{seq:04d}"
+                    seq += 1
+                    if name not in used:
+                        used.add(name)
+                        break
             pos = len(out)
             for i, line in enumerate(out):
                 target = _line_target(line)
@@ -3634,6 +3767,432 @@ class _Decompiler:
                     pos = i
                     break
             out.insert(pos, _line_item(name, line_no))
+        return out, keep
+
+    def _drop_redundant_same_target_l_before_z(self, lines):
+        inherited = set()
+        raw_by_line = {}
+        for ev in self.events:
+            raw_labels = [str(x or "") for x in list((ev or {}).get("labels") or [])]
+            if not raw_labels:
+                continue
+            try:
+                line_no = int(ev.get("line", -1) or -1)
+            except Exception:
+                continue
+            if line_no <= 0:
+                continue
+            raw_by_line.setdefault(int(line_no), set()).update(raw_labels)
+            z_ids = set()
+            for lab in raw_labels:
+                if not lab.startswith("Z"):
+                    continue
+                try:
+                    z_ids.add(int(lab[1:]))
+                except Exception:
+                    continue
+            if not z_ids:
+                continue
+            for lab in raw_labels:
+                if not lab.startswith("L"):
+                    continue
+                try:
+                    lid = int(lab[1:])
+                except Exception:
+                    continue
+                if lid in z_ids:
+                    inherited.add((int(line_no), _label_token(lid)))
+        refs = _line_label_refs(lines)
+        out = []
+        kept = _copy_lines(lines)
+        idx = 0
+        while idx < len(kept):
+            line = kept[idx]
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if m and target is not None:
+                indent, label, tail = m.groups()
+                if (
+                    label.startswith("#l")
+                    and tail
+                    and label not in refs
+                    and (int(target), str(label or "")) in inherited
+                    and (
+                        f"Z{int(str(label or '')[2:])}"
+                        in raw_by_line.get(int(target), set())
+                    )
+                ):
+                    out.append(_line_item(indent + tail, target))
+                    idx += 1
+                    continue
+            if m and target is not None and idx + 1 < len(kept):
+                _, label, tail = m.groups()
+                if (
+                    label.startswith("#l")
+                    and (not tail)
+                    and (int(target), str(label or "")) in inherited
+                ):
+                    nxt = kept[idx + 1]
+                    next_target = _line_target(nxt)
+                    next_m = _LINE_LABEL_RE.match(_line_text(nxt))
+                    if next_target is not None and int(next_target) == int(target):
+                        if (not next_m) and label not in refs:
+                            idx += 1
+                            continue
+                    if (
+                        next_target is not None
+                        and int(next_target) == int(target)
+                        and next_m
+                    ):
+                        _, next_label, next_tail = next_m.groups()
+                        if next_label.startswith("#z") and (not next_tail):
+                            idx += 1
+                            continue
+            out.append(_line_item(text, target))
+            idx += 1
+        return out
+
+    def _rewrite_successor_l_refs_to_z(self, lines):
+        refs = _line_label_refs(lines)
+        if not refs:
+            return _copy_lines(lines)
+        explicit = set()
+        raw_by_line = {}
+        for ev in self.events:
+            raw_labels = [str(x or "") for x in list((ev or {}).get("labels") or [])]
+            if not raw_labels:
+                continue
+            try:
+                line_no = int(ev.get("line", -1) or -1)
+            except Exception:
+                continue
+            if line_no <= 0:
+                continue
+            raw_by_line.setdefault(int(line_no), set()).update(raw_labels)
+        for line in lines or []:
+            m = _LINE_LABEL_RE.match(_line_text(line))
+            if not m:
+                continue
+            explicit.add(str(m.group(2) or ""))
+        rewrites = {}
+        mapping = {}
+        kept = _copy_lines(lines)
+        for idx, line in enumerate(kept):
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if not m or target is None:
+                continue
+            indent, label, tail = m.groups()
+            if (not label.startswith("#l")) or tail or label in refs:
+                continue
+            try:
+                lid = int(label[2:])
+            except Exception:
+                continue
+            raw_here = raw_by_line.get(int(target), set())
+            if (f"L{lid}" not in raw_here) or (f"Z{lid}" not in raw_here):
+                continue
+            next_idx = None
+            for j in range(idx + 1, len(kept)):
+                next_target = _line_target(kept[j])
+                if next_target is None or int(next_target) <= int(target):
+                    continue
+                next_idx = j
+                break
+            if next_idx is None:
+                continue
+            next_text = _line_text(kept[next_idx])
+            next_target = _line_target(kept[next_idx])
+            next_m = _LINE_LABEL_RE.match(next_text)
+            if not next_m or next_target is None:
+                continue
+            next_indent, next_label, next_tail = next_m.groups()
+            next_ref = _label_token(lid + 1)
+            if next_label != next_ref or not next_tail or next_ref not in refs:
+                continue
+            raw_next = raw_by_line.get(int(next_target), set())
+            if (f"L{lid + 1}" not in raw_next) or (f"Z{lid + 1}" in raw_next):
+                continue
+            z_label = _z_label_token(lid + 1)
+            if z_label in explicit:
+                continue
+            rewrites[idx] = indent + z_label
+            rewrites[next_idx] = next_indent + next_tail
+            mapping[next_ref] = z_label
+            explicit.add(z_label)
+        if (not rewrites) and (not mapping):
+            return _copy_lines(lines)
+        out = []
+        for idx, line in enumerate(kept):
+            text = rewrites.get(idx, _line_text(line))
+            out.append(
+                _line_item(_rewrite_label_refs(text, mapping), _line_target(line))
+            )
+        return out
+
+    def _rewrite_predefinition_refs_to_label_cluster_head(self, lines):
+        kept = _copy_lines(lines)
+        out = _copy_lines(lines)
+        idx = 0
+        while idx < len(kept):
+            m = _SYNTH_LINE_LABEL_RE.match(_line_text(kept[idx]))
+            if not m or m.group(3):
+                idx += 1
+                continue
+            cluster = [(idx, str(m.group(2) or ""), _line_target(kept[idx]))]
+            j = idx + 1
+            while j < len(kept):
+                text = _line_text(kept[j])
+                if not text.strip():
+                    j += 1
+                    continue
+                m = _SYNTH_LINE_LABEL_RE.match(text)
+                if not m or m.group(3):
+                    break
+                cluster.append((j, str(m.group(2) or ""), _line_target(kept[j])))
+                j += 1
+            if len(cluster) == 2:
+                _, head, head_target = cluster[0]
+                alias_idx, alias, alias_target = cluster[1]
+                if (
+                    head != alias
+                    and head_target is not None
+                    and alias_target is not None
+                    and int(head_target) < int(alias_target)
+                    and (head.startswith("#__gap_l") or head.startswith("#__cdnl_gap_"))
+                    and (
+                        alias.startswith("#__gap_l") or alias.startswith("#__cdnl_gap_")
+                    )
+                ):
+                    alias_seen = False
+                    head_seen = False
+                    for pos in range(alias_idx):
+                        text = _line_text(out[pos])
+                        for ref in _SYNTH_LABEL_REF_SUB_RE.finditer(text):
+                            label = str(ref.group(2) or "")
+                            if label == alias:
+                                alias_seen = True
+                            elif label == head:
+                                head_seen = True
+                        if alias_seen and head_seen:
+                            break
+                    if alias_seen and (not head_seen):
+                        mapping = {alias: head}
+                        for pos in range(alias_idx):
+                            text = _line_text(out[pos])
+                            rewrote = _rewrite_synth_label_refs(text, mapping)
+                            if rewrote != text:
+                                out[pos] = _line_item(rewrote, _line_target(out[pos]))
+            idx = j
+        return out
+
+    def _normalize_label_clusters(self, lines):
+        refs = _line_label_refs(lines)
+        kept = _copy_lines(lines)
+        idx = 0
+        out = _copy_lines(kept)
+        while idx < len(kept):
+            text = _line_text(kept[idx])
+            target = _line_target(kept[idx])
+            m = _LINE_LABEL_RE.match(text)
+            if m:
+                _, label, tail = m.groups()
+                if label.startswith("#l") and not tail and label not in refs:
+                    j = idx + 1
+                    while j < len(kept) and not _line_text(kept[j]).strip():
+                        j += 1
+                    if j < len(kept):
+                        next_text = _line_text(kept[j])
+                        next_target = _line_target(kept[j])
+                        next_m = _LINE_LABEL_RE.match(next_text)
+                        if (
+                            next_m
+                            and target is not None
+                            and next_target is not None
+                            and int(next_target) == int(target)
+                            and not next_m.group(3)
+                            and str(next_m.group(2) or "").startswith("#z")
+                        ):
+                            out[idx] = _line_item(next_text, target)
+                            out[j] = _line_item("", next_target)
+            idx += 1
+        kept = _copy_lines(out)
+        out = []
+        idx = 0
+        while idx < len(kept):
+            text = _line_text(kept[idx])
+            target = _line_target(kept[idx])
+            m = _LINE_LABEL_RE.match(text)
+            if m:
+                indent, label, tail = m.groups()
+                if label.startswith("#l") and tail and label not in refs:
+                    prev_idx = idx - 1
+                    while prev_idx >= 0 and not _line_text(kept[prev_idx]).strip():
+                        prev_idx -= 1
+                    if prev_idx >= 0:
+                        prev_text = _line_text(kept[prev_idx])
+                        prev_target = _line_target(kept[prev_idx])
+                        prev_m = _LINE_LABEL_RE.match(prev_text)
+                        if (
+                            prev_m
+                            and target is not None
+                            and prev_target is not None
+                            and int(prev_target) == int(target)
+                            and not prev_m.group(3)
+                            and str(prev_m.group(2) or "").startswith("#z")
+                        ):
+                            out.append(_line_item(indent + tail, target))
+                            idx += 1
+                            continue
+            out.append(_line_item(text, target))
+            idx += 1
+        return out
+
+    def _normalize_inline_l_after_z(self, lines):
+        refs = _line_label_refs(lines)
+        kept = _copy_lines(lines)
+        mapping = {}
+        rewrites = {}
+        idx = 0
+        while idx < len(kept):
+            text = _line_text(kept[idx])
+            target = _line_target(kept[idx])
+            m = _LINE_LABEL_RE.match(text)
+            if not m:
+                idx += 1
+                continue
+            _, z_label, z_tail = m.groups()
+            if (not z_label.startswith("#z")) or z_tail:
+                idx += 1
+                continue
+            j = idx + 1
+            while j < len(kept) and not _line_text(kept[j]).strip():
+                j += 1
+            if j >= len(kept):
+                idx += 1
+                continue
+            next_text = _line_text(kept[j])
+            next_target = _line_target(kept[j])
+            next_m = _LINE_LABEL_RE.match(next_text)
+            if not next_m:
+                idx += 1
+                continue
+            indent, l_label, l_tail = next_m.groups()
+            same_target = (
+                target is not None
+                and next_target is not None
+                and int(target) == int(next_target)
+            )
+            same_raw_offset = False
+            try:
+                zid = int(z_label[2:])
+                lid = int(l_label[2:])
+                if (
+                    0 <= zid < len(self.z_label_list)
+                    and 0 <= lid < len(self.label_list)
+                    and int(self.z_label_list[zid]) > 0
+                    and int(self.z_label_list[zid]) == int(self.label_list[lid])
+                ):
+                    same_raw_offset = True
+            except Exception:
+                same_raw_offset = False
+            if (
+                (not l_label.startswith("#l"))
+                or (not l_tail)
+                or ((not same_target) and (not same_raw_offset))
+            ):
+                idx += 1
+                continue
+            if l_label in refs:
+                mapping[l_label] = z_label
+            rewrites[j] = indent + l_tail
+            idx += 1
+        if (not mapping) and (not rewrites):
+            return _copy_lines(lines)
+        out = []
+        for idx, line in enumerate(kept):
+            text = rewrites.get(idx, _line_text(line))
+            out.append(
+                _line_item(_rewrite_label_refs(text, mapping), _line_target(line))
+            )
+        return out
+
+    def _rewrite_explicit_l_refs_to_explicit_z(self, lines):
+        alias_map = {}
+        kept = _copy_lines(lines)
+        refs = _line_label_refs(kept)
+        z_by_ofs = {}
+        for line in kept:
+            text = _line_text(line)
+            m = _LINE_LABEL_RE.match(text)
+            if not m:
+                continue
+            label = str(m.group(2) or "")
+            if not label.startswith("#z"):
+                continue
+            try:
+                zid = int(label[2:])
+            except Exception:
+                continue
+            if zid < 0 or zid >= len(self.z_label_list):
+                continue
+            try:
+                ofs = int(self.z_label_list[zid])
+            except Exception:
+                continue
+            if ofs <= 0:
+                continue
+            z_by_ofs.setdefault(ofs, []).append(label)
+        if not z_by_ofs:
+            return kept
+        for line in kept:
+            text = _line_text(line)
+            m = _LINE_LABEL_RE.match(text)
+            if not m:
+                continue
+            label = str(m.group(2) or "")
+            tail = str(m.group(3) or "")
+            if not label.startswith("#l"):
+                continue
+            if (not tail) and label not in refs:
+                continue
+            try:
+                lid = int(label[2:])
+            except Exception:
+                continue
+            if lid < 0 or lid >= len(self.label_list):
+                continue
+            try:
+                ofs = int(self.label_list[lid])
+            except Exception:
+                continue
+            if ofs <= 0:
+                continue
+            z_labels = z_by_ofs.get(ofs, [])
+            if len(z_labels) != 1:
+                continue
+            alias_map[label] = z_labels[0]
+        if not alias_map:
+            return kept
+        out = []
+        for line in kept:
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if not m:
+                out.append(_line_item(_rewrite_label_refs(text, alias_map), target))
+                continue
+            indent, label, tail = m.groups()
+            z_label = alias_map.get(label)
+            if not z_label:
+                out.append(_line_item(_rewrite_label_refs(text, alias_map), target))
+                continue
+            tail = _rewrite_label_refs(str(tail or ""), alias_map)
+            if tail:
+                out.append(_line_item(indent + tail, target))
+            continue
         return out
 
     def _preserved_unreferenced_l_labels(self):
@@ -3836,10 +4395,51 @@ class _Decompiler:
             return ops[j]
         return None
 
+    def _render_empty_switch_line(self, ops, ctx):
+        seq = [
+            ev for ev in list(ops or []) if str((ev or {}).get("op") or "") != "CD_EOF"
+        ]
+        if len(seq) < 2:
+            return None
+        tail = seq[-1]
+        if str(
+            (tail or {}).get("op") or ""
+        ) != "CD_GOTO" or not self._is_fallthrough_goto(tail):
+            return None
+        seq = seq[:-1]
+        if not seq or str((seq[-1] or {}).get("op") or "") != "CD_POP":
+            return None
+        expr = self._expr(str((seq[-1] or {}).get("_expr") or ""), ctx)
+        if not expr:
+            return None
+        for ev in seq[:-1]:
+            op = str((ev or {}).get("op") or "")
+            if op in (
+                "CD_ELM_POINT",
+                "CD_PUSH",
+                "CD_PROPERTY",
+                "CD_COPY",
+                "CD_COPY_ELM",
+                "CD_OPERATE_1",
+                "CD_OPERATE_2",
+                "CD_ARG",
+                "CD_SEL_BLOCK_START",
+                "CD_SEL_BLOCK_END",
+                "CD_COMMAND",
+                "CD_GOSUB",
+                "CD_GOSUBSTR",
+            ):
+                continue
+            return None
+        return f"switch({expr}){{}}"
+
     def _render_simple_line(self, ops, ctx):
         ops = list(ops or [])
         if not ops:
             return ""
+        empty_switch = self._render_empty_switch_line(ops, ctx)
+        if empty_switch is not None:
+            return empty_switch
         parts = []
         eof_only = True
         assign_ctx = (
@@ -4777,10 +5377,27 @@ class _Decompiler:
         body_lines = self._dedupe_l_label_defs(body_lines)
         body_lines, keep_labels = self._restore_standalone_l_labels(body_lines)
         body_lines = self._restore_synthetic_gap_labels(body_lines)
-        body_lines = self._restore_empty_cd_nl_sentences(body_lines)
+        body_lines, extra_keep_labels = self._restore_empty_cd_nl_sentences(body_lines)
+        body_lines = self._rewrite_predefinition_refs_to_label_cluster_head(body_lines)
+        body_lines = self._normalize_label_clusters(body_lines)
+        body_lines = self._normalize_inline_l_after_z(body_lines)
+        body_lines = self._drop_redundant_same_target_l_before_z(body_lines)
+        body_lines = self._rewrite_successor_l_refs_to_z(body_lines)
+        body_lines = self._rewrite_explicit_l_refs_to_explicit_z(body_lines)
+        keep_labels.update(extra_keep_labels)
         keep_labels.update(self._preserved_unreferenced_l_labels())
         body_lines = _filter_unused_line_labels(body_lines, keep_labels=keep_labels)
+        try:
+            eof_line = (
+                int(self.events[-1].get("line", 0) or 0)
+                if self.events and self.event_ops[-1] == "CD_EOF"
+                else None
+            )
+        except Exception:
+            eof_line = None
+        body_lines = _drop_terminal_l_before_eof(body_lines, eof_line)
         body_lines = _merge_same_target_lines(body_lines)
+        body_lines = _drop_terminal_command_return(body_lines)
         body_lines = self._restore_terminal_eof_line(body_lines)
         self.external_inc_lines = _support_inc_lines_from_hints(self.hints)
         if not self.external_inc_lines:
