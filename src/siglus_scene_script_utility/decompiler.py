@@ -3609,7 +3609,7 @@ class _Decompiler:
         for idx in range(1, len(self.events)):
             if self.event_ops[idx - 1] != "CD_NL":
                 continue
-            if self.event_ops[idx] != "CD_NL":
+            if self.event_ops[idx] not in ("CD_NL", "CD_GOTO"):
                 continue
             prev = self.events[idx - 1]
             ev = self.events[idx]
@@ -3628,11 +3628,17 @@ class _Decompiler:
                 cur_line = int(ev.get("line", -1) or -1)
             except Exception:
                 continue
-            if prev_line <= 0 or cur_line <= prev_line:
-                continue
+            if self.event_ops[idx] == "CD_NL":
+                if prev_line <= 0 or cur_line <= prev_line:
+                    continue
+                target_line = prev_line
+            else:
+                if prev_line <= 0 or cur_line != prev_line:
+                    continue
+                target_line = cur_line
             for lab in labels:
                 try:
-                    out.setdefault(_label_token(int(lab[1:])), prev_line)
+                    out.setdefault(_label_token(int(lab[1:])), target_line)
                 except Exception:
                     continue
         return out
@@ -3666,6 +3672,39 @@ class _Decompiler:
                     emitted.add(label)
                     keep.add(label)
                 out.append(_line_item(indent + tail, target))
+                continue
+            out.append(_line_item(text, target))
+        return out, keep
+
+    def _split_l_labels_to_standalone_targets(self, lines):
+        standalone = self._standalone_l_label_targets()
+        if not standalone:
+            return _copy_lines(lines), set()
+        out = []
+        keep = set()
+        emitted = set()
+        for line in lines or []:
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if not m:
+                out.append(_line_item(text, target))
+                continue
+            indent, label, tail = m.groups()
+            label = str(label or "")
+            standalone_target = standalone.get(label)
+            if (
+                label.startswith("#l")
+                and tail
+                and target is not None
+                and standalone_target is not None
+                and int(standalone_target) < int(target)
+            ):
+                if label not in emitted:
+                    out.append(_line_item(indent + label, standalone_target))
+                    emitted.add(label)
+                    keep.add(label)
+                out.append(_line_item(indent + str(tail or ""), target))
                 continue
             out.append(_line_item(text, target))
         return out, keep
@@ -4293,6 +4332,180 @@ class _Decompiler:
             if tail:
                 out.append(_line_item(indent + tail, target))
             continue
+        return out
+
+    def _collapse_explicit_l_goto_trampolines(self, lines):
+        kept = _copy_lines(lines)
+        out = []
+        ref_counts = {}
+        for ref in _LABEL_REF_RE.findall("\n".join(_line_text(x) for x in kept)):
+            ref_counts[ref] = int(ref_counts.get(ref, 0) or 0) + 1
+        idx = 0
+        while idx < len(kept):
+            line = kept[idx]
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if m and target is not None and idx + 1 < len(kept):
+                indent, label, tail = m.groups()
+                tail = str(tail or "")
+                tramp = re.fullmatch(r"\s*goto\s+(#l\d+)\s*", tail)
+                if label.startswith("#l") and tramp:
+                    alias = str(tramp.group(1) or "")
+                    j = idx + 1
+                    while j < len(kept) and not _line_text(kept[j]).strip():
+                        j += 1
+                    next_text = _line_text(kept[j]) if j < len(kept) else ""
+                    next_target = _line_target(kept[j]) if j < len(kept) else None
+                    next_m = _LINE_LABEL_RE.match(next_text)
+                    tail_text = ""
+                    end_idx = None
+                    if (
+                        next_m
+                        and next_target is not None
+                        and str(next_m.group(2) or "") == alias
+                        and int(next_target) == int(target)
+                    ):
+                        k = j
+                        while k < len(kept):
+                            cluster_text = _line_text(kept[k])
+                            cluster_target = _line_target(kept[k])
+                            cluster_m = _LINE_LABEL_RE.match(cluster_text)
+                            if (
+                                cluster_target is None
+                                or int(cluster_target) != int(target)
+                                or not cluster_m
+                            ):
+                                break
+                            if k == j and str(cluster_m.group(2) or "") != alias:
+                                break
+                            if not tail_text and str(cluster_m.group(3) or ""):
+                                tail_text = str(cluster_m.group(3) or "")
+                            k += 1
+                        if tail_text:
+                            end_idx = k
+                    if tail_text and int(ref_counts.get(alias, 0) or 0) == 1:
+                        out.append(
+                            _line_item(
+                                indent + label + "\t" + tail_text,
+                                target,
+                            )
+                        )
+                        idx = int(end_idx or (j + 1))
+                        continue
+            out.append(_line_item(text, target))
+            idx += 1
+        return out
+
+    def _move_referenced_l_to_standalone_slot_after_z(self, lines):
+        refs = _line_label_refs(lines)
+        kept = _copy_lines(lines)
+        out = []
+        idx = 0
+        while idx < len(kept):
+            line = kept[idx]
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if m and str(m.group(2) or "").startswith("#z") and (not m.group(3)):
+                j = idx + 1
+                while j < len(kept) and not _line_text(kept[j]).strip():
+                    j += 1
+                if j < len(kept):
+                    mid_text = _line_text(kept[j])
+                    mid_target = _line_target(kept[j])
+                    mid_m = _LINE_LABEL_RE.match(mid_text)
+                    if (
+                        mid_m
+                        and str(mid_m.group(2) or "").startswith("#l")
+                        and (not mid_m.group(3))
+                        and str(mid_m.group(2) or "") not in refs
+                    ):
+                        k = j + 1
+                        while k < len(kept) and not _line_text(kept[k]).strip():
+                            k += 1
+                        if k < len(kept):
+                            next_text = _line_text(kept[k])
+                            next_target = _line_target(kept[k])
+                            next_m = _LINE_LABEL_RE.match(next_text)
+                            moved_label = str(next_m.group(2) or "") if next_m else ""
+                            moved_tail = str(next_m.group(3) or "") if next_m else ""
+                            if (
+                                next_m
+                                and moved_label.startswith("#l")
+                                and moved_label in refs
+                                and moved_tail
+                                and mid_target is not None
+                                and next_target is not None
+                                and int(mid_target) < int(next_target)
+                            ):
+                                out.append(_line_item(text, target))
+                                out.append(
+                                    _line_item(
+                                        str(mid_m.group(1) or "") + moved_label,
+                                        mid_target,
+                                    )
+                                )
+                                out.append(
+                                    _line_item(
+                                        str(next_m.group(1) or "") + moved_tail,
+                                        next_target,
+                                    )
+                                )
+                                idx = k + 1
+                                continue
+            out.append(_line_item(text, target))
+            idx += 1
+        return out
+
+    def _drop_unreferenced_l_after_z_before_l_tail(self, lines):
+        refs = _line_label_refs(lines)
+        kept = _copy_lines(lines)
+        out = []
+        idx = 0
+        while idx < len(kept):
+            line = kept[idx]
+            text = _line_text(line)
+            target = _line_target(line)
+            m = _LINE_LABEL_RE.match(text)
+            if m and str(m.group(2) or "").startswith("#z") and (not m.group(3)):
+                j = idx + 1
+                while j < len(kept) and not _line_text(kept[j]).strip():
+                    j += 1
+                if j < len(kept):
+                    mid_text = _line_text(kept[j])
+                    mid_target = _line_target(kept[j])
+                    mid_m = _LINE_LABEL_RE.match(mid_text)
+                    if (
+                        mid_m
+                        and str(mid_m.group(2) or "").startswith("#l")
+                        and (not mid_m.group(3))
+                        and str(mid_m.group(2) or "") not in refs
+                        and target is not None
+                        and mid_target is not None
+                        and int(target) == int(mid_target)
+                    ):
+                        k = j + 1
+                        while k < len(kept) and not _line_text(kept[k]).strip():
+                            k += 1
+                        if k < len(kept):
+                            next_text = _line_text(kept[k])
+                            next_target = _line_target(kept[k])
+                            next_m = _LINE_LABEL_RE.match(next_text)
+                            if (
+                                next_m
+                                and str(next_m.group(2) or "").startswith("#l")
+                                and str(next_m.group(3) or "")
+                                and next_target is not None
+                                and int(next_target) > int(mid_target)
+                            ):
+                                out.append(_line_item(text, target))
+                                idx += 1
+                                while idx <= j:
+                                    idx += 1
+                                continue
+            out.append(_line_item(text, target))
+            idx += 1
         return out
 
     def _preserved_unreferenced_l_labels(self):
@@ -5528,7 +5741,14 @@ class _Decompiler:
         body_lines = self._drop_redundant_same_target_l_before_z(body_lines)
         body_lines = self._rewrite_successor_l_refs_to_z(body_lines)
         body_lines = self._rewrite_explicit_l_refs_to_explicit_z(body_lines)
+        body_lines = self._collapse_explicit_l_goto_trampolines(body_lines)
+        body_lines, late_keep_labels = self._split_l_labels_to_standalone_targets(
+            body_lines
+        )
+        body_lines = self._move_referenced_l_to_standalone_slot_after_z(body_lines)
+        body_lines = self._drop_unreferenced_l_after_z_before_l_tail(body_lines)
         keep_labels.update(extra_keep_labels)
+        keep_labels.update(late_keep_labels)
         keep_labels.update(self._preserved_unreferenced_l_labels())
         body_lines = _filter_unused_line_labels(body_lines, keep_labels=keep_labels)
         try:
