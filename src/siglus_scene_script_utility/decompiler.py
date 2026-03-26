@@ -3692,6 +3692,7 @@ class _Decompiler:
 
     def _restore_empty_cd_nl_sentences(self, lines):
         out = _copy_lines(lines)
+        refs = _line_label_refs(out)
         keep = set()
         seen_targets = set()
         for line in out:
@@ -3726,7 +3727,23 @@ class _Decompiler:
                 except Exception:
                     continue
             if line_no in seen_targets:
-                if has_z_label and len(l_labels) == 1:
+                same_target_has_stmt = False
+                for line in out:
+                    target = _line_target(line)
+                    if target is None or int(target) != int(line_no):
+                        continue
+                    text = str(_line_text(line) or "").strip()
+                    if not text:
+                        continue
+                    m = _LINE_LABEL_RE.match(text)
+                    if not m or m.group(3):
+                        same_target_has_stmt = True
+                        break
+                if (
+                    has_z_label
+                    and len(l_labels) == 1
+                    and (l_labels[0] in refs or not same_target_has_stmt)
+                ):
                     for pos, line in enumerate(out):
                         target = _line_target(line)
                         if target is None or int(target) != int(line_no):

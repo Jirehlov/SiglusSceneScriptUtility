@@ -475,8 +475,16 @@ def _payload_trace_lines(trace):
     return lines
 
 
-def _scn_payload_hash_bundle(blob):
-    bundle = _dat_disassembly_bundle(blob)
+def _scn_payload_hash_bundle(
+    blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
+):
+    bundle = _dat_disassembly_bundle(
+        blob,
+        dat_path=dat_path,
+        pack_context=pack_context,
+        scene_no=scene_no,
+        scene_name=scene_name,
+    )
     if not isinstance(bundle, dict):
         return None
     lines = _payload_trace_lines(bundle.get("trace") or [])

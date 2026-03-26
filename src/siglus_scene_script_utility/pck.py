@@ -517,9 +517,23 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
 
     exe_el1 = b""
     exe_el2 = b""
+    pack_ctx1 = None
+    pack_ctx2 = None
     if compare_payload:
         exe_el1 = _compute_exe_el("", os.path.dirname(os.path.abspath(str(p1 or ""))))
         exe_el2 = _compute_exe_el("", os.path.dirname(os.path.abspath(str(p2 or ""))))
+        try:
+            pack_ctx1 = _build_disam_pack_context(
+                b1, hdr=h1, meta={"scn_names": names1}
+            )
+        except Exception:
+            pack_ctx1 = None
+        try:
+            pack_ctx2 = _build_disam_pack_context(
+                b2, hdr=h2, meta={"scn_names": names2}
+            )
+        except Exception:
+            pack_ctx2 = None
 
     def _decode_scene_blob_for_compare(blob, hdr, exe_el):
         if not isinstance(blob, (bytes, bytearray)) or not blob:
@@ -559,7 +573,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
                 return None
         return b
 
-    def _cmp_payload(r1, r2):
+    def _cmp_payload(r1, r2, scene_name=None):
         if not (r1 and r2):
             return "-"
         try:
@@ -573,8 +587,16 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             )
             if not blob1 or not blob2:
                 return "-"
-            c1 = DAT._scn_payload_hash_bundle(blob1)
-            c2 = DAT._scn_payload_hash_bundle(blob2)
+            c1 = DAT._scn_payload_hash_bundle(
+                blob1,
+                pack_context=pack_ctx1,
+                scene_name=scene_name,
+            )
+            c2 = DAT._scn_payload_hash_bundle(
+                blob2,
+                pack_context=pack_ctx2,
+                scene_name=scene_name,
+            )
             if not c1 or not c2:
                 return "-"
             same = c1.get("size") == c2.get("size") and c1.get("sha1") == c2.get("sha1")
@@ -602,7 +624,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             l2x = hx(r2[1] - 1) if r2 else "-"
             nm = k if i == 0 else f"{k}#{i:d}"
             if compare_payload:
-                payload_cmp = _cmp_payload(r1, r2)
+                payload_cmp = _cmp_payload(r1, r2, scene_name=k)
                 payload_cmp_counts[payload_cmp] = (
                     int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
                 )
