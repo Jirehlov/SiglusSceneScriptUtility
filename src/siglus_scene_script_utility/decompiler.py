@@ -2,6 +2,7 @@ import bisect
 import functools
 import os
 import re
+from .CA import _iszen
 from . import const as C
 from . import disam
 from .common import invert_form_code_map, unique_out_path, write_text
@@ -137,6 +138,50 @@ def _quote_ss_text(text):
         .replace("\t", "\\t")
     )
     return f'"{s}"'
+
+
+def _name_needs_macro(text):
+    s = str(text or "")
+    if not s:
+        return True
+    for ch in s:
+        if ch in (_OPEN_NAME, _CLOSE_NAME, "\r", "\n", "\t"):
+            return True
+        if not _iszen(ch):
+            return True
+    return False
+
+
+def _iter_name_macro_texts(events):
+    out = []
+    seen = set()
+    for ev in list(events or []):
+        if str((ev or {}).get("op") or "") != "CD_NAME":
+            continue
+        text = str((ev or {}).get("text") or "")
+        if not _name_needs_macro(text) or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
+def _name_macro_name(idx):
+    return f"@__decompiled_name_{int(idx):04d}"
+
+
+def _build_name_macros(texts):
+    ordered = sorted(str(x or "") for x in list(texts or []))
+    return {text: _name_macro_name(idx) for idx, text in enumerate(ordered)}
+
+
+def _name_define_lines(name_macros):
+    return [
+        f"#define {macro} {_quote_ss_text(text)}"
+        for text, macro in sorted(
+            dict(name_macros or {}).items(), key=lambda item: str(item[1] or "")
+        )
+    ]
 
 
 def _join_inline_sentences(parts):
@@ -667,6 +712,23 @@ def _merge_same_target_lines(lines):
     return out
 
 
+def _drop_empty_same_target_placeholders(lines):
+    out = []
+    for line in lines or []:
+        text = _line_text(line)
+        target = _line_target(line)
+        if (
+            out
+            and (not str(text or ""))
+            and target is not None
+            and _line_target(out[-1]) is not None
+            and int(target) == int(_line_target(out[-1]))
+        ):
+            continue
+        out.append(_line_item(text, target))
+    return out
+
+
 def _filter_unused_line_labels(lines, keep_labels=None):
     keep = set(str(x or "") for x in (keep_labels or []))
     refs = _line_label_refs(lines)
@@ -1023,6 +1085,7 @@ def _render_decl_form(arg):
 def _support_inc_lines_from_hints(hints):
     hints = dict(hints or {})
     lines = []
+    lines.extend(_name_define_lines(hints.get("name_macros")))
     global_count = hints.get("global_command_count")
     global_commands = dict(hints.get("global_commands") or {})
     global_prop_max = hints.get("global_property_max_id")
@@ -1092,6 +1155,7 @@ def build_decompile_hints(bundles):
     slots = {}
     prop_slots = {}
     prop_max = None
+    name_texts = set()
 
     def _slot(cmd_id):
         return slots.setdefault(
@@ -1130,6 +1194,7 @@ def build_decompile_hints(bundles):
             _prop_slot(prop_id)
             _add_prop_form(prop_id, form)
         dec = _Decompiler(bundle, hints=seed, analysis_only=True)
+        name_texts.update(_iter_name_macro_texts(dec.events))
         if global_count is not None:
             for cmd_id, forms in (dec.command_call_forms or {}).items():
                 try:
@@ -1322,6 +1387,7 @@ def build_decompile_hints(bundles):
         int(idx): {"form": _prefer_property_form((info or {}).get("forms") or {})}
         for idx, info in sorted(prop_slots.items())
     }
+    hints["name_macros"] = _build_name_macros(name_texts)
     return hints
 
 
@@ -1476,6 +1542,9 @@ class _Decompiler:
             "command_call_forms",
             self._collect_command_call_forms,
         )
+        self.name_macros = dict(self.hints.get("name_macros") or {})
+        if not self.name_macros:
+            self.name_macros = _build_name_macros(_iter_name_macro_texts(self.events))
         self.scene_prop_lines = self._get_cached_trace_value(
             "scene_prop_lines",
             self._build_scene_prop_lines,
@@ -2970,6 +3039,7 @@ class _Decompiler:
 
     def _build_inc_lines(self):
         lines = []
+        lines.extend(_name_define_lines(self.name_macros))
         global_count = self.global_command_count
         prop_max = self.global_property_max_id
         if prop_max is None and self.global_property_hints:
@@ -4489,7 +4559,9 @@ class _Decompiler:
             if op == "CD_TEXT":
                 part = _quote_ss_text(ev.get("text") or "")
             elif op == "CD_NAME":
-                part = _OPEN_NAME + str(ev.get("text") or "") + _CLOSE_NAME
+                text = str(ev.get("text") or "")
+                macro = str((self.name_macros or {}).get(text) or "")
+                part = _OPEN_NAME + (macro if macro else text) + _CLOSE_NAME
             elif op == "CD_DEC_PROP":
                 part = self._render_decl_stmt(ev, ctx)
             elif op == "CD_ASSIGN":
@@ -5167,6 +5239,7 @@ class _Decompiler:
         header_line = self.event_lines[g_idx]
         head_event_idx = g_idx
         prefix_init_lines = []
+        inline_prefix_init_lines = []
         if j == g_idx:
             init_lines = []
         else:
@@ -5193,6 +5266,9 @@ class _Decompiler:
             if init_split[0] is None:
                 return None
             prefix_init_lines, init_lines, init_head_idx = init_split
+            if len(init_lines) > 1:
+                inline_prefix_init_lines = list(init_lines[:-1])
+                init_lines = init_lines[-1:]
             if init_head_idx is not None:
                 head_event_idx = init_head_idx
         loop_idx = g_idx + 1
@@ -5224,6 +5300,8 @@ class _Decompiler:
             + _join_inline_sentences(loop_lines)
             + ")"
         )
+        if inline_prefix_init_lines:
+            head = _join_inline_sentences(inline_prefix_init_lines + [head])
         loop_out = self._wrap_block(head, body_lines, inline_body)
         prefix_out = list(prefix_init_lines)
         if head_event_idx != start_idx:
@@ -5463,6 +5541,7 @@ class _Decompiler:
             eof_line = None
         body_lines = _drop_terminal_l_before_eof(body_lines, eof_line)
         body_lines = _merge_same_target_lines(body_lines)
+        body_lines = _drop_empty_same_target_placeholders(body_lines)
         body_lines = _drop_terminal_command_return(body_lines)
         body_lines = self._restore_terminal_eof_line(body_lines)
         self.external_inc_lines = _support_inc_lines_from_hints(self.hints)
