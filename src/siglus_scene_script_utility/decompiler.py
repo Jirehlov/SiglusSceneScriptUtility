@@ -1403,6 +1403,19 @@ class _Decompiler:
                 )
             ]
             self.active_z_label_count = self._active_z_label_count()
+        self.target_ref_counts = {}
+        self.conditional_target_ref_counts = {}
+        for idx, target in enumerate(self.event_targets):
+            if target is None:
+                continue
+            op = self.event_ops[idx]
+            if op not in ("CD_GOTO", "CD_GOTO_FALSE", "CD_GOTO_TRUE"):
+                continue
+            self.target_ref_counts[target] = self.target_ref_counts.get(target, 0) + 1
+            if op != "CD_GOTO":
+                self.conditional_target_ref_counts[target] = (
+                    self.conditional_target_ref_counts.get(target, 0) + 1
+                )
         self.local_command_by_ofs = self._build_local_command_index()
         self.global_command_count = self.hints.get("global_command_count")
         if self.global_command_count is None:
@@ -5264,6 +5277,10 @@ class _Decompiler:
                 head_idx = gt_idx + 1
                 continue
             if op == "CD_POP":
+                if not cond_expr:
+                    cond_expr = self._expr(
+                        str(self.events[head_idx].get("_expr") or ""), ctx
+                    )
                 if head_idx + 1 >= len(self.events):
                     return None
                 if self.event_ops[head_idx + 1] != "CD_GOTO":
@@ -5271,7 +5288,7 @@ class _Decompiler:
                 final_goto_idx = head_idx + 1
                 break
             head_idx += 1
-        if not cases or final_goto_idx is None or not cond_expr:
+        if final_goto_idx is None or not cond_expr:
             return None
         default_or_out = int(self.event_targets[final_goto_idx] or -1)
         out_ofs = None
@@ -5314,6 +5331,38 @@ class _Decompiler:
                     ),
                 }
             )
+        if not ordered:
+            default_idx = self._idx_for_ofs(default_or_out)
+            if default_idx is None:
+                return None
+            if default_idx != (final_goto_idx + 1):
+                return None
+            try:
+                default_label_id = int(
+                    self.events[final_goto_idx].get("label_id", -1) or -1
+                )
+            except Exception:
+                default_label_id = -1
+            if int(self.target_ref_counts.get(default_or_out, 0) or 0) != 1:
+                return None
+            if int(self.conditional_target_ref_counts.get(default_or_out, 0) or 0) != 0:
+                return None
+            default_labels = [
+                str(lab or "")
+                for lab in self._event_labels(self.events[default_idx])
+                if str(lab or "").startswith("L")
+            ]
+            if default_labels != [f"L{default_label_id}"]:
+                return None
+            out_label_id = default_label_id - 1
+            if out_label_id < 0 or out_label_id >= len(self.label_list):
+                return None
+            try:
+                out_ofs = int(self.label_list[out_label_id] or -1)
+            except Exception:
+                return None
+            if out_ofs <= int(default_or_out):
+                return None
         if out_ofs is None:
             return None
         self._add_suppressed_offsets(
