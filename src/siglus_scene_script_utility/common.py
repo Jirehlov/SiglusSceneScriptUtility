@@ -26,6 +26,28 @@ def invert_form_code_map():
     return out
 
 
+def augment_receiver_form_codes(forms=None):
+    out = set()
+    for form in forms or ():
+        try:
+            out.add(int(form))
+        except Exception:
+            continue
+    try:
+        fm = C._FORM_CODE
+    except Exception:
+        fm = {}
+    if not isinstance(fm, dict):
+        fm = {}
+    for name in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
+        try:
+            if name in fm:
+                out.add(int(fm[name]))
+        except Exception:
+            continue
+    return out
+
+
 def unique_out_path(path):
     try:
         if not path:

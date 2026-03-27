@@ -1,5 +1,5 @@
 from . import const as C
-from .common import hx, invert_form_code_map, read_i32_le
+from .common import augment_receiver_form_codes, hx, invert_form_code_map, read_i32_le
 
 
 def _resolve_form_code(value):
@@ -360,6 +360,7 @@ def disassemble_scn_bytes(
                 continue
     except Exception:
         pass
+    receiver_forms = augment_receiver_form_codes(receiver_forms)
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))
     except Exception:

@@ -5,7 +5,12 @@ import re
 from .CA import _iszen
 from . import const as C
 from . import disam
-from .common import invert_form_code_map, unique_out_path, write_text
+from .common import (
+    augment_receiver_form_codes,
+    invert_form_code_map,
+    unique_out_path,
+    write_text,
+)
 
 _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"
@@ -302,6 +307,7 @@ def _element_indexes():
                 receiver_forms.add(int(key))
             except Exception:
                 continue
+        receiver_forms = augment_receiver_form_codes(receiver_forms)
         _ELEMENT_INDEX_CACHE = (elm_exact, elm_array_exact, frozenset(receiver_forms))
         _ELEMENT_INDEX_CACHE_KEY = cache_key
     return _ELEMENT_INDEX_CACHE
