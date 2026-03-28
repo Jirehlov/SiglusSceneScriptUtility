@@ -1209,10 +1209,58 @@ def disassemble_scn_bytes(
             return _pop_scalar_expr(form)
         return _pop_element_expr()
 
+    def _pop_arg_value(arg_info):
+        if not isinstance(arg_info, dict):
+            return None
+        try:
+            form = int(arg_info.get("form"))
+        except Exception:
+            return None
+        if form == fm_list:
+            vals = []
+            for sub in reversed(list(arg_info.get("sub") or [])):
+                vals.append(_pop_arg_value(sub))
+            vals.reverse()
+            return vals
+        if form in scalar_forms:
+            if not stack:
+                return None
+            it = _pop_stack_top()
+            try:
+                val = it.get("val")
+            except Exception:
+                val = None
+            if val is None:
+                return None
+            if form == fm_str:
+                try:
+                    sid = int(val)
+                except Exception:
+                    return None
+                if 0 <= sid < len(str_list or []):
+                    try:
+                        return str(str_list[sid])
+                    except Exception:
+                        return None
+                return None
+            try:
+                return int(val)
+            except Exception:
+                return None
+        _consume_element()
+        return None
+
     def _pop_arg_expr_list(arg_forms):
         vals = []
         for arg_info in reversed(list(arg_forms or [])):
             vals.append(_pop_arg_expr(arg_info))
+        vals.reverse()
+        return vals
+
+    def _pop_arg_value_list(arg_forms):
+        vals = []
+        for arg_info in reversed(list(arg_forms or [])):
+            vals.append(_pop_arg_value(arg_info))
         vals.reverse()
         return vals
 
@@ -1231,6 +1279,13 @@ def disassemble_scn_bytes(
         saved = _snapshot_state()
         try:
             return _pop_arg_expr_list(arg_forms)
+        finally:
+            _restore_state(saved)
+
+    def _peek_arg_value_list(arg_forms):
+        saved = _snapshot_state()
+        try:
+            return _pop_arg_value_list(arg_forms)
         finally:
             _restore_state(saved)
 
@@ -1280,6 +1335,49 @@ def disassemble_scn_bytes(
         finally:
             _restore_state(saved)
         return None
+
+    def _command_named_values(info, arg_values, named_ids):
+        args = list(arg_values or [])
+        ids = list(named_ids or [])
+        if not ids or not isinstance(info, dict):
+            return {}
+        pos_cnt = len(args) - len(ids)
+        if pos_cnt < 0:
+            return {}
+        arg_map = info.get("arg_map") or {}
+        named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
+        named_list = (
+            named_spec.get("arg_list")
+            if isinstance(named_spec, dict)
+            else (named_spec if isinstance(named_spec, list) else [])
+        )
+        if not isinstance(named_list, list):
+            return {}
+        name_by_id = {}
+        for item in named_list:
+            if not isinstance(item, dict):
+                continue
+            try:
+                nid = int(item.get("id", -1))
+            except Exception:
+                continue
+            nm = str(item.get("name") or "")
+            if nm:
+                name_by_id[nid] = nm
+        if not name_by_id:
+            return {}
+        out = {}
+        ordered_ids = list(reversed(ids))
+        for value, nid in zip(args[pos_cnt:], ordered_ids):
+            try:
+                key = int(nid)
+            except Exception:
+                continue
+            nm = name_by_id.get(key)
+            if not nm:
+                continue
+            out[nm] = value
+        return out
 
     def _scan_property_slice(items):
         parent_form = _form_code(C.FM_GLOBAL)
@@ -2064,6 +2162,8 @@ def disassemble_scn_bytes(
             i += 4
             element_code = None
             ename = ""
+            qname = ""
+            info = {}
             resolved_cmd = _resolve_command_expr(len(arg_forms or []), ret_form)
             cmd_stack_start = _latest_elm_stack_start()
             cmd_parent_form = None
@@ -2097,6 +2197,8 @@ def disassemble_scn_bytes(
                 ),
                 named_ids=named_ids,
             )
+            arg_values = _peek_arg_value_list(arg_forms)
+            named_values = _command_named_values(info, arg_values, named_ids)
             rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""
             ec_s = (f" ec={hx(element_code)}") if element_code is not None else ""
             expr_s = f" ; expr={cmd_expr}" if cmd_expr else ""
@@ -2120,6 +2222,12 @@ def disassemble_scn_bytes(
                     else None
                 ),
                 element_code=(int(element_code) if element_code is not None else None),
+                _call_name=(qname or None),
+                _call_base_name=(str(info.get("name") or "") or None),
+                _arg_values=list(arg_values or []),
+                _named_values=(
+                    dict(named_values) if isinstance(named_values, dict) else {}
+                ),
             )
             if cmd_stack_start is not None:
                 _collapse_command_expr(cmd_stack_start, ret_form, expr=cmd_expr)

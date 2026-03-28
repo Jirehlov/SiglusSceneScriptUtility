@@ -3,282 +3,335 @@ import os
 import re
 import sys
 
+from . import dat
+from . import pck
 from . import sound
-from .common import eprint, write_bytes
+from .common import eprint, read_bytes, write_bytes
 
-_KOE_RE = re.compile(
-    r"\b[KＫ][OＯ][EＥ]\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)", re.IGNORECASE
+_VOICE_CALL_NAMES = frozenset(
+    {
+        "koe",
+        "koe_play_wait",
+        "koe_play_wait_key",
+        "exkoe",
+        "exkoe_play_wait",
+        "exkoe_play_wait_key",
+        "add_koe",
+    }
 )
-_KOE2_RE = re.compile(
-    r"\b[KＫ][OＯ][EＥ]2\(\s*(\d+)\s*(?:,\s*(\d+)\s*)?\)", re.IGNORECASE
-)
-_EXKOE_RE = re.compile(
-    r"\b[EＥ][XＸ][KＫ][OＯ][EＥ]\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE
-)
-_MSGBACK_ID_RE = re.compile(r"\$\$ADD_MSGBACK\s*\(\s*(\d+)", re.IGNORECASE)
-_NAME_RE = re.compile(r"【([^】]*)】")
-_TEXT_RE = re.compile(
-    r"「([^」]*)」|『([^』]*)』|（([^）]*)）|〈([^〉]*)〉|《([^》]*)》|\"([^\"]*)\"|“([^”]*)”"
-)
-_QUOTE_RE = re.compile(r"\"([^\"]*)\"")
 _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
-_MES_CALL_RE = re.compile(r"(?:@|＠)?mes\s*\(", re.IGNORECASE)
-_J_OPEN_CLOSE = {
-    "【": "】",
-    "「": "」",
-    "『": "』",
-    "（": "）",
-    "〈": "〉",
-    "《": "》",
-    "“": "”",
-}
+_TEXT_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("（", "）"), ('"', '"'))
 
 
-def _strip_wrapping(s: str):
-    s = s.strip()
-    if len(s) >= 2:
-        a = s[0]
-        b = s[-1]
-        if a in _J_OPEN_CLOSE and _J_OPEN_CLOSE[a] == b:
-            return s[1:-1].strip()
-        if (a == '"' and b == '"') or (a == "'" and b == "'"):
-            return s[1:-1].strip()
-    return s
-
-
-def _split_args(s: str):
+def _iter_scene_dat_paths(scene_root: str):
+    if os.path.isfile(scene_root):
+        low = os.path.basename(scene_root).lower()
+        if low.endswith(".dat") and not low.endswith(".dat.txt"):
+            return [scene_root]
+        return []
+    if not os.path.isdir(scene_root):
+        return []
     out = []
-    buf = []
-    stack = []
-    in_dq = False
-    in_sq = False
-    esc = False
-    depth = 0
-    for ch in s:
-        if in_dq:
-            buf.append(ch)
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_dq = False
-            continue
-        if in_sq:
-            buf.append(ch)
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == "'":
-                in_sq = False
-            continue
-        if ch == '"':
-            in_dq = True
-            buf.append(ch)
-            continue
-        if ch == "'":
-            in_sq = True
-            buf.append(ch)
-            continue
-        if stack and ch == stack[-1]:
-            stack.pop()
-            buf.append(ch)
-            continue
-        if ch in _J_OPEN_CLOSE:
-            stack.append(_J_OPEN_CLOSE[ch])
-            buf.append(ch)
-            continue
-        if ch == "(":
-            depth += 1
-            buf.append(ch)
-            continue
-        if ch == ")" and depth > 0:
-            depth -= 1
-            buf.append(ch)
-            continue
-        if ch == "," and not stack and depth == 0:
-            out.append("".join(buf).strip())
-            buf = []
-            continue
-        buf.append(ch)
-    out.append("".join(buf).strip())
+    for base, _dirs, files in os.walk(scene_root):
+        for name in files:
+            low = name.lower()
+            if not low.endswith(".dat") or low.endswith(".dat.txt"):
+                continue
+            out.append(os.path.join(base, name))
+    out.sort()
     return out
 
 
-def _mes_args(line: str):
-    m = _MES_CALL_RE.search(line)
-    if not m:
-        return None
-    start = m.end()
-    i = start
-    depth = 1
-    stack = []
-    in_dq = False
-    in_sq = False
-    esc = False
-    while i < len(line):
-        ch = line[i]
-        if in_dq:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == '"':
-                in_dq = False
-            i += 1
-            continue
-        if in_sq:
-            if esc:
-                esc = False
-            elif ch == "\\":
-                esc = True
-            elif ch == "'":
-                in_sq = False
-            i += 1
-            continue
-        if ch == '"':
-            in_dq = True
-            i += 1
-            continue
-        if ch == "'":
-            in_sq = True
-            i += 1
-            continue
-        if stack and ch == stack[-1]:
-            stack.pop()
-            i += 1
-            continue
-        if ch in _J_OPEN_CLOSE:
-            stack.append(_J_OPEN_CLOSE[ch])
-            i += 1
-            continue
-        if ch == "(":
-            depth += 1
-            i += 1
-            continue
-        if ch == ")":
-            depth -= 1
-            if depth == 0:
-                return line[start:i]
-            i += 1
-            continue
-        i += 1
-    return line[start:]
+def _bundle_relpath(bundle, scene_root: str):
+    source = str((bundle or {}).get("koe_source") or "")
+    if source:
+        return source.replace("\\", "/")
+    dat_path = str((bundle or {}).get("dat_path") or "")
+    scene_name = str((bundle or {}).get("scene_name") or "")
+    if dat_path:
+        if os.path.isdir(scene_root):
+            try:
+                return os.path.relpath(dat_path, scene_root).replace("\\", "/")
+            except Exception:
+                pass
+        name = os.path.basename(dat_path)
+        if name:
+            return name
+    if scene_name:
+        return scene_name + ".dat"
+    return "<unknown>"
 
 
-def _name_text_from_mes(line: str):
-    inner = _mes_args(line)
-    if inner is None:
-        return "", ""
-    args = _split_args(inner)
-    if len(args) < 3:
-        return "", ""
-    name = _strip_wrapping(args[1])
-    text = _strip_wrapping(args[2])
-    return name, text
-
-
-def _name_text(line: str, start: int = 0):
-    name = ""
-    text = ""
-    m = _NAME_RE.search(line, pos=start)
-    pos = start
-    if m:
-        name = m.group(1).strip()
-        pos = m.end()
-    m2 = _TEXT_RE.search(line, pos=pos)
-    if m2:
-        for g in m2.groups():
-            if g is not None:
-                text = g
-                break
-    if _MES_CALL_RE.search(line):
-        n2, t2 = _name_text_from_mes(line)
-        if n2:
-            name = n2
-        if t2:
-            text = t2
-    return name, text
-
-
-def _scan_calls(script_root: str):
-    refs = []
-    msg_map = {}
-    script_files = 0
-    txts = []
-    scripts = []
-    if os.path.isdir(script_root):
-        for e in os.scandir(script_root):
-            if not e.is_file():
+def _iter_scene_bundles(scene_root: str):
+    if os.path.isfile(scene_root) and os.path.basename(scene_root).lower().endswith(
+        ".pck"
+    ):
+        pck_name = os.path.basename(scene_root)
+        for item in pck._iter_decoded_scene_dat_items(scene_root):
+            if not isinstance(item, dict):
                 continue
-            low = e.name.lower()
-            if low.endswith(".txt") and not low.endswith(".dat.txt"):
-                txts.append(e.path)
-        if txts:
-            scripts = sorted(txts)
-        else:
-            scripts = sorted(
-                e.path
-                for e in os.scandir(script_root)
-                if e.is_file() and e.name.lower().endswith(".ss")
-            )
-    elif os.path.isfile(script_root):
-        scripts = [script_root]
-    for fp in scripts:
-        script_files += 1
-        if os.path.isdir(script_root):
-            rel = os.path.relpath(fp, script_root).replace("\\", "/")
-        else:
-            rel = os.path.basename(fp)
-        b = open(fp, "rb").read()
+            blob = item.get("blob")
+            rel = str(item.get("relpath") or "")
+            scene_name = item.get("scene_name")
+            scene_no = item.get("scene_no")
+            pack_context = item.get("pack_context")
+            display = f"{pck_name}!{rel.replace('\\', '/')}" if rel else pck_name
+            try:
+                bundle = dat._dat_disassembly_bundle(
+                    blob,
+                    os.path.abspath(scene_root) + "!" + rel.replace("/", "!"),
+                    pack_context=pack_context,
+                    scene_no=scene_no,
+                    scene_name=scene_name,
+                )
+            except Exception:
+                bundle = None
+            if isinstance(bundle, dict):
+                bundle["koe_source"] = display
+                yield bundle
+        return
+    for dat_path in _iter_scene_dat_paths(scene_root):
         try:
-            s = b.decode("utf-8-sig")
+            blob = read_bytes(dat_path)
         except Exception:
-            s = b.decode("cp932", errors="replace")
-        pending = []
-        for ln, line in enumerate(s.splitlines(), 1):
-            if pending:
-                pending = [p for p in pending if ln - p[1] <= 1]
-            m = _MSGBACK_ID_RE.search(line)
-            if m:
-                qs = _QUOTE_RE.findall(line)
-                if qs:
-                    msg_map[int(m.group(1))] = qs[-1]
-            koe_ms = list(_KOE_RE.finditer(line))
-            koe2_ms = list(_KOE2_RE.finditer(line))
-            for _ms in (koe_ms, koe2_ms):
-                if not _ms:
+            continue
+        try:
+            bundle = dat._dat_disassembly_bundle(blob, dat_path)
+        except Exception:
+            bundle = None
+        if isinstance(bundle, dict):
+            yield bundle
+
+
+def _iter_trace_line_groups(trace):
+    cur_line = None
+    cur_marker = None
+    cur_events = []
+    for idx, ev in enumerate(trace or []):
+        if not isinstance(ev, dict):
+            continue
+        raw_line = ev.get("line")
+        try:
+            line_no = int(raw_line) if raw_line is not None else None
+        except Exception:
+            line_no = None
+        marker = ("line", line_no) if line_no is not None else ("seq", idx)
+        if cur_events and marker != cur_marker:
+            yield cur_line, cur_events
+            cur_events = []
+        cur_line = line_no
+        cur_marker = marker
+        cur_events.append(ev)
+    if cur_events:
+        yield cur_line, cur_events
+
+
+def _line_name_text(events):
+    name = ""
+    texts = []
+    for ev in events or []:
+        op = str((ev or {}).get("op") or "")
+        text = str((ev or {}).get("text") or "")
+        if not text:
+            continue
+        if op == "CD_NAME":
+            name = text
+            continue
+        if op == "CD_TEXT":
+            texts.append(_normalize_voice_text(text))
+    return name, "".join(texts)
+
+
+def _normalize_voice_text(text):
+    s = str(text or "")
+    if not s:
+        return ""
+    for oq, cq in _TEXT_QUOTE_PAIRS:
+        if not s.startswith(oq):
+            continue
+        end = s.find(cq, len(oq))
+        if end < 0:
+            continue
+        tail = s[end + len(cq) :]
+        if not tail.strip().strip(cq):
+            return s[len(oq) : end]
+    return s
+
+
+def _remember_voice_meta(voice_meta, koe_no, name, text):
+    try:
+        koe_no_i = int(koe_no)
+    except Exception:
+        return
+    one = voice_meta.setdefault(koe_no_i, {"name": "", "text": ""})
+    if name and not one.get("name"):
+        one["name"] = str(name)
+    if text and not one.get("text"):
+        one["text"] = str(text)
+
+
+def _voice_call_base_name(ev):
+    base = str((ev or {}).get("_call_base_name") or "").strip()
+    if base:
+        return base
+    call_name = str((ev or {}).get("_call_name") or "").strip()
+    if "." in call_name:
+        return call_name.rsplit(".", 1)[-1]
+    return call_name
+
+
+def _normalize_koe_no(koe_no, scene_no=None):
+    try:
+        koe_no_i = int(koe_no)
+    except Exception:
+        return None
+    try:
+        scene_no_i = int(scene_no) if scene_no is not None else None
+    except Exception:
+        scene_no_i = None
+    if 0 <= koe_no_i < 100000 and scene_no_i is not None:
+        return scene_no_i * 100000 + koe_no_i
+    return koe_no_i
+
+
+def _voice_ref_from_event(ev, scene_no=None):
+    if str((ev or {}).get("op") or "") != "CD_COMMAND":
+        return None
+    base = _voice_call_base_name(ev)
+    if base not in _VOICE_CALL_NAMES:
+        return None
+    named = dict((ev or {}).get("_named_values") or {})
+    args = list((ev or {}).get("_arg_values") or [])
+    koe_no = named.get("koe_no")
+    if koe_no is None and args:
+        koe_no = args[0]
+    koe_no = _normalize_koe_no(koe_no, scene_no=scene_no)
+    if koe_no is None:
+        return None
+    chara_no = named.get("chara_no")
+    if chara_no is None and len(args) >= 2:
+        chara_no = args[1]
+    try:
+        chara_no = int(chara_no)
+    except Exception:
+        chara_no = -1
+    return koe_no, chara_no
+
+
+def _line_inline_voice_meta(events, scene_no=None):
+    out = {}
+    for ev in events or []:
+        if str((ev or {}).get("op") or "") != "CD_COMMAND":
+            continue
+        if _voice_call_base_name(ev) in _VOICE_CALL_NAMES:
+            continue
+        args = list((ev or {}).get("_arg_values") or [])
+        if len(args) < 4:
+            continue
+        koe_no = _normalize_koe_no(args[0], scene_no=scene_no)
+        if koe_no is None:
+            continue
+        try:
+            chara_no = int(args[1])
+        except Exception:
+            chara_no = -1
+        name = str(args[2] or "")
+        text = _normalize_voice_text(args[3])
+        if not name and not text:
+            continue
+        out.setdefault((koe_no, chara_no), {"name": name, "text": text})
+    return out
+
+
+def _scan_bundle_calls(bundle, scene_root: str):
+    refs = []
+    trace = [x for x in list((bundle or {}).get("trace") or []) if isinstance(x, dict)]
+    rel = _bundle_relpath(bundle, scene_root)
+    scene_no = (bundle or {}).get("scene_no")
+    voice_meta = {}
+    pending = []
+    last_name = ""
+    last_text = ""
+    last_line = None
+    for line_no, events in _iter_trace_line_groups(trace):
+        name, text = _line_name_text(events)
+        line_meta = _line_inline_voice_meta(events, scene_no=scene_no)
+        if name or text:
+            keep = []
+            for idx, src_line in pending:
+                if (
+                    line_no is None
+                    or src_line is None
+                    or int(line_no) - int(src_line) > 1
+                    or int(line_no) < int(src_line)
+                ):
+                    keep.append((idx, src_line))
                     continue
-                name, text = _name_text(line, start=_ms[0].end())
-                if name or text:
-                    for km in _ms:
-                        koe_no = int(km.group(1))
-                        ch = int(km.group(2)) if km.group(2) is not None else -1
-                        refs.append([koe_no, ch, name, text, f"{rel}:{ln}"])
-                else:
-                    for km in _ms:
-                        koe_no = int(km.group(1))
-                        ch = int(km.group(2)) if km.group(2) is not None else -1
-                        idx = len(refs)
-                        refs.append([koe_no, ch, "", "", f"{rel}:{ln}"])
-                        if "【" not in line and not re.search(r"[「『\"（]", line):
-                            pending.append((idx, ln))
-            if pending and _MES_CALL_RE.search(line):
-                name, text = _name_text(line)
-                idx, _ = pending.pop(0)
                 if name and not refs[idx][2]:
                     refs[idx][2] = name
                 if text and not refs[idx][3]:
                     refs[idx][3] = text
-            for em in _EXKOE_RE.finditer(line):
-                koe_no = int(em.group(1))
-                ch = int(em.group(2))
-                name, text = _name_text(line, start=em.end())
-                if not text:
-                    text = msg_map.get(koe_no, "")
-                refs.append([koe_no, ch, name, text, f"{rel}:{ln}"])
-    return refs, script_files
+                if refs[idx][2] or refs[idx][3]:
+                    _remember_voice_meta(
+                        voice_meta, refs[idx][0], refs[idx][2], refs[idx][3]
+                    )
+                else:
+                    keep.append((idx, src_line))
+            pending = keep
+        elif line_no is not None:
+            pending = [
+                (idx, src_line)
+                for idx, src_line in pending
+                if src_line is None or int(line_no) - int(src_line) <= 1
+            ]
+        adjacent = (
+            line_no is not None
+            and last_line is not None
+            and 0 <= int(line_no) - int(last_line) <= 1
+        )
+        fallback_name = name or (last_name if adjacent else "")
+        fallback_text = text or (last_text if adjacent else "")
+        for ev in events:
+            ref = _voice_ref_from_event(ev, scene_no=scene_no)
+            if ref is None:
+                continue
+            koe_no, chara_no = ref
+            meta = dict(voice_meta.get(int(koe_no)) or {})
+            inline = dict(
+                line_meta.get((koe_no, chara_no)) or line_meta.get((koe_no, -1)) or {}
+            )
+            ref_name = (
+                fallback_name
+                or str(inline.get("name") or "")
+                or str(meta.get("name") or "")
+            )
+            ref_text = (
+                fallback_text
+                or str(inline.get("text") or "")
+                or str(meta.get("text") or "")
+            )
+            callsite = f"{rel}:{line_no}" if line_no is not None else rel
+            refs.append([koe_no, chara_no, ref_name, ref_text, callsite])
+            if ref_name or ref_text:
+                _remember_voice_meta(voice_meta, koe_no, ref_name, ref_text)
+            else:
+                pending.append((len(refs) - 1, line_no))
+        if name:
+            last_name = name
+        if text:
+            last_text = text
+        if line_no is not None and (name or text):
+            last_line = int(line_no)
+    return refs
+
+
+def _scan_calls(scene_root: str):
+    refs = []
+    scene_files = 0
+    for bundle in _iter_scene_bundles(scene_root):
+        scene_files += 1
+        refs.extend(_scan_bundle_calls(bundle, scene_root))
+    return refs, scene_files
 
 
 def _rank_ovk_path(voice_dir: str, zname: str, path: str):
@@ -361,15 +414,18 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     if len(argv) != 3:
-        eprint("Usage: koe_collector <script_root> <voice_dir> <output_dir>")
+        eprint("Usage: koe_collector <scene_root|scene.pck> <voice_dir> <output_dir>")
         return 2
-    script_root, voice_dir, out_dir = argv
+    scene_root, voice_dir, out_dir = argv
     os.makedirs(out_dir, exist_ok=True)
 
     scene_map, entries, ovk_files, z_files, entry_count, table_failed = _index_ovk(
         voice_dir
     )
-    call_refs, script_files = _scan_calls(script_root)
+    call_refs, scene_files = _scan_calls(scene_root)
+    if scene_files <= 0:
+        eprint("No scene .dat files or supported .pck scenes found.")
+        return 1
 
     missing_rows = []
     for koe_no, ch, name, text, callsite in call_refs:
@@ -428,9 +484,9 @@ def main(argv=None):
     eprint(f"OVK files        : {ovk_files:,}")
     eprint(f"OVK z-files      : {z_files:,}")
     eprint(f"OVK table errors : {table_failed:,}")
-    eprint(f"Script files     : {script_files:,}")
-    eprint(f"Script callsites : {len(call_refs):,}")
-    eprint(f"Script missing   : {len(missing_rows):,}")
+    eprint(f"Scene files      : {scene_files:,}")
+    eprint(f"Scene callsites  : {len(call_refs):,}")
+    eprint(f"Scene missing    : {len(missing_rows):,}")
     eprint(f"KOE total        : {len(entries):,}")
     eprint(f"KOE referenced   : {referenced:,}")
     eprint(f"KOE unreferenced : {unreferenced:,}")
