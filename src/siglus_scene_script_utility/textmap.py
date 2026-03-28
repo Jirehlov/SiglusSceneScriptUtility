@@ -27,6 +27,10 @@ from .common import (
     write_encoded_text,
 )
 
+_TEXTMAP_KIND_DIALOGUE = 1
+_TEXTMAP_KIND_NAME = 2
+_TEXTMAP_KIND_OTHER = 3
+
 
 def _csv_escape_text(s: str) -> str:
     if s is None:
@@ -122,10 +126,37 @@ def _needs_quoted_literal(value: str) -> bool:
     return False
 
 
-def _collect_compiled_string_atom_ids(root, atom_type_map):
-    out = set()
+def _merge_textmap_kind(cur_kind, new_kind):
+    try:
+        cur_kind = int(cur_kind)
+    except Exception:
+        cur_kind = None
+    try:
+        new_kind = int(new_kind)
+    except Exception:
+        new_kind = None
+    if new_kind not in (
+        _TEXTMAP_KIND_DIALOGUE,
+        _TEXTMAP_KIND_NAME,
+        _TEXTMAP_KIND_OTHER,
+    ):
+        return cur_kind
+    if cur_kind in (_TEXTMAP_KIND_DIALOGUE, _TEXTMAP_KIND_NAME):
+        return cur_kind
+    if cur_kind == _TEXTMAP_KIND_OTHER and new_kind in (
+        _TEXTMAP_KIND_DIALOGUE,
+        _TEXTMAP_KIND_NAME,
+    ):
+        return new_kind
+    if cur_kind == _TEXTMAP_KIND_OTHER:
+        return cur_kind
+    return new_kind
 
-    def _add(atom):
+
+def _collect_compiled_string_kinds(root, atom_type_map):
+    out = {}
+
+    def _add(atom, kind):
         if not isinstance(atom, dict):
             return
         if int(atom.get("type", -1) or -1) != int(C.LA_T["VAL_STR"]):
@@ -135,7 +166,7 @@ def _collect_compiled_string_atom_ids(root, atom_type_map):
             return
         if int(atom_type_map.get(aid, -1) or -1) != int(C.LA_T["VAL_STR"]):
             return
-        out.add(aid)
+        out[aid] = _merge_textmap_kind(out.get(aid), kind)
 
     def _walk(node):
         if isinstance(node, list):
@@ -146,11 +177,20 @@ def _collect_compiled_string_atom_ids(root, atom_type_map):
             return
         nt = node.get("node_type")
         if nt == C.NT_S_TEXT:
-            _add(((node.get("text") or {}).get("atom") or {}))
+            _add(
+                ((node.get("text") or {}).get("atom") or {}),
+                _TEXTMAP_KIND_DIALOGUE,
+            )
         elif nt == C.NT_S_NAME:
-            _add(((((node.get("name") or {}).get("name") or {}).get("atom")) or {}))
+            _add(
+                ((((node.get("name") or {}).get("name") or {}).get("atom")) or {}),
+                _TEXTMAP_KIND_NAME,
+            )
         elif nt == C.NT_SMP_LITERAL:
-            _add((((node.get("Literal") or {}).get("atom")) or {}))
+            _add(
+                (((node.get("Literal") or {}).get("atom")) or {}),
+                _TEXTMAP_KIND_OTHER,
+            )
         for value in node.values():
             _walk(value)
 
@@ -226,7 +266,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
         raise RuntimeError(
             f"textmap: MA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
         )
-    keep_ids = _collect_compiled_string_atom_ids(
+    kind_map = _collect_compiled_string_kinds(
         (mad or {}).get("root") if isinstance(mad, dict) else None,
         atom_type_map,
     )
@@ -236,7 +276,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
         if atom.get("type") != C.LA_T["VAL_STR"]:
             continue
         aid = int(atom.get("id", -1) or -1)
-        if aid not in keep_ids:
+        if aid not in kind_map:
             continue
         opt = int(atom.get("opt", -1))
         if opt < 0 or opt >= len(str_list):
@@ -246,6 +286,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
                 "index": len(tokens) + 1,
                 "line": int(atom.get("line", 0) or 0),
                 "text": str_list[opt],
+                "kind": int(kind_map.get(aid, _TEXTMAP_KIND_OTHER)),
             }
         )
     return tokens, iad
@@ -321,6 +362,8 @@ def _locate_tokens(source_text: str, tokens, iad):
                 "span_end": abs_end,
                 "quoted": quoted_flag,
                 "text": text,
+                "kind": int(token.get("kind", _TEXTMAP_KIND_OTHER) or 0)
+                or _TEXTMAP_KIND_OTHER,
             }
         )
     return out
@@ -339,6 +382,7 @@ def _write_map(csv_path: str, entries):
                 "span_start",
                 "span_end",
                 "quoted",
+                "kind",
                 "original",
                 "replacement",
             ]
@@ -355,6 +399,7 @@ def _write_map(csv_path: str, entries):
                     e.get("span_start", 0),
                     e.get("span_end", 0),
                     e.get("quoted", 0),
+                    e.get("kind", _TEXTMAP_KIND_OTHER),
                     _csv_escape_text(e.get("text", "")),
                     _csv_escape_text(e.get("text", "")),
                 ]

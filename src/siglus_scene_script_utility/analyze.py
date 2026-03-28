@@ -133,7 +133,7 @@ def analyze_file(path, readall=False):
     if ftype == "gan":
         return gan.gan(blob)
     if ftype == "pck":
-        return pck.pck(blob)
+        return pck.pck(blob, input_pck=path)
     if ftype == "dat":
         return dat.dat(path, blob)
     if ftype == "cgm":
