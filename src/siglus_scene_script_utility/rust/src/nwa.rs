@@ -1,4 +1,3 @@
-
 #[derive(Clone, Copy, Debug)]
 pub struct NwaHeader {
     pub channels: u16,
@@ -173,17 +172,15 @@ fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
             6 => apply_delta(br, nowsmp, 7, 0x40, 7),
             _ => apply_delta(br, nowsmp, 8, 0x80, 9),
         },
-        _ => {
-            match which {
-                1 => apply_delta(br, nowsmp, 8, 0x80, 2),
-                2 => apply_delta(br, nowsmp, 8, 0x80, 3),
-                3 => apply_delta(br, nowsmp, 8, 0x80, 4),
-                4 => apply_delta(br, nowsmp, 8, 0x80, 5),
-                5 => apply_delta(br, nowsmp, 8, 0x80, 6),
-                6 => apply_delta(br, nowsmp, 8, 0x80, 7),
-                _ => apply_delta(br, nowsmp, 8, 0x80, 9),
-            }
-        }
+        _ => match which {
+            1 => apply_delta(br, nowsmp, 8, 0x80, 2),
+            2 => apply_delta(br, nowsmp, 8, 0x80, 3),
+            3 => apply_delta(br, nowsmp, 8, 0x80, 4),
+            4 => apply_delta(br, nowsmp, 8, 0x80, 5),
+            5 => apply_delta(br, nowsmp, 8, 0x80, 6),
+            6 => apply_delta(br, nowsmp, 8, 0x80, 7),
+            _ => apply_delta(br, nowsmp, 8, 0x80, 9),
+        },
     }
 }
 

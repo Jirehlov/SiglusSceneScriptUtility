@@ -1,4 +1,3 @@
-
 #[inline]
 pub fn cycle_inplace(data: &mut [u8], code: &[u8], start: usize) {
     if code.is_empty() {
