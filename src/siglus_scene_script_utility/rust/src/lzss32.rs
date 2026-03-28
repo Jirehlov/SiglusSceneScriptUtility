@@ -226,7 +226,7 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
         if tree_find.src_index >= tree_find.src_cnt {
             break;
         }
-        if tree_find.match_size <= BREAK_EVEN {
+        if tree_find.match_size == BREAK_EVEN {
             replace_cnt = 1;
             pack_data[0] |= bit_mask[pack_bit_count];
             let v = dwords[tree_find.src_index].to_le_bytes();
