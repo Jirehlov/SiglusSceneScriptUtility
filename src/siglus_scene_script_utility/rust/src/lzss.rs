@@ -1,18 +1,10 @@
-//! LZSS compression/decompression implementation
-//!
-//! This is a port of the Python LZSS implementation with significant
-//! performance improvements using Rust's efficient memory management.
-
 const INDEX_BITS: usize = 12;
 const LENGTH_BITS: usize = 16 - INDEX_BITS;
 const BREAK_EVEN: usize = 1;
 const LOOK_AHEAD: usize = (1 << LENGTH_BITS) + BREAK_EVEN;
 const WINDOW_SIZE: usize = 1 << INDEX_BITS;
 
-/// Binary tree node for LZSS compression
 struct LzssTree {
-    #[allow(dead_code)]
-    size: usize,
     root: usize,
     unused: usize,
     parent: Vec<usize>,
@@ -35,7 +27,6 @@ impl LzssTree {
         big[root] = 0;
 
         Self {
-            size: tree_size,
             root,
             unused,
             parent,
@@ -124,14 +115,11 @@ impl LzssTree {
     }
 }
 
-/// Tree-based pattern finder for LZSS compression
 struct LzssTreeFind<'a> {
     src: &'a [u8],
     src_cnt: usize,
     window_size: usize,
-    #[allow(dead_code)]
-    look_ahead_size: usize,
-    max_match_len: usize, // Configurable max match length (level)
+    max_match_len: usize,
     src_index: usize,
     match_target: usize,
     match_size: usize,
@@ -141,13 +129,11 @@ struct LzssTreeFind<'a> {
 
 impl<'a> LzssTreeFind<'a> {
     fn new(src: &'a [u8], window_size: usize, look_ahead_size: usize, level: usize) -> Self {
-        // Clamp level to valid range (2-17)
         let max_match_len = level.clamp(2, look_ahead_size);
         Self {
             src,
             src_cnt: src.len(),
             window_size,
-            look_ahead_size,
             max_match_len,
             src_index: 0,
             match_target: 0,
@@ -172,7 +158,6 @@ impl<'a> LzssTreeFind<'a> {
                 return;
             }
 
-            // Use max_match_len (level) to limit how far we search for matches
             let matching_loop_cnt = self.max_match_len.min(src_left);
 
             loop {
@@ -215,13 +200,6 @@ impl<'a> LzssTreeFind<'a> {
     }
 }
 
-/// LZSS compression with configurable level
-///
-/// # Arguments
-/// * `src` - Source data to compress
-/// * `level` - Compression level (2-17). Higher = better compression but slower.
-///   - 2: Fastest, worst compression
-///   - 17: Slowest, best compression (default)
 pub fn pack_with_level(src: &[u8], level: usize, suppress_empty_tail_group: bool) -> Vec<u8> {
     if src.is_empty() {
         return Vec::new();
@@ -238,7 +216,6 @@ pub fn pack_with_level(src: &[u8], level: usize, suppress_empty_tail_group: bool
     const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 
     loop {
-        // make_pack_data inline
         if tree_find.src_index >= tree_find.src_cnt {
             if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
                 pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
@@ -281,7 +258,6 @@ pub fn pack_with_level(src: &[u8], level: usize, suppress_empty_tail_group: bool
         }
     }
 
-    // Write header
     let pack_buf_size = pack_buf.len() as u32;
     let org_size = src.len() as u32;
     pack_buf[0..4].copy_from_slice(&pack_buf_size.to_le_bytes());
@@ -290,13 +266,11 @@ pub fn pack_with_level(src: &[u8], level: usize, suppress_empty_tail_group: bool
     pack_buf
 }
 
-/// LZSS compression with default level (17 = best compression)
 #[inline]
 pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
     pack_with_level(src, LOOK_AHEAD, suppress_empty_tail_group)
 }
 
-/// LZSS decompression
 pub fn unpack(src: &[u8]) -> Vec<u8> {
     if src.len() < 8 {
         return Vec::new();

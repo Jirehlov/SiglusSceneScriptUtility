@@ -254,7 +254,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 ### `-x` / `--extract` — Extract Files
 
-Extracts a `.pck` scene file into a directory of individual `.ss` source text files (with optional `.dat` disassembly), or restores the `Gameexe.ini` plaintext from a binary `Gameexe.dat`.
+Extracts a `.pck` scene file into a timestamped directory containing decoded scene `.dat` files and any embedded original source files, or restores the `Gameexe.ini` plaintext from a binary `Gameexe.dat`.
 
 #### Syntax
 
@@ -262,7 +262,7 @@ Extracts a `.pck` scene file into a directory of individual `.ss` source text fi
 # Extract a .pck file
 siglus-ssu -x [--disam] <input_pck> [output_dir]
 
-# Batch-disassemble .dat files from a directory
+# Batch-disassemble and decompile `.dat` files from a directory
 siglus-ssu -x --disam <input_dir> [output_dir]
 
 # Restore Gameexe.ini from Gameexe.dat
@@ -276,8 +276,12 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
 | `<input_pck>` | Path to the `.pck` file to extract. |
 | `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
 | `<output_dir>` | Directory where extracted files will be written. Optional for all `-x` modes. If omitted, output defaults to the input file directory, or to the input directory itself when the input is a directory. |
-| `--disam` | With `.pck` input, also dump a human-readable disassembly alongside each extracted compiled `.dat` file. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` files into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
+| `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly plus reconstructed `decompiled/<scene>.ss` files and `decompiled/__decompiled.inc`. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` plus `decompiled/*.ss` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Automatically detects a nearby `SiglusEngine*.exe` or `key.txt` to derive the decryption key. |
+
+With `.pck` input, extracted files are written into `output_YYYYMMDD_HHMMSS/`. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run also prints total disassembly, decompile-hints, and decompile timing summaries.
+
+The current decompiler is experimental. Treat `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
 
 #### Examples
 
@@ -288,10 +292,10 @@ siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/
 # Extract Scene.pck next to the input file
 siglus-ssu -x /path/to/Scene.pck
 
-# Extract with .dat disassembly
+# Extract with `.dat` disassembly and decompiled `.ss`
 siglus-ssu -x --disam /path/to/Scene.pck /path/to/translation_work/
 
-# Batch-disassemble the .dat files in one directory
+# Batch-disassemble and decompile the `.dat` files in one directory
 siglus-ssu -x --disam /path/to/scene_dir/
 
 # Restore Gameexe.ini from Gameexe.dat
@@ -330,7 +334,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 |---|---|
 | `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. |
 | `[input_file_2]` | Optional second file for structural comparison. Both files must be the same type. |
-| `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to a `__DATDIR__` subdirectory instead of printing to stdout. |
+| `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to a `__DATDIR__` subdirectory and also emit reconstructed `decompiled/*.ss` output plus `decompiled/__decompiled.inc`. The run prints total disassembly, decompile-hints, and decompile timing summaries. The decompiler output is experimental and should not be treated as a reliable source-of-truth. |
 | `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
 | `--payload` | For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
@@ -382,6 +386,14 @@ file_count: 2048
 encryption: yes
 ...
 ```
+
+When analyzing a `.pck`, the report may also print a trailing `stats:` block.
+
+- `scene_files` is the number of scene `.dat` entries, excluding `暗号.dat`.
+- `cd_text_dialogue_lines` / `cd_text_dialogue_chars` are counted from decoded `CD_TEXT` events.
+- If embedded original `.ss` sources are present, `ss_source_files`, `ss_dialogue_lines`, and `ss_dialogue_chars` are also printed using the `.ss` textmap dialogue classification.
+- `ss_failed_files` is printed when some embedded `.ss` sources could not be parsed for the `.ss`-based count.
+- `parsed_scene_files` is printed when some scene payloads could not be decoded for the `CD_TEXT`-based count.
 
 ---
 
@@ -461,21 +473,21 @@ The exported CSV uses UTF-8 BOM encoding with CRLF line endings and is compatibl
 
 ### `-k` / `--koe` — Collect Voice Files by Character
 
-Scans `.ss` script source files (or exported `.txt` disassemblies) for `KOE()`, `KOE2()`, and `EXKOE()` voice call instructions, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files into per-character subdirectories.
+Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files into per-character subdirectories.
 
-Also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location.
+Also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`.
 
 #### Syntax
 
 ```
-siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
+siglus-ssu -k <scene_input> <voice_dir> <output_dir>
 ```
 
 #### Parameters
 
 | Parameter | Description |
 |---|---|
-| `<ss_dir>` | Path to a directory of `.ss` source files, or a directory of exported `.txt` disassemblies (if `.txt` files are present they take priority). Can also be a single `.ss` or `.txt` file. |
+| `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. |
 | `<voice_dir>` | Path to the directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. |
 | `<output_dir>` | Directory where extracted `.ogg` files and the `koe_master.csv` manifest will be written. |
 
@@ -488,7 +500,7 @@ siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
     KOE(000000001).ogg
     KOE(000000002).ogg
     ...
-  unreferenced/            — Entries in .ovk not referenced by any script
+  unreferenced/            — Entries in .ovk not referenced by any scanned scene
     KOE(000000003).ogg
     ...
 ```
@@ -496,11 +508,14 @@ siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
 #### Examples
 
 ```bash
-# Collect all voice files from .ss scripts
-siglus-ssu -k /path/to/ss_scripts/ /path/to/voice/ /path/to/voice_out/
+# Collect all voice files directly from Scene.pck
+siglus-ssu -k /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 
-# Collect from a single .ss file (useful for testing)
-siglus-ssu -k /path/to/single_script.ss /path/to/voice/ /path/to/voice_out/
+# Collect from a decoded scene `.dat` directory
+siglus-ssu -k /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
+
+# Collect from a single scene `.dat` file
+siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
 ```
 
 #### `koe_master.csv` Format
@@ -508,9 +523,9 @@ siglus-ssu -k /path/to/single_script.ss /path/to/voice/ /path/to/voice_out/
 | Column | Description |
 |---|---|
 | `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Empty for call-sites where the OVK entry was not found. |
-| `character` | Character name extracted from `【name】` brackets in the script. |
-| `text` | Dialogue text extracted from Japanese quotation brackets. |
-| `callsite` | Semicolon-separated list of `filename:line` locations where this KOE is called. |
+| `character` | Character name inferred from `CD_NAME` events and inline voice metadata in the scene trace. |
+| `text` | Dialogue text inferred from `CD_TEXT` events and inline voice metadata in the scene trace. |
+| `callsite` | Semicolon-separated list of `filename:line` locations where this KOE is called, or `Scene.pck!scene.dat:line` when scanning a `.pck` directly. |
 
 #### Summary Output
 
@@ -522,9 +537,9 @@ OVK entries      : 45,678
 OVK files        : 56
 OVK z-files      : 56
 OVK table errors : 0
-Script files     : 128
-Script callsites : 44,210
-Script missing   : 124
+Scene files      : 128
+Scene callsites  : 44,210
+Scene missing    : 124
 KOE total        : 45,678
 KOE referenced   : 44,086
 KOE unreferenced : 1,592
@@ -626,6 +641,9 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
    ```
 
 2. **Edit `chapter1.ss.csv`:** Fill in the `replacement` column with translated text.
+
+   The exported `.ss.csv` also includes a `kind` column:
+   `1 = dialogue`, `2 = speaker name`, `3 = other text`.
 
 3. **Apply the translated text map:**
 

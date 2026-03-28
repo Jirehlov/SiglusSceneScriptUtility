@@ -13,7 +13,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-/// LZSS compression with default level (17)
 #[pyfunction]
 #[pyo3(signature = (data, suppress_empty_tail_group=false))]
 fn lzss_pack(
@@ -25,11 +24,6 @@ fn lzss_pack(
     Ok(PyBytes::new(py, &result).into())
 }
 
-/// LZSS compression with configurable level
-///
-/// Level ranges from 2 to 17:
-/// - 2: Fastest compression, worst ratio
-/// - 17: Slowest compression, best ratio (default)
 #[pyfunction]
 #[pyo3(signature = (data, level, suppress_empty_tail_group=false))]
 fn lzss_pack_level(
@@ -42,7 +36,6 @@ fn lzss_pack_level(
     Ok(PyBytes::new(py, &result).into())
 }
 
-/// LZSS decompression
 #[pyfunction]
 fn lzss_unpack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = lzss::unpack(data);
@@ -55,34 +48,25 @@ fn lzss32_pack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     Ok(PyBytes::new(py, &result).into())
 }
 
-/// XOR cycle operation (in-place mutation)
-/// Takes a bytearray and modifies it in place
 #[pyfunction]
 fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) -> PyResult<()> {
-    // SAFETY: We have exclusive access through the Bound reference
     let data_slice = unsafe { data.as_bytes_mut() };
     xor::cycle_inplace(data_slice, code, start);
     Ok(())
 }
 
-/// MD5 digest computation
 #[pyfunction]
 fn md5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = md5::digest(data);
     Ok(PyBytes::new(py, &result).into())
 }
 
-/// NWA decompression (16-bit PCM)
-///
-/// Returns the decoded little-endian PCM bytes (length = header.original_size).
 #[pyfunction]
 fn nwa_decode_pcm(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
     let result = nwa::decode_pcm(data).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &result).into())
 }
 
-/// Tile copy with mask
-/// dst must be a bytearray that will be modified in place
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn tile_copy(
@@ -98,16 +82,11 @@ fn tile_copy(
     rev: bool,
     lim: u8,
 ) -> PyResult<()> {
-    // SAFETY: We have exclusive access through the Bound reference
     let dst_slice = unsafe { dst.as_bytes_mut() };
     tile::copy(dst_slice, src, bx, by, mask, tx, ty, repx, repy, rev, lim);
     Ok(())
 }
 
-/// MSVC rand() compatible shuffle (in-place) used by string table generation.
-///
-/// Takes the current PRNG state and a Python list, shuffles the list in-place,
-/// and returns the updated PRNG state.
 #[pyfunction]
 fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
     let mut x = state;
@@ -116,7 +95,6 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
         return Ok(x);
     }
 
-    // The original algorithm effectively uses 15-bit rand() outputs.
     let n32: u32 = 15;
     let i_1: u32 = 0x7FFF;
 
@@ -135,7 +113,6 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
         loop {
             let mut rnd: u32 = 0;
             for _ in 0..chunks {
-                // MSVC rand(): x = x * 214013 + 2531011; return (x >> 16) & 0x7FFF
                 x = x.wrapping_mul(214013).wrapping_add(2531011);
                 let r = (x >> 16) & 0x7FFF;
                 rnd = (rnd << n32) | r;
@@ -150,7 +127,6 @@ fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -
 
         let i_idx = i - 1;
         if i_idx != j {
-            // pyo3 0.27: Bound<PyAny> doesn't have into_py()/to_object(); use unbind() to get owned Py<PyAny>.
             let v_i: pyo3::Py<pyo3::types::PyAny> = a.get_item(i_idx)?.unbind();
             let v_j: pyo3::Py<pyo3::types::PyAny> = a.get_item(j)?.unbind();
             a.set_item(i_idx, v_j)?;
@@ -206,7 +182,6 @@ fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
     if a.len() < 2 {
         return x;
     }
-    // 15-bit MSVC rand()
     for (i_idx, p) in params.iter().enumerate() {
         let i = (i_idx + 2) as u32;
         let iu = p.iu;
@@ -246,16 +221,6 @@ fn fmt_hms(secs: f64) -> String {
     format!("{h:02}:{m:02}:{ss:02}")
 }
 
-/// Fast parallel scan for --test-shuffle (first file only).
-///
-/// This scans the u32 space from seed0 up to 0xFFFFFFFF and returns
-/// the first seed whose shuffle produces a string-index table matching
-/// `target_idx`.
-///
-/// IMPORTANT: We match the raw (ofs,len) index table, not an inferred "order".
-/// Inferring order by sorting by ofs is ambiguous when multiple entries share
-/// the same ofs (common when len==0), which can otherwise make the brute-force
-/// search incorrectly report "no seed".
 #[pyfunction]
 fn find_shuffle_seed_first(
     py: Python<'_>,
@@ -333,9 +298,6 @@ fn find_shuffle_seed_first(
                         let seed = seed0.saturating_add(a as u32);
                         let _ = shuffle_inplace_vec(seed, &mut buf, &params);
 
-                        // Build (ofs,len) table for this permutation.
-                        // Lengths are determined by the string pool, so we can reuse
-                        // the expected lengths; only offsets depend on shuffle order.
                         let mut ofs: i32 = 0;
                         for &orig_u32 in buf.iter() {
                             let orig = orig_u32 as usize;
@@ -346,7 +308,6 @@ fn find_shuffle_seed_first(
                             }
                         }
 
-                        // Compare offsets in original index order.
                         let mut ok = true;
                         for i0 in 0..ofs_out.len() {
                             if ofs_out[i0] != target_ofs[i0] {
@@ -415,7 +376,6 @@ fn find_shuffle_seed_first(
 
         std::thread::sleep(Duration::from_millis(50));
         if let Err(e) = py.check_signals() {
-            // KeyboardInterrupt or other signal: stop all workers and rethrow.
             stop.store(true, Ordering::Relaxed);
             for h in handles {
                 let _ = h.join();
@@ -434,7 +394,6 @@ fn find_shuffle_seed_first(
     }
 }
 
-/// Python module definition
 #[pymodule]
 fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_pack, m)?)?;

@@ -3,6 +3,7 @@ import os
 import re
 import sys
 
+from . import const as C
 from . import dat
 from . import pck
 from . import sound
@@ -67,10 +68,20 @@ def _iter_scene_bundles(scene_root: str):
         ".pck"
     ):
         pck_name = os.path.basename(scene_root)
-        for item in pck._iter_decoded_scene_dat_items(scene_root):
+        try:
+            blob = read_bytes(scene_root)
+            hdr = pck.parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+        except Exception:
+            blob = b""
+            hdr = None
+        for item in pck._iter_pck_scene_dat_items(
+            blob,
+            input_pck=scene_root,
+            hdr=hdr,
+        ):
             if not isinstance(item, dict):
                 continue
-            blob = item.get("blob")
+            scene_blob = item.get("blob")
             rel = str(item.get("relpath") or "")
             scene_name = item.get("scene_name")
             scene_no = item.get("scene_no")
@@ -78,7 +89,7 @@ def _iter_scene_bundles(scene_root: str):
             display = f"{pck_name}!{rel.replace('\\', '/')}" if rel else pck_name
             try:
                 bundle = dat._dat_disassembly_bundle(
-                    blob,
+                    scene_blob,
                     os.path.abspath(scene_root) + "!" + rel.replace("/", "!"),
                     pack_context=pack_context,
                     scene_no=scene_no,

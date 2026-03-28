@@ -135,10 +135,6 @@ def _format_command_decl(prefix, name, args, ret_form):
     return head
 
 
-def _quote_ss_text(text):
-    return quote_ss_text(text)
-
-
 def _name_needs_macro(text):
     s = str(text or "")
     if not s:
@@ -165,18 +161,16 @@ def _iter_name_macro_texts(events):
     return out
 
 
-def _name_macro_name(idx):
-    return f"@__decompiled_name_{int(idx):04d}"
-
-
 def _build_name_macros(texts):
     ordered = sorted(str(x or "") for x in list(texts or []))
-    return {text: _name_macro_name(idx) for idx, text in enumerate(ordered)}
+    return {
+        text: f"@__decompiled_name_{int(idx):04d}" for idx, text in enumerate(ordered)
+    }
 
 
 def _name_define_lines(name_macros):
     return [
-        f"#define {macro} {_quote_ss_text(text)}"
+        f"#define {macro} {quote_ss_text(text)}"
         for text, macro in sorted(
             dict(name_macros or {}).items(), key=lambda item: str(item[1] or "")
         )
@@ -332,25 +326,10 @@ def _system_symbolic_string_blockers():
     return _SYMBOLIC_STRING_BLOCKER_CACHE
 
 
-def _decompiled_dir(root):
+def _write_support_inc_lines(root, lines):
     base = os.path.abspath(str(root or "."))
     cand = os.path.join(base, "decompiled")
-    return cand if os.path.isdir(cand) else base
-
-
-def _decl_sort_key(text):
-    s = str(text or "").strip()
-    m = _DECL_PROP_ID_RE.match(s)
-    if m:
-        return (0, int(m.group(1)))
-    m = _DECL_CMD_ID_RE.match(s)
-    if m:
-        return (1, int(m.group(1)))
-    return (2, s.casefold())
-
-
-def _write_support_inc_lines(root, lines):
-    ss_root = _decompiled_dir(root)
+    ss_root = cand if os.path.isdir(cand) else base
     out_path = os.path.join(ss_root, "__decompiled.inc")
     merged = []
     seen = set()
@@ -361,7 +340,18 @@ def _write_support_inc_lines(root, lines):
         seen.add(text)
         merged.append(text)
     if merged:
-        merged = sorted(merged, key=_decl_sort_key)
+
+        def _sort_key(text):
+            s = str(text or "").strip()
+            m = _DECL_PROP_ID_RE.match(s)
+            if m:
+                return (0, int(m.group(1)))
+            m = _DECL_CMD_ID_RE.match(s)
+            if m:
+                return (1, int(m.group(1)))
+            return (2, s.casefold())
+
+        merged = sorted(merged, key=_sort_key)
         write_text(out_path, "\n".join(merged).rstrip() + "\n", enc="utf-8")
         return out_path
     try:
@@ -387,24 +377,23 @@ def _copy_arg_layout(layout):
     return out
 
 
-def _arg_layout_specificity(layout):
-    vals = _copy_arg_layout(layout)
-    try:
-        fm_int = int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0))
-    except Exception:
-        fm_int = 0
-    return (
-        len(vals),
-        sum(1 for it in vals if int(it.get("form", 0) or 0) != fm_int),
-    )
-
-
 def _merge_arg_layout(current, incoming):
+    def _specificity(layout):
+        vals = _copy_arg_layout(layout)
+        try:
+            fm_int = int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0))
+        except Exception:
+            fm_int = 0
+        return (
+            len(vals),
+            sum(1 for it in vals if int(it.get("form", 0) or 0) != fm_int),
+        )
+
     cur = _copy_arg_layout(current)
     new = _copy_arg_layout(incoming)
     if not new:
         return cur or None
-    if not cur or _arg_layout_specificity(new) >= _arg_layout_specificity(cur):
+    if not cur or _specificity(new) >= _specificity(cur):
         return new
     return cur
 
@@ -1669,7 +1658,7 @@ class _Decompiler:
         s = str(text or "")
         if self._can_emit_symbolic_string(s):
             return s
-        return _quote_ss_text(s)
+        return quote_ss_text(s)
 
     def _build_for_candidates(self):
         out = []
@@ -4855,7 +4844,7 @@ class _Decompiler:
                 eof_only = False
             part = ""
             if op == "CD_TEXT":
-                part = _quote_ss_text(ev.get("text") or "")
+                part = quote_ss_text(ev.get("text") or "")
             elif op == "CD_NAME":
                 text = str(ev.get("text") or "")
                 macro = str((self.name_macros or {}).get(text) or "")

@@ -28,8 +28,8 @@ from .common import (
     ANGOU_DAT_NAME,
     new_disam_stats,
     add_elapsed_seconds,
-    format_elapsed_seconds,
     write_status,
+    write_disam_totals,
 )
 
 DAT_TXT_OUT_DIR = None
@@ -391,6 +391,66 @@ def _write_dat_decompiled(
         return None
 
 
+def _process_dat_output_items(items, stats=None):
+    bundle_list = []
+    ready_items = []
+    failed_paths = []
+    for item in list(items or []):
+        if not isinstance(item, dict):
+            continue
+        dat_path = item.get("dat_path")
+        blob = item.get("blob")
+        out_dir = item.get("out_dir")
+        name = os.path.basename(str(dat_path or ""))
+        write_status(f"Disassembling {name} ...")
+        started = time.perf_counter()
+        bundle = _dat_disassembly_bundle(
+            blob,
+            dat_path,
+            pack_context=item.get("pack_context"),
+            scene_no=item.get("scene_no"),
+            scene_name=item.get("scene_name"),
+        )
+        add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
+        if not isinstance(bundle, dict):
+            failed_paths.append(dat_path)
+            continue
+        out_path = _write_dat_txt(
+            dat_path,
+            blob,
+            out_dir,
+            stats,
+            bundle=bundle,
+        )
+        if not out_path:
+            failed_paths.append(dat_path)
+            continue
+        bundle_list.append(bundle)
+        ready_items.append(
+            {
+                "dat_path": dat_path,
+                "out_dir": out_dir,
+                "bundle": bundle,
+                "txt_path": out_path,
+            }
+        )
+    if bundle_list:
+        started = time.perf_counter()
+        decompile_hints = _build_decompile_hints(bundle_list)
+        add_elapsed_seconds(
+            stats, "decompile_hints_seconds", time.perf_counter() - started
+        )
+        for item in ready_items:
+            _write_dat_decompiled(
+                item.get("dat_path"),
+                out_dir=item.get("out_dir"),
+                bundle=item.get("bundle"),
+                decompile_hints=decompile_hints,
+                stats=stats,
+            )
+    return {"written": ready_items, "failed_paths": failed_paths}
+
+
 def _write_dat_disassembly(
     dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
 ):
@@ -434,14 +494,6 @@ def _scn_payload_bounds(blob):
     if so < 0 or ss <= 0 or (so + ss) > len(blob):
         return None
     return so, ss
-
-
-def _scn_payload_bytes(blob):
-    bounds = _scn_payload_bounds(blob)
-    if bounds is None:
-        return None
-    so, ss = bounds
-    return bytes(memoryview(blob)[so : so + ss])
 
 
 _PAYLOAD_COMPARE_DROP_KEYS = frozenset(
@@ -774,15 +826,7 @@ def dat(path, blob: bytes) -> int:
     if out_txt:
         print("")
         print(f"wrote: {out_txt}")
-        print(
-            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
-        )
-        print(
-            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}"
-        )
-        print(
-            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
-        )
+        write_disam_totals(sys.stdout, disam_stats)
     return 0
 
 
@@ -998,14 +1042,6 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
             print(f"wrote: {out2}")
         else:
             print(f"failed to write: {p2}.txt")
-        print(
-            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
-        )
-        print(
-            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}"
-        )
-        print(
-            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
-        )
+        write_disam_totals(sys.stdout, disam_stats)
 
     return 0

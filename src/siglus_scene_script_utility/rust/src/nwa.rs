@@ -1,7 +1,3 @@
-//! NWA (Siglus compressed PCM) decoder.
-//!
-//! This is a direct port of the Python reference implementation in `sound.py`.
-//! We keep semantics intentionally strict to match the Python behavior.
 
 #[derive(Clone, Copy, Debug)]
 pub struct NwaHeader {
@@ -19,7 +15,7 @@ pub struct NwaHeader {
     pub last_sample_pack_size: u32,
 }
 
-const NWA_HEADER_SIZE: usize = 44; // struct '<HHIiiIIIIIII'
+const NWA_HEADER_SIZE: usize = 44;
 
 #[inline]
 fn read_u16_le(b: &[u8], off: usize) -> Result<u16, String> {
@@ -94,8 +90,6 @@ impl<'a> BitReader<'a> {
 
     #[inline]
     fn get(&mut self, nbits: u8) -> u32 {
-        // Match the Python implementation: read a u16 at bp (missing bytes => 0),
-        // shift by bit, mask, then advance.
         let b0 = if self.bp < self.data.len() {
             self.data[self.bp]
         } else {
@@ -180,7 +174,6 @@ fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
             _ => apply_delta(br, nowsmp, 8, 0x80, 9),
         },
         _ => {
-            // mod == 8
             match which {
                 1 => apply_delta(br, nowsmp, 8, 0x80, 2),
                 2 => apply_delta(br, nowsmp, 8, 0x80, 3),
@@ -196,11 +189,6 @@ fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
 
 #[inline]
 fn remap_pack_mod(pack_mod: i32) -> u8 {
-    // Python logic:
-    // if pack_mod == 0: pack_mod = 2
-    // elif pack_mod == 1: pack_mod = 1
-    // elif pack_mod == 2: pack_mod = 0
-    // mod = 3 + pack_mod
     match pack_mod {
         0 => 2,
         1 => 1,
@@ -276,7 +264,6 @@ fn unpack_unit_16_into(chunk: &[u8], src_smp_cnt: usize, header: &NwaHeader, dst
         return;
     }
 
-    // Stereo (interleaved L,R samples)
     let mut nowsmp_l = read_i16_le_or0(chunk, 0);
     let mut nowsmp_r = read_i16_le_or0(chunk, 2);
     let mut br = BitReader::new(chunk, 4);

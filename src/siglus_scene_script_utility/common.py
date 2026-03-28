@@ -497,6 +497,23 @@ def add_elapsed_seconds(stats, key: str, seconds) -> None:
         return
 
 
+def write_disam_totals(out, stats) -> None:
+    if out is None:
+        out = sys.stdout
+    try:
+        out.write(
+            f"Total disassembly time: {format_elapsed_seconds((stats or {}).get('disassembly_seconds', 0.0))}\n"
+        )
+        out.write(
+            f"Total decompile hints time: {format_elapsed_seconds((stats or {}).get('decompile_hints_seconds', 0.0))}\n"
+        )
+        out.write(
+            f"Total decompile time: {format_elapsed_seconds((stats or {}).get('decompile_seconds', 0.0))}\n"
+        )
+    except Exception:
+        return
+
+
 def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 

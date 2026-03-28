@@ -1,15 +1,10 @@
-//! MD5 digest implementation
-//!
-//! Custom MD5 implementation matching the Python version's behavior.
 
-/// MD5 round shift amounts
 const MD5_S: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
     14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
     21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
-/// MD5 sine-derived constants
 const MD5_K: [u32; 64] = [
     0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
     0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
@@ -21,13 +16,11 @@ const MD5_K: [u32; 64] = [
     0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
 ];
 
-/// Left rotate a 32-bit value
 #[inline(always)]
 fn left_rotate(x: u32, c: u32) -> u32 {
     x.rotate_left(c)
 }
 
-/// Compute MD5 digest of data
 pub fn digest(data: &[u8]) -> Vec<u8> {
     let total = data.len();
     let alpha = (total + 1) & 0x3F;
@@ -40,14 +33,12 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
     let mut add_data = [0u8; 73];
     add_data[0] = 0x80;
 
-    // Store length in bits (little endian)
     let bit_len = ((total as u64) << 3) as u32;
     add_data[add_cnt - 8] = (bit_len & 0xFF) as u8;
     add_data[add_cnt - 7] = ((bit_len >> 8) & 0xFF) as u8;
     add_data[add_cnt - 6] = ((bit_len >> 16) & 0xFF) as u8;
     add_data[add_cnt - 5] = ((bit_len >> 24) & 0xFF) as u8;
 
-    // Initial state
     let mut st = [0x67452301u32, 0xEFCDAB89u32, 0x98BADCFEu32, 0x10325476u32];
 
     let mut data_cnt = total;
@@ -80,7 +71,6 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
             blk = block;
         }
 
-        // Parse block into 16 32-bit words
         let mut x = [0u32; 16];
         for (i, chunk) in blk.chunks(4).enumerate() {
             x[i] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
@@ -121,7 +111,6 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    // Pack result as little-endian bytes
     let mut result = Vec::with_capacity(16);
     for &word in &st {
         result.extend_from_slice(&word.to_le_bytes());

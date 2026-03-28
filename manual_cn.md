@@ -253,7 +253,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 ### `-x` / `--extract` — 提取文件
 
-将 `.pck` 场景文件提取为包含各个 `.ss` 源文本文件的目录（可选附带 `.dat` 反汇编），或从二进制 `Gameexe.dat` 还原 `Gameexe.ini` 明文。
+将 `.pck` 场景文件提取为一个带时间戳的目录，目录内包含已解码的场景 `.dat` 文件以及包内嵌入的原始 source 文件；或者从二进制 `Gameexe.dat` 还原 `Gameexe.ini` 明文。
 
 #### 语法
 
@@ -261,7 +261,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 # 提取 .pck 文件
 siglus-ssu -x [--disam] <input_pck> [output_dir]
 
-# 对目录中的 .dat 批量反汇编
+# 对目录中的 `.dat` 批量反汇编并反编译
 siglus-ssu -x --disam <input_dir> [output_dir]
 
 # 从 Gameexe.dat 还原 Gameexe.ini
@@ -275,8 +275,12 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
 | `<input_pck>` | 要提取的 `.pck` 文件路径。 |
 | `<input_dir>` | 启用 `--disam` 时，用来扫描 `.dat` 的目录路径。只处理该目录当前层的 `.dat` 文件。 |
 | `<output_dir>` | 提取文件的输出目录。对所有 `-x` 模式都可省略；省略时默认输出到输入文件所在目录，若输入本身是目录，则默认输出到该目录。 |
-| `--disam` | 对 `.pck` 输入时，除提取 `.ss` 源文件外，还会在每个提取出的编译后 `.dat` 旁边写出可读反汇编。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
+| `--disam` | 对 `.pck` 输入时，除写出 `<scene>.dat.txt` 反汇编外，还会额外写出重建后的 `decompiled/<scene>.ss` 以及 `decompiled/__decompiled.inc`。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 和 `decompiled/*.ss` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
 | `--gei` | 不提取 `.pck`，而是将 `Gameexe.dat` 二进制文件解码还原为 `Gameexe.ini` 明文文件。输入参数可以是 `.dat` 文件本身或其父目录。自动检测附近的 `SiglusEngine*.exe` 或 `key.txt` 以推导解密密钥。 |
+
+对 `.pck` 输入时，实际输出会写入 `output_YYYYMMDD_HHMMSS/` 目录。若包内存在原始 source，会与解码后的场景 `.dat` 一起还原出来。启用 `--disam` 时，命令结束前还会打印反汇编、hints 和反编译三个阶段的总耗时。
+
+当前 decompiler 属于实验性质。`decompiled/*.ss` 更适合拿来阅读和排查，不应视为对原始 source 的可靠还原，也不应默认当作稳定可回编的发布输入。
 
 #### 示例
 
@@ -287,10 +291,10 @@ siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/
 # 将 Scene.pck 提取到输入文件同目录
 siglus-ssu -x /path/to/Scene.pck
 
-# 提取并附带 .dat 反汇编
+# 提取并附带 `.dat` 反汇编和反编译 `.ss`
 siglus-ssu -x --disam /path/to/Scene.pck /path/to/translation_work/
 
-# 对单个目录当前层的 .dat 批量输出反汇编
+# 对单个目录当前层的 `.dat` 批量反汇编并反编译
 siglus-ssu -x --disam /path/to/scene_dir/
 
 # 从 Gameexe.dat 还原 Gameexe.ini
@@ -329,7 +333,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 |---|---|
 | `<input_file>` | 要分析的文件路径。支持扩展名：`.pck`、`.dat`、`.gan`、`.sav`、`.cgm`、`.tcr`。 |
 | `[input_file_2]` | 用于结构比较的可选第二个文件。两个文件必须类型相同。 |
-| `--disam` | 分析 `.dat` 文件时，将可读反汇编写入 `__DATDIR__` 子目录，而非打印到 stdout。 |
+| `--disam` | 分析 `.dat` 文件时，将可读反汇编写入 `__DATDIR__` 子目录，并额外输出重建后的 `decompiled/*.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
 | `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
 | `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
@@ -381,6 +385,14 @@ file_count: 2048
 encryption: yes
 ...
 ```
+
+分析 `.pck` 时，报告尾部还可能追加一个 `stats:` 区块。
+
+- `scene_files` 表示场景 `.dat` 条目数量，不包含 `暗号.dat`。
+- `cd_text_dialogue_lines` / `cd_text_dialogue_chars` 基于已解码的 `CD_TEXT` 事件统计。
+- 如果 `.pck` 内嵌了原始 `.ss` source，还会额外打印 `ss_source_files`、`ss_dialogue_lines`、`ss_dialogue_chars`，它们使用 `.ss` textmap 的台词分类口径。
+- 当部分内嵌 `.ss` source 无法参与 `.ss` 统计时，会额外打印 `ss_failed_files`。
+- 当部分 scene payload 无法解码，导致 `CD_TEXT` 统计不完整时，会额外打印 `parsed_scene_files`。
 
 ---
 
@@ -460,21 +472,21 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 ### `-k` / `--koe` — 按角色收集语音文件
 
-扫描 `.ss` 脚本源文件（或导出的 `.txt` 反汇编文件）中的 `KOE()`、`KOE2()`、`EXKOE()` 语音调用指令，将其与 `.ovk` 语音文件条目匹配，并将对应的 `.ogg` 音频文件提取到按角色命名的子目录中。
+扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并把对应的 `.ogg` 音频提取到按角色命名的子目录中。
 
-同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。
+同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。
 
 #### 语法
 
 ```
-siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
+siglus-ssu -k <scene_input> <voice_dir> <output_dir>
 ```
 
 #### 参数
 
 | 参数 | 说明 |
 |---|---|
-| `<ss_dir>` | `.ss` 源文件目录，或导出的 `.txt` 反汇编目录（若目录中存在 `.txt` 文件则优先使用）。也可以是单个 `.ss` 或 `.txt` 文件。 |
+| `<scene_input>` | `Scene.pck`、单个场景 `.dat` 文件，或场景 `.dat` 目录树的路径。 |
 | `<voice_dir>` | 包含 `.ovk` 语音文件文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。 |
 | `<output_dir>` | 提取的 `.ogg` 文件和 `koe_master.csv` 清单的输出目录。 |
 
@@ -487,7 +499,7 @@ siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
     KOE(000000001).ogg
     KOE(000000002).ogg
     ...
-  unreferenced/            — .ovk 中未被任何脚本引用的条目
+  unreferenced/            — .ovk 中未被任何已扫描场景引用的条目
     KOE(000000003).ogg
     ...
 ```
@@ -495,11 +507,14 @@ siglus-ssu -k <ss_dir> <voice_dir> <output_dir>
 #### 示例
 
 ```bash
-# 从 .ss 脚本收集所有语音文件
-siglus-ssu -k /path/to/ss_scripts/ /path/to/voice/ /path/to/voice_out/
+# 直接从 Scene.pck 收集所有语音文件
+siglus-ssu -k /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 
-# 从单个 .ss 文件收集（用于测试）
-siglus-ssu -k /path/to/single_script.ss /path/to/voice/ /path/to/voice_out/
+# 从解码后的场景 `.dat` 目录收集
+siglus-ssu -k /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
+
+# 从单个场景 `.dat` 文件收集（用于测试）
+siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
 ```
 
 #### `koe_master.csv` 格式
@@ -507,9 +522,9 @@ siglus-ssu -k /path/to/single_script.ss /path/to/voice/ /path/to/voice_out/
 | 列名 | 说明 |
 |---|---|
 | `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。对于未在 OVK 中找到的调用位置为空。 |
-| `character` | 从脚本中 `【名前】` 括号内提取的角色名。 |
-| `text` | 从日文引号括号中提取的对话文本。 |
-| `callsite` | 分号分隔的 `文件名:行号` 调用位置列表。 |
+| `character` | 从 scene trace 中的 `CD_NAME` 事件和 inline voice metadata 推断出的角色名。 |
+| `text` | 从 scene trace 中的 `CD_TEXT` 事件和 inline voice metadata 推断出的文本。 |
+| `callsite` | 分号分隔的 `文件名:行号` 调用位置列表；若直接扫描 `.pck`，则为 `Scene.pck!scene.dat:line`。 |
 
 #### 完成后汇总输出（stderr）
 
@@ -517,7 +532,14 @@ siglus-ssu -k /path/to/single_script.ss /path/to/voice/ /path/to/voice_out/
 === koe_collector summary ===
 OVK entries      : 45,678
 OVK files        : 56
-...
+OVK z-files      : 56
+OVK table errors : 0
+Scene files      : 128
+Scene callsites  : 44,210
+Scene missing    : 124
+KOE total        : 45,678
+KOE referenced   : 44,086
+KOE unreferenced : 1,592
 Audio extracted  : 43,900
 CSV path         : /path/to/voice_out/koe_master.csv
 ```
@@ -609,6 +631,9 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
    ```
 
 2. **编辑 `chapter1.ss.csv`：** 在 `replacement` 列填入翻译文本。
+
+   导出的 `.ss.csv` 还会包含一个 `kind` 列：
+   `1 = 台词`、`2 = 说台词的角色`、`3 = 其他文本`。
 
 3. **应用翻译：**
 

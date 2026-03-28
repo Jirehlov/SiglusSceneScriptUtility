@@ -1,15 +1,12 @@
 import os
 import sys
-import time
 
 from .common import (
     looks_like_siglus_dat,
     parse_gei_disam_args,
     read_bytes,
     new_disam_stats,
-    add_elapsed_seconds,
-    format_elapsed_seconds,
-    write_status,
+    write_disam_totals,
 )
 from . import GEI
 from . import pck
@@ -39,11 +36,8 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
     if not dat_paths:
         sys.stderr.write("No .dat files found\n")
         return 1
-    bundles = []
-    ready_bundles = []
-    ok_cnt = 0
     skip_cnt = 0
-    fail_cnt = 0
+    items = []
     disam_stats = new_disam_stats()
     for dat_path in dat_paths:
         blob = read_bytes(dat_path)
@@ -56,61 +50,22 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
-        write_status(f"Disassembling {name} ...")
-        started = time.perf_counter()
-        bundle = D._dat_disassembly_bundle(blob, dat_path)
-        if not isinstance(bundle, dict):
-            add_elapsed_seconds(
-                disam_stats, "disassembly_seconds", time.perf_counter() - started
-            )
-            sys.stderr.write(f"Failed: {name}\n")
-            fail_cnt += 1
-            continue
-        bundles.append((dat_path, blob, bundle))
-        out_path = D._write_dat_txt(
-            dat_path,
-            blob,
-            output_dir,
-            disam_stats,
-            bundle=bundle,
-        )
-        add_elapsed_seconds(
-            disam_stats, "disassembly_seconds", time.perf_counter() - started
-        )
-        if not out_path:
-            sys.stderr.write(f"Failed: {name}\n")
-            fail_cnt += 1
-            continue
-        sys.stdout.write(f"Wrote: {out_path}\n")
-        ok_cnt += 1
-        ready_bundles.append((dat_path, blob, bundle))
-    started = time.perf_counter()
-    decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
-    add_elapsed_seconds(
-        disam_stats, "decompile_hints_seconds", time.perf_counter() - started
-    )
-    for dat_path, blob, bundle in ready_bundles:
-        D._write_dat_decompiled(
-            dat_path,
-            out_dir=output_dir,
-            bundle=bundle,
-            decompile_hints=decompile_hints,
-            stats=disam_stats,
-        )
+        items.append({"dat_path": dat_path, "blob": blob, "out_dir": output_dir})
+    result = D._process_dat_output_items(items, stats=disam_stats)
+    written = list((result or {}).get("written") or [])
+    failed_paths = list((result or {}).get("failed_paths") or [])
+    ok_cnt = len(written)
+    fail_cnt = len(failed_paths)
+    for item in written:
+        sys.stdout.write(f"Wrote: {item.get('txt_path')}\n")
+    for dat_path in failed_paths:
+        sys.stderr.write(f"Failed: {os.path.basename(str(dat_path or ''))}\n")
     if ok_cnt:
         sys.stdout.write(f"Disassembled scenes: {ok_cnt:d}\n")
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
         )
-        sys.stdout.write(
-            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}\n"
-        )
-        sys.stdout.write(
-            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}\n"
-        )
-        sys.stdout.write(
-            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}\n"
-        )
+        write_disam_totals(sys.stdout, disam_stats)
     if skip_cnt:
         sys.stdout.write(f"Skipped non-scene .dat files: {skip_cnt:d}\n")
     if fail_cnt:

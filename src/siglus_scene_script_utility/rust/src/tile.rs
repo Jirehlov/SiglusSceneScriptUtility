@@ -1,19 +1,4 @@
-//! Tile copy operations with masking
 
-/// Copy tiles with mask-based conditional copying
-///
-/// # Arguments
-/// * `dst` - Destination buffer (mutable)
-/// * `src` - Source buffer
-/// * `bx` - Block width
-/// * `by` - Block height  
-/// * `mask` - Mask tile data
-/// * `tx` - Mask tile width
-/// * `ty` - Mask tile height
-/// * `repx` - X repeat offset
-/// * `repy` - Y repeat offset
-/// * `rev` - Reverse condition flag
-/// * `lim` - Limit threshold for mask comparison
 #[allow(clippy::too_many_arguments)]
 pub fn copy(
     dst: &mut [u8],
@@ -32,7 +17,6 @@ pub fn copy(
         return;
     }
 
-    // Calculate starting offsets
     let x0 = if repx <= 0 {
         ((-repx) as usize) % tx
     } else {

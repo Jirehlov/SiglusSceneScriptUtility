@@ -39,9 +39,7 @@ from .common import (
     read_siglus_engine_exe_el,
     looks_like_siglus_pck,
     new_disam_stats,
-    add_elapsed_seconds,
-    format_elapsed_seconds,
-    write_status,
+    write_disam_totals,
 )
 
 MAX_SCENE_LIST = 2000
@@ -446,20 +444,24 @@ def _iter_pck_angou_sources(blob: bytes, hdr=None):
         yield raw
 
 
+def _angou_source_exe_el(raw: bytes):
+    try:
+        _t, _, _ = decode_text_auto(raw)
+    except Exception:
+        _t = ""
+    s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
+    if not s:
+        return b""
+    mb = s.encode("cp932", "ignore")
+    if len(mb) < 8:
+        return b""
+    return exe_angou_element(mb)
+
+
 def _compute_exe_el_from_pck_blob(blob: bytes, hdr=None):
     try:
         for raw in _iter_pck_angou_sources(blob, hdr=hdr) or []:
-            try:
-                _t, _, _ = decode_text_auto(raw)
-            except Exception:
-                _t = ""
-            s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s:
-                continue
-            mb = s.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            el = exe_angou_element(mb)
+            el = _angou_source_exe_el(raw)
             if el:
                 return el
         return b""
@@ -467,15 +469,15 @@ def _compute_exe_el_from_pck_blob(blob: bytes, hdr=None):
         return b""
 
 
-def _iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
+def _read_pck_scene_lists(blob: bytes, hdr=None):
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        return
+        return ([], [])
     if not looks_like_siglus_pck(blob):
-        return
+        return ([], [])
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     if not hdr:
-        return
+        return ([], [])
     scn_name_idx = _read_struct_list(
         blob,
         hdr.get("scn_name_index_list_ofs", 0),
@@ -513,17 +515,45 @@ def _iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
         n = min(len(scn_names), len(scn_data))
         scn_names = scn_names[:n]
         scn_data = scn_data[:n]
+    return (scn_names, scn_data)
+
+
+def _resolve_pck_scene_exe_el(blob: bytes, input_pck: str = "", hdr=None):
+    try:
+        if not hdr:
+            hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+        if int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0) == 0:
+            return b""
+    except Exception:
+        return b""
+    if not input_pck:
+        return b""
+    exe_el = _compute_exe_el_from_pck_blob(blob, hdr=hdr)
+    if exe_el:
+        return exe_el
+    try:
+        return _compute_exe_el("", os.path.dirname(os.path.abspath(input_pck)))
+    except Exception:
+        return b""
+
+
+def _iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
+    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
+        return
+    if not looks_like_siglus_pck(blob):
+        return
+    if not hdr:
+        hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    if not hdr:
+        return
+    scn_names, scn_data = _read_pck_scene_lists(blob, hdr=hdr)
     try:
         pack_context = _build_disam_pack_context(
             blob, hdr=hdr, meta={"scn_names": scn_names}
         )
     except Exception:
         pack_context = {}
-    exe_el = b""
-    if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0 and input_pck:
-        exe_el = _compute_exe_el_from_pck_blob(blob, hdr=hdr)
-        if not exe_el:
-            exe_el = _compute_exe_el("", os.path.dirname(os.path.abspath(input_pck)))
+    exe_el = _resolve_pck_scene_exe_el(blob, input_pck=input_pck, hdr=hdr)
     for scn_no, (nm, scn_blob) in enumerate(zip(scn_names, scn_data)):
         if not nm:
             continue
@@ -772,22 +802,8 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
         h2.get("scn_data_index_cnt", 0),
         _I32_PAIR_STRUCT,
     )
-    n1 = _read_struct_list(
-        b1,
-        h1.get("scn_name_index_list_ofs", 0),
-        h1.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    n2 = _read_struct_list(
-        b2,
-        h2.get("scn_name_index_list_ofs", 0),
-        h2.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    end1 = h1.get("scn_name_list_ofs", 0) + _max_pair_end(n1) * 2
-    end2 = h2.get("scn_name_list_ofs", 0) + _max_pair_end(n2) * 2
-    names1 = _decode_utf16le_strings(b1, n1, h1.get("scn_name_list_ofs", 0), end1)
-    names2 = _decode_utf16le_strings(b2, n2, h2.get("scn_name_list_ofs", 0), end2)
+    names1, _ = _read_pck_scene_lists(b1, hdr=h1)
+    names2, _ = _read_pck_scene_lists(b2, hdr=h2)
 
     def _scene_map(names, idx, base_ofs, blob):
         m = {}
@@ -813,16 +829,8 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
     pack_ctx1 = None
     pack_ctx2 = None
     if compare_payload:
-        exe_el1 = _compute_exe_el_from_pck_blob(b1, hdr=h1)
-        if not exe_el1:
-            exe_el1 = _compute_exe_el(
-                "", os.path.dirname(os.path.abspath(str(p1 or "")))
-            )
-        exe_el2 = _compute_exe_el_from_pck_blob(b2, hdr=h2)
-        if not exe_el2:
-            exe_el2 = _compute_exe_el(
-                "", os.path.dirname(os.path.abspath(str(p2 or "")))
-            )
+        exe_el1 = _resolve_pck_scene_exe_el(b1, input_pck=str(p1 or ""), hdr=h1)
+        exe_el2 = _resolve_pck_scene_exe_el(b2, input_pck=str(p2 or ""), hdr=h2)
         try:
             pack_ctx1 = _build_disam_pack_context(
                 b1, hdr=h1, meta={"scn_names": names1}
@@ -1199,213 +1207,11 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     return (raw, name)
 
 
-def _compute_exe_el_from_scene_pck(os_dir: str):
-    try:
-        pck = os.path.join(os_dir or ".", "Scene.pck")
-        if not os.path.isfile(pck):
-            return b""
-        dat = read_bytes(pck)
-        hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        if not hdr:
-            return b""
-        orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
-        if orig_hsz <= 0:
-            return b""
-        scn_data_idx = _read_struct_list(
-            dat,
-            hdr.get("scn_data_index_list_ofs", 0),
-            hdr.get("scn_data_index_cnt", 0),
-            _I32_PAIR_STRUCT,
-        )
-        blob_end = hdr.get("scn_data_list_ofs", 0) + max(
-            [a + b for a, b in scn_data_idx], default=0
-        )
-        pos = int(blob_end)
-        if pos < 0 or pos + orig_hsz > len(dat):
-            return b""
-        ctx = {"source_angou": C.SOURCE_ANGOU}
-        size_list_enc = dat[pos : pos + orig_hsz]
-        size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
-        if not size_bytes or (len(size_bytes) % 4) != 0:
-            return b""
-        sizes = list(struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes))
-        pos += orig_hsz
-        cands = []
-        for sz in sizes:
-            sz = int(sz) & 0xFFFFFFFF
-            if sz <= 0 or pos + sz > len(dat):
-                break
-            enc_blob = dat[pos : pos + sz]
-            raw, name = source_angou_decrypt(enc_blob, ctx)
-            nm = os.path.basename(name or "")
-            if is_named_filename(nm, ANGOU_DAT_NAME):
-                cands.append((name or nm, raw))
-            pos += sz
-        if not cands:
-            return b""
-        cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-        try:
-            _t, _, _ = decode_text_auto(cands[0][1])
-        except Exception:
-            _t = ""
-        s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-        if not s:
-            return b""
-        mb = s.encode("cp932", "ignore")
-        if len(mb) < 8:
-            return b""
-        return exe_angou_element(mb)
-    except Exception:
-        return b""
-
-
-def _iter_exe_el_candidates(os_dir: str):
-    seen = set()
-    yielded = False
-
-    paths = list_named_paths(os_dir, ANGOU_DAT_NAME, recursive=True)
-    for p in paths:
-        try:
-            try:
-                _t, _, _ = decode_text_auto(read_bytes(p))
-            except Exception:
-                _t = ""
-            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s0:
-                continue
-            mb = s0.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            el = exe_angou_element(mb)
-            if el and el not in seen:
-                seen.add(el)
-                yielded = True
-                yield el
-        except Exception:
-            continue
-
-    if not yielded:
-        kp = find_named_path(os_dir, KEY_TXT_NAME, recursive=True)
-        if kp:
-            el = read_exe_el_key(kp)
-            if el and el not in seen:
-                seen.add(el)
-                yielded = True
-                yield el
-
-    ep = find_siglus_engine_exe(os_dir)
-    if ep:
-        el = read_siglus_engine_exe_el(ep)
-        if el and el not in seen:
-            seen.add(el)
-            yielded = True
-            yield el
-
-    try:
-        pck = os.path.join(os_dir or ".", "Scene.pck")
-        if not os.path.isfile(pck):
-            return
-        dat = read_bytes(pck)
-        hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        if not hdr:
-            return
-        orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
-        if orig_hsz <= 0:
-            return
-        scn_data_idx = _read_struct_list(
-            dat,
-            hdr.get("scn_data_index_list_ofs", 0),
-            hdr.get("scn_data_index_cnt", 0),
-            _I32_PAIR_STRUCT,
-        )
-        blob_end = hdr.get("scn_data_list_ofs", 0) + max(
-            [a + b for a, b in scn_data_idx], default=0
-        )
-        pos = int(blob_end)
-        if pos < 0 or pos + orig_hsz > len(dat):
-            return
-        ctx = {"source_angou": C.SOURCE_ANGOU}
-        size_list_enc = dat[pos : pos + orig_hsz]
-        size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
-        if not size_bytes or (len(size_bytes) % 4) != 0:
-            return
-        sizes = list(struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes))
-        pos += orig_hsz
-        cands = []
-        for sz in sizes:
-            sz = int(sz) & 0xFFFFFFFF
-            if sz <= 0 or pos + sz > len(dat):
-                break
-            enc_blob = dat[pos : pos + sz]
-            raw, name = source_angou_decrypt(enc_blob, ctx)
-            nm = os.path.basename(name or "")
-            if is_named_filename(nm, ANGOU_DAT_NAME):
-                cands.append((name or nm, raw))
-            pos += sz
-        cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-        for _name, raw in cands:
-            try:
-                _t, _, _ = decode_text_auto(raw)
-            except Exception:
-                _t = ""
-            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s0:
-                continue
-            mb = s0.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            el = exe_angou_element(mb)
-            if el and el not in seen:
-                seen.add(el)
-                yield el
-    except Exception:
-        return
-
-
 def _iter_scene_pck_angou_sources(os_dir: str):
     for pck in _iter_local_siglus_pck_paths(os_dir):
         try:
             dat = read_bytes(pck)
-            if not looks_like_siglus_pck(dat):
-                continue
-            hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-            if not hdr:
-                continue
-            orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
-            if orig_hsz <= 0:
-                continue
-            scn_data_idx = _read_struct_list(
-                dat,
-                hdr.get("scn_data_index_list_ofs", 0),
-                hdr.get("scn_data_index_cnt", 0),
-                _I32_PAIR_STRUCT,
-            )
-            blob_end = hdr.get("scn_data_list_ofs", 0) + max(
-                [a + b for a, b in scn_data_idx], default=0
-            )
-            pos = int(blob_end)
-            if pos < 0 or pos + orig_hsz > len(dat):
-                continue
-            ctx = {"source_angou": C.SOURCE_ANGOU}
-            size_list_enc = dat[pos : pos + orig_hsz]
-            size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
-            if not size_bytes or (len(size_bytes) % 4) != 0:
-                continue
-            sizes = list(struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes))
-            pos += orig_hsz
-            cands = []
-            for sz in sizes:
-                sz = int(sz) & 0xFFFFFFFF
-                if sz <= 0 or pos + sz > len(dat):
-                    break
-                enc_blob = dat[pos : pos + sz]
-                raw, name = source_angou_decrypt(enc_blob, ctx)
-                nm = os.path.basename(name or "")
-                if is_named_filename(nm, ANGOU_DAT_NAME):
-                    cands.append((name or nm, raw))
-                pos += sz
-            cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-            for _name, raw in cands:
+            for raw in _iter_pck_angou_sources(dat) or []:
                 yield raw
         except Exception:
             continue
@@ -1414,17 +1220,9 @@ def _iter_scene_pck_angou_sources(os_dir: str):
 def _compute_exe_el_from_scene_pck(os_dir: str):
     try:
         for raw in _iter_scene_pck_angou_sources(os_dir):
-            try:
-                _t, _, _ = decode_text_auto(raw)
-            except Exception:
-                _t = ""
-            s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s:
-                continue
-            mb = s.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            return exe_angou_element(mb)
+            el = _angou_source_exe_el(raw)
+            if el:
+                return el
         return b""
     except Exception:
         return b""
@@ -1437,17 +1235,7 @@ def _iter_exe_el_candidates(os_dir: str):
     paths = list_named_paths(os_dir, ANGOU_DAT_NAME, recursive=True)
     for p in paths:
         try:
-            try:
-                _t, _, _ = decode_text_auto(read_bytes(p))
-            except Exception:
-                _t = ""
-            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s0:
-                continue
-            mb = s0.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            el = exe_angou_element(mb)
+            el = _angou_source_exe_el(read_bytes(p))
             if el and el not in seen:
                 seen.add(el)
                 yielded = True
@@ -1474,17 +1262,7 @@ def _iter_exe_el_candidates(os_dir: str):
 
     try:
         for raw in _iter_scene_pck_angou_sources(os_dir):
-            try:
-                _t, _, _ = decode_text_auto(raw)
-            except Exception:
-                _t = ""
-            s0 = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-            if not s0:
-                continue
-            mb = s0.encode("cp932", "ignore")
-            if len(mb) < 8:
-                continue
-            el = exe_angou_element(mb)
+            el = _angou_source_exe_el(raw)
             if el and el not in seen:
                 seen.add(el)
                 yield el
@@ -1585,80 +1363,6 @@ def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):
         return {}
 
 
-def _iter_decoded_scene_dat_items(input_pck: str):
-    input_pck = os.path.abspath(input_pck)
-    dat = read_bytes(input_pck)
-    if _looks_like_flix_pck(dat) and (not looks_like_siglus_pck(dat)):
-        return
-    if not looks_like_siglus_pck(dat):
-        return
-    hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    if not hdr:
-        return
-    scn_name_idx = _read_struct_list(
-        dat,
-        hdr.get("scn_name_index_list_ofs", 0),
-        hdr.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_name_blob_len = max([a + b for a, b in scn_name_idx], default=0) * 2
-    scn_names = _decode_utf16le_strings(
-        dat,
-        scn_name_idx,
-        hdr.get("scn_name_list_ofs", 0),
-        hdr.get("scn_name_list_ofs", 0) + scn_name_blob_len,
-        errors="surrogatepass",
-        strip_null=False,
-        default="",
-        on_error="append_default",
-        on_decode_error="append_default",
-        min_blob_ofs=1,
-        allow_empty_blob=True,
-        strict_blob_end=True,
-    )
-    scn_data_idx = _read_struct_list(
-        dat,
-        hdr.get("scn_data_index_list_ofs", 0),
-        hdr.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_data = _read_blobs(
-        dat,
-        scn_data_idx,
-        hdr.get("scn_data_list_ofs", 0),
-        max([a + b for a, b in scn_data_idx], default=0),
-    )
-    if len(scn_names) != len(scn_data):
-        n = min(len(scn_names), len(scn_data))
-        scn_names = scn_names[:n]
-        scn_data = scn_data[:n]
-    try:
-        pack_context = _build_disam_pack_context(
-            dat, hdr=hdr, meta={"scn_names": scn_names}
-        )
-    except Exception:
-        pack_context = {}
-    exe_el = b""
-    if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0:
-        exe_el = _compute_exe_el_from_pck_blob(dat, hdr=hdr)
-        if not exe_el:
-            exe_el = _compute_exe_el("", os.path.dirname(input_pck))
-    for scn_no, (nm, blob) in enumerate(zip(scn_names, scn_data)):
-        if not nm:
-            continue
-        out_dat = _decode_scene_blob(blob, hdr, exe_el, require_exe=False)
-        if not out_dat:
-            continue
-        rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
-        yield {
-            "scene_no": scn_no,
-            "scene_name": nm,
-            "blob": out_dat,
-            "relpath": rel,
-            "pack_context": dict(pack_context or {}),
-        }
-
-
 def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
@@ -1692,43 +1396,6 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         sys.stderr.write("Invalid pck\n")
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    scn_name_idx = _read_struct_list(
-        dat,
-        hdr.get("scn_name_index_list_ofs", 0),
-        hdr.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_name_blob_len = max([a + b for a, b in scn_name_idx], default=0) * 2
-    scn_names = _decode_utf16le_strings(
-        dat,
-        scn_name_idx,
-        hdr.get("scn_name_list_ofs", 0),
-        hdr.get("scn_name_list_ofs", 0) + scn_name_blob_len,
-        errors="surrogatepass",
-        strip_null=False,
-        default="",
-        on_error="append_default",
-        on_decode_error="append_default",
-        min_blob_ofs=1,
-        allow_empty_blob=True,
-        strict_blob_end=True,
-    )
-    scn_data_idx = _read_struct_list(
-        dat,
-        hdr.get("scn_data_index_list_ofs", 0),
-        hdr.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_data = _read_blobs(
-        dat,
-        scn_data_idx,
-        hdr.get("scn_data_list_ofs", 0),
-        max([a + b for a, b in scn_data_idx], default=0),
-    )
-    if len(scn_names) != len(scn_data):
-        n = min(len(scn_names), len(scn_data))
-        scn_names = scn_names[:n]
-        scn_data = scn_data[:n]
     out_dir = os.path.join(
         output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
     )
@@ -1736,150 +1403,60 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")
-    ctx = {"source_angou": C.SOURCE_ANGOU}
-    orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
-    if orig_hsz > 0:
+    if int(hdr.get("original_source_header_size", 0) or 0) > 0:
         try:
-            blob_end = hdr.get("scn_data_list_ofs", 0) + max(
-                [a + b for a, b in scn_data_idx], default=0
-            )
-            pos = int(blob_end)
-            size_list_enc = dat[pos : pos + orig_hsz]
-            size_bytes, _ = source_angou_decrypt(size_list_enc, ctx)
-            if size_bytes and (len(size_bytes) % 4 == 0):
-                sizes = list(
-                    struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes)
-                )
-            else:
-                sizes = []
-            pos += orig_hsz
-            for sz in sizes:
-                sz = int(sz) & 0xFFFFFFFF
-                if sz <= 0 or pos + sz > len(dat):
-                    break
-                enc_blob = dat[pos : pos + sz]
-                raw, name = source_angou_decrypt(enc_blob, ctx)
-                rel = _safe_relpath(name)
+            for item in _iter_pck_original_source_items(dat, hdr=hdr) or []:
+                raw = bytes(item.get("raw") or b"")
+                rel = _safe_relpath(str(item.get("name") or ""))
                 if not rel:
                     rel = "unknown.bin"
                 out_name = os.path.basename(rel) or rel
                 out_path = _unique_outpath(os_dir, out_name)
                 write_bytes(out_path, raw)
-                pos += sz
         except Exception as e:
             sys.stderr.write(f"Warning: failed to extract original sources: {e}\n")
-    exe_el = b""
     if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0:
-        exe_el = _compute_exe_el_from_pck_blob(dat, hdr=hdr)
-        if not exe_el:
-            exe_el = _compute_exe_el(os_dir, os.path.dirname(input_pck))
+        exe_el = _resolve_pck_scene_exe_el(dat, input_pck=input_pck, hdr=hdr)
         if not exe_el:
             sys.stderr.write(
                 "Warning: scn_data_exe_angou_mod=1 but 暗号.dat not found/invalid under output folder; scene data may remain encrypted.\n"
             )
-    easy_code = C.EASY_ANGOU_CODE
     D = None
     disam_stats = None
     dat_items = []
-    pack_context = {}
     if dat_txt:
         from . import dat as D
 
         disam_stats = new_disam_stats()
-        pack_context = _build_disam_pack_context(
-            dat, hdr=hdr, meta={"scn_names": scn_names}
-        )
-    for scn_no, (nm, blob) in enumerate(zip(scn_names, scn_data)):
-        if not nm:
-            continue
-        b = blob
-        if exe_el:
-            _b = bytearray(b)
-            xor_cycle_inplace(_b, exe_el, 0)
-            b = bytes(_b)
-        lz = b""
-        if easy_code:
-            _b = bytearray(b)
-            xor_cycle_inplace(_b, easy_code, 0)
-            cand = bytes(_b)
-        else:
-            cand = b""
-        if cand and _looks_like_lzss(cand):
-            lz = cand
-        elif _looks_like_lzss(b):
-            lz = b
-        if lz:
-            try:
-                out_dat = lzss_unpack(lz)
-            except Exception:
-                out_dat = b""
-        else:
-            out_dat = b
-        rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
+    for item in _iter_pck_scene_dat_items(dat, input_pck=input_pck, hdr=hdr) or []:
+        nm = str(item.get("scene_name") or "")
+        rel = str(item.get("relpath") or (_safe_relpath(nm + ".dat") or (nm + ".dat")))
+        out_dat = bytes(item.get("blob") or b"")
         out_name = os.path.basename(rel) or rel
         out_path = _unique_outpath(bs_dir, out_name)
         write_bytes(out_path, out_dat)
         if D and (not D._is_decompiler_excluded_dat(out_path, nm)):
-            dat_items.append((out_path, out_dat, scn_no, nm))
+            dat_items.append((out_path, out_dat, item))
         ok_cnt += 1
     if D and dat_items:
-        bundles = []
-        ready_bundles = []
-        for dat_path, blob, scn_no, nm in dat_items:
-            name = os.path.basename(str(dat_path))
-            write_status(f"Disassembling {name} ...")
-            started = time.perf_counter()
-            bundle = D._dat_disassembly_bundle(
-                blob,
-                dat_path,
-                pack_context=pack_context,
-                scene_no=scn_no,
-                scene_name=nm,
-            )
-            if not isinstance(bundle, dict):
-                add_elapsed_seconds(
-                    disam_stats, "disassembly_seconds", time.perf_counter() - started
-                )
-                continue
-            bundles.append((dat_path, blob, bundle))
-            out_dir = os.path.dirname(dat_path) or bs_dir
-            out_path = D._write_dat_txt(
-                dat_path,
-                blob,
-                out_dir,
-                disam_stats,
-                bundle=bundle,
-            )
-            add_elapsed_seconds(
-                disam_stats, "disassembly_seconds", time.perf_counter() - started
-            )
-            if out_path:
-                ready_bundles.append((dat_path, blob, bundle))
-        started = time.perf_counter()
-        decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
-        add_elapsed_seconds(
-            disam_stats, "decompile_hints_seconds", time.perf_counter() - started
+        D._process_dat_output_items(
+            [
+                {
+                    "dat_path": dat_path,
+                    "blob": blob,
+                    "out_dir": os.path.dirname(dat_path) or bs_dir,
+                    "pack_context": item.get("pack_context"),
+                    "scene_no": item.get("scene_no"),
+                    "scene_name": item.get("scene_name"),
+                }
+                for dat_path, blob, item in dat_items
+            ],
+            stats=disam_stats,
         )
-        for dat_path, blob, bundle in ready_bundles:
-            D._write_dat_decompiled(
-                dat_path,
-                out_dir=os.path.dirname(dat_path) or bs_dir,
-                bundle=bundle,
-                decompile_hints=decompile_hints,
-                stats=disam_stats,
-            )
     sys.stdout.write(f"Extracted scenes: {ok_cnt:d}\n")
     if dat_txt and isinstance(disam_stats, dict):
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
         )
-        sys.stdout.write(
-            f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}\n"
-        )
-        sys.stdout.write(
-            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}\n"
-        )
-        sys.stdout.write(
-            f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}\n"
-        )
+        write_disam_totals(sys.stdout, disam_stats)
     return 0
