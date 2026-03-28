@@ -168,7 +168,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.1.13
+siglus-ssu init --ref v0.1.14
 ```
 
 ---
