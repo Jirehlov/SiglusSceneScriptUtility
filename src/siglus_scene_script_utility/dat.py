@@ -78,16 +78,41 @@ def _disassembly_ended_unexpectedly(dis):
 
 
 def _build_decompile_hints(bundles):
+    def _hint_status(bundle):
+        name = ""
+        try:
+            name = os.path.basename(str((bundle or {}).get("dat_path") or ""))
+        except Exception:
+            name = ""
+        if not name:
+            try:
+                name = str((bundle or {}).get("scene_name") or "")
+            except Exception:
+                name = ""
+        if not name:
+            name = "<unknown>"
+        write_status(f"Building hints {name} ...")
+
     try:
         return build_decompile_hints(
             [
                 x
                 for x in list(bundles or [])
                 if isinstance(x, dict) and not bool(x.get("decompiler_excluded"))
-            ]
+            ],
+            status=_hint_status,
         )
     except Exception:
         return {}
+
+
+def _ensure_decompile_hints(bundles, decompile_hints=None, stats=None):
+    if decompile_hints is not None:
+        return decompile_hints
+    started = time.perf_counter()
+    out = _build_decompile_hints(bundles)
+    add_elapsed_seconds(stats, "decompile_hints_seconds", time.perf_counter() - started)
+    return out
 
 
 def _is_decompiler_excluded_dat(dat_path=None, scene_name=None):
@@ -353,6 +378,9 @@ def _write_dat_decompiled(
             return None
         if bool(bundle.get("decompiler_excluded")):
             return None
+        decompile_hints = _ensure_decompile_hints(
+            [bundle], decompile_hints=decompile_hints, stats=stats
+        )
         name = os.path.basename(str(dat_path))
         write_status(f"Decompiling {name} ...")
         started = time.perf_counter()

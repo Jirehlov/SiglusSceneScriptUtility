@@ -1125,7 +1125,7 @@ def _support_inc_lines_from_hints(hints):
     return lines
 
 
-def build_decompile_hints(bundles):
+def build_decompile_hints(bundles, status=None):
     bundle_list = [x for x in list(bundles or []) if isinstance(x, dict)]
     global_count = _pick_pack_context_count(bundle_list, "inc_command_cnt")
     if global_count is None:
@@ -1178,6 +1178,8 @@ def build_decompile_hints(bundles):
         slot["forms"] = forms
 
     for bundle in bundle_list:
+        if callable(status):
+            status(bundle)
         pack_ctx = dict((bundle or {}).get("pack_context") or {})
         for it in list(pack_ctx.get("inc_property_defs") or []):
             try:
