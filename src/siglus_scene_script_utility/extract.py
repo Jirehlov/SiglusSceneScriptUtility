@@ -86,14 +86,17 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
         ready_bundles.append((dat_path, blob, bundle))
     started = time.perf_counter()
     decompile_hints = D._build_decompile_hints([x[2] for x in bundles])
+    add_elapsed_seconds(
+        disam_stats, "decompile_hints_seconds", time.perf_counter() - started
+    )
     for dat_path, blob, bundle in ready_bundles:
         D._write_dat_decompiled(
             dat_path,
             out_dir=output_dir,
             bundle=bundle,
             decompile_hints=decompile_hints,
+            stats=disam_stats,
         )
-    add_elapsed_seconds(disam_stats, "decompile_seconds", time.perf_counter() - started)
     if ok_cnt:
         sys.stdout.write(f"Disassembled scenes: {ok_cnt:d}\n")
         sys.stdout.write(
@@ -101,6 +104,9 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
         )
         sys.stdout.write(
             f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}\n"
+        )
+        sys.stdout.write(
+            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}\n"
         )
         sys.stdout.write(
             f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}\n"

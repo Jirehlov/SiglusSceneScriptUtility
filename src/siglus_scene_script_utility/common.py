@@ -479,6 +479,7 @@ def new_disam_stats() -> dict:
         "disassembled": 0,
         "ended_unexpectedly": 0,
         "disassembly_seconds": 0.0,
+        "decompile_hints_seconds": 0.0,
         "decompile_seconds": 0.0,
     }
 

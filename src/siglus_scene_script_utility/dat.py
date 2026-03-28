@@ -750,6 +750,9 @@ def dat(path, blob: bytes) -> int:
             f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
         )
         print(
+            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}"
+        )
+        print(
             f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
         )
     return 0
@@ -969,6 +972,9 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
             print(f"failed to write: {p2}.txt")
         print(
             f"Total disassembly time: {format_elapsed_seconds(disam_stats.get('disassembly_seconds', 0.0))}"
+        )
+        print(
+            f"Total decompile hints time: {format_elapsed_seconds(disam_stats.get('decompile_hints_seconds', 0.0))}"
         )
         print(
             f"Total decompile time: {format_elapsed_seconds(disam_stats.get('decompile_seconds', 0.0))}"
