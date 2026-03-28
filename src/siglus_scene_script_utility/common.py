@@ -48,6 +48,57 @@ def augment_receiver_form_codes(forms=None):
     return out
 
 
+def quote_ss_text(text):
+    try:
+        s = str(text or "")
+    except Exception:
+        s = ""
+    s = s.replace("\\", "\\\\").replace('"', '\\"')
+    s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    return f'"{s}"'
+
+
+def normalize_ss_quoted_literal_source(text):
+    s = str(text or "")
+    if len(s) < 2 or s[0] != '"' or s[-1] != '"':
+        return s
+    inner = s[1:-1]
+    out = []
+    i = 0
+    while i < len(inner):
+        ch = inner[i]
+        if ch == "\\":
+            if i + 1 >= len(inner):
+                out.append("\\\\")
+                i += 1
+                continue
+            nxt = inner[i + 1]
+            if nxt in '\\"n':
+                out.append("\\" + nxt)
+                i += 2
+                continue
+            out.append("\\\\")
+            i += 1
+            continue
+        if ch == '"':
+            out.append('\\"')
+            i += 1
+            continue
+        if ch == "\r":
+            if i + 1 < len(inner) and inner[i + 1] == "\n":
+                i += 1
+            out.append("\\n")
+            i += 1
+            continue
+        if ch == "\n":
+            out.append("\\n")
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return '"' + "".join(out) + '"'
+
+
 def unique_out_path(path):
     try:
         if not path:

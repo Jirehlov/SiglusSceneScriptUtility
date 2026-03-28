@@ -8,6 +8,8 @@ from . import disam
 from .common import (
     augment_receiver_form_codes,
     invert_form_code_map,
+    normalize_ss_quoted_literal_source,
+    quote_ss_text,
     unique_out_path,
     write_text,
 )
@@ -134,15 +136,7 @@ def _format_command_decl(prefix, name, args, ret_form):
 
 
 def _quote_ss_text(text):
-    s = str(text or "")
-    s = (
-        s.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\r", "\\r")
-        .replace("\n", "\\n")
-        .replace("\t", "\\t")
-    )
-    return f'"{s}"'
+    return quote_ss_text(text)
 
 
 def _name_needs_macro(text):
@@ -194,13 +188,13 @@ def _join_inline_sentences(parts):
     return "\t".join(vals)
 
 
-_LABEL_REF_RE = re.compile(r"\b(?:goto\s+|gosub(?:str)?(?:\([^)]*\))?\s+)(#l\d+)\b")
+_LABEL_REF_RE = re.compile(r"\b(?:goto\s+|gosub(?:str)?(?:\([^\r\n]*\))?\s+)(#l\d+)\b")
 _LABEL_REF_SUB_RE = re.compile(
-    r"(\b(?:goto\s+|gosub(?:str)?(?:\([^)]*\))?\s+))(#l\d+)\b"
+    r"(\b(?:goto\s+|gosub(?:str)?(?:\([^\r\n]*\))?\s+))(#l\d+)\b"
 )
 _LINE_LABEL_RE = re.compile(r"^(\s*)(#(?:z\d+|l\d+))(?:\t(.*))?$")
 _SYNTH_LABEL_REF_SUB_RE = re.compile(
-    r"(\b(?:goto\s+|gosub(?:str)?(?:\([^)]*\))?\s+))(#__(?:gap_l\d+|cdnl_gap_\d+))\b"
+    r"(\b(?:goto\s+|gosub(?:str)?(?:\([^\r\n]*\))?\s+))(#__(?:gap_l\d+|cdnl_gap_\d+))\b"
 )
 _SYNTH_LINE_LABEL_RE = re.compile(r"^(\s*)(#__(?:gap_l\d+|cdnl_gap_\d+))(?:\t(.*))?$")
 _DECL_CMD_ID_RE = re.compile(r"^\s*#command\s+__cmd_(\d+)\b")
@@ -886,7 +880,7 @@ def _expr_to_source(expr):
                 k += 1
                 break
             k += 1
-        out.append(s[j:k])
+        out.append(normalize_ss_quoted_literal_source(s[j:k]))
         i = k
     return "".join(out)
 
@@ -4340,6 +4334,89 @@ class _Decompiler:
             continue
         return out
 
+    def _rewrite_l_refs_to_existing_label_heads(self, lines):
+        kept = _copy_lines(lines)
+        refs = _line_label_refs(kept)
+        if not refs:
+            return kept
+        head_by_ofs = {}
+        head_by_lid = {}
+        for line in kept:
+            text = _line_text(line)
+            label = None
+            m = _LINE_LABEL_RE.match(text)
+            if m:
+                label = str(m.group(2) or "")
+            else:
+                m = _SYNTH_LINE_LABEL_RE.match(text)
+                if m:
+                    label = str(m.group(2) or "")
+            if not label:
+                continue
+            ofs = None
+            lid = None
+            if label.startswith("#l"):
+                try:
+                    lid = int(label[2:])
+                except Exception:
+                    lid = None
+                if lid is not None and 0 <= lid < len(self.label_list):
+                    try:
+                        ofs = int(self.label_list[lid] or -1)
+                    except Exception:
+                        ofs = -1
+            elif label.startswith("#z"):
+                try:
+                    zid = int(label[2:])
+                except Exception:
+                    zid = None
+                if zid is not None and 0 <= zid < len(self.z_label_list):
+                    try:
+                        ofs = int(self.z_label_list[zid] or -1)
+                    except Exception:
+                        ofs = -1
+            elif label.startswith("#__gap_l"):
+                try:
+                    lid = int(label[len("#__gap_l") :])
+                except Exception:
+                    lid = None
+                if lid is not None and 0 <= lid < len(self.label_list):
+                    try:
+                        ofs = int(self.label_list[lid] or -1)
+                    except Exception:
+                        ofs = -1
+            if ofs is None or ofs <= 0:
+                continue
+            head_by_ofs.setdefault(int(ofs), label)
+            if lid is not None:
+                head_by_lid.setdefault(int(lid), label)
+        mapping = {}
+        for label in refs:
+            try:
+                lid = int(str(label or "")[2:])
+            except Exception:
+                continue
+            if lid < 0 or lid >= len(self.label_list):
+                continue
+            try:
+                ofs = int(self.label_list[lid] or -1)
+            except Exception:
+                ofs = -1
+            head = head_by_ofs.get(int(ofs)) if ofs > 0 else None
+            if not head:
+                head = head_by_lid.get(int(lid))
+            if head and head != label:
+                mapping[str(label or "")] = str(head or "")
+        if not mapping:
+            return kept
+        return [
+            _line_item(
+                _rewrite_label_refs(_line_text(line), mapping),
+                _line_target(line),
+            )
+            for line in kept
+        ]
+
     def _collapse_explicit_l_goto_trampolines(self, lines):
         kept = _copy_lines(lines)
         out = []
@@ -5747,6 +5824,7 @@ class _Decompiler:
         body_lines = self._drop_redundant_same_target_l_before_z(body_lines)
         body_lines = self._rewrite_successor_l_refs_to_z(body_lines)
         body_lines = self._rewrite_explicit_l_refs_to_explicit_z(body_lines)
+        body_lines = self._rewrite_l_refs_to_existing_label_heads(body_lines)
         body_lines = self._collapse_explicit_l_goto_trampolines(body_lines)
         body_lines, late_keep_labels = self._split_l_labels_to_standalone_targets(
             body_lines

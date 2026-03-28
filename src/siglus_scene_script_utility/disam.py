@@ -1,5 +1,11 @@
 from . import const as C
-from .common import augment_receiver_form_codes, hx, invert_form_code_map, read_i32_le
+from .common import (
+    augment_receiver_form_codes,
+    hx,
+    invert_form_code_map,
+    quote_ss_text,
+    read_i32_le,
+)
 
 
 def _resolve_form_code(value):
@@ -868,18 +874,7 @@ def disassemble_scn_bytes(
         _consume_element()
 
     def _quote_ss_text(text):
-        try:
-            s = str(text or "")
-        except Exception:
-            s = ""
-        s = (
-            s.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("\r", "\\r")
-            .replace("\n", "\\n")
-            .replace("\t", "\\t")
-        )
-        return f'"{s}"'
+        return quote_ss_text(text)
 
     def _item_expr(it, expect_form=None):
         if not isinstance(it, dict):
