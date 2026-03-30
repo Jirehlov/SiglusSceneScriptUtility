@@ -153,20 +153,60 @@ def _merge_textmap_kind(cur_kind, new_kind):
     return new_kind
 
 
+def _int_value(value, default=-1):
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
 def _collect_compiled_string_kinds(root, atom_type_map):
     out = {}
+
+    unknown_list = []
+    try:
+        unknown_list = list((root or {}).get("_unknown_list") or [])
+    except Exception:
+        unknown_list = []
 
     def _add(atom, kind):
         if not isinstance(atom, dict):
             return
-        if int(atom.get("type", -1) or -1) != int(C.LA_T["VAL_STR"]):
+        if _int_value(atom.get("type"), -1) != int(C.LA_T["VAL_STR"]):
             return
-        aid = int(atom.get("id", -1) or -1)
+        aid = _int_value(atom.get("id"), -1)
         if aid < 0:
             return
-        if int(atom_type_map.get(aid, -1) or -1) != int(C.LA_T["VAL_STR"]):
+        if _int_value(atom_type_map.get(aid), -1) != int(C.LA_T["VAL_STR"]):
             return
         out[aid] = _merge_textmap_kind(out.get(aid), kind)
+
+    def _mark_string_atoms(node, kind):
+        if isinstance(node, list):
+            for item in node:
+                _mark_string_atoms(item, kind)
+            return
+        if not isinstance(node, dict):
+            return
+        if _int_value(node.get("type"), -1) == int(C.LA_T["VAL_STR"]):
+            _add(node, kind)
+        for value in node.values():
+            _mark_string_atoms(value, kind)
+
+    def _command_name(node):
+        try:
+            atom = ((node.get("name") or {}).get("atom")) or {}
+            opt = _int_value(atom.get("opt"), -1)
+        except Exception:
+            opt = -1
+        if 0 <= opt < len(unknown_list):
+            try:
+                return str(unknown_list[opt] or "")
+            except Exception:
+                return ""
+        return ""
 
     def _walk(node):
         if isinstance(node, list):
@@ -191,6 +231,22 @@ def _collect_compiled_string_kinds(root, atom_type_map):
                 (((node.get("Literal") or {}).get("atom")) or {}),
                 _TEXTMAP_KIND_OTHER,
             )
+        elif nt == C.NT_ELM_ELEMENT:
+            if _int_value(node.get("element_type"), -1) == int(C.ET_COMMAND):
+                parent = node.get("element_parent_form")
+                name = _command_name(node)
+                if parent in (C.FM_GLOBAL, C.FM_MWND) and name in (
+                    "print",
+                    "set_namae",
+                ):
+                    _mark_string_atoms(
+                        (node.get("arg_list") or {}).get("arg") or [],
+                        (
+                            _TEXTMAP_KIND_DIALOGUE
+                            if name == "print"
+                            else _TEXTMAP_KIND_NAME
+                        ),
+                    )
         for value in node.values():
             _walk(value)
 
@@ -249,7 +305,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
     atom_list = list(lad.get("atom_list") or [])
     atom_type_map = {}
     for atom in atom_list:
-        atom_type_map[int(atom.get("id", -1) or -1)] = int(atom.get("type", -1) or -1)
+        atom_type_map[_int_value(atom.get("id"), -1)] = _int_value(atom.get("type"), -1)
     sa = SA.SA(iad, lad)
     ok, sad = sa.analize()
     if not ok:
@@ -266,18 +322,16 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
         raise RuntimeError(
             f"textmap: MA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
         )
-    kind_map = _collect_compiled_string_kinds(
-        (mad or {}).get("root") if isinstance(mad, dict) else None,
-        atom_type_map,
-    )
+    root = (mad or {}).get("root") if isinstance(mad, dict) else None
+    if isinstance(root, dict):
+        root["_unknown_list"] = list(lad.get("unknown_list") or [])
+    kind_map = _collect_compiled_string_kinds(root, atom_type_map)
     str_list = lad.get("str_list") or []
     tokens = []
     for atom in atom_list:
         if atom.get("type") != C.LA_T["VAL_STR"]:
             continue
-        aid = int(atom.get("id", -1) or -1)
-        if aid not in kind_map:
-            continue
+        aid = _int_value(atom.get("id"), -1)
         opt = int(atom.get("opt", -1))
         if opt < 0 or opt >= len(str_list):
             continue
@@ -290,6 +344,71 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
             }
         )
     return tokens, iad
+
+
+def _is_trace_command_base(ev, base_name: str) -> bool:
+    if not isinstance(ev, dict):
+        return False
+    base_name = str(base_name or "").casefold()
+    if not base_name:
+        return False
+    base = str(ev.get("_call_base_name") or "").casefold()
+    if base == base_name:
+        return True
+    name = str(ev.get("_call_name") or "").casefold()
+    return name == base_name or name.endswith("." + base_name)
+
+
+def _collect_disam_string_kinds(bundle):
+    out = {}
+    if not isinstance(bundle, dict):
+        return out
+    trace = list(bundle.get("trace") or [])
+    try:
+        fm_str = int((C._FORM_CODE or {}).get(C.FM_STR, -1))
+    except Exception:
+        fm_str = -1
+    if fm_str < 0:
+        return out
+    for i, ev in enumerate(trace):
+        op = str((ev or {}).get("op") or "")
+        if op == "CD_TEXT":
+            try:
+                sid = _int_value((ev or {}).get("str_id"), -1)
+            except Exception:
+                sid = -1
+            if sid >= 0:
+                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
+            continue
+        if op == "CD_NAME":
+            try:
+                sid = _int_value((ev or {}).get("str_id"), -1)
+            except Exception:
+                sid = -1
+            if sid >= 0:
+                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
+            continue
+        if op != "CD_PUSH":
+            continue
+        try:
+            if _int_value((ev or {}).get("form"), -1) != fm_str:
+                continue
+            sid = _int_value((ev or {}).get("value"), -1)
+        except Exception:
+            continue
+        if sid < 0:
+            continue
+        out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_OTHER)
+        if i + 1 >= len(trace):
+            continue
+        next_ev = trace[i + 1] or {}
+        next_op = str(next_ev.get("op") or "")
+        if next_op == "CD_COMMAND":
+            if _is_trace_command_base(next_ev, "print"):
+                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
+            elif _is_trace_command_base(next_ev, "set_namae"):
+                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
+    return out
 
 
 def _locate_tokens(source_text: str, tokens, iad):
@@ -762,15 +881,25 @@ def _parse_scn_dat(blob: bytes):
     return str_list, out_scn
 
 
-def _write_disam_map(csv_path: str, str_list):
+def _write_disam_map(csv_path: str, str_list, kind_map):
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["index", "original", "replacement"])
-        for i, s in enumerate(str_list or []):
+        w.writerow(["index", "kind", "original", "replacement"])
+        for i in sorted(int(k) for k in (kind_map or {}).keys()):
+            if i < 0 or i >= len(str_list or []):
+                continue
+            s = str_list[i]
             if s == "":
                 continue
-            w.writerow([i, _csv_escape_text(s), _csv_escape_text(s)])
+            w.writerow(
+                [
+                    i,
+                    int(kind_map.get(i, _TEXTMAP_KIND_OTHER) or _TEXTMAP_KIND_OTHER),
+                    _csv_escape_text(s),
+                    _csv_escape_text(s),
+                ]
+            )
 
 
 def _apply_disam_map(str_list, rows, filename: str = ""):
@@ -888,9 +1017,11 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
         eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
         return 1
     str_list, out_scn = parsed
+    bundle = DAT._dat_disassembly_bundle(_plain_blob, dat_path)
+    kind_map = _collect_disam_string_kinds(bundle)
     csv_path = dat_path + ".csv"
     if not apply_mode:
-        _write_disam_map(csv_path, str_list)
+        _write_disam_map(csv_path, str_list, kind_map)
         print(csv_path)
         return 0
     if not os.path.exists(csv_path):
