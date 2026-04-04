@@ -1,3 +1,4 @@
+import struct
 import os
 import sys
 from .common import (
@@ -34,7 +35,7 @@ def _analyze_one(path):
         return 1
     try:
         info = video.read_omv_full_info(path)
-    except Exception as exc:
+    except (EOFError, OSError, ValueError, struct.error) as exc:
         eprint(f"error: analyze failed: {exc}")
         return 1
     basic = info.basic
@@ -179,7 +180,7 @@ def main(argv=None):
                 try:
                     flags_hi24 = _parse_flags_spec(argv[i + 1])
                     flags_specified = True
-                except Exception as e:
+                except ValueError as e:
                     eprint(f"error: --flags {e}")
                     return 2
                 i += 2
@@ -221,7 +222,7 @@ def main(argv=None):
                 return 1
             try:
                 ref_info = video.read_omv_full_info(refer_path)
-            except Exception as exc:
+            except (EOFError, OSError, ValueError, struct.error) as exc:
                 eprint(f"error: refer analyze failed: {exc}")
                 return 1
             if ref_info.outer is None or not ref_info.table_b:
@@ -240,7 +241,7 @@ def main(argv=None):
             video.build_omv_from_ogv(
                 inp, outp2, mode=mode_override, flags_hi24=flags_hi24
             )
-        except Exception as exc:
+        except (EOFError, OSError, ValueError, struct.error) as exc:
             eprint(f"error: build failed: {exc}")
             return 1
         print(fmt_kv("wrote", outp2))

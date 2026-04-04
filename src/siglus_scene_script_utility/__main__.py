@@ -319,16 +319,19 @@ def main(argv=None):
             return 1
         sys.stdout.write(f"const.py installed at: {path}\n")
         return 0
-    try:
-        from ._const_manager import _const_path, load_const_module
+    from ._const_manager import _const_path, load_const_module
 
+    try:
         load_const_module(profile=const_profile)
-    except Exception:
+    except FileNotFoundError:
         p = _const_path()
         sys.stderr.write(
             f"{_prog()}: const.py is missing. Run '{_prog()} init' first. Expected at: {p}\n"
         )
         return 2
+    except Exception as exc:
+        sys.stderr.write(f"{_prog()}: failed to load const.py: {exc}\n")
+        return 1
     if mode in ("-c", "--compile"):
         from . import compiler
 

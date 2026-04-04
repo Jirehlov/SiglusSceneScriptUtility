@@ -33,6 +33,7 @@ from .common import (
     find_named_path,
     ANGOU_DAT_NAME,
     KEY_TXT_NAME,
+    read_u32_le,
     read_exe_el_key,
     find_exe_el,
     find_siglus_engine_exe,
@@ -1109,18 +1110,6 @@ def _iter_local_siglus_pck_paths(os_dir: str):
     return out
 
 
-def _md5_dword(md5_code: bytes, ofs: int) -> int:
-    if ofs is None:
-        return 0
-    try:
-        o = int(ofs)
-    except Exception:
-        return 0
-    if o < 0 or o + 4 > len(md5_code):
-        return 0
-    return struct.unpack_from("<I", md5_code, o)[0]
-
-
 def source_angou_decrypt(enc: bytes, ctx: dict):
     sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
     if not sa:
@@ -1154,13 +1143,15 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     except Exception:
         name = ""
     p += name_len
-    lzsz = _md5_dword(md5_code, 64)
-    mw = (_md5_dword(md5_code, int(sa["mask_w_md5_i"])) % int(sa["mask_w_sur"])) + int(
-        sa["mask_w_add"]
-    )
-    mh = (_md5_dword(md5_code, int(sa["mask_h_md5_i"])) % int(sa["mask_h_sur"])) + int(
-        sa["mask_h_add"]
-    )
+    lzsz = read_u32_le(md5_code, 64, default=0)
+    mw = (
+        read_u32_le(md5_code, int(sa["mask_w_md5_i"]), default=0)
+        % int(sa["mask_w_sur"])
+    ) + int(sa["mask_w_add"])
+    mh = (
+        read_u32_le(md5_code, int(sa["mask_h_md5_i"]), default=0)
+        % int(sa["mask_h_sur"])
+    ) + int(sa["mask_h_add"])
     mask = bytearray(mw * mh)
     ind = int(sa.get("mask_index", 0))
     mi = int(sa.get("mask_md5_index", 0))
@@ -1169,9 +1160,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
         mask[i] = mg[ind % len(mg)] ^ md5_code[mask_md5_ofs]
         ind += 1
         mi = (mi + 1) % 16
-    mapw = (_md5_dword(md5_code, int(sa["map_w_md5_i"])) % int(sa["map_w_sur"])) + int(
-        sa["map_w_add"]
-    )
+    mapw = (
+        read_u32_le(md5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
+    ) + int(sa["map_w_add"])
     bh = (lzsz + 1) // 2
     dh = (bh + 3) // 4
     maph = (dh + (mapw - 1)) // mapw

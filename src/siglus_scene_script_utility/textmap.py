@@ -428,7 +428,7 @@ def _locate_tokens(source_text: str, tokens, iad):
         line_no = int(token["line"] or 0)
         if line_no <= 0 or line_no > len(line_spans):
             continue
-        line_start, line_end, line_text = line_spans[line_no - 1]
+        line_start, _line_end, line_text = line_spans[line_no - 1]
         cursor = cursors.get(line_no, 0)
         text = token["text"]
         replace_spans = replace_span_cache.get(line_no)

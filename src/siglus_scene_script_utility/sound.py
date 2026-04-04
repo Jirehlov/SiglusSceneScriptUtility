@@ -18,7 +18,7 @@ try:
 
     _native_nwa_decode_pcm = getattr(native_accel, "nwa_decode_pcm", None)
     _USE_NATIVE_NWA = _native_nwa_decode_pcm is not None
-except Exception:
+except (ImportError, AttributeError, OSError):
     _native_nwa_decode_pcm = None
     _USE_NATIVE_NWA = False
 

@@ -32,6 +32,39 @@ OMVFullInfo = namedtuple(
 _OggPage = namedtuple(
     "_OggPage", "serial seq header_type granulepos segments body page_bytes"
 )
+_OMV_PARSE_ERRORS = (EOFError, OSError, ValueError, struct.error)
+
+
+class _OggPacketAssembler:
+    __slots__ = ("buffer", "markers")
+
+    def __init__(self):
+        self.buffer = bytearray()
+        self.markers = []
+
+    def start_page(self, *, is_packet_start: bool, marker=None):
+        if is_packet_start:
+            self.buffer.clear()
+            self.markers.clear()
+        elif marker is not None and (not self.markers or self.markers[-1] != marker):
+            self.markers.append(marker)
+
+    def feed_page(self, body: bytes, segments, *, marker=None):
+        body_pos = 0
+        for seg_len in segments:
+            seg_len = int(seg_len)
+            if marker is not None and not self.markers:
+                self.markers.append(marker)
+            if seg_len:
+                self.buffer.extend(body[body_pos : body_pos + seg_len])
+            body_pos += seg_len
+            if seg_len < 255:
+                packet = bytes(self.buffer)
+                span = tuple(self.markers)
+                self.buffer.clear()
+                self.markers.clear()
+                yield packet, span
+
 
 _OUTER_TEMPLATE = (
     168,
@@ -112,7 +145,7 @@ def _parse_outer_header(path):
             int(dword_4c),
             int(dword_50),
         )
-    except Exception:
+    except (OSError, struct.error):
         return None
 
 
@@ -173,7 +206,7 @@ def read_omv_info(path, *, parse_streams=True):
             stream_kinds = tuple(
                 kinds_by_serial[serial] for serial in sorted(kinds_by_serial)
             )
-        except Exception:
+        except _OMV_PARSE_ERRORS:
             stream_kinds = ()
     return OMVInfo(str(path), size, oggs_off, header_size, ogv_size, stream_kinds)
 
@@ -209,7 +242,7 @@ def read_omv_full_info(path):
                     theora_pic_w,
                     theora_pic_h,
                 ) = theora_info
-    except Exception:
+    except _OMV_PARSE_ERRORS:
         pass
     return OMVFullInfo(
         basic,
@@ -250,8 +283,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     frame_no_in_page = []
     header_pages = set()
     table_b = []
-    packet_buffer = bytearray()
-    packet_pages = []
+    assembler = _OggPacketAssembler()
     last_key_seq = -1
     last_key_page = -1
     prev_time_state = 0
@@ -289,57 +321,44 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
             first_frame_index.append(-1)
             frame_no_in_page.append(0)
             x0 += page_bytes_len
-            if page.header_type & 1 == 0:
-                packet_buffer.clear()
-                packet_pages.clear()
-            elif (not packet_pages) or packet_pages[-1] != video_page_no:
-                packet_pages.append(video_page_no)
-            body_pos = 0
-            for seg_len in page.segments:
-                seg_len = int(seg_len)
-                if not packet_pages:
-                    packet_pages.append(video_page_no)
-                if seg_len:
-                    packet_buffer.extend(page.body[body_pos : body_pos + seg_len])
-                body_pos += seg_len
-                if seg_len < 255:
-                    packet = bytes(packet_buffer)
-                    packet_buffer.clear()
-                    span = packet_pages[:]
-                    packet_pages.clear()
-                    if packet and (packet[0] & 128) != 0:
-                        header_pages.update(span)
-                        continue
-                    last_page = int(span[-1])
-                    if first_frame_index[last_page] < 0:
-                        first_frame_index[last_page] = int(seq)
-                    frame_no = int(frame_no_in_page[last_page])
-                    frame_no_in_page[last_page] = frame_no + 1
-                    frames_in_page[last_page] = int(frames_in_page[last_page]) + 1
-                    is_key = (
-                        bool(packet)
-                        and (packet[0] & 128) == 0
-                        and (packet[0] & 64) == 0
+            assembler.start_page(
+                is_packet_start=bool(page.header_type & 1 == 0),
+                marker=video_page_no,
+            )
+            for packet, span in assembler.feed_page(
+                page.body, page.segments, marker=video_page_no
+            ):
+                if packet and (packet[0] & 128) != 0:
+                    header_pages.update(span)
+                    continue
+                last_page = int(span[-1])
+                if first_frame_index[last_page] < 0:
+                    first_frame_index[last_page] = int(seq)
+                frame_no = int(frame_no_in_page[last_page])
+                frame_no_in_page[last_page] = frame_no + 1
+                frames_in_page[last_page] = int(frames_in_page[last_page]) + 1
+                is_key = (
+                    bool(packet) and (packet[0] & 128) == 0 and (packet[0] & 64) == 0
+                )
+                if is_key:
+                    last_key_seq = int(seq)
+                    last_key_page = int(last_page)
+                flags = int(_flags_base_for(int(seq)) | (1 if is_key else 0))
+                time_ms = int(ratio * float(seq + 1) * 1000.0) & 4294967295
+                table_b.append(
+                    TableBEntry(
+                        int(seq),
+                        int(last_page),
+                        int(frame_no),
+                        int(flags),
+                        int(last_key_seq),
+                        int(last_key_page),
+                        int(prev_time_state) & 4294967295,
+                        int(time_ms),
                     )
-                    if is_key:
-                        last_key_seq = int(seq)
-                        last_key_page = int(last_page)
-                    flags = int(_flags_base_for(int(seq)) | (1 if is_key else 0))
-                    time_ms = int(ratio * float(seq + 1) * 1000.0) & 4294967295
-                    table_b.append(
-                        TableBEntry(
-                            int(seq),
-                            int(last_page),
-                            int(frame_no),
-                            int(flags),
-                            int(last_key_seq),
-                            int(last_key_page),
-                            int(prev_time_state) & 4294967295,
-                            int(time_ms),
-                        )
-                    )
-                    prev_time_state = int(time_ms + 1)
-                    seq += 1
+                )
+                prev_time_state = int(time_ms + 1)
+                seq += 1
     table_a = []
     for index, (page_no, is_eos, is_packet_start, page_bytes, x0_value) in enumerate(
         page_summaries
@@ -458,24 +477,16 @@ def _detect_packet_kind(packet):
 
 
 def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
-    buffers = {}
+    assemblers = {}
     with open(path, "rb") as file_obj:
         for page in _iter_ogg_pages(file_obj, oggs_off, max_pages=max_pages):
             serial = int(page.serial)
             if serial_filter is not None and serial != int(serial_filter):
                 continue
-            if page.header_type & 1 == 0:
-                buffers.setdefault(serial, bytearray()).clear()
-            current = buffers.setdefault(serial, bytearray())
-            body_pos = 0
-            for seg_len in page.segments:
-                seg_len = int(seg_len)
-                if seg_len:
-                    current.extend(page.body[body_pos : body_pos + seg_len])
-                body_pos += seg_len
-                if seg_len < 255:
-                    yield serial, bytes(current)
-                    current.clear()
+            assembler = assemblers.setdefault(serial, _OggPacketAssembler())
+            assembler.start_page(is_packet_start=bool(page.header_type & 1 == 0))
+            for packet, _span in assembler.feed_page(page.body, page.segments):
+                yield serial, packet
 
 
 def _parse_ogg_stream_kinds_by_serial(path, oggs_off, *, max_pages=256):
@@ -613,7 +624,7 @@ def _try_parse_tables(path, outer):
         try:
             ogg_off = find_oggs_offset(path, int(off))
             break
-        except Exception:
+        except _OMV_PARSE_ERRORS:
             pass
     if ogg_off is None:
         return table_a, table_b, None

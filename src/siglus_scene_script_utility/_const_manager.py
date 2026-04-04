@@ -33,23 +33,62 @@ def const_exists() -> bool:
     return _const_path().is_file()
 
 
-def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
-    name = "siglus_scene_script_utility.const"
-    if name in sys.modules:
-        return
+def _validate_const_bytes(data: bytes) -> str:
+    digest = hashlib.sha512(data).hexdigest()
+    if digest not in _CONST_SHA512_ALLOWED:
+        raise RuntimeError(f"const.py sha512 mismatch: {digest}")
+    return digest
+
+
+def _read_validated_const(path: Path | None = None) -> tuple[Path, bytes, str]:
     p = Path(path) if path else _const_path()
     if not p.is_file():
         raise FileNotFoundError(
             f"Missing const.py. Run 'siglus-ssu init' first. Expected at: {p}"
         )
+    data = p.read_bytes()
+    return p, data, _validate_const_bytes(data)
+
+
+def _loaded_const_file(module) -> str | None:
+    raw = getattr(module, "__file__", None)
+    if not raw:
+        return None
+    try:
+        return str(Path(raw).resolve())
+    except OSError:
+        return str(raw)
+
+
+def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
+    name = "siglus_scene_script_utility.const"
+    p, data, digest = _read_validated_const(path)
+    resolved_path = str(p.resolve())
+    cached = sys.modules.get(name)
+    if cached is not None:
+        cached_profile = getattr(cached, "_SIGLUS_SSU_CONST_PROFILE", None)
+        cached_digest = getattr(cached, "_SIGLUS_SSU_CONST_SHA512", None)
+        cached_path = _loaded_const_file(cached)
+        if (
+            cached_profile == profile
+            and cached_digest == digest
+            and cached_path == resolved_path
+        ):
+            return
+        sys.modules.pop(name, None)
     spec = iu.spec_from_file_location(name, p)
-    if not spec or not spec.loader:
+    if not spec:
         raise RuntimeError(f"Failed to create import spec for const.py at {p}")
     m = iu.module_from_spec(spec)
-    if profile is not None:
-        m.__dict__["_SIGLUS_SSU_CONST_PROFILE"] = profile
+    m.__dict__["_SIGLUS_SSU_CONST_PROFILE"] = profile
+    m.__dict__["_SIGLUS_SSU_CONST_SHA512"] = digest
+    m.__dict__["_SIGLUS_SSU_CONST_SOURCE_PATH"] = resolved_path
     sys.modules[name] = m
-    spec.loader.exec_module(m)
+    try:
+        exec(compile(data, str(p), "exec"), m.__dict__)
+    except Exception:
+        sys.modules.pop(name, None)
+        raise
 
 
 def _package_version() -> str:
@@ -86,6 +125,17 @@ def _version_subject_pattern(version: str):
     return re.compile(rf"^v?{vv}\b")
 
 
+def _append_version_ref(
+    refs: list[str], seen: set[str], pattern, ref: str, subject: str
+) -> None:
+    ref = str(ref or "").strip()
+    subject = str(subject or "").strip()
+    if not ref or not subject or not pattern.match(subject) or ref in seen:
+        return
+    seen.add(ref)
+    refs.append(ref)
+
+
 def _git_version_refs(version: str) -> tuple[str, ...]:
     pattern = _version_subject_pattern(version)
     if pattern is None:
@@ -107,12 +157,7 @@ def _git_version_refs(version: str) -> tuple[str, ...]:
         if "\t" not in line:
             continue
         commit, subject = line.split("\t", 1)
-        commit = str(commit).strip()
-        subject = str(subject).strip()
-        if not commit or not pattern.match(subject) or commit in seen:
-            continue
-        seen.add(commit)
-        refs.append(commit)
+        _append_version_ref(refs, seen, pattern, commit, subject)
     return tuple(refs)
 
 
@@ -155,10 +200,7 @@ def _remote_version_refs(
                 sha = str(item.get("sha") or "").strip()
             except Exception:
                 continue
-            if not sha or not subject or not pattern.match(subject) or sha in seen:
-                continue
-            seen.add(sha)
-            refs.append(sha)
+            _append_version_ref(refs, seen, pattern, sha, subject)
         if refs or len(payload) < per_page:
             break
     return tuple(refs)
@@ -228,8 +270,7 @@ def download_const(ref: str | None = None, force: bool = False) -> Path:
     if dst.exists() and not force:
         return dst
     _, data = _resolve_const_ref(ref)
-    if hashlib.sha512(data).hexdigest() not in _CONST_SHA512_ALLOWED:
-        raise RuntimeError("const.py sha512 mismatch.")
+    _validate_const_bytes(data)
     tmp = dst.with_suffix(".py.tmp")
     tmp.write_bytes(data)
     tmp.replace(dst)

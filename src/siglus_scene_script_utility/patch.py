@@ -20,10 +20,6 @@ from .common import (
 )
 
 
-def sha256_of(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def _parse_key_literal(s: str) -> bytes:
     s = str(s or "").strip()
     if not s:
@@ -442,7 +438,7 @@ def main(argv=None):
         return 2
 
     raw = read_bytes(in_path)
-    before_hash = sha256_of(raw)
+    before_hash = hashlib.sha256(raw).hexdigest()
     data = bytearray(raw)
 
     mode_name = ""
@@ -475,7 +471,7 @@ def main(argv=None):
         mode_name = f"lang:{tag}"
 
     after = bytes(data)
-    after_hash = sha256_of(after)
+    after_hash = hashlib.sha256(after).hexdigest()
 
     print(f"Input : {in_path}")
     print(f"Mode  : {mode_name}")

@@ -302,8 +302,7 @@ def disassemble_scn_bytes(
             pass
     read_flag_command_codes = _read_flag_command_codes()
 
-    def _form_code(name):
-        return _resolve_form_code(name)
+    _form_code = _resolve_form_code
 
     cd_none = C.CD_NONE
     cd_nl = C.CD_NL
@@ -873,9 +872,6 @@ def disassemble_scn_bytes(
             return
         _consume_element()
 
-    def _quote_ss_text(text):
-        return quote_ss_text(text)
-
     def _item_expr(it, expect_form=None):
         if not isinstance(it, dict):
             return "<?>"
@@ -896,7 +892,7 @@ def disassemble_scn_bytes(
             return "label(?)"
         if form == fm_str:
             if val is not None and 0 <= val < len(str_list or []):
-                return _quote_ss_text(str_list[val])
+                return quote_ss_text(str_list[val])
             if val is not None:
                 return f"$str[{val:d}]"
             return '""'

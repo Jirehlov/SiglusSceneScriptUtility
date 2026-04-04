@@ -464,9 +464,6 @@ class BS:
     def scn_push_i32(s, v):
         s.out_scn["scn"].push_i32(v)
 
-    def scn_size(s):
-        return s.out_scn["scn"].size()
-
     def _first_atom(s, node):
         if isinstance(node, dict):
             a = node.get("atom")
@@ -647,9 +644,11 @@ class BS:
         line_no = int((atom.get("line")) or 0)
         if label_id < 0 or label_id >= len(s.out_scn["label_list"]):
             return True
-        s.out_scn["label_list"][label_id] = s.scn_size()
+        s.out_scn["label_list"][label_id] = s.out_scn["scn"].size()
         if line_no:
-            s.add_out_txt("label: " + str(label_id) + " @ " + str(s.scn_size()))
+            s.add_out_txt(
+                "label: " + str(label_id) + " @ " + str(s.out_scn["scn"].size())
+            )
         return True
 
     def bs_z_label(s, z_label):
@@ -669,7 +668,7 @@ class BS:
             return True
         if sub < 0 or sub >= len(s.out_scn["label_list"]):
             pass
-        ofs = s.scn_size()
+        ofs = s.out_scn["scn"].size()
         try:
             if 0 <= sub < len(s.out_scn["label_list"]):
                 s.out_scn["label_list"][sub] = ofs
@@ -712,7 +711,7 @@ class BS:
         s.scn_push_i32(label_no_end)
         cmd_label = {
             "cmd_id": int(def_cmd.get("cmd_id", 0) or 0),
-            "offset": s.scn_size(),
+            "offset": s.out_scn["scn"].size(),
         }
         s.out_scn["cmd_label_list"].append(cmd_label)
         for p in def_cmd.get("prop_list") or []:
@@ -724,7 +723,7 @@ class BS:
         s.scn_push_u8(C.CD_RETURN)
         s.scn_push_i32(0)
         s.add_out_txt("CD_RETURN")
-        s.out_scn["label_list"][label_no_end] = s.scn_size()
+        s.out_scn["label_list"][label_no_end] = s.out_scn["scn"].size()
         inc_cnt = int(s.m_piad.get("inc_command_cnt", 0) or 0)
         if cmd_label["cmd_id"] >= inc_cnt:
             idx = cmd_label["cmd_id"] - inc_cnt
@@ -867,11 +866,11 @@ class BS:
                     return False
                 s.scn_push_u8(C.CD_GOTO)
                 s.scn_push_i32(label_no_end)
-                s.out_scn["label_list"][label_no_if] = s.scn_size()
+                s.out_scn["label_list"][label_no_if] = s.out_scn["scn"].size()
             else:
                 if not s.bs_block(sb.get("block")):
                     return False
-        s.out_scn["label_list"][label_no_end] = s.scn_size()
+        s.out_scn["label_list"][label_no_end] = s.out_scn["scn"].size()
         return True
 
     def bs_for(s, for_):
@@ -890,10 +889,10 @@ class BS:
             return False
         s.scn_push_u8(C.CD_GOTO)
         s.scn_push_i32(label_no_init)
-        s.out_scn["label_list"][label_no_loop] = s.scn_size()
+        s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
         if not s.bs_block(for_.get("loop")):
             return False
-        s.out_scn["label_list"][label_no_init] = s.scn_size()
+        s.out_scn["label_list"][label_no_init] = s.out_scn["scn"].size()
         if not s.bs_exp(for_.get("cond"), True):
             return False
         s.scn_push_u8(C.CD_GOTO_FALSE)
@@ -902,7 +901,7 @@ class BS:
             return False
         s.scn_push_u8(C.CD_GOTO)
         s.scn_push_i32(label_no_loop)
-        s.out_scn["label_list"][label_no_out] = s.scn_size()
+        s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         s.loop_label.pop()
         return True
 
@@ -917,7 +916,7 @@ class BS:
         label_no_out = label_size + 1
         s.out_scn["label_list"].extend([0, 0])
         s.loop_label.append({"Continue": label_no_loop, "Break": label_no_out})
-        s.out_scn["label_list"][label_no_loop] = s.scn_size()
+        s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
         if not s.bs_exp(while_.get("cond"), True):
             return False
         s.scn_push_u8(C.CD_GOTO_FALSE)
@@ -926,7 +925,7 @@ class BS:
             return False
         s.scn_push_u8(C.CD_GOTO)
         s.scn_push_i32(label_no_loop)
-        s.out_scn["label_list"][label_no_out] = s.scn_size()
+        s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         s.loop_label.pop()
         return True
 
@@ -988,7 +987,7 @@ class BS:
         s.scn_push_u8(C.CD_GOTO)
         s.scn_push_i32(label_no_default if switch.get("Default") else label_no_out)
         for idx, cs in enumerate(cases):
-            s.out_scn["label_list"][label_no_case + idx] = s.scn_size()
+            s.out_scn["label_list"][label_no_case + idx] = s.out_scn["scn"].size()
             s.scn_push_u8(C.CD_POP)
             s.scn_push_i32(form_l)
             if not s.bs_block(cs.get("block")):
@@ -996,12 +995,12 @@ class BS:
             s.scn_push_u8(C.CD_GOTO)
             s.scn_push_i32(label_no_out)
         if switch.get("Default"):
-            s.out_scn["label_list"][label_no_default] = s.scn_size()
+            s.out_scn["label_list"][label_no_default] = s.out_scn["scn"].size()
             if not s.bs_block((switch.get("Default") or {}).get("block")):
                 return False
             s.scn_push_u8(C.CD_GOTO)
             s.scn_push_i32(label_no_out)
-        s.out_scn["label_list"][label_no_out] = s.scn_size()
+        s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         return True
 
     def bs_assign(s, assign):

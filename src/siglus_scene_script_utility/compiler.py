@@ -24,6 +24,7 @@ from .native_ops import (
 from .common import (
     looks_like_siglus_dat,
     record_stage_time,
+    read_u32_le,
     read_bytes,
     read_text_auto,
     write_text,
@@ -88,20 +89,14 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     struct.pack_into("<I", md5_code, 64, n0x40)
     nameb = bytearray((name or "").encode("utf-16le"))
     xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
-
-    def _md5_dword(ofs: int) -> int:
-        if ofs is None or ofs < 0:
-            return 0
-        if ofs + 4 > len(md5_code):
-            return 0
-        return struct.unpack_from("<I", md5_code, ofs)[0]
-
-    mw = (_md5_dword(int(sa["mask_w_md5_i"])) % int(sa["mask_w_sur"])) + int(
-        sa["mask_w_add"]
-    )
-    mh = (_md5_dword(int(sa["mask_h_md5_i"])) % int(sa["mask_h_sur"])) + int(
-        sa["mask_h_add"]
-    )
+    mw = (
+        read_u32_le(md5_code, int(sa["mask_w_md5_i"]), default=0)
+        % int(sa["mask_w_sur"])
+    ) + int(sa["mask_w_add"])
+    mh = (
+        read_u32_le(md5_code, int(sa["mask_h_md5_i"]), default=0)
+        % int(sa["mask_h_sur"])
+    ) + int(sa["mask_h_add"])
     mask = bytearray(mw * mh)
     ind = int(sa.get("mask_index", 0))
     mi = int(sa.get("mask_md5_index", 0))
@@ -110,9 +105,9 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
         mask[i] = mg[ind % len(mg)] ^ md5_code[mask_md5_ofs]
         ind += 1
         mi = (mi + 1) % 16
-    mapw = (_md5_dword(int(sa["map_w_md5_i"])) % int(sa["map_w_sur"])) + int(
-        sa["map_w_add"]
-    )
+    mapw = (
+        read_u32_le(md5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
+    ) + int(sa["map_w_add"])
     bh = (lzsz + 1) // 2
     dh = (bh + 3) // 4
     maph = (dh + (mapw - 1)) // mapw
