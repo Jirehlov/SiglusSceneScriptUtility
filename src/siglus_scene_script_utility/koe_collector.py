@@ -24,6 +24,40 @@ _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
 _TEXT_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("（", "）"), ('"', '"'))
 
 
+def _try_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or(value, default):
+    parsed = _try_int(value)
+    return default if parsed is None else parsed
+
+
+def _duration_from_path(path: str):
+    try:
+        return sound.read_ogg_duration_seconds(path)
+    except (OSError, ValueError, EOFError):
+        return None
+
+
+def _duration_from_ogg_bytes(ogg: bytes):
+    try:
+        return sound.estimate_ogg_duration_seconds(ogg)
+    except (ValueError, EOFError):
+        return None
+
+
+def _maybe_add_duration(
+    total_seconds: float, counted: int, failed: int, duration
+) -> tuple[float, int, int]:
+    if duration is None:
+        return total_seconds, counted, failed + 1
+    return total_seconds + float(duration), counted + 1, failed
+
+
 def _iter_scene_dat_paths(scene_root: str):
     if os.path.isfile(scene_root):
         low = os.path.basename(scene_root).lower()
@@ -53,7 +87,7 @@ def _bundle_relpath(bundle, scene_root: str):
         if os.path.isdir(scene_root):
             try:
                 return os.path.relpath(dat_path, scene_root).replace("\\", "/")
-            except Exception:
+            except (OSError, ValueError):
                 pass
         name = os.path.basename(dat_path)
         if name:
@@ -124,7 +158,7 @@ def _iter_trace_line_groups(trace):
         raw_line = ev.get("line")
         try:
             line_no = int(raw_line) if raw_line is not None else None
-        except Exception:
+        except (TypeError, ValueError):
             line_no = None
         marker = ("line", line_no) if line_no is not None else ("seq", idx)
         if cur_events and marker != cur_marker:
@@ -170,9 +204,8 @@ def _normalize_voice_text(text):
 
 
 def _remember_voice_meta(voice_meta, koe_no, name, text):
-    try:
-        koe_no_i = int(koe_no)
-    except Exception:
+    koe_no_i = _try_int(koe_no)
+    if koe_no_i is None:
         return
     one = voice_meta.setdefault(koe_no_i, {"name": "", "text": ""})
     if name and not one.get("name"):
@@ -192,14 +225,10 @@ def _voice_call_base_name(ev):
 
 
 def _normalize_koe_no(koe_no, scene_no=None):
-    try:
-        koe_no_i = int(koe_no)
-    except Exception:
+    koe_no_i = _try_int(koe_no)
+    if koe_no_i is None:
         return None
-    try:
-        scene_no_i = int(scene_no) if scene_no is not None else None
-    except Exception:
-        scene_no_i = None
+    scene_no_i = _try_int(scene_no) if scene_no is not None else None
     if 0 <= koe_no_i < 100000 and scene_no_i is not None:
         return scene_no_i * 100000 + koe_no_i
     return koe_no_i
@@ -222,10 +251,7 @@ def _voice_ref_from_event(ev, scene_no=None):
     chara_no = named.get("chara_no")
     if chara_no is None and len(args) >= 2:
         chara_no = args[1]
-    try:
-        chara_no = int(chara_no)
-    except Exception:
-        chara_no = -1
+    chara_no = _int_or(chara_no, -1)
     return koe_no, chara_no
 
 
@@ -242,10 +268,7 @@ def _line_inline_voice_meta(events, scene_no=None):
         koe_no = _normalize_koe_no(args[0], scene_no=scene_no)
         if koe_no is None:
             continue
-        try:
-            chara_no = int(args[1])
-        except Exception:
-            chara_no = -1
+        chara_no = _int_or(args[1], -1)
         name = str(args[2] or "")
         text = _normalize_voice_text(args[3])
         if not name and not text:
@@ -421,6 +444,14 @@ def _select_ovk(scene_map: dict, voice_dir: str, scene_no: int, chara_no: int):
     return min(sm.values(), key=lambda p: _rank_ovk_path(voice_dir, zname, p))
 
 
+def _format_duration(seconds: float) -> str:
+    total_ms = int(round(max(float(seconds or 0.0), 0.0) * 1000.0))
+    hours, rem = divmod(total_ms, 3600000)
+    minutes, rem = divmod(rem, 60000)
+    secs, millis = divmod(rem, 1000)
+    return f"{hours:d}:{minutes:02d}:{secs:02d}.{millis:03d}"
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -468,6 +499,9 @@ def main(argv=None):
             w.writerow(["", name, text, callsite])
 
     extracted = skipped = failed = 0
+    total_duration_sec = 0.0
+    duration_counted = 0
+    duration_failed = 0
     for koe_no in sorted(entries.keys()):
         e = entries[koe_no]
         is_unref = not e["callsites"]
@@ -476,15 +510,35 @@ def main(argv=None):
         out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
         if os.path.isfile(out_path):
             skipped += 1
+            if not is_unref:
+                total_duration_sec, duration_counted, duration_failed = (
+                    _maybe_add_duration(
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                        _duration_from_path(out_path),
+                    )
+                )
             continue
         scene_no = koe_no // 100000
         entry_no = koe_no % 100000
         try:
-            ovk_path = _select_ovk(scene_map, voice_dir, scene_no, int(e["chara_no"]))
+            ovk_path = _select_ovk(
+                scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
+            )
             ogg = sound.extract_ogg_bytes_from_ovk_entry(ovk_path, int(entry_no))
             os.makedirs(dest_dir, exist_ok=True)
             write_bytes(out_path, ogg)
             extracted += 1
+            if not is_unref:
+                total_duration_sec, duration_counted, duration_failed = (
+                    _maybe_add_duration(
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                        _duration_from_ogg_bytes(ogg),
+                    )
+                )
         except Exception as ex:
             failed += 1
             eprint(f"Failed to extract koe_no={koe_no}: {ex}")
@@ -504,6 +558,11 @@ def main(argv=None):
     eprint(f"Audio extracted  : {extracted:,}")
     eprint(f"Audio skipped    : {skipped:,}")
     eprint(f"Audio failed     : {failed:,}")
+    eprint(
+        f"Voice duration   : {total_duration_sec:,.3f} sec ({_format_duration(total_duration_sec)}) [referenced only]"
+    )
+    eprint(f"Duration counted : {duration_counted:,}")
+    eprint(f"Duration failed  : {duration_failed:,}")
     eprint(f"CSV path         : {csv_path}")
     eprint(f"CSV rows         : {total_rows:,}")
     eprint(f"Out dir          : {out_dir}")

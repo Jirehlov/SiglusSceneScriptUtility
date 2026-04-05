@@ -250,7 +250,3 @@ def main(argv=None):
             return 2
         return compare_files(args[0], args[1], compare_payload=compare_payload)
     return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

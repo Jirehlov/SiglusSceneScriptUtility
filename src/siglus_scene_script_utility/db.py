@@ -325,7 +325,3 @@ def main(argv=None):
     dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)
     eprint(f"done: wrote {out_path}")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -1,24 +1,19 @@
 import os
 import sys
+from importlib import import_module
 
 
 def _prog():
     p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
-    return p or "siglus-ssu"
+    if not p or p in {"__main__.py", "__main__"}:
+        return "siglus-ssu"
+    return p
 
 
 def _get_version() -> str:
-    try:
-        from importlib.metadata import version as _pkg_version
+    from ._const_manager import _package_version
 
-        return _pkg_version("siglus-ssu")
-    except Exception:
-        try:
-            from . import __version__ as _v
-
-            return str(_v)
-        except Exception:
-            return "unknown"
+    return _package_version() or "unknown"
 
 
 def _print_version(out=None) -> None:
@@ -34,7 +29,7 @@ def _usage(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write("\n")
     out.write("Options:\n")
@@ -45,6 +40,9 @@ def _usage(out=None):
     out.write("  --const-profile Select const profile (0-2, default: 0)\n")
     out.write("\n")
     out.write("Modes:\n")
+    out.write(
+        "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
+    )
     out.write("  init            Download required const.py\n")
     out.write("  -c, --compile   Compile scripts\n")
     out.write(
@@ -66,6 +64,9 @@ def _usage(out=None):
     out.write(
         "    --ref         Git ref (branch/tag/commit), default: current package version release ref\n"
     )
+    out.write("\n")
+    out.write("LSP mode:\n")
+    out.write(f"  {p} -lsp\n")
     out.write("\n")
     out.write("Compile mode:\n")
     out.write(
@@ -218,7 +219,7 @@ def _usage_short(out=None):
     p = _prog()
     out.write(f"{p} {_get_version()}\n")
     out.write(
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
     )
     out.write(f"Try '{p} --help' for more information.\n")
 
@@ -257,15 +258,51 @@ def _consume_global_options(argv):
         os.environ["SIGLUS_SSU_LEGACY"] = "1"
     profile = None
     if const_profile is not None:
+        value = str(const_profile).strip()
         try:
-            profile = int(str(const_profile).strip(), 0)
-        except Exception as exc:
+            profile = int(value, 0)
+        except ValueError as exc:
             raise ValueError(f"invalid --const-profile value: {const_profile}") from exc
         if profile not in (0, 1, 2):
             raise ValueError(
                 f"invalid --const-profile value: {const_profile} (expected 0, 1, or 2)"
             )
     return out, profile
+
+
+def _run_mode(module_name, args):
+    module = import_module(f"siglus_scene_script_utility.{module_name}")
+    rc = module.main(args)
+    if rc == 2:
+        _usage_short()
+    return rc
+
+
+MODE_MODULES = {
+    "-c": "compiler",
+    "--compile": "compiler",
+    "-x": "extract",
+    "--extract": "extract",
+    "-a": "analyze",
+    "--analyze": "analyze",
+    "-d": "db",
+    "--db": "db",
+    "-k": "koe_collector",
+    "--koe": "koe_collector",
+    "-e": "exec",
+    "--exec": "exec",
+    "--execute": "exec",
+    "-m": "textmap",
+    "--textmap": "textmap",
+    "-g": "g00",
+    "--g00": "g00",
+    "-s": "sound_tool",
+    "--sound": "sound_tool",
+    "-v": "video_tool",
+    "--video": "video_tool",
+    "-p": "patch",
+    "--patch": "patch",
+}
 
 
 def main(argv=None):
@@ -286,10 +323,15 @@ def main(argv=None):
     if argv[0] in ("-h", "--help", "help"):
         _usage()
         return 0
-    if len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
+    mode = argv[0]
+    if mode == "-lsp":
+        if len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
+            sys.stdout.write(f"{_prog()} -lsp\n")
+            sys.stdout.write("Run the SiglusSceneScript Language Server over stdio.\n")
+            return 0
+    elif len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
         _usage()
         return 0
-    mode = argv[0]
     if mode in ("init", "--init"):
         from ._const_manager import download_const, load_const_module
 
@@ -332,83 +374,13 @@ def main(argv=None):
     except Exception as exc:
         sys.stderr.write(f"{_prog()}: failed to load const.py: {exc}\n")
         return 1
-    if mode in ("-c", "--compile"):
-        from . import compiler
+    if mode == "-lsp":
+        from . import lsp as lsp_server
 
-        rc = compiler.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-x", "--extract"):
-        from . import extract
-
-        rc = extract.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-a", "--analyze"):
-        from . import analyze
-
-        rc = analyze.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-d", "--db"):
-        from . import db
-
-        rc = db.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-k", "--koe"):
-        from . import koe_collector
-
-        rc = koe_collector.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-e", "--exec", "--execute"):
-        from . import exec
-
-        rc = exec.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-m", "--textmap"):
-        from . import textmap
-
-        rc = textmap.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-g", "--g00"):
-        from . import g00
-
-        rc = g00.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-s", "--sound"):
-        from . import sound_tool
-
-        rc = sound_tool.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-v", "--video"):
-        from . import video_tool
-
-        rc = video_tool.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
-    if mode in ("-p", "--patch"):
-        from . import patch
-
-        rc = patch.main(argv[1:])
-        if rc == 2:
-            _usage_short()
-        return rc
+        return lsp_server.main(argv[1:])
+    module_name = MODE_MODULES.get(mode)
+    if module_name is not None:
+        return _run_mode(module_name, argv[1:])
     sys.stderr.write(f"{_prog()}: unknown mode: {mode}\n")
     _usage_short()
     return 2

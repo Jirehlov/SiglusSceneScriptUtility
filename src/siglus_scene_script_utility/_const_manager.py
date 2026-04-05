@@ -8,6 +8,7 @@ import sys
 import urllib.request
 from urllib import error as urlerror
 from importlib import util as iu
+from importlib.metadata import PackageNotFoundError, version as dist_version
 from pathlib import Path
 
 _API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_scene_script_utility/const.py?ref={ref}"
@@ -93,16 +94,11 @@ def load_const_module(path: Path | None = None, profile: int | None = None) -> N
 
 def _package_version() -> str:
     try:
-        from importlib.metadata import version as _pkg_version
+        return str(dist_version("siglus-ssu") or "").strip()
+    except PackageNotFoundError:
+        from . import __version__ as _v
 
-        return str(_pkg_version("siglus-ssu") or "").strip()
-    except Exception:
-        try:
-            from . import __version__ as _v
-
-            return str(_v or "").strip()
-        except Exception:
-            return ""
+        return str(_v or "").strip()
 
 
 def _repo_root() -> Path | None:
@@ -118,7 +114,7 @@ def _version_subject_pattern(version: str):
         return None
     try:
         vv = re.escape(str(version).lstrip("vV"))
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if not vv:
         return None
@@ -149,7 +145,7 @@ def _git_version_refs(version: str) -> tuple[str, ...]:
             text=True,
             timeout=10,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return ()
     refs = []
     seen = set()
@@ -181,14 +177,14 @@ def _remote_version_refs(
     try:
         per_page = max(1, min(int(per_page), 100))
         max_pages = max(1, int(max_pages))
-    except Exception:
+    except (TypeError, ValueError):
         return ()
     for page in range(1, max_pages + 1):
         try:
             payload = _github_api_json(
                 _COMMITS_API.format(per_page=per_page, page=page)
             )
-        except Exception:
+        except (urlerror.URLError, ValueError, RuntimeError):
             return tuple(refs)
         if not isinstance(payload, list) or not payload:
             break
@@ -198,7 +194,7 @@ def _remote_version_refs(
                 msg = str(commit.get("message") or "")
                 subject = msg.splitlines()[0].strip() if msg else ""
                 sha = str(item.get("sha") or "").strip()
-            except Exception:
+            except AttributeError:
                 continue
             _append_version_ref(refs, seen, pattern, sha, subject)
         if refs or len(payload) < per_page:

@@ -50,6 +50,82 @@ def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
     return out
 
 
+def _iter_ogg_pages_bytes(ogg_bytes: bytes):
+    i = 0
+    n = len(ogg_bytes)
+    while i + 27 <= n:
+        if ogg_bytes[i : i + 4] != b"OggS":
+            break
+        header_type = int(ogg_bytes[i + 5])
+        granulepos = struct.unpack_from("<q", ogg_bytes, i + 6)[0]
+        segment_count = int(ogg_bytes[i + 26])
+        hdr_end = i + 27 + segment_count
+        if hdr_end > n:
+            break
+        segments = ogg_bytes[i + 27 : hdr_end]
+        body_len = int(sum(segments))
+        page_end = hdr_end + body_len
+        if page_end > n:
+            break
+        body = ogg_bytes[hdr_end:page_end]
+        yield header_type, (None if granulepos < 0 else int(granulepos)), segments, body
+        i = page_end
+
+
+def _ogg_first_packet(ogg_bytes: bytes) -> bytes:
+    buf = bytearray()
+    for header_type, _granulepos, segments, body in _iter_ogg_pages_bytes(ogg_bytes):
+        if (header_type & 0x01) == 0:
+            buf.clear()
+        body_pos = 0
+        for seg_len in segments:
+            seg_len = int(seg_len)
+            if seg_len:
+                buf.extend(body[body_pos : body_pos + seg_len])
+            body_pos += seg_len
+            if seg_len < 255:
+                return bytes(buf)
+    return b""
+
+
+def _ogg_ident_info(ogg_bytes: bytes):
+    packet = _ogg_first_packet(ogg_bytes)
+    if len(packet) >= 16 and packet[:1] == b"\x01" and packet[1:7] == b"vorbis":
+        rate = int.from_bytes(packet[12:16], "little", signed=False)
+        if rate > 0:
+            return ("vorbis", rate, 0)
+    if len(packet) >= 19 and packet[:8] == b"OpusHead":
+        pre_skip = int.from_bytes(packet[10:12], "little", signed=False)
+        return ("opus", 48000, pre_skip)
+    if len(packet) >= 40 and packet[:8] == b"Speex   ":
+        rate = int.from_bytes(packet[36:40], "little", signed=True)
+        if rate > 0:
+            return ("speex", rate, 0)
+    return None
+
+
+def estimate_ogg_duration_seconds(ogg_bytes: bytes) -> float | None:
+    if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
+        return None
+    info = _ogg_ident_info(ogg_bytes)
+    if info is None:
+        return None
+    _codec, sample_rate, pre_skip = info
+    if sample_rate <= 0:
+        return None
+    sample_count = _ogg_calc_smp_cnt(ogg_bytes)
+    if sample_count <= 0:
+        return None
+    if pre_skip > 0 and sample_count > pre_skip:
+        sample_count -= pre_skip
+    return float(sample_count) / float(sample_rate)
+
+
+def read_ogg_duration_seconds(path: str) -> float | None:
+    with open(path, "rb") as f:
+        return estimate_ogg_duration_seconds(f.read())
+
+
 def encode_ogg_to_owp_bytes(ogg_bytes: bytes, key: int = 0x39) -> bytes:
     if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
         raise ValueError("OWP encode failed: input is not OggS")
@@ -119,6 +195,7 @@ class OVKEntry:
     entry_no: int
     offset: int
     size: int
+    sample_count: int = 0
 
 
 _OVK_ENTRY_STRUCT = struct.Struct("<IIii")
@@ -134,10 +211,17 @@ def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
             raise EOFError("Unexpected EOF while reading ovk table")
         out: List[OVKEntry] = []
         for i in range(cnt):
-            size, offset, no, _smp_cnt = _OVK_ENTRY_STRUCT.unpack_from(
+            size, offset, no, smp_cnt = _OVK_ENTRY_STRUCT.unpack_from(
                 table, i * _OVK_ENTRY_STRUCT.size
             )
-            out.append(OVKEntry(entry_no=int(no), offset=int(offset), size=int(size)))
+            out.append(
+                OVKEntry(
+                    entry_no=int(no),
+                    offset=int(offset),
+                    size=int(size),
+                    sample_count=max(int(smp_cnt), 0),
+                )
+            )
         return out
 
 

@@ -1213,7 +1213,3 @@ def main(argv=None):
                 errors += 1
         return 1 if errors else 0
     return _process_ss(ss_path, apply_mode)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

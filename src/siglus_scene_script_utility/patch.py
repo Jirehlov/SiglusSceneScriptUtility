@@ -506,7 +506,3 @@ def main(argv=None):
 
     print(f"Written: {out_path}")
     return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

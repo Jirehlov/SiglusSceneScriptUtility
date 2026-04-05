@@ -536,7 +536,3 @@ def main(argv=None) -> int:
     exit_code = run_batch(files, _proc)
     _cleanup_tmp_dir(tmp_dir, out_root)
     return exit_code
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

@@ -272,7 +272,3 @@ def main(argv=None):
         return 1, out_path
 
     return run_batch(files, _proc)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

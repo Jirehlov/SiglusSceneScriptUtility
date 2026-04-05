@@ -135,7 +135,3 @@ def main(argv=None):
         sys.stderr.write("Directory input requires --disam or --gei\n")
         return 2
     return pck.extract_pck(in_path, out_dir, dat_txt)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

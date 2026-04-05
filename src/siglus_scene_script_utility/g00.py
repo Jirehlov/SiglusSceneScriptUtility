@@ -1641,7 +1641,3 @@ def main(argv=None):
             print(f"[!] {e}", file=sys.stderr)
             return 1
     return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

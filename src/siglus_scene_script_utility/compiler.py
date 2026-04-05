@@ -839,7 +839,3 @@ def main(argv=None):
         if ok and (not a.debug) and tmp and tmp_auto:
             shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
