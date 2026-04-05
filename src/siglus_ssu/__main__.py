@@ -225,8 +225,8 @@ def _usage_short(out=None):
 
 
 def _drop_const_module():
-    sys.modules.pop("siglus_scene_script_utility.const", None)
-    pkg = sys.modules.get("siglus_scene_script_utility")
+    sys.modules.pop("siglus_ssu.const", None)
+    pkg = sys.modules.get("siglus_ssu")
     if pkg is not None and hasattr(pkg, "const"):
         delattr(pkg, "const")
 
@@ -271,7 +271,7 @@ def _consume_global_options(argv):
 
 
 def _run_mode(module_name, args):
-    module = import_module(f"siglus_scene_script_utility.{module_name}")
+    module = import_module(f"siglus_ssu.{module_name}")
     rc = module.main(args)
     if rc == 2:
         _usage_short()

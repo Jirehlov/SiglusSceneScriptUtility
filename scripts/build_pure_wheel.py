@@ -7,8 +7,8 @@ temp = root / ".pure-wheel-build"
 if temp.exists():
     shutil.rmtree(temp)
 
-pkg_src = root / "src" / "siglus_scene_script_utility"
-pkg_dst = temp / "src" / "siglus_scene_script_utility"
+pkg_src = root / "src" / "siglus_ssu"
+pkg_dst = temp / "src" / "siglus_ssu"
 pkg_dst.mkdir(parents=True, exist_ok=True)
 
 for src in pkg_src.rglob("*"):
@@ -47,7 +47,7 @@ pyproject = (
     dependencies = []
 
     [project.scripts]
-    siglus-ssu = "siglus_scene_script_utility.__main__:main"
+    siglus-ssu = "siglus_ssu.__main__:main"
 
     [project.urls]
     Repository = "https://github.com/Jirehlov/SiglusSceneScriptUtility"

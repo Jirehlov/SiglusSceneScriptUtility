@@ -11,7 +11,7 @@ from importlib import util as iu
 from importlib.metadata import PackageNotFoundError, version as dist_version
 from pathlib import Path
 
-_API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_scene_script_utility/const.py?ref={ref}"
+_API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_ssu/const.py?ref={ref}"
 _COMMITS_API = (
     "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/commits"
     "?per_page={per_page}&page={page}"
@@ -62,7 +62,7 @@ def _loaded_const_file(module) -> str | None:
 
 
 def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
-    name = "siglus_scene_script_utility.const"
+    name = "siglus_ssu.const"
     p, data, digest = _read_validated_const(path)
     resolved_path = str(p.resolve())
     cached = sys.modules.get(name)
