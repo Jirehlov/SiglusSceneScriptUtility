@@ -186,9 +186,8 @@ SEMANTIC_TOKEN_TYPES = [
     "type",
     "string",
     "dialogue",
-    "dialogueControl",
+    "element",
     "speakerName",
-    "speakerDelimiter",
 ]
 SEMANTIC_TOKEN_MODIFIERS = ["declaration"]
 SEMANTIC_TOKEN_TYPE_INDEX = {
@@ -1155,6 +1154,52 @@ def _local_call_property_defined(
     )
 
 
+def _user_command_defined(result: AnalysisResult, key: str) -> bool:
+    return any(
+        record.kind == "command"
+        for mapping in (result.local_definitions, result.project.definitions)
+        for record in mapping.get(key, [])
+    )
+
+
+def _user_global_property_defined(result: AnalysisResult, key: str) -> bool:
+    return any(
+        record.kind == "property" and not record.scope.casefold().startswith("command ")
+        for mapping in (result.local_definitions, result.project.definitions)
+        for record in mapping.get(key, [])
+    )
+
+
+def _builtin_kind_defined(key: str, kind: str) -> bool:
+    return any(record.kind == kind for record in BUILTIN_RECORDS.get(key, []))
+
+
+def _append_definition_location(
+    locations: list[dict[str, Any]],
+    seen: set[tuple[str, int]],
+    record: DefinitionRecord,
+    fallback_path: str,
+    current_path: str = "",
+    current_text: str = "",
+) -> None:
+    path = os.path.abspath(record.path or fallback_path)
+    marker = (path, record.line)
+    if marker in seen:
+        return
+    seen.add(marker)
+    text = (
+        current_text
+        if current_path and path == os.path.abspath(current_path)
+        else _read_text(path, {})
+    )
+    locations.append(
+        {
+            "uri": path_to_uri(path),
+            "range": _line_range(text, record.line),
+        }
+    )
+
+
 def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     replace_tree = (
         result.project.iad.get("replace_tree")
@@ -1262,6 +1307,9 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             key = name.casefold()
             element_type = int(node.get("element_type", 0) or 0)
             if element_type == C.ET_COMMAND:
+                is_element = not _user_command_defined(
+                    result, key
+                ) and _builtin_kind_defined(key, "command")
                 renamable = any(
                     record.kind == "command"
                     for record in result.local_definitions.get(key, [])
@@ -1274,28 +1322,37 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                     name,
                     _command_symbol_id(name),
                     "command",
-                    "function",
+                    ("element" if is_element else "function"),
                     False,
                     renamable,
                 )
             elif element_type == C.ET_PROPERTY:
                 if node.get("element_parent_form") == C.FM_CALL and current_command:
+                    local_defined = _local_call_property_defined(
+                        result, current_command, key
+                    )
+                    is_element = not local_defined and _builtin_kind_defined(
+                        key, "property"
+                    )
                     add_request(
                         name_atom,
                         name,
                         _call_property_symbol_id(current_command, name),
                         "property",
-                        "variable",
+                        ("element" if is_element else "variable"),
                         False,
-                        _local_call_property_defined(result, current_command, key),
+                        local_defined,
                     )
                 else:
+                    is_element = not _user_global_property_defined(
+                        result, key
+                    ) and _builtin_kind_defined(key, "property")
                     add_request(
                         name_atom,
                         name,
                         _global_property_symbol_id(name),
                         "property",
-                        "variable",
+                        ("element" if is_element else "variable"),
                         False,
                         any(
                             record.kind == "property"
@@ -1528,59 +1585,6 @@ def _line_start_offsets(text: str) -> list[int]:
     return out
 
 
-def _root_sentences(sad: dict[str, Any] | None) -> list[dict[str, Any]]:
-    root = (sad or {}).get("root") if isinstance(sad, dict) else None
-    if not isinstance(root, dict):
-        return []
-    sentense_list = root.get("sentense_list")
-    if isinstance(sentense_list, dict):
-        return [
-            item
-            for item in sentense_list.get("sentense") or []
-            if isinstance(item, dict)
-        ]
-    if isinstance(sentense_list, list):
-        return [item for item in sentense_list if isinstance(item, dict)]
-    return []
-
-
-def _message_line_info(sad: dict[str, Any] | None) -> tuple[set[int], set[int]]:
-    speaker_lines: set[int] = set()
-    trailing_dialogue_command_lines: set[int] = set()
-    by_line: dict[int, list[dict[str, Any]]] = {}
-    for sentence in _root_sentences(sad):
-        line = max(0, int(sentence.get("node_line", 1) or 1) - 1)
-        by_line.setdefault(line, []).append(sentence)
-        if int(sentence.get("node_type", 0) or 0) == C.NT_S_NAME:
-            speaker_lines.add(line)
-    for line, sentences in by_line.items():
-        last_text_index = -1
-        for index, sentence in enumerate(sentences):
-            if int(sentence.get("node_type", 0) or 0) == C.NT_S_TEXT:
-                last_text_index = index
-        if last_text_index < 0:
-            continue
-        if any(
-            int(sentence.get("node_type", 0) or 0) == C.NT_S_COMMAND
-            for sentence in sentences[last_text_index + 1 :]
-        ):
-            trailing_dialogue_command_lines.add(line)
-    return speaker_lines, trailing_dialogue_command_lines
-
-
-def _speaker_delimiter_ranges(
-    line_text: str,
-    start_char: int,
-    end_char: int,
-) -> list[tuple[int, int]]:
-    out: list[tuple[int, int]] = []
-    if start_char > 0 and line_text[start_char - 1] == "【":
-        out.append((start_char - 1, start_char))
-    if end_char < len(line_text) and line_text[end_char] == "】":
-        out.append((end_char, end_char + 1))
-    return out
-
-
 def _source_uses_utf8(path: str, text: str) -> bool:
     from . import textmap as tm
 
@@ -1614,8 +1618,6 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
     except Exception:
         return []
     line_offsets = _line_start_offsets(text)
-    lines = text.split("\n")
-    speaker_lines, trailing_dialogue_command_lines = _message_line_info(result.sad)
     out: list[StringSemanticRange] = []
     seen: set[tuple[int, int, int, str]] = set()
 
@@ -1625,7 +1627,7 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
         end_char: int,
         semantic_type: str,
     ) -> None:
-        if line < 0 or line >= len(lines):
+        if line < 0 or line >= len(line_offsets):
             return
         start = max(0, start_char)
         end = max(start, end_char)
@@ -1660,34 +1662,6 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
         start_char = max(0, span_start - line_start)
         end_char = max(start_char, span_end - line_start)
         add_range(line, start_char, end_char, semantic_type)
-        if semantic_type == "speakerName" and line in speaker_lines:
-            for delimiter_start, delimiter_end in _speaker_delimiter_ranges(
-                lines[line],
-                start_char,
-                end_char,
-            ):
-                add_range(line, delimiter_start, delimiter_end, "speakerDelimiter")
-    last_dialogue_end_by_line: dict[int, int] = {}
-    for item in out:
-        if item.semantic_type != "dialogue":
-            continue
-        last_dialogue_end_by_line[item.line] = max(
-            last_dialogue_end_by_line.get(item.line, 0),
-            item.end_char,
-        )
-    for occurrence in occurrences_for_result(result):
-        if occurrence.line not in trailing_dialogue_command_lines:
-            continue
-        if occurrence.start_char < last_dialogue_end_by_line.get(occurrence.line, 0):
-            continue
-        if occurrence.definition:
-            continue
-        add_range(
-            occurrence.line,
-            occurrence.start_char,
-            occurrence.end_char,
-            "dialogueControl",
-        )
     out.sort(
         key=lambda item: (item.line, item.start_char, item.end_char, item.semantic_type)
     )
@@ -2072,32 +2046,29 @@ def definition_locations(
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
 
-    def add_record(rec: DefinitionRecord) -> None:
-        k = (os.path.abspath(rec.path or result.path), rec.line)
-        if k in seen:
-            return
-        seen.add(k)
-        text = (
-            result.text
-            if os.path.abspath(rec.path or result.path) == result.path
-            else _read_text(rec.path, {})
-        )
-        locations.append(
-            {
-                "uri": path_to_uri(rec.path or result.path),
-                "range": _line_range(text, rec.line),
-            }
-        )
-
     if token_kind == "label":
         rec = result.label_definitions.get(key) or result.z_label_definitions.get(key)
         if rec:
-            add_record(rec)
+            _append_definition_location(
+                locations,
+                seen,
+                rec,
+                result.path,
+                current_path=result.path,
+                current_text=result.text,
+            )
         return locations
 
     for mapping in (result.local_definitions, result.project.definitions):
         for rec in mapping.get(key, []):
-            add_record(rec)
+            _append_definition_location(
+                locations,
+                seen,
+                rec,
+                result.path,
+                current_path=result.path,
+                current_text=result.text,
+            )
     return locations
 
 
@@ -2109,28 +2080,18 @@ def definition_locations_for_occurrence(
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
 
-    def add_record(rec: DefinitionRecord) -> None:
-        k = (os.path.abspath(rec.path or result.path), rec.line)
-        if k in seen:
-            return
-        seen.add(k)
-        text = (
-            result.text
-            if os.path.abspath(rec.path or result.path) == result.path
-            else _read_text(rec.path, {})
-        )
-        locations.append(
-            {
-                "uri": path_to_uri(rec.path or result.path),
-                "range": _line_range(text, rec.line),
-            }
-        )
-
     if occurrence.symbol_id.startswith("cmd:"):
         for mapping in (result.local_definitions, result.project.definitions):
             for rec in mapping.get(key, []):
                 if rec.kind == "command":
-                    add_record(rec)
+                    _append_definition_location(
+                        locations,
+                        seen,
+                        rec,
+                        result.path,
+                        current_path=result.path,
+                        current_text=result.text,
+                    )
         return locations
     if occurrence.symbol_id.startswith("cprop:"):
         parts = occurrence.symbol_id.split(":", 2)
@@ -2138,7 +2099,14 @@ def definition_locations_for_occurrence(
             scope = f"command {parts[1]}"
             for rec in result.local_definitions.get(key, []):
                 if rec.kind == "property" and rec.scope.casefold() == scope.casefold():
-                    add_record(rec)
+                    _append_definition_location(
+                        locations,
+                        seen,
+                        rec,
+                        result.path,
+                        current_path=result.path,
+                        current_text=result.text,
+                    )
         return locations
     if occurrence.symbol_id.startswith("gprop:"):
         for mapping in (result.local_definitions, result.project.definitions):
@@ -2146,7 +2114,14 @@ def definition_locations_for_occurrence(
                 if rec.kind == "property" and not rec.scope.casefold().startswith(
                     "command "
                 ):
-                    add_record(rec)
+                    _append_definition_location(
+                        locations,
+                        seen,
+                        rec,
+                        result.path,
+                        current_path=result.path,
+                        current_text=result.text,
+                    )
         return locations
     if occurrence.symbol_id.startswith("macro:"):
         parts = occurrence.symbol_id.split(":", 2)
@@ -2154,7 +2129,14 @@ def definition_locations_for_occurrence(
             macro_kind = parts[1]
             for rec in result.project.definitions.get(key, []):
                 if rec.kind.casefold() == macro_kind:
-                    add_record(rec)
+                    _append_definition_location(
+                        locations,
+                        seen,
+                        rec,
+                        result.path,
+                        current_path=result.path,
+                        current_text=result.text,
+                    )
         return locations
     return locations
 
@@ -2754,6 +2736,20 @@ class SSLanguageServer:
             )
         )
 
+    def command_implementation_locations(
+        self, directory: str, name: str
+    ) -> list[dict[str, Any]]:
+        entry = self.link_diagnostics_for_directory(directory)
+        key = str(name or "").casefold()
+        locations: list[dict[str, Any]] = []
+        seen: set[tuple[str, int]] = set()
+        for records in entry.file_commands.values():
+            for rec in records:
+                if rec.name.casefold() != key:
+                    continue
+                _append_definition_location(locations, seen, rec, directory)
+        return locations
+
     def handle_initialize(self, msg_id: Any, _params: dict[str, Any]) -> None:
         result = {
             "capabilities": {
@@ -2961,21 +2957,16 @@ class SSLanguageServer:
         occurrence = occurrence_at_position(result, line, character)
         if occurrence is not None:
             if occurrence.symbol_id.startswith("cmd:"):
-                defs = [
-                    item
-                    for item in self.symbol_occurrences(
-                        os.path.dirname(doc.path) or ".", occurrence.symbol_id
-                    )
-                    if item.definition
-                ]
-                if defs:
-                    self.respond(msg_id, result=_occurrence_locations(defs))
-                    return
-            else:
-                defs = definition_locations_for_occurrence(result, occurrence)
+                defs = self.command_implementation_locations(
+                    os.path.dirname(doc.path) or ".", occurrence.name
+                )
                 if defs:
                     self.respond(msg_id, result=defs)
                     return
+            defs = definition_locations_for_occurrence(result, occurrence)
+            if defs:
+                self.respond(msg_id, result=defs)
+                return
         defs = definition_locations(result, line, character)
         self.respond(msg_id, result=defs)
 
