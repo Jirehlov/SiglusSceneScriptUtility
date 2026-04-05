@@ -24,7 +24,7 @@
    - [-a / --analyze — Analyze and Compare Files](#-a----analyze--analyze-and-compare-files)
    - [-d / --db — Export and Compile `.dbs` Databases](#-d----db--export-and-compile-dbs-databases)
    - [-k / --koe — Collect Voice Files by Character](#-k----koe--collect-voice-files-by-character)
-   - [-e / --exec — Execute at a Script Label](#-e----exec--execute-at-a-script-label)
+   - [-e / --exec / --execute — Execute at a Script Label](#-e----exec----execute--execute-at-a-script-label)
    - [-m / --textmap — Text Mapping for Translation](#-m----textmap--text-mapping-for-translation)
    - [-g / --g00 — Work with `.g00` Image Files](#-g----g00--work-with-g00-image-files)
    - [-s / --sound — Work with Audio Files](#-s----sound--work-with-audio-files)
@@ -48,6 +48,7 @@
 - Decoding and re-encoding `.nwa` / `.owp` / `.ovk` audio files
 - Extracting and recompiling `.omv` video files
 - Patching `SiglusEngine.exe` for alternative key or language settings
+- Providing an LSP for the SiglusSS language
 
 > **Compatibility Notice:** Resource files from very old versions of **SiglusEngine** are not supported by this project. If a game uses an unusually old engine build, some related resource formats or constants may differ and the tools described in this manual may not work correctly.
 
@@ -164,9 +165,11 @@ siglus-ssu init [--force | -f] [--ref <git-ref>]
 | Parameter | Description |
 |---|---|
 | `--force`, `-f` | Overwrite an existing `const.py` even if one already exists. |
-| `--ref <git-ref>` | Download the `const.py` from a specific Git branch, tag, or commit hash. By default, `init` tries the current package version's release ref first, then matching tag names. |
+| `--ref <git-ref>` | Download `const.py` from a specific Git branch, tag, or commit hash. By default, `init` tries the current package version's release ref first, then matching tag names. |
 
-After download, `const.py` is verified against a built-in SHA-512 allowlist. The built-in default ref mapping only tracks the current supported package version. Explicit `--ref` values still work as long as they resolve to the same allowlisted `const.py` content.
+`init` requires network access to the GitHub API. If `--force` is not specified and `const.py` already exists at the target location, the command will not re-download but will directly load and verify the existing file.
+
+After download, `const.py` is verified against a built-in SHA-512 allowlist. The built-in default ref mapping only tracks the current supported package version; explicit `--ref` values still work as long as they ultimately resolve to the same allowlisted `const.py` content.
 
 #### Examples
 
@@ -210,9 +213,9 @@ None.
 
 ### `-c` / `--compile` — Compile Scripts
 
-Compiles a directory of `.ss` SceneScript source files into a `.pck` file (or a directory of compiled `.dat` files). The compilation pipeline faithfully reproduces the official SiglusEngine build system, including LZSS compression, per-script string-table shuffling, and `暗号.dat`-based encryption.
+Compiles a directory of `.ss` SceneScript source files into a `.pck` file. During compilation, individual scene `.dat` files are first generated in a temporary directory, then in the normal mode they are linked and packed into the final `Scene.pck`. The compilation pipeline faithfully reproduces the official SiglusEngine build system, including LZSS compression, per-script string-table shuffling, and `暗号.dat`-based encryption.
 
-It also supports compiling the `Gameexe.ini` → `Gameexe.dat` stage independently via `--gei`.
+It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
 
 #### Syntax
 
@@ -232,20 +235,20 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | Parameter | Description |
 |---|---|
 | `<input_dir>` | Directory containing `.ss` source files, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. |
-| `<output_pck \| output_dir>` | Path for the output. If the path ends with `.pck`, the `.pck` file is written there. If it is a directory path, a `Scene.pck` is created inside it. |
+| `<output_pck \| output_dir>` | Output path. If the path ends with `.pck`, the file is written there. If the argument already exists and is a directory, or ends with a path separator, a `Scene.pck` is created inside it. Other non-existent paths that do not end with `.pck` are currently also interpreted as an output file path. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Also prints per-stage timing statistics. |
 | `--charset ENC` | Force source file encoding. Accepted values: `jis`, `cp932`, `sjis`, `shift_jis` (all equivalent to CP932/Shift-JIS), or `utf8`, `utf-8`. If omitted, the encoding is auto-detected. |
-| `--no-os` | Skip the OS (Original Source) packing stage. The compiled `.dat` files are placed in the output but not packed into a `.pck`. Does not affect encryption or compression of the scripts. |
+| `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan `input_dir` for existing `.dat` files, copy them, and pack them directly into a `.pck` file. Useful for packing already-compiled scripts. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--test-shuffle`. |
 | `--no-angou` | Disable LZSS compression and XOR encryption. Sets `header_size = 0`. Useful for debugging or for engines without encryption. |
 | `--no-lzss` | Disable only the LZSS stage while keeping the usual script encryption/header behavior. This matches the official "easy link" style output. |
 | `--parallel` | Enable multi-process parallel compilation to speed up large projects. |
-| `--max-workers N` | Maximum number of parallel worker processes. Defaults to the number of CPU cores. |
+| `--max-workers N` | Maximum number of parallel worker processes. Only effective with `--parallel`; defaults to auto. |
 | `--lzss-level N` | LZSS compression level, from `2` (fast, large) to `17` (slow, smallest). Default: `17`. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. |
 | `--test-shuffle [seed0]` | Brute-force scan all possible 32-bit MSVC `rand()` seeds to find the one that reproduces the string table order in `<test_dir>`. Optionally start the scan at `seed0`. |
-| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. |
+| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage, writing a fixed filename `Gameexe.dat` into the output directory. |
 
 #### Examples
 
@@ -311,7 +314,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir]
 | `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
 | `<output_dir>` | Directory where extracted files will be written. Optional for all `-x` modes. If omitted, output defaults to the input file directory, or to the input directory itself when the input is a directory. |
 | `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly plus reconstructed `decompiled/<scene>.ss` files and `decompiled/__decompiled.inc`. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` plus `decompiled/*.ss` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
-| `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Automatically detects a nearby `SiglusEngine*.exe` or `key.txt` to derive the decryption key. |
+| `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Automatically detects a nearby `暗号.dat`, `key.txt`, or `SiglusEngine*.exe` to derive the decryption key. |
 
 With `.pck` input, extracted files are written into `output_YYYYMMDD_HHMMSS/`. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run also prints total disassembly, decompile-hints, and decompile timing summaries.
 
@@ -367,8 +370,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | Parameter | Description |
 |---|---|
 | `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. |
-| `[input_file_2]` | Optional second file for structural comparison. Both files must be the same type. |
-| `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to a `__DATDIR__` subdirectory and also emit reconstructed `decompiled/*.ss` output plus `decompiled/__decompiled.inc`. The run prints total disassembly, decompile-hints, and decompile timing summaries. The decompiler output is experimental and should not be treated as a reliable source-of-truth. |
+| `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
+| `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
 | `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
 | `--payload` | For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
@@ -415,19 +418,23 @@ size: 123456789 bytes (0x75BCD15)
 mtime: 2024-01-01 12:00:00
 sha1: a1b2c3d4...
 
-pck_version: 1
-file_count: 2048
-encryption: yes
+header:
+  header_size=...
+  scn_data_exe_angou_mod=...
+  original_source_header_size=...
+counts:
+  inc_prop=...  inc_cmd=...
+  scn_name=...  scn_data_index=...  scn_data_cnt=...
 ...
 ```
 
-When analyzing a `.pck`, the report may also print a trailing `stats:` block.
+When analyzing a `.pck`, the report may also append a trailing `stats:` block.
 
 - `scene_files` is the number of scene `.dat` entries, excluding `暗号.dat`.
 - `cd_text_dialogue_lines` / `cd_text_dialogue_chars` are counted from decoded `CD_TEXT` events.
-- If embedded original `.ss` sources are present, `ss_source_files`, `ss_dialogue_lines`, and `ss_dialogue_chars` are also printed using the `.ss` textmap dialogue classification.
-- `ss_failed_files` is printed when some embedded `.ss` sources could not be parsed for the `.ss`-based count.
-- `parsed_scene_files` is printed when some scene payloads could not be decoded for the `CD_TEXT`-based count.
+- If the `.pck` embeds original `.ss` source, `ss_source_files`, `ss_dialogue_lines`, and `ss_dialogue_chars` are also printed using the `.ss` textmap dialogue classification.
+- `ss_failed_files` is additionally printed when some embedded `.ss` source files cannot participate in the `.ss`-based count.
+- `parsed_scene_files` is additionally printed when some scene payloads cannot be decoded, making the `CD_TEXT`-based count incomplete.
 
 ---
 
@@ -492,9 +499,17 @@ siglus-ssu -d --c --type 2 --set-shuffle 12345 /path/to/gamedb.dbs.csv /path/to/
 siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/to/output.dbs
 ```
 
+With directory input, both `-d --x` and `-d --c` **recursively** scan subdirectories and preserve the relative directory structure in the output.
+
 #### CSV Format
 
-The exported CSV uses UTF-8 BOM encoding with CRLF line endings and is compatible with Microsoft Excel. The first row is a header. Each subsequent row corresponds to one cell in the database table. Special characters in string values are escaped:
+The exported CSV uses UTF-8 BOM encoding with CRLF line endings and is compatible with Microsoft Excel. The first two rows are the `#DATANO` and `#DATATYPE` header rows, followed by data rows.
+
+- `#DATANO` row: the first column is fixed to `#DATANO`, and the remaining columns are the call numbers of each column header.
+- `#DATATYPE` row: the first column is fixed to `#DATATYPE`, and the remaining columns are the data type markers of the corresponding columns; the main types you will see are `S` (string) and `V` (numeric / other 32-bit unit).
+- Data rows: the first column of each row is that row's row call number, and the remaining columns correspond to the column order defined by the first two rows.
+
+Special characters in string values are escaped:
 
 | Escape Sequence | Meaning |
 |---|---|
@@ -590,7 +605,7 @@ Out dir          : /path/to/voice_out/
 
 ---
 
-### `-e` / `--exec` — Execute at a Script Label
+### `-e` / `--exec` / `--execute` — Execute at a Script Label
 
 Launches the `SiglusEngine.exe` directly to a specific scene and `#z` label. This is useful for quickly jumping to a particular scene during testing without replaying the full game.
 
@@ -660,7 +675,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 | `<path_to_ss \| path_to_dir>` | A single `.ss` file or a directory of `.ss` files. Exactly one path argument is required. |
 | `<path_to_dat \| path_to_dir>` | A single `.dat` file or a directory. Exactly one path argument is required. |
 | `--apply`, `-a` | Apply a `.ss.csv` text map back to the corresponding `.ss` file in-place. The `.ss.csv` must already exist alongside the `.ss` file. |
-| `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `Gameexe.dat` and `暗号.dat` are automatically excluded. |
+| `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `.dat` files are recursively scanned, and `Gameexe.dat` and `暗号.dat` are automatically excluded. |
 | `--disam-apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. `--apply`, `--disam`, and `--disam-apply` are mutually exclusive. |
 
 #### Workflow: `.ss` Files
@@ -754,12 +769,12 @@ Provides tools for analyzing, extracting, merging, creating, and updating `.g00`
 
 | Type | Description |
 |---|---|
-| type0 | LZSS32-compressed BGRA (32-bit) image. Solid color background. Alpha must be 255. |
+| type0 | LZSS32-compressed BGRA (32-bit) image. |
 | type1 | LZSS-compressed paletted image (up to 256 colors). |
-| type2 | Multi-cut sprite sheet. Contains multiple named cut regions. |
+| type2 | Multi-cut composite image (sprite sheet) containing multiple indexed cuts. |
 | type3 | XOR-obfuscated JPEG image. |
 
-> **Note:** Extracting and compiling `.g00` files requires [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`).
+> **Note:** Except for `--a` (pure analysis mode), all `.g00` extract, merge, create, and update operations currently require [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`).
 
 #### Syntax
 
@@ -781,13 +796,13 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 
 | Parameter | Description |
 |---|---|
-| `--a` | **Analyze** mode. Prints type, canvas size, LZSS stats, and per-cut details for type2 files. |
-| `--x` | **Extract** mode. Decodes each `.g00` and writes PNG or JPEG files. |
+| `--a` | **Analyze** mode. Prints type, canvas size, and LZSS stats; for type2, also prints detailed information for up to the first 50 cuts. |
+| `--x` | **Extract** mode. Decodes each `.g00` and writes PNG or JPEG files; for type2, also exports a round-trippable `.type2.json` sidecar. |
 | `--m` | **Merge** mode. Composites multiple `.g00` images or cuts into one PNG. |
 | `--c` | **Create/update** mode. Without `--refer`, creates a new `.g00`. With `--refer`, updates image payload using the referenced `.g00` as the base. |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | (Merge mode only) Optional output directory for the merged PNG. If omitted, the file is written to the current working directory. |
 | `--type N`, `--t N` | (Create mode only) In create mode, force the output `.g00` type. In update mode, override the expected reference `.g00` type for validation. |
-| `--refer <ref_g00 \| ref_dir>` | (Create mode only) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. |
+| `--refer <ref_g00 \| ref_dir>` | (Create mode only) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. If the output path is omitted in update mode, single-file input defaults to writing back to the reference `.g00`, and directory input defaults to writing back to the reference directory. |
 | `<g00spec>[:cutNNN]` | For merge mode, optionally select a specific cut index from a type2 `.g00` by appending `:cutNNN` (e.g., `bg_day.g00:cut002`). |
 
 #### Examples
@@ -830,12 +845,17 @@ siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/orig
 siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/original_g00/
 ```
 
+Directory input for `-g --x` **recursively** scans for `.g00` files, but the current implementation writes all output directly to the same `output_dir` without preserving the original subdirectory structure; if identically named resources exist in different subdirectories, later same-named outputs are skipped because the target already exists.
+
 #### Create Mode Notes
 
 - Create mode is selected when `--refer` is omitted.
 - Implemented create targets are **type0**, **type2**, and **type3**.
-- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. Use `--type 2` for JSON-driven type2 creation.
+- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. Use `--type 2` and pass a `.type2.json` directly for type2 creation.
 - For type2 rebuilds produced by `-g --x`, pass the generated `.type2.json` directly to `-g --c`. Do not pass a single `*_cutNNN.png` file to create a multi-cut type2 archive.
+- `--c` directory input currently scans only the **immediate level** of files, not recursively.
+- `.type2.json` can only be used for creating/rebuilding type2; it cannot be used with `--refer` for update mode.
+- In update mode, if the output path is omitted: single-file input defaults to writing back to the reference `.g00`; directory input defaults to writing back to the reference directory. Back up original assets before operating on them.
 - `type1` create is still not implemented.
 
 #### Type2 JSON Layout
@@ -939,8 +959,8 @@ siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 |---|---|
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
-| `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. |
-| `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. |
+| `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
+| `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
 
 #### Examples
 
@@ -975,11 +995,13 @@ When extracting a `.ovk` with multiple entries, output files are named:
 
 #### OVK Creation Naming
 
-When creating `.ovk` from a directory, files named `<basename>_<N>.ogg` (where `N` is an integer) are grouped into a single `<basename>.ovk`. Files without the numeric suffix become individual `.owp` files.
+When creating `.ovk` from a directory, files named `<basename>_<N>.ogg` (where `N` is an integer) are only grouped into a single `<basename>.ovk` when at least two files share the same basename. If a group contains only one numerically-suffixed file, the current implementation treats it as a regular single-file input and produces an `.owp`. Files without a numeric suffix are also individually encoded as `.owp`.
 
 #### `.owp` Trim Details
 
 The `--trim` option reads the Gameexe.dat BGM table (entries formatted as `#BGM.N = "...", "filename", start, end, repeat`) and calls **ffmpeg** to trim each decoded `.ogg` to the samples between `repeat` and `end`. This is useful for extracting seamlessly-loopable background music.
+
+Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output.
 
 ---
 
@@ -1010,6 +1032,8 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | `--refer <ref.omv>` | Copy the header `mode` and TableB `flags_hi24` from an existing `.omv` reference. Useful for matching the exact header of the original. Overridden by `--mode` / `--flags` if both are specified. |
 | `--mode N` | Override the `mode` field (header offset `0x28`). Accepts decimal or `0x...` hex. |
 | `--flags 0xXXXXXX` | Override the TableB `flags` high 24 bits. Accepts a single value or a comma-separated range spec like `0-9:0x1A2B3C00,10-:0x00000000`. |
+
+Directory input for `-v --x` recursively scans for `.omv` files and preserves the relative directory structure in the output. For `-v --c`, the second argument is interpreted as a directory if it already exists as a directory, ends with a path separator, or has no extension; to write to a specific file, give an explicit `.omv`-extension path.
 
 #### Examples
 
@@ -1053,10 +1077,10 @@ siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace
 | `<input_exe>` | Path to `SiglusEngine.exe` to patch. |
 | `<input_key>` | **(--altkey only)** The new 16-byte key. Accepts: a literal like `0xA9, 0x86, ...`; `key.txt`; `暗号.dat`; `SiglusEngine*.exe`; or a directory (auto-derives key). |
 | `-o`, `--output` | Path for the output patched executable. Defaults to `<stem>_alt.exe` (altkey) or `<stem>_CHS.exe` / `<stem>_ENG.exe` (lang). |
-| `--inplace` | Overwrite the input file directly instead of writing to a new path. |
+| `--inplace` | Overwrite the input file directly instead of writing to a new path. If both `-o`/`--output` and `--inplace` are given, `--inplace` takes precedence. |
 | `--lang chs` | Apply the built-in Simplified Chinese preset. |
 | `--lang eng` | Apply the built-in English preset. |
-| `--lang <json>` | Apply a custom JSON-specified patch (see below). |
+| `--lang <json>` | Apply a custom JSON-specified patch (see below). Here `<json>` is an **inline JSON string**, not a path to a JSON file. |
 
 #### Language Patch Presets
 
@@ -1120,12 +1144,12 @@ Input : /path/to/SiglusEngine.exe
 Mode  : lang:eng
 SHA256(before): abc123...
 SHA256(after) : def456...
-Applied changes: 48 bytes
- - lfCharSet: 0x80 -> 0x00 (4 bytes)
- - Scene.pck -> Scene.eng (18 bytes)
- - savedata -> saveeng (16 bytes)
- - japanese -> english (16 bytes)
- - Gameexe.dat -> Gameexe.eng (22 bytes)
+Applied changes: N bytes
+ - lfCharSet: -> 0x00 (N bytes)
+ - Scene.pck -> Scene.eng (N bytes)
+ - savedata -> saveeng (N bytes)
+ - japanese -> english (N bytes)
+ - Gameexe.dat -> Gameexe.eng (N bytes)
 Written: /path/to/SiglusEngine_ENG.exe
 ```
 
@@ -1543,7 +1567,7 @@ Particular points to preserve:
 
 1. `switch` / `case` / `default` use **no colon**; `case(exp)` is followed directly by a sentence sequence;
 2. the three `for` clauses are separated by commas, not semicolons;
-3. the initializer and loop clauses of `for` are not expressions but “zero or more sentences”; 
+3. the initializer and loop clauses of `for` are not expressions but “zero or more sentences”;
 4. `name-stmt` contains exactly one string token;
 5. a standalone string token is itself a legal text statement.
 
@@ -1737,7 +1761,7 @@ mes(【Hero】, "Wait, I need to think about this.")
 
 ### Matching the Shuffle Seed
 
-All official game builds shuffle the string table in each `.dat` using an MSVC-compatible `rand()` seed, though some use a seed other than the default `1`. You **do not** need to reproduce this for your translation to work correctly — the engine reads strings correctly regardless of their order in the table.
+This tool can reproduce `.dat` string-table shuffle positions with an MSVC-compatible `rand()` seed. Translation work usually **does not** need this; you only need to care about the seed when you want byte-for-byte identical output.
 
 If you want a byte-for-byte identical output (e.g., for binary diffing), first try to find the seed:
 
@@ -1769,7 +1793,7 @@ Do not rewrite it as `s[0] = s[0] * 3`, because that still uses the same problem
 
 ### Pillow Not Installed (G00 Mode)
 
-G00 image extraction and compilation require [Pillow](https://pillow.readthedocs.io/):
+In G00 image mode, all operations except `--a` (pure analysis) currently require [Pillow](https://pillow.readthedocs.io/):
 
 ```bash
 pip install pillow

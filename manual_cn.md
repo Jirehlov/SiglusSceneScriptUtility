@@ -24,7 +24,7 @@
    - [-a / --analyze — 分析和比较文件](#-a----analyze--分析和比较文件)
    - [-d / --db — 导出和编译 `.dbs` 数据库](#-d----db--导出和编译-dbs-数据库)
    - [-k / --koe — 按角色收集语音文件](#-k----koe--按角色收集语音文件)
-   - [-e / --exec — 从指定标签启动引擎](#-e----exec--从指定标签启动引擎)
+   - [-e / --exec / --execute — 从指定标签启动引擎](#-e----exec----execute--从指定标签启动引擎)
    - [-m / --textmap — 翻译用文本映射](#-m----textmap--翻译用文本映射)
    - [-g / --g00 — 处理 `.g00` 图片文件](#-g----g00--处理-g00-图片文件)
    - [-s / --sound — 处理音频文件](#-s----sound--处理音频文件)
@@ -48,6 +48,7 @@
 - 解码和重新编码 `.nwa` / `.owp` / `.ovk` 音频文件
 - 提取和重新编译 `.omv` 视频文件
 - 为 `SiglusEngine.exe` 打补丁（修改密钥或语言设置）
+- 提供SiglusSS语言的LSP
 
 > **兼容性提醒：** 本项目不支持版本过低的 **SiglusEngine** 所使用的相关资源文件。如果某个游戏使用了非常老的引擎版本，则其部分资源格式或常量定义可能与当前支持范围不一致，本手册中的工具和流程可能无法正常工作。
 
@@ -416,9 +417,13 @@ size: 123456789 bytes (0x75BCD15)
 mtime: 2024-01-01 12:00:00
 sha1: a1b2c3d4...
 
-pck_version: 1
-file_count: 2048
-encryption: yes
+header:
+  header_size=...
+  scn_data_exe_angou_mod=...
+  original_source_header_size=...
+counts:
+  inc_prop=...  inc_cmd=...
+  scn_name=...  scn_data_index=...  scn_data_cnt=...
 ...
 ```
 
@@ -597,7 +602,7 @@ Out dir          : /path/to/voice_out/
 
 ---
 
-### `-e` / `--exec` — 从指定标签启动引擎
+### `-e` / `--exec` / `--execute` — 从指定标签启动引擎
 
 直接将 `SiglusEngine.exe` 启动到指定场景和 `#z` 标签处。适用于测试时快速跳转到特定场景，无需从头重玩游戏。
 
@@ -1134,11 +1139,13 @@ Input : /path/to/SiglusEngine.exe
 Mode  : lang:eng
 SHA256(before): abc123...
 SHA256(after) : def456...
-Applied changes: 48 bytes
- - lfCharSet: 0x80 -> 0x00 (4 bytes)
- - Scene.pck -> Scene.eng (18 bytes)
- - savedata -> saveeng (16 bytes)
- - japanese -> english (16 bytes)
+Applied changes: N bytes
+ - lfCharSet: -> 0x00 (N bytes)
+ - Scene.pck -> Scene.eng (N bytes)
+ - savedata -> saveeng (N bytes)
+ - japanese -> english (N bytes)
+ - Gameexe.dat -> Gameexe.eng (N bytes)
+Written: /path/to/SiglusEngine_ENG.exe
 ```
 
 
