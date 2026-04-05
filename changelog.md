@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.1.15] - 2026-04-05
+
+- **New Mode:** Added `-lsp` stdio language-server mode for SiglusSceneScript. The new server provides compiler-backed diagnostics, completions, hover, go-to-definition, references, rename, semantic tokens, and document symbols for `.ss` and `.inc` files.
+- Renamed the Python package namespace from `siglus_scene_script_utility` to `siglus_ssu`. The `siglus-ssu` console entry point stays the same, but Python imports, the Rust extension module path, and pure-wheel packaging now use the new package name.
+- Changed `const.py` loading to validate the installed file on load, reload cleanly when the selected `--const-profile` changes, and resolve package version metadata through the renamed `siglus_ssu` package path.
+- `-k --koe` now reports total referenced voice duration together with counted and failed duration items. This is backed by new Ogg duration parsing helpers and OVK sample-count exposure.
+
+
 ## [v0.1.14] - 2026-03-28
 
 - Added a scene decompiler and shared decompile-hints pipeline. `-x --disam` and `-a --disam` now emit readable `.dat.txt` output together with reconstructed `decompiled/*.ss` scripts and `decompiled/__decompiled.inc`, and print separate disassembly / hints / decompile timing totals.
