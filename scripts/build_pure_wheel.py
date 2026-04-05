@@ -39,7 +39,7 @@ pyproject = (
 
     [project]
     name = "siglus-ssu"
-    version = "0.1.15"
+    version = "0.2.0"
     description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
     readme = "README.md"
     requires-python = ">=3.12"

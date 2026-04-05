@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.0] - 2026-04-05
+
+- Improved LSP mode.
+
+
 ## [v0.1.15] - 2026-04-05
 
 - **New Mode:** Added `-lsp` stdio language-server mode for SiglusSceneScript. The new server provides compiler-backed diagnostics, completions, hover, go-to-definition, references, rename, semantic tokens, and document symbols for `.ss` and `.inc` files.
