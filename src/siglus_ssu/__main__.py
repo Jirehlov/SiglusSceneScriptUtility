@@ -127,13 +127,14 @@ def _usage(out=None):
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
+    out.write(f"  {p} -k [--stats-only] <scene_input> <voice_dir> <output_dir>\n")
+    out.write(f"  {p} -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>\n")
     out.write(
-        f"  {p} -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>\n"
+        "    --stats-only   Write summary only, and CSV unless --single is used; do not extract .ogg files\n"
     )
     out.write(
-        "    --stats-only   Write CSV and summary only; do not extract .ogg files\n"
+        "    --single       Extract only the specified global KOE number directly into output_dir; no CSV or character subdirectories\n"
     )
-    out.write("    --single       Extract only the specified global KOE number\n")
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")

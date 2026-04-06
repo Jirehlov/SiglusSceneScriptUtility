@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.1] - 2026-04-06
+
+- Changed `.pck` analysis so word counting no longer runs implicitly. Use `-a --word <input_pck> [output_csv]` to generate word-count output and CSV files, with one row per decoded scene `.dat` and one row per embedded `.ss` source.
+- Added a deterministic built-in word-count rule so mixed CJK and non-CJK text is counted consistently across platforms.
+- Added `-k --stats-only` to collect KOE statistics and write CSV output without extracting audio files.
+- Added `-k --single <koe_no>` to extract only one specific KOE entry while still writing CSV and summary output.
+- `.pck` analysis now also prints `暗号.dat` when an embedded or adjacent source is available, matching compile-mode summary output.
+
+
 ## [v0.2.0] - 2026-04-05
 
 - Improved LSP mode.

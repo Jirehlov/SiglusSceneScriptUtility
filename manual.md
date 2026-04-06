@@ -181,7 +181,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Download const.py from a specific tagged release
-siglus-ssu init --ref v0.2.0
+siglus-ssu init --ref v0.2.1
 ```
 
 ---
@@ -546,25 +546,26 @@ Special characters in string values are escaped:
 
 ### `-k` / `--koe` — Collect Voice Files by Character
 
-Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files into per-character subdirectories.
+Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files. In normal mode, files are grouped into per-character subdirectories.
 
-Also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
+In normal mode, the command also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
 
 #### Syntax
 
 ```
-siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 ```
 
 #### Parameters
 
 | Parameter | Description |
 |---|---|
-| `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. |
+| `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. Required in normal mode; not used with `--single`. |
 | `<voice_dir>` | Path to the directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. In directory mode, only `.ovk` files in that directory itself are scanned; the search is not recursive. |
-| `<output_dir>` | Directory where extracted `.ogg` files and the `koe_master.csv` manifest will be written. |
-| `--stats-only` | Still writes `koe_master.csv` and prints the summary, but does not write any `.ogg` files. Useful when you only want statistics. |
-| `--single KOE_NO` | Only extracts the specified global KOE number. CSV generation and summary scanning still run for the full input set. |
+| `<output_dir>` | Directory where extracted `.ogg` files will be written. In normal mode, `koe_master.csv` is also written there. With `--single`, the extracted file is written directly under `<output_dir>`. |
+| `--stats-only` | Prints the summary and does not write any `.ogg` files. In normal mode it still writes `koe_master.csv`; with `--single`, no CSV is written. |
+| `--single KOE_NO` | Only extracts the specified global KOE number. In this mode, no scene input is required, no `koe_master.csv` is generated, no character-name or `unreferenced` subdirectories are created, and the output file is written directly as `<output_dir>/KOE(XXXXXXXXX).ogg`. |
 
 #### Output Structure
 
@@ -578,6 +579,13 @@ siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output
   unreferenced/            — Entries in .ovk not referenced by any scanned scene
     KOE(000000003).ogg
     ...
+```
+
+With `--single`, the output structure becomes:
+
+```
+<output_dir>/
+  KOE(123456789).ogg
 ```
 
 #### Examples
@@ -596,10 +604,10 @@ siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
 siglus-ssu -k --stats-only /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 
 # Extract only one global KOE entry
-siglus-ssu -k --single 123456789 /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
+siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 ```
 
-#### `koe_master.csv` Format
+#### `koe_master.csv` Format (Normal Mode Only)
 
 | Column | Description |
 |---|---|
@@ -637,7 +645,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-`Stats only` and `Single KOE` are only shown when the corresponding option is used.
+The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. With `--single`, scene-scanning and CSV-related lines are omitted.
 
 ---
 

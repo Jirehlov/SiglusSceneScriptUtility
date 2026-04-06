@@ -456,6 +456,12 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     args = list(argv)
+    usage_normal = (
+        "Usage: koe_collector [--stats-only] <scene_input> <voice_dir> <output_dir>"
+    )
+    usage_single = (
+        "Usage: koe_collector [--stats-only] --single KOE_NO <voice_dir> <output_dir>"
+    )
     stats_only = False
     single_koe_no = None
     pos = []
@@ -468,9 +474,7 @@ def main(argv=None):
             continue
         if arg == "--single":
             if i + 1 >= len(args):
-                eprint(
-                    "Usage: koe_collector [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>"
-                )
+                eprint(usage_single)
                 return 2
             single_koe_no = _try_int(args[i + 1])
             if single_koe_no is None or single_koe_no < 0:
@@ -487,110 +491,184 @@ def main(argv=None):
             continue
         pos.append(arg)
         i += 1
-    if len(pos) != 3:
-        eprint(
-            "Usage: koe_collector [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>"
-        )
-        return 2
-    scene_root, voice_dir, out_dir = pos
+    if single_koe_no is None:
+        if len(pos) != 3:
+            eprint(usage_normal)
+            eprint(usage_single)
+            return 2
+        scene_root, voice_dir, out_dir = pos
+    else:
+        if len(pos) != 2:
+            eprint(usage_single)
+            return 2
+        scene_root = ""
+        voice_dir, out_dir = pos
     os.makedirs(out_dir, exist_ok=True)
 
     scene_map, entries, ovk_files, z_files, entry_count, table_failed = _index_ovk(
         voice_dir
     )
-    call_refs, scene_files = _scan_calls(scene_root)
-    if scene_files <= 0:
-        eprint("No scene .dat files or supported .pck scenes found.")
-        return 1
+    if single_koe_no is None:
+        call_refs, scene_files = _scan_calls(scene_root)
+        if scene_files <= 0:
+            eprint("No scene .dat files or supported .pck scenes found.")
+            return 1
+        missing_rows = []
+        for koe_no, ch, name, text, callsite in call_refs:
+            e = entries.get(koe_no)
+            if e is None:
+                missing_rows.append((name, text, callsite))
+                continue
+            if name and not e["name"]:
+                e["name"] = name
+            if text and not e["text"]:
+                e["text"] = text
+            e["callsites"].add(callsite)
+            if e["chara_no"] < 0 and ch >= 0:
+                e["chara_no"] = ch
+        referenced = sum(1 for v in entries.values() if v["callsites"])
+        unreferenced = len(entries) - referenced
+    else:
+        call_refs = []
+        scene_files = 0
+        missing_rows = []
+        referenced = 0
+        unreferenced = 0
 
-    missing_rows = []
-    for koe_no, ch, name, text, callsite in call_refs:
-        e = entries.get(koe_no)
-        if e is None:
-            missing_rows.append((name, text, callsite))
-            continue
-        if name and not e["name"]:
-            e["name"] = name
-        if text and not e["text"]:
-            e["text"] = text
-        e["callsites"].add(callsite)
-        if e["chara_no"] < 0 and ch >= 0:
-            e["chara_no"] = ch
-
-    referenced = sum(1 for v in entries.values() if v["callsites"])
-    unreferenced = len(entries) - referenced
-
-    csv_path = os.path.join(out_dir, "koe_master.csv")
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f, lineterminator="\r\n")
-        w.writerow(["koe_no", "character", "text", "callsite"])
-        for koe_no in sorted(entries.keys()):
-            e = entries[koe_no]
-            w.writerow(
-                [str(koe_no), e["name"], e["text"], ";".join(sorted(e["callsites"]))]
-            )
-        for name, text, callsite in sorted(missing_rows, key=lambda x: x[2]):
-            w.writerow(["", name, text, callsite])
-
+    csv_path = ""
+    total_rows = 0
+    if single_koe_no is None:
+        csv_path = os.path.join(out_dir, "koe_master.csv")
+        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f, lineterminator="\r\n")
+            w.writerow(["koe_no", "character", "text", "callsite"])
+            for koe_no in sorted(entries.keys()):
+                e = entries[koe_no]
+                w.writerow(
+                    [
+                        str(koe_no),
+                        e["name"],
+                        e["text"],
+                        ";".join(sorted(e["callsites"])),
+                    ]
+                )
+            for name, text, callsite in sorted(missing_rows, key=lambda x: x[2]):
+                w.writerow(["", name, text, callsite])
+        total_rows = len(entries) + len(missing_rows)
     single_found = single_koe_no is None or single_koe_no in entries
     extracted = skipped = failed = 0
     total_duration_sec = 0.0
     duration_counted = 0
     duration_failed = 0
-    for koe_no in sorted(entries.keys()):
-        e = entries[koe_no]
-        is_unref = not e["callsites"]
-        role = e["name"].strip() or "unknown"
-        dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
-        out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
-        should_extract = (not stats_only) and (
-            single_koe_no is None or koe_no == single_koe_no
-        )
-        duration_done = False
-        if not is_unref and os.path.isfile(out_path):
-            total_duration_sec, duration_counted, duration_failed = _maybe_add_duration(
-                total_duration_sec,
-                duration_counted,
-                duration_failed,
-                _duration_from_path(out_path),
-            )
-            duration_done = True
-        if should_extract and os.path.isfile(out_path):
-            skipped += 1
-            continue
-        if not should_extract and (is_unref or duration_done):
-            continue
-        scene_no = koe_no // 100000
-        entry_no = koe_no % 100000
-        try:
-            ovk_path = _select_ovk(
-                scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
-            )
-            ogg = b""
-            if should_extract or ((not is_unref) and (not duration_done)):
-                ogg = sound.extract_ogg_bytes_from_ovk_entry(ovk_path, int(entry_no))
-            if should_extract:
-                os.makedirs(dest_dir, exist_ok=True)
-                write_bytes(out_path, ogg)
-                extracted += 1
-            if not is_unref and not duration_done:
-                total_duration_sec, duration_counted, duration_failed = (
-                    _maybe_add_duration(
-                        total_duration_sec,
-                        duration_counted,
-                        duration_failed,
-                        _duration_from_ogg_bytes(ogg),
-                    )
+    if single_koe_no is None:
+        for koe_no in sorted(entries.keys()):
+            e = entries[koe_no]
+            is_unref = not e["callsites"]
+            role = e["name"].strip() or "unknown"
+            dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
+            out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
+            should_extract = not stats_only
+            duration_done = False
+            if not is_unref and os.path.isfile(out_path):
+                (
+                    total_duration_sec,
+                    duration_counted,
+                    duration_failed,
+                ) = _maybe_add_duration(
+                    total_duration_sec,
+                    duration_counted,
+                    duration_failed,
+                    _duration_from_path(out_path),
                 )
-        except Exception as ex:
-            if should_extract:
-                failed += 1
+                duration_done = True
+            if should_extract and os.path.isfile(out_path):
+                skipped += 1
+                continue
+            if not should_extract and (is_unref or duration_done):
+                continue
+            scene_no = koe_no // 100000
+            entry_no = koe_no % 100000
+            try:
+                ovk_path = _select_ovk(
+                    scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
+                )
+                ogg = b""
+                if should_extract or ((not is_unref) and (not duration_done)):
+                    ogg = sound.extract_ogg_bytes_from_ovk_entry(
+                        ovk_path, int(entry_no)
+                    )
+                if should_extract:
+                    os.makedirs(dest_dir, exist_ok=True)
+                    write_bytes(out_path, ogg)
+                    extracted += 1
                 if not is_unref and not duration_done:
+                    total_duration_sec, duration_counted, duration_failed = (
+                        _maybe_add_duration(
+                            total_duration_sec,
+                            duration_counted,
+                            duration_failed,
+                            _duration_from_ogg_bytes(ogg),
+                        )
+                    )
+            except Exception as ex:
+                if should_extract:
+                    failed += 1
+                    if not is_unref and not duration_done:
+                        duration_failed += 1
+                    eprint(f"Failed to extract koe_no={koe_no}: {ex}")
+                elif not is_unref and not duration_done:
                     duration_failed += 1
-                eprint(f"Failed to extract koe_no={koe_no}: {ex}")
-            elif not is_unref and not duration_done:
-                duration_failed += 1
-    total_rows = len(entries) + len(missing_rows)
+    else:
+        if single_found:
+            koe_no = int(single_koe_no)
+            out_path = os.path.join(out_dir, f"KOE({koe_no:09d}).ogg")
+            should_extract = not stats_only
+            duration_done = False
+            if os.path.isfile(out_path):
+                (
+                    total_duration_sec,
+                    duration_counted,
+                    duration_failed,
+                ) = _maybe_add_duration(
+                    total_duration_sec,
+                    duration_counted,
+                    duration_failed,
+                    _duration_from_path(out_path),
+                )
+                duration_done = True
+            if should_extract and os.path.isfile(out_path):
+                skipped += 1
+            else:
+                scene_no = koe_no // 100000
+                entry_no = koe_no % 100000
+                try:
+                    ovk_path = _select_ovk(scene_map, voice_dir, scene_no, -1)
+                    ogg = b""
+                    if should_extract or (not duration_done):
+                        ogg = sound.extract_ogg_bytes_from_ovk_entry(
+                            ovk_path, int(entry_no)
+                        )
+                    if should_extract:
+                        os.makedirs(out_dir, exist_ok=True)
+                        write_bytes(out_path, ogg)
+                        extracted += 1
+                    if not duration_done:
+                        total_duration_sec, duration_counted, duration_failed = (
+                            _maybe_add_duration(
+                                total_duration_sec,
+                                duration_counted,
+                                duration_failed,
+                                _duration_from_ogg_bytes(ogg),
+                            )
+                        )
+                except Exception as ex:
+                    if should_extract:
+                        failed += 1
+                        if not duration_done:
+                            duration_failed += 1
+                        eprint(f"Failed to extract koe_no={koe_no}: {ex}")
+                    elif not duration_done:
+                        duration_failed += 1
     eprint("")
     eprint("=== koe_collector summary ===")
     if stats_only:
@@ -603,22 +681,29 @@ def main(argv=None):
     eprint(f"OVK files        : {ovk_files:,}")
     eprint(f"OVK z-files      : {z_files:,}")
     eprint(f"OVK table errors : {table_failed:,}")
-    eprint(f"Scene files      : {scene_files:,}")
-    eprint(f"Scene callsites  : {len(call_refs):,}")
-    eprint(f"Scene missing    : {len(missing_rows):,}")
-    eprint(f"KOE total        : {len(entries):,}")
-    eprint(f"KOE referenced   : {referenced:,}")
-    eprint(f"KOE unreferenced : {unreferenced:,}")
+    if single_koe_no is None:
+        eprint(f"Scene files      : {scene_files:,}")
+        eprint(f"Scene callsites  : {len(call_refs):,}")
+        eprint(f"Scene missing    : {len(missing_rows):,}")
+        eprint(f"KOE total        : {len(entries):,}")
+        eprint(f"KOE referenced   : {referenced:,}")
+        eprint(f"KOE unreferenced : {unreferenced:,}")
     eprint(f"Audio extracted  : {extracted:,}")
     eprint(f"Audio skipped    : {skipped:,}")
     eprint(f"Audio failed     : {failed:,}")
-    eprint(
-        f"Voice duration   : {total_duration_sec:,.3f} sec ({_format_duration(total_duration_sec)}) [referenced only]"
-    )
+    if single_koe_no is None:
+        eprint(
+            f"Voice duration   : {total_duration_sec:,.3f} sec ({_format_duration(total_duration_sec)}) [referenced only]"
+        )
+    else:
+        eprint(
+            f"Voice duration   : {total_duration_sec:,.3f} sec ({_format_duration(total_duration_sec)})"
+        )
     eprint(f"Duration counted : {duration_counted:,}")
     eprint(f"Duration failed  : {duration_failed:,}")
-    eprint(f"CSV path         : {csv_path}")
-    eprint(f"CSV rows         : {total_rows:,}")
+    if csv_path:
+        eprint(f"CSV path         : {csv_path}")
+        eprint(f"CSV rows         : {total_rows:,}")
     eprint(f"Out dir          : {out_dir}")
     if single_koe_no is not None and not single_found:
         return 1

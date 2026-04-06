@@ -180,7 +180,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.2.0
+siglus-ssu init --ref v0.2.1
 ```
 
 ---
@@ -545,25 +545,26 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 ### `-k` / `--koe` — 按角色收集语音文件
 
-扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并把对应的 `.ogg` 音频提取到按角色命名的子目录中。
+扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并提取对应的 `.ogg` 音频文件。普通模式下，输出会按角色名分类到子目录中。
 
-同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
+普通模式下还会生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
 
 #### 语法
 
 ```
-siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 ```
 
 #### 参数
 
 | 参数 | 说明 |
 |---|---|
-| `<scene_input>` | `Scene.pck`、单个场景 `.dat` 文件，或场景 `.dat` 目录树的路径。 |
+| `<scene_input>` | `Scene.pck`、单个场景 `.dat` 文件，或场景 `.dat` 目录树的路径。普通模式必填；使用 `--single` 时不需要。 |
 | `<voice_dir>` | 包含 `.ovk` 语音文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。目录模式当前只扫描该目录当前层的 `.ovk` 文件，不递归。 |
-| `<output_dir>` | 提取的 `.ogg` 文件和 `koe_master.csv` 清单的输出目录。 |
-| `--stats-only` | 仍会写出 `koe_master.csv` 并打印汇总，但不会写任何 `.ogg` 文件。适合只看统计的场景。 |
-| `--single KOE_NO` | 仅提取指定的全局 KOE 编号。CSV 生成和汇总扫描仍会对整个输入集执行。 |
+| `<output_dir>` | 提取的 `.ogg` 文件输出目录。普通模式下还会在这里写出 `koe_master.csv`；使用 `--single` 时，提取出的单个文件会直接写到 `<output_dir>` 根下。 |
+| `--stats-only` | 打印汇总，但不会写任何 `.ogg` 文件。普通模式下仍会写出 `koe_master.csv`；若同时使用 `--single`，则不会写 CSV。 |
+| `--single KOE_NO` | 仅提取指定的全局 KOE 编号。此模式下不需要场景输入，不会生成 `koe_master.csv`，不会创建角色名或 `unreferenced` 子目录，输出文件会直接写成 `<output_dir>/KOE(XXXXXXXXX).ogg`。 |
 
 #### 输出结构
 
@@ -577,6 +578,13 @@ siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output
   unreferenced/            — .ovk 中未被任何已扫描场景引用的条目
     KOE(000000003).ogg
     ...
+```
+
+使用 `--single` 时，输出结构变为：
+
+```
+<output_dir>/
+  KOE(123456789).ogg
 ```
 
 #### 示例
@@ -595,10 +603,10 @@ siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
 siglus-ssu -k --stats-only /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 
 # 只提取一个全局 KOE 条目
-siglus-ssu -k --single 123456789 /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
+siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 ```
 
-#### `koe_master.csv` 格式
+#### `koe_master.csv` 格式（仅普通模式）
 
 | 列名 | 说明 |
 |---|---|
@@ -634,7 +642,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。
+上面的示例是普通模式输出。`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。使用 `--single` 时，不会显示场景扫描相关行，也不会显示 CSV 相关行。
 
 ---
 
