@@ -354,6 +354,9 @@ siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 # 分析单个文件
 siglus-ssu -a [--disam] [--readall] [--payload] <input_file>
 
+# 仅统计 .pck 中的台词计数并导出逐文件 CSV
+siglus-ssu -a --word <input_pck> [output_csv]
+
 # 比较两个同类型文件
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
@@ -372,6 +375,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写在输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/*.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
 | `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
+| `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`。 |
 | `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
@@ -381,6 +385,12 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 ```bash
 # 分析 Scene.pck — 打印头部信息、文件数量、加密状态
 siglus-ssu -a /path/to/Scene.pck
+
+# 统计每个场景 `.dat` 与内嵌 `.ss` 的台词计数，并写出 CSV
+siglus-ssu -a --word /path/to/Scene.pck
+
+# 统计台词计数，并把 CSV 写到指定路径
+siglus-ssu -a --word /path/to/Scene.pck /path/to/scene_counts.csv
 
 # 分析编译后的 .dat 脚本 — 打印头部字段和字符串池
 siglus-ssu -a /path/to/script.dat
@@ -427,13 +437,25 @@ counts:
 ...
 ```
 
-分析 `.pck` 时，报告尾部还可能追加一个 `stats:` 区块。
 
-- `scene_files` 表示场景 `.dat` 条目数量，不包含 `暗号.dat`。
-- `cd_text_dialogue_lines` / `cd_text_dialogue_chars` 基于已解码的 `CD_TEXT` 事件统计。
-- 如果 `.pck` 内嵌了原始 `.ss` source，还会额外打印 `ss_source_files`、`ss_dialogue_lines`、`ss_dialogue_chars`，它们使用 `.ss` textmap 的台词分类口径。
-- 当部分内嵌 `.ss` source 无法参与 `.ss` 统计时，会额外打印 `ss_failed_files`。
-- 当部分 scene payload 无法解码，导致 `CD_TEXT` 统计不完整时，会额外打印 `parsed_scene_files`。
+#### 字数统计输出（`-a --word`）
+
+`-a --word` 会为每个已解码场景 `.dat` 和每个内嵌 `.ss` source 打印一行，并写出同内容的 CSV。计数规则固定在项目内部，因此不同平台结果一致：
+
+- 汉字、平假名、片假名、注音符号每个字符算 `1`
+- 韩文按连续词段计数
+- 其他字母和数字按连续词段计数
+- 非亚洲词段中，内部的 `'`、`’`、`-`、`_` 在两侧都是字母数字时不拆分
+- 数字段中，内部的 `.`, `,`, `/`, `:` 在两侧都是十进制数字时不拆分
+- 标点、空白、emoji 以及其他符号算 `0`
+
+CSV 列为：
+
+- `type` — `dat` 或 `ss`
+- `path` — `.pck` 内的逐文件相对路径
+- `status` — `ok` 或 `failed`
+- `dialogue_lines` — 计入统计的台词条目数
+- `dialogue_count` — 计入统计的台词总计数
 
 ---
 
@@ -523,12 +545,12 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并把对应的 `.ogg` 音频提取到按角色命名的子目录中。
 
-同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，则不会阻止导出，但会计入 `Duration failed` 统计。
+同时生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
 
 #### 语法
 
 ```
-siglus-ssu -k <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>
 ```
 
 #### 参数
@@ -538,6 +560,8 @@ siglus-ssu -k <scene_input> <voice_dir> <output_dir>
 | `<scene_input>` | `Scene.pck`、单个场景 `.dat` 文件，或场景 `.dat` 目录树的路径。 |
 | `<voice_dir>` | 包含 `.ovk` 语音文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。目录模式当前只扫描该目录当前层的 `.ovk` 文件，不递归。 |
 | `<output_dir>` | 提取的 `.ogg` 文件和 `koe_master.csv` 清单的输出目录。 |
+| `--stats-only` | 仍会写出 `koe_master.csv` 并打印汇总，但不会写任何 `.ogg` 文件。适合只看统计的场景。 |
+| `--single KOE_NO` | 仅提取指定的全局 KOE 编号。CSV 生成和汇总扫描仍会对整个输入集执行。 |
 
 #### 输出结构
 
@@ -564,6 +588,12 @@ siglus-ssu -k /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
 
 # 从单个场景 `.dat` 文件收集（用于测试）
 siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
+
+# 只生成 CSV 和汇总，不写任何 `.ogg`
+siglus-ssu -k --stats-only /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
+
+# 只提取一个全局 KOE 条目
+siglus-ssu -k --single 123456789 /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 ```
 
 #### `koe_master.csv` 格式
@@ -579,6 +609,8 @@ siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
 
 ```
 === koe_collector summary ===
+Stats only       : yes
+Single KOE       : 123456789
 OVK entries      : 45,678
 OVK files        : 56
 OVK z-files      : 56
@@ -599,6 +631,8 @@ CSV path         : /path/to/voice_out/koe_master.csv
 CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
+
+`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。
 
 ---
 

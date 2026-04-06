@@ -210,6 +210,12 @@ def main(argv=None):
     args = list(argv)
     if (not args) or args[0] in ("-h", "--help", "help"):
         return 2
+    word = False
+    if "--word" in args:
+        args.remove("--word")
+        word = True
+    if word and "--disam" in args:
+        return 2
     args, gei, _disam = parse_gei_disam_args(
         args,
         disam_action=lambda: setattr(dat, "DAT_TXT_OUT_DIR", "__DATDIR__"),
@@ -230,6 +236,14 @@ def main(argv=None):
     if "--angou" in args:
         args.remove("--angou")
         angou = True
+    if word:
+        if gei or _disam or readall or compare_payload or angou:
+            return 2
+        if len(args) == 1:
+            return pck.pck_word_count(args[0])
+        if len(args) == 2:
+            return pck.pck_word_count(args[0], args[1])
+        return 2
     if angou:
         if gei or readall:
             return 2

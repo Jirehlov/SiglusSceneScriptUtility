@@ -355,6 +355,9 @@ Analyzes the internal structure of a supported binary file and prints a detailed
 # Analyze a single file
 siglus-ssu -a [--disam] [--readall] [--payload] <input_file>
 
+# Count dialogue units in a .pck only and write per-file CSV
+siglus-ssu -a --word <input_pck> [output_csv]
+
 # Compare two files of the same type
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
@@ -373,6 +376,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
 | `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
 | `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
+| `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`. |
 | `--payload` | For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
@@ -382,6 +386,12 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 ```bash
 # Analyze Scene.pck — prints header info, file count, encryption status
 siglus-ssu -a /path/to/Scene.pck
+
+# Count dialogue units for each scene `.dat` and embedded `.ss`, then write CSV
+siglus-ssu -a --word /path/to/Scene.pck
+
+# Count dialogue units and write the CSV to an explicit path
+siglus-ssu -a --word /path/to/Scene.pck /path/to/scene_counts.csv
 
 # Analyze a compiled .dat script — prints header fields and string pool
 siglus-ssu -a /path/to/script.dat
@@ -428,13 +438,25 @@ counts:
 ...
 ```
 
-When analyzing a `.pck`, the report may also append a trailing `stats:` block.
 
-- `scene_files` is the number of scene `.dat` entries, excluding `暗号.dat`.
-- `cd_text_dialogue_lines` / `cd_text_dialogue_chars` are counted from decoded `CD_TEXT` events.
-- If the `.pck` embeds original `.ss` source, `ss_source_files`, `ss_dialogue_lines`, and `ss_dialogue_chars` are also printed using the `.ss` textmap dialogue classification.
-- `ss_failed_files` is additionally printed when some embedded `.ss` source files cannot participate in the `.ss`-based count.
-- `parsed_scene_files` is additionally printed when some scene payloads cannot be decoded, making the `CD_TEXT`-based count incomplete.
+#### Word Count Output (`-a --word`)
+
+`-a --word` prints one row per decoded scene `.dat` and one row per embedded `.ss` source file. The count rule is fixed inside the project so results stay platform-independent:
+
+- Han, Hiragana, Katakana, and Bopomofo count as `1` per character
+- Hangul counts by contiguous word run
+- Other letters and numbers count by contiguous word run
+- Internal `'`, `’`, `-`, and `_` keep a non-Asian run together when both sides are alphanumeric
+- Internal `.`, `,`, `/`, and `:` keep a numeric run together when both sides are decimal digits
+- Punctuation, whitespace, emoji, and other symbols count as `0`
+
+The CSV uses:
+
+- `type` — `dat` or `ss`
+- `path` — per-file relative path inside the `.pck`
+- `status` — `ok` or `failed`
+- `dialogue_lines` — number of counted dialogue entries
+- `dialogue_count` — total counted dialogue units
 
 ---
 
@@ -524,12 +546,12 @@ Special characters in string values are escaped:
 
 Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files into per-character subdirectories.
 
-Also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After extraction, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, extraction still succeeds, but that item is counted under `Duration failed`.
+Also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
 
 #### Syntax
 
 ```
-siglus-ssu -k <scene_input> <voice_dir> <output_dir>
+siglus-ssu -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>
 ```
 
 #### Parameters
@@ -539,6 +561,8 @@ siglus-ssu -k <scene_input> <voice_dir> <output_dir>
 | `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. |
 | `<voice_dir>` | Path to the directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. In directory mode, only `.ovk` files in that directory itself are scanned; the search is not recursive. |
 | `<output_dir>` | Directory where extracted `.ogg` files and the `koe_master.csv` manifest will be written. |
+| `--stats-only` | Still writes `koe_master.csv` and prints the summary, but does not write any `.ogg` files. Useful when you only want statistics. |
+| `--single KOE_NO` | Only extracts the specified global KOE number. CSV generation and summary scanning still run for the full input set. |
 
 #### Output Structure
 
@@ -565,6 +589,12 @@ siglus-ssu -k /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
 
 # Collect from a single scene `.dat` file
 siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
+
+# Generate CSV and summary only, without writing any `.ogg`
+siglus-ssu -k --stats-only /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
+
+# Extract only one global KOE entry
+siglus-ssu -k --single 123456789 /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
 ```
 
 #### `koe_master.csv` Format
@@ -582,6 +612,8 @@ After completion, a summary is printed to stderr:
 
 ```
 === koe_collector summary ===
+Stats only       : yes
+Single KOE       : 123456789
 OVK entries      : 45,678
 OVK files        : 56
 OVK z-files      : 56
@@ -602,6 +634,8 @@ CSV path         : /path/to/voice_out/koe_master.csv
 CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
+
+`Stats only` and `Single KOE` are only shown when the corresponding option is used.
 
 ---
 

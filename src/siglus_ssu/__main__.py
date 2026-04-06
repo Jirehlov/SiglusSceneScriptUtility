@@ -110,11 +110,15 @@ def _usage(out=None):
     out.write(
         f"  {p} -a [--disam] [--readall] [--payload] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
+    out.write(f"  {p} -a --word <input_pck> [output_csv]\n")
     out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --disam        Write .dat disassembly to __DATDIR__\n")
     out.write(
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
+    )
+    out.write(
+        "    --word         Count dialogue units for each .dat/.ss inside a .pck and write CSV only\n"
     )
     out.write(
         "    --payload      Compare normalized decoded/decompressed scn_bytes semantics (ignores string-pool ids when text matches); expensive\n"
@@ -123,7 +127,13 @@ def _usage(out=None):
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
-    out.write(f"  {p} -k <ss_dir> <voice_dir> <output_dir>\n")
+    out.write(
+        f"  {p} -k [--stats-only] [--single KOE_NO] <scene_input> <voice_dir> <output_dir>\n"
+    )
+    out.write(
+        "    --stats-only   Write CSV and summary only; do not extract .ogg files\n"
+    )
+    out.write("    --single       Extract only the specified global KOE number\n")
     out.write("\n")
     out.write("Execute mode:\n")
     out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")

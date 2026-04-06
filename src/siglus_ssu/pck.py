@@ -1,3 +1,4 @@
+import csv
 import struct
 import io
 from contextlib import redirect_stdout
@@ -10,6 +11,7 @@ import tempfile
 from . import const as C
 from .native_ops import lzss_unpack, xor_cycle_inplace
 from . import compiler
+from .word_count import count_text_units
 from .common import (
     hx,
     _dn,
@@ -569,19 +571,63 @@ def _iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
         }
 
 
-def _pck_cd_text_stats(blob: bytes, input_pck: str = "", hdr=None) -> dict:
+def _pck_word_csv_name(input_pck: str) -> str:
+    stem = os.path.splitext(os.path.basename(str(input_pck or "")))[0]
+    if not stem:
+        stem = "Scene"
+    return stem + ".word.csv"
+
+
+def _pck_word_csv_path(input_pck: str, output_csv: str = "") -> str:
+    input_pck = os.path.abspath(input_pck)
+    if not output_csv:
+        return os.path.join(os.path.dirname(input_pck), _pck_word_csv_name(input_pck))
+    output_csv = str(output_csv)
+    if os.path.isdir(output_csv) or output_csv.endswith(("\\", "/")):
+        return os.path.join(os.path.abspath(output_csv), _pck_word_csv_name(input_pck))
+    return os.path.abspath(output_csv)
+
+
+def _write_pck_word_csv(csv_path: str, rows) -> None:
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(["type", "path", "status", "dialogue_lines", "dialogue_count"])
+        for row in rows or []:
+            w.writerow(
+                [
+                    str((row or {}).get("type") or ""),
+                    str((row or {}).get("path") or ""),
+                    str((row or {}).get("status") or ""),
+                    int((row or {}).get("lines", 0) or 0),
+                    int((row or {}).get("count", 0) or 0),
+                ]
+            )
+
+
+def _pck_cd_word_rows(blob: bytes, input_pck: str = "", hdr=None) -> dict:
     from . import dat as _dat
 
     stats = {
+        "rows": [],
         "scene_files": 0,
         "parsed_scene_files": 0,
         "cd_text_dialogue_lines": 0,
-        "cd_text_dialogue_chars": 0,
+        "cd_text_dialogue_count": 0,
     }
     for item in _iter_pck_scene_dat_items(blob, input_pck=input_pck, hdr=hdr) or []:
         stats["scene_files"] += 1
+        row = {
+            "type": "dat",
+            "path": str(item.get("relpath") or ""),
+            "status": "ok",
+            "lines": 0,
+            "count": 0,
+        }
         scn_blob = item.get("blob")
         if not scn_blob:
+            row["status"] = "failed"
+            stats["rows"].append(row)
             continue
         bundle = _dat._dat_disassembly_bundle(
             scn_blob,
@@ -591,6 +637,8 @@ def _pck_cd_text_stats(blob: bytes, input_pck: str = "", hdr=None) -> dict:
             scene_name=item.get("scene_name"),
         )
         if not bundle:
+            row["status"] = "failed"
+            stats["rows"].append(row)
             continue
         stats["parsed_scene_files"] += 1
         for ev in bundle.get("trace") or []:
@@ -605,52 +653,78 @@ def _pck_cd_text_stats(blob: bytes, input_pck: str = "", hdr=None) -> dict:
                 continue
             if txt == "":
                 continue
-            stats["cd_text_dialogue_lines"] += 1
-            stats["cd_text_dialogue_chars"] += len(txt)
+            row["lines"] += 1
+            row["count"] += count_text_units(txt)
+        stats["cd_text_dialogue_lines"] += int(row.get("lines", 0) or 0)
+        stats["cd_text_dialogue_count"] += int(row.get("count", 0) or 0)
+        stats["rows"].append(row)
     return stats
 
 
-def _pck_ss_text_stats(blob: bytes, hdr=None) -> dict:
+def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
     from . import textmap as _textmap
 
     stats = {
+        "rows": [],
         "ss_source_files": 0,
         "ss_failed_files": 0,
         "ss_dialogue_lines": 0,
-        "ss_dialogue_chars": 0,
+        "ss_dialogue_count": 0,
     }
     sources = list(_iter_pck_original_source_items(blob, hdr=hdr) or [])
     if not sources:
         return stats
     with tempfile.TemporaryDirectory(prefix="siglus_ssu_textmap_") as tmpdir:
         ss_paths = []
+        seen_ss_paths = set()
         for item in sources:
             raw = bytes(item.get("raw") or b"")
             name = str(item.get("name") or "")
             rel = _safe_relpath(name)
             if not rel:
                 rel = "unknown.bin"
-            out_name = os.path.basename(rel) or rel
-            out_path = os.path.join(tmpdir, out_name)
+            rel_display = rel.replace("\\", "/")
+            out_path = os.path.join(tmpdir, rel)
+            os.makedirs(os.path.dirname(out_path) or tmpdir, exist_ok=True)
             if os.path.exists(out_path):
                 try:
                     if read_bytes(out_path) != raw:
-                        out_path = _unique_outpath(tmpdir, out_name)
+                        out_path = _unique_outpath(
+                            os.path.dirname(out_path) or tmpdir,
+                            os.path.basename(rel) or rel,
+                        )
+                        rel_display = os.path.relpath(out_path, tmpdir).replace(
+                            "\\", "/"
+                        )
                         write_bytes(out_path, raw)
                 except Exception:
-                    out_path = _unique_outpath(tmpdir, out_name)
+                    out_path = _unique_outpath(
+                        os.path.dirname(out_path) or tmpdir,
+                        os.path.basename(rel) or rel,
+                    )
+                    rel_display = os.path.relpath(out_path, tmpdir).replace("\\", "/")
                     write_bytes(out_path, raw)
             else:
                 write_bytes(out_path, raw)
             if os.path.splitext(out_path)[1].lower() == ".ss":
-                ss_paths.append(out_path)
+                key = (os.path.abspath(out_path), rel_display)
+                if key not in seen_ss_paths:
+                    seen_ss_paths.add(key)
+                    ss_paths.append((out_path, rel_display))
         if not ss_paths:
             return stats
         iad_cache = {}
-        for ss_path in sorted(
-            ss_paths, key=lambda p: os.path.basename(str(p)).casefold()
+        for ss_path, rel_display in sorted(
+            ss_paths, key=lambda p: str(p[1]).casefold()
         ):
             stats["ss_source_files"] += 1
+            row = {
+                "type": "ss",
+                "path": rel_display,
+                "status": "ok",
+                "lines": 0,
+                "count": 0,
+            }
             try:
                 text, encoding, _newline = _textmap._read_text(ss_path)
                 ctx = {
@@ -671,17 +745,71 @@ def _pck_ss_text_stats(blob: bytes, hdr=None) -> dict:
                     txt = str(entry.get("text") or "")
                     if not txt:
                         continue
-                    stats["ss_dialogue_lines"] += 1
-                    stats["ss_dialogue_chars"] += len(txt)
+                    row["lines"] += 1
+                    row["count"] += count_text_units(txt)
             except Exception:
+                row["status"] = "failed"
                 stats["ss_failed_files"] += 1
+            stats["ss_dialogue_lines"] += int(row.get("lines", 0) or 0)
+            stats["ss_dialogue_count"] += int(row.get("count", 0) or 0)
+            stats["rows"].append(row)
     return stats
 
 
-def _pck_text_stats(blob: bytes, input_pck: str = "", hdr=None) -> dict:
-    stats = _pck_cd_text_stats(blob, input_pck=input_pck, hdr=hdr)
-    stats.update(_pck_ss_text_stats(blob, hdr=hdr))
-    return stats
+def pck_word_count(input_pck: str, output_csv: str = "") -> int:
+    input_pck = os.path.abspath(input_pck)
+    if not os.path.exists(input_pck):
+        sys.stderr.write(f"not found: {input_pck}\n")
+        return 2
+    blob = read_bytes(input_pck)
+    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
+        print("unsupported --word input: flix .pck is not supported")
+        return 1
+    if not looks_like_siglus_pck(blob):
+        print("unsupported --word input: only Siglus .pck is supported")
+        return 1
+    hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    dat_stats = _pck_cd_word_rows(blob, input_pck=input_pck, hdr=hdr)
+    ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
+    rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
+    csv_path = _pck_word_csv_path(input_pck, output_csv)
+    _write_pck_word_csv(csv_path, rows)
+    print("==== Word Count ====")
+    print(f"file: {input_pck}")
+    print(f"csv: {csv_path}")
+    print("")
+    print("dat:")
+    if dat_stats.get("rows"):
+        for row in dat_stats.get("rows") or []:
+            print(
+                f"  [{row.get('status')}] {row.get('path')}  lines={int(row.get('lines', 0) or 0):d} count={int(row.get('count', 0) or 0):d}"
+            )
+    else:
+        print("  (none)")
+    print("")
+    print("ss:")
+    if ss_stats.get("rows"):
+        for row in ss_stats.get("rows") or []:
+            print(
+                f"  [{row.get('status')}] {row.get('path')}  lines={int(row.get('lines', 0) or 0):d} count={int(row.get('count', 0) or 0):d}"
+            )
+    else:
+        print("  (none)")
+    print("")
+    print("totals:")
+    print(f"  dat_files={int(dat_stats.get('scene_files', 0) or 0):d}")
+    print(f"  parsed_dat_files={int(dat_stats.get('parsed_scene_files', 0) or 0):d}")
+    print(
+        f"  dat_dialogue_lines={int(dat_stats.get('cd_text_dialogue_lines', 0) or 0):d}"
+    )
+    print(
+        f"  dat_dialogue_count={int(dat_stats.get('cd_text_dialogue_count', 0) or 0):d}"
+    )
+    print(f"  ss_files={int(ss_stats.get('ss_source_files', 0) or 0):d}")
+    print(f"  ss_failed_files={int(ss_stats.get('ss_failed_files', 0) or 0):d}")
+    print(f"  ss_dialogue_lines={int(ss_stats.get('ss_dialogue_lines', 0) or 0):d}")
+    print(f"  ss_dialogue_count={int(ss_stats.get('ss_dialogue_count', 0) or 0):d}")
+    return 0
 
 
 def pck(blob: bytes, input_pck: str = "") -> int:
@@ -749,28 +877,6 @@ def pck(blob: bytes, input_pck: str = "") -> int:
         )
     print("")
     _print_sections(secs, len(blob))
-    stats = _pck_text_stats(blob, input_pck=input_pck, hdr=h)
-    print("")
-    print("stats:")
-    scene_files = int(stats.get("scene_files", 0) or 0)
-    parsed_scene_files = int(stats.get("parsed_scene_files", 0) or 0)
-    print(f"  scene_files={scene_files:d}")
-    print(
-        f"  cd_text_dialogue_lines={int(stats.get('cd_text_dialogue_lines', 0) or 0):d}"
-    )
-    print(
-        f"  cd_text_dialogue_chars={int(stats.get('cd_text_dialogue_chars', 0) or 0):d}"
-    )
-    if parsed_scene_files != scene_files:
-        print(f"  parsed_scene_files={parsed_scene_files:d}")
-    ss_source_files = int(stats.get("ss_source_files", 0) or 0)
-    if ss_source_files > 0:
-        print(f"  ss_source_files={ss_source_files:d}")
-        print(f"  ss_dialogue_lines={int(stats.get('ss_dialogue_lines', 0) or 0):d}")
-        print(f"  ss_dialogue_chars={int(stats.get('ss_dialogue_chars', 0) or 0):d}")
-        ss_failed_files = int(stats.get("ss_failed_files", 0) or 0)
-        if ss_failed_files:
-            print(f"  ss_failed_files={ss_failed_files:d}")
     return 0
 
 
