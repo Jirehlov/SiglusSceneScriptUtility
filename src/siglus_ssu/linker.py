@@ -10,7 +10,8 @@ from .common import (
     set_stage_time,
     pack_i32_pairs,
     exe_angou_element,
-    read_text_auto,
+    read_angou_first_line,
+    angou_to_exe_el,
     read_bytes,
     write_bytes,
     find_named_path,
@@ -71,38 +72,31 @@ def _xor_cycle_inplace(buf, code, start=0):
     _xor_cycle_inplace_native(buf, code, st)
 
 
-def _read_first_line(path, force_charset=""):
-    try:
-        txt = read_text_auto(path, force_charset=(force_charset or ""))
-    except Exception:
-        return ""
-    i = txt.find("\n")
-    if i >= 0:
-        txt = txt[:i]
-    return txt.strip("\r\n")
-
-
 def _resolve_exe_angou(ctx):
     if (not ctx.get("exe_angou_mode")) or (not ctx.get("lzss_mode", True)):
         return (False, b"")
     scn_path = ctx.get("scn_path") or ""
     angou_str = ctx.get("exe_angou_str")
-    if (not angou_str) and scn_path:
+    if angou_str is None and scn_path:
         p = find_named_path(scn_path, ANGOU_DAT_NAME, recursive=False)
         if p:
-            angou_str = _read_first_line(p, ctx.get("charset_force") or "")
+            angou_str = read_angou_first_line(p, ctx.get("charset_force") or "")
     if (not angou_str) and scn_path:
         kp = find_named_path(scn_path, KEY_TXT_NAME, recursive=False)
         if kp:
             el = read_exe_el_key(kp)
             if el and len(el) == 16:
                 return (True, el)
-    if not angou_str:
+    if angou_str is None:
         return (False, b"")
-    mb = angou_str.encode("cp932", "ignore")
-    if len(mb) < 8:
+    if ctx.get("exe_angou_str") is None:
+        el = angou_to_exe_el(angou_str)
+    else:
+        mb = str(angou_str).encode("cp932", "ignore")
+        el = exe_angou_element(mb) if len(mb) >= 8 else b""
+    if not el:
         return (False, b"")
-    return (True, exe_angou_element(mb))
+    return (True, el)
 
 
 def _get_scene_names(ctx):

@@ -445,6 +445,38 @@ def read_text_auto(path: str, force_charset: str = "") -> str:
     return decode_text_auto(data, force_charset=force_charset)[0]
 
 
+def first_line_text(text: str) -> str:
+    s = str(text or "")
+    i = s.find("\n")
+    if i >= 0:
+        s = s[:i]
+    return s.strip("\r\n")
+
+
+def angou_first_line(text: str) -> str:
+    s = first_line_text(text)
+    if not s:
+        return ""
+    if len(s.encode("cp932", "ignore")) < 8:
+        return ""
+    return s
+
+
+def read_angou_first_line(path: str, force_charset: str = "") -> str:
+    try:
+        return angou_first_line(read_text_auto(path, force_charset=force_charset))
+    except Exception:
+        return ""
+
+
+def decode_angou_first_line(data: bytes, force_charset: str = "") -> str:
+    try:
+        text, _, _ = decode_text_auto(data, force_charset=force_charset)
+    except Exception:
+        return ""
+    return angou_first_line(text)
+
+
 def read_bytes(path: str) -> bytes:
     with open(path, "rb") as f:
         return f.read()
@@ -626,24 +658,24 @@ def read_exe_el_key(path: str) -> bytes:
     return b""
 
 
+def angou_to_exe_el(text: str) -> bytes:
+    s = angou_first_line(text)
+    if not s:
+        return b""
+    el = exe_angou_element(s.encode("cp932", "ignore"))
+    return el if el and len(el) == 16 else b""
+
+
 def find_exe_el(
     base_dir: str, recursive: bool = True, force_charset: str = ""
 ) -> bytes:
     p = find_named_path(base_dir, ANGOU_DAT_NAME, recursive=recursive)
     if p:
-        try:
-            s0 = read_text_auto(p, force_charset=(force_charset or "")).split("\n", 1)[
-                0
-            ]
-        except Exception:
-            s0 = ""
-        s0 = str(s0 or "").strip("\r\n")
-        if s0:
-            mb = s0.encode("cp932", "ignore")
-            if len(mb) >= 8:
-                el = exe_angou_element(mb)
-                if el and len(el) == 16:
-                    return el
+        el = angou_to_exe_el(
+            read_angou_first_line(p, force_charset=(force_charset or ""))
+        )
+        if el:
+            return el
     kp = find_named_path(base_dir, KEY_TXT_NAME, recursive=recursive)
     if kp:
         el = read_exe_el_key(kp)

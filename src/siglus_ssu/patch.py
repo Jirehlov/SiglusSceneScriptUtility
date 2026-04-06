@@ -8,9 +8,9 @@ import json
 from .common import (
     read_bytes,
     write_bytes,
-    read_text_auto,
     read_exe_el_key,
-    exe_angou_element,
+    read_angou_first_line,
+    angou_to_exe_el,
     find_exe_el,
     is_named_filename,
     ANGOU_DAT_NAME,
@@ -51,15 +51,7 @@ def _derive_key_from_path(p: str) -> bytes:
         return el if el and len(el) == 16 else b""
 
     if is_named_filename(bn, ANGOU_DAT_NAME):
-        try:
-            s0 = read_text_auto(p).split("\n", 1)[0]
-        except Exception:
-            s0 = ""
-        s0 = str(s0 or "").strip("\r\n")
-        if not s0:
-            return b""
-        mb = s0.encode("cp932", "ignore")
-        el = exe_angou_element(mb) if len(mb) >= 8 else b""
+        el = angou_to_exe_el(read_angou_first_line(p))
         return el if el and len(el) == 16 else b""
 
     if cf.startswith("siglusengine") and cf.endswith(".exe"):

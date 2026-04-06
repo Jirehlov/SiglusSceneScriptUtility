@@ -5,6 +5,8 @@ from .common import (
     exe_angou_element,
     read_bytes,
     read_text_auto,
+    read_angou_first_line,
+    angou_to_exe_el,
     write_text,
     write_bytes,
     find_named_path,
@@ -183,12 +185,7 @@ def _load_angou_first_line(ctx):
     p = find_named_path(scn, ANGOU_DAT_NAME, recursive=False)
     if not p:
         return ""
-    try:
-        return read_text_auto(p, force_charset=(ctx.get("charset_force") or "")).split(
-            "\n", 1
-        )[0]
-    except FileNotFoundError:
-        return ""
+    return read_angou_first_line(p, force_charset=(ctx.get("charset_force") or ""))
 
 
 def write_gameexe_dat(ctx):
@@ -221,11 +218,16 @@ def write_gameexe_dat(ctx):
         s = ctx.get("exe_angou_str")
         if s is None:
             s = _load_angou_first_line(ctx)
-        if s:
-            mb = s.encode("cp932", "ignore")
+            if s:
+                el = angou_to_exe_el(s)
+                if el:
+                    mode = 1
+        elif s:
+            mb = str(s).encode("cp932", "ignore")
             if len(mb) >= 8:
-                mode = 1
                 el = exe_angou_element(mb)
+                if el and len(el) == 16:
+                    mode = 1
     if ctx.get("exe_angou_mode") and (not mode) and scn:
         kp = find_named_path(scn, KEY_TXT_NAME, recursive=False)
         if kp:

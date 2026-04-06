@@ -438,10 +438,12 @@ counts:
 ...
 ```
 
+If an embedded or adjacent `暗号.dat` is available, `.pck` analysis also appends a trailing `=== 暗号.dat ===` block and prints its first line, matching the compile-mode summary style.
+
 
 #### Word Count Output (`-a --word`)
 
-`-a --word` prints one row per decoded scene `.dat` and one row per embedded `.ss` source file. The count rule is fixed inside the project so results stay platform-independent:
+`-a --word` prints one row per decoded scene `.dat` and one row per embedded `.ss` source file. The count rule is as follows:
 
 - Han, Hiragana, Katakana, and Bopomofo count as `1` per character
 - Hangul counts by contiguous word run

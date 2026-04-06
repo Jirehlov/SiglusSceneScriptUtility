@@ -24,8 +24,6 @@ from .common import (
     _print_sections,
     _diff_kv,
     build_sections,
-    exe_angou_element,
-    decode_text_auto,
     read_bytes,
     write_bytes,
     parse_i32_header,
@@ -40,6 +38,9 @@ from .common import (
     find_exe_el,
     find_siglus_engine_exe,
     read_siglus_engine_exe_el,
+    decode_angou_first_line,
+    read_angou_first_line,
+    angou_to_exe_el,
     looks_like_siglus_pck,
     new_disam_stats,
     write_disam_totals,
@@ -447,24 +448,31 @@ def _iter_pck_angou_sources(blob: bytes, hdr=None):
         yield raw
 
 
-def _angou_source_exe_el(raw: bytes):
-    try:
-        _t, _, _ = decode_text_auto(raw)
-    except Exception:
-        _t = ""
-    s = _t.split("\n", 1)[0].strip("\r\n") if _t else ""
-    if not s:
-        return b""
-    mb = s.encode("cp932", "ignore")
-    if len(mb) < 8:
-        return b""
-    return exe_angou_element(mb)
+def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
+    for raw in _iter_pck_angou_sources(blob, hdr=hdr) or []:
+        line = decode_angou_first_line(raw)
+        if line:
+            return line
+    if input_pck:
+        try:
+            path = find_named_path(
+                os.path.dirname(os.path.abspath(input_pck)),
+                ANGOU_DAT_NAME,
+                recursive=False,
+            )
+        except Exception:
+            path = ""
+        if path:
+            line = read_angou_first_line(path)
+            if line:
+                return line
+    return ""
 
 
 def _compute_exe_el_from_pck_blob(blob: bytes, hdr=None):
     try:
         for raw in _iter_pck_angou_sources(blob, hdr=hdr) or []:
-            el = _angou_source_exe_el(raw)
+            el = angou_to_exe_el(decode_angou_first_line(raw))
             if el:
                 return el
         return b""
@@ -877,6 +885,11 @@ def pck(blob: bytes, input_pck: str = "") -> int:
         )
     print("")
     _print_sections(secs, len(blob))
+    angou = _pck_angou_content(blob, input_pck=input_pck, hdr=h)
+    if angou:
+        print("")
+        print(f"=== {ANGOU_DAT_NAME} ===")
+        print(angou)
     return 0
 
 
@@ -1317,7 +1330,7 @@ def _iter_scene_pck_angou_sources(os_dir: str):
 def _compute_exe_el_from_scene_pck(os_dir: str):
     try:
         for raw in _iter_scene_pck_angou_sources(os_dir):
-            el = _angou_source_exe_el(raw)
+            el = angou_to_exe_el(decode_angou_first_line(raw))
             if el:
                 return el
         return b""
@@ -1332,7 +1345,7 @@ def _iter_exe_el_candidates(os_dir: str):
     paths = list_named_paths(os_dir, ANGOU_DAT_NAME, recursive=True)
     for p in paths:
         try:
-            el = _angou_source_exe_el(read_bytes(p))
+            el = angou_to_exe_el(read_angou_first_line(p))
             if el and el not in seen:
                 seen.add(el)
                 yielded = True
@@ -1359,7 +1372,7 @@ def _iter_exe_el_candidates(os_dir: str):
 
     try:
         for raw in _iter_scene_pck_angou_sources(os_dir):
-            el = _angou_source_exe_el(raw)
+            el = angou_to_exe_el(decode_angou_first_line(raw))
             if el and el not in seen:
                 seen.add(el)
                 yield el
