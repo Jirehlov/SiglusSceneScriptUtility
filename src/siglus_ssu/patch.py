@@ -22,6 +22,14 @@ from .common import (
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
 _LOC_BYPASS_STUB = b"\xb0\x01\xc3"
+_LOC_IMPORT_ALIASES = {
+    "sysdir": ("GetSystemDirectoryW", "GetSystemDirectoryA"),
+    "fvisize": ("GetFileVersionInfoSizeW", "GetFileVersionInfoSizeA"),
+    "fvi": ("GetFileVersionInfoW", "GetFileVersionInfoA"),
+    "verq": ("VerQueryValueW", "VerQueryValueA"),
+    "locinfo": ("GetLocaleInfoW", "GetLocaleInfoA"),
+    "tz": ("GetTimeZoneInformation",),
+}
 
 
 def _parse_key_literal(s: str) -> bytes:
@@ -133,6 +141,13 @@ def _parse_pe32_sections(exe_bytes: bytes):
                 "Only 32-bit PE32 SiglusEngine.exe builds are supported for --loc."
             )
         image_base = struct.unpack_from("<I", exe_bytes, opt_off + 28)[0]
+        data_dir_off = opt_off + 96
+        import_rva = 0
+        import_size = 0
+        if opt_sz >= 104 and data_dir_off + 16 <= len(exe_bytes):
+            import_rva, import_size = struct.unpack_from(
+                "<II", exe_bytes, data_dir_off + 8
+            )
         sec_off = opt_off + opt_sz
         sections = []
         for i in range(sec_cnt):
@@ -159,7 +174,12 @@ def _parse_pe32_sections(exe_bytes: bytes):
             )
     except struct.error as exc:
         raise RuntimeError("Invalid or truncated PE32 image.") from exc
-    return {"image_base": int(image_base), "sections": sections}
+    return {
+        "image_base": int(image_base),
+        "sections": sections,
+        "import_rva": int(import_rva),
+        "import_size": int(import_size),
+    }
 
 
 def _pe_off_to_va(layout, file_off: int):
@@ -172,6 +192,77 @@ def _pe_off_to_va(layout, file_off: int):
                 layout["image_base"] + sec["virtual_address"] + (file_off - raw_start)
             )
     return None
+
+
+def _rva_to_off(layout, rva: int):
+    rva = int(rva)
+    if rva < 0:
+        return None
+    raw_starts = [
+        sec["raw_offset"] for sec in layout["sections"] if sec["raw_offset"] > 0
+    ]
+    if raw_starts:
+        header_end = min(raw_starts)
+        if rva < header_end and rva < header_end:
+            return rva
+    for sec in layout["sections"]:
+        va0 = sec["virtual_address"]
+        span = max(sec["virtual_size"], sec["raw_size"])
+        if va0 <= rva < va0 + span:
+            return sec["raw_offset"] + (rva - va0)
+    return None
+
+
+def _read_cstr(blob: bytes, off: int):
+    off = int(off)
+    if off < 0 or off >= len(blob):
+        return ""
+    end = blob.find(b"\x00", off)
+    if end == -1:
+        end = len(blob)
+    return blob[off:end].decode("ascii", "ignore")
+
+
+def _parse_pe32_imports(exe_bytes: bytes, layout):
+    imports = {}
+    desc_off = _rva_to_off(layout, layout.get("import_rva", 0))
+    if desc_off is None:
+        return imports
+    max_off = len(exe_bytes)
+    seen_desc = set()
+    while desc_off is not None and desc_off + 20 <= max_off:
+        if desc_off in seen_desc:
+            break
+        seen_desc.add(desc_off)
+        oft_rva, _ts, _fc, name_rva, ft_rva = struct.unpack_from(
+            "<IIIII", exe_bytes, desc_off
+        )
+        if oft_rva == 0 and name_rva == 0 and ft_rva == 0:
+            break
+        thunk_rva = oft_rva or ft_rva
+        thunk_off = _rva_to_off(layout, thunk_rva)
+        ft_off = _rva_to_off(layout, ft_rva)
+        if thunk_off is None or ft_off is None:
+            desc_off += 20
+            continue
+        idx = 0
+        while thunk_off + idx * 4 + 4 <= max_off and ft_off + idx * 4 + 4 <= max_off:
+            thunk = struct.unpack_from("<I", exe_bytes, thunk_off + idx * 4)[0]
+            if thunk == 0:
+                break
+            if thunk & 0x80000000:
+                idx += 1
+                continue
+            ibn_off = _rva_to_off(layout, thunk)
+            if ibn_off is None or ibn_off + 2 > max_off:
+                idx += 1
+                continue
+            name = _read_cstr(exe_bytes, ibn_off + 2)
+            if name:
+                imports.setdefault(name, layout["image_base"] + ft_rva + idx * 4)
+            idx += 1
+        desc_off += 20
+    return imports
 
 
 def _find_loc_function_start(text_data: bytes, ref_rel_off: int):
@@ -188,56 +279,132 @@ def _find_loc_function_start(text_data: bytes, ref_rel_off: int):
     return fallback
 
 
+def _find_text_section(layout):
+    for sec in layout["sections"]:
+        if sec["name"].casefold() == ".text":
+            return sec
+    raise RuntimeError("Could not locate the .text section in SiglusEngine.exe.")
+
+
+def _find_loc_import_categories(exe_bytes: bytes, layout):
+    imports = _parse_pe32_imports(exe_bytes, layout)
+    cats = {}
+    for cat, aliases in _LOC_IMPORT_ALIASES.items():
+        for name in aliases:
+            if name in imports:
+                cats[cat] = imports[name]
+                break
+    return cats
+
+
+def _find_iat_ref_functions(text_sec, iat_va: int):
+    refs = set()
+    text_data = text_sec["data"]
+    pat = struct.pack("<I", int(iat_va))
+    start = 0
+    while True:
+        rel_off = text_data.find(pat, start)
+        if rel_off == -1:
+            break
+        func_rel = _find_loc_function_start(text_data, rel_off)
+        if func_rel is not None:
+            refs.add(text_sec["raw_offset"] + func_rel)
+        start = rel_off + 1
+    return refs
+
+
+def _is_loc_bool_callsite(text_data: bytes, rel_off: int):
+    tail = text_data[rel_off + 5 : rel_off + 13]
+    if len(tail) < 4 or tail[:2] != b"\x84\xc0":
+        return False
+    branch = tail[2:]
+    if len(branch) >= 2 and branch[0] in (0x74, 0x75):
+        return True
+    if len(branch) >= 6 and branch[:2] in (b"\x0f\x84", b"\x0f\x85"):
+        return True
+    if len(branch) >= 2 and branch[:2] == b"\x90\x90":
+        return True
+    if len(branch) >= 6 and branch[:6] == b"\x90" * 6:
+        return True
+    return False
+
+
+def _scan_text_call_graph(text_sec, layout):
+    text_data = text_sec["data"]
+    text_va = layout["image_base"] + text_sec["virtual_address"]
+    call_graph = {}
+    bool_targets = {}
+    for rel_off in range(0, max(0, len(text_data) - 5)):
+        if text_data[rel_off] != 0xE8:
+            continue
+        try:
+            disp = struct.unpack_from("<i", text_data, rel_off + 1)[0]
+        except struct.error:
+            continue
+        dest_va = text_va + rel_off + 5 + disp
+        if not (text_va <= dest_va < text_va + len(text_data)):
+            continue
+        caller_rel = _find_loc_function_start(text_data, rel_off)
+        callee_rel = _find_loc_function_start(text_data, dest_va - text_va)
+        if caller_rel is None or callee_rel is None:
+            continue
+        caller_off = text_sec["raw_offset"] + caller_rel
+        callee_off = text_sec["raw_offset"] + callee_rel
+        call_graph.setdefault(caller_off, set()).add(callee_off)
+        if _is_loc_bool_callsite(text_data, rel_off):
+            bool_targets[callee_off] = bool_targets.get(callee_off, 0) + 1
+    return call_graph, bool_targets
+
+
+def _closure_categories(start_func: int, call_graph, func_cats):
+    seen = set()
+    cats = set()
+    stack = [int(start_func)]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        cats.update(func_cats.get(cur, ()))
+        for nxt in call_graph.get(cur, ()):
+            if nxt not in seen:
+                stack.append(nxt)
+    return cats
+
+
 def _find_loc_guard_function(data: bytearray):
     exe_bytes = bytes(data)
     layout = _parse_pe32_sections(exe_bytes)
-    text_sec = None
-    for sec in layout["sections"]:
-        if sec["name"].casefold() == ".text":
-            text_sec = sec
-            break
-    if text_sec is None:
-        raise RuntimeError("Could not locate the .text section in SiglusEngine.exe.")
-
-    marker_map = {
-        "msg": "This Game is Japan Only".encode("utf-16le"),
-        "title": "日本語版Windows判定".encode("utf-16le"),
-    }
-    candidates = {}
-    for kind, marker in marker_map.items():
-        marker_hits = _find_all(exe_bytes, marker)
-        for marker_off in marker_hits:
-            marker_va = _pe_off_to_va(layout, marker_off)
-            if marker_va is None:
-                continue
-            ref_pat = struct.pack("<I", marker_va)
-            start = 0
-            while True:
-                ref_rel_off = text_sec["data"].find(ref_pat, start)
-                if ref_rel_off == -1:
-                    break
-                func_rel_off = _find_loc_function_start(text_sec["data"], ref_rel_off)
-                if func_rel_off is not None:
-                    func_off = text_sec["raw_offset"] + func_rel_off
-                    info = candidates.setdefault(
-                        func_off, {"msg": 0, "title": 0, "state_hint": False}
-                    )
-                    info[kind] += 1
-                    head = bytes(data[func_off : func_off + 3])
-                    if head in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB):
-                        info["state_hint"] = True
-                start = ref_rel_off + 1
-
+    text_sec = _find_text_section(layout)
+    import_cats = _find_loc_import_categories(exe_bytes, layout)
+    want = set(import_cats)
+    if len(want) < len(_LOC_IMPORT_ALIASES):
+        raise RuntimeError(
+            "Could not locate the region-detection routine in this SiglusEngine.exe build."
+        )
+    func_cats = {}
+    for cat, iat_va in import_cats.items():
+        for func_off in _find_iat_ref_functions(text_sec, iat_va):
+            func_cats.setdefault(func_off, set()).add(cat)
+    call_graph, bool_targets = _scan_text_call_graph(text_sec, layout)
     ranked = []
-    for func_off, info in candidates.items():
-        score = info["msg"] * 4 + info["title"] * 2 + (1 if info["state_hint"] else 0)
-        ranked.append((score, info["msg"], info["title"], func_off))
+    for func_off, call_cnt in bool_targets.items():
+        cats = _closure_categories(func_off, call_graph, func_cats)
+        direct = set()
+        for callee in call_graph.get(func_off, ()):
+            direct.update(func_cats.get(callee, ()))
+        head = bytes(data[func_off : func_off + 3])
+        score = (
+            len(cats & want) * 100
+            + len(direct & want) * 10
+            + min(call_cnt, 9)
+            + (1 if head in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB) else 0)
+        )
+        ranked.append((score, len(cats & want), len(direct & want), call_cnt, func_off))
     ranked.sort(reverse=True)
-    for _score, msg_cnt, title_cnt, func_off in ranked:
-        if msg_cnt > 0 and title_cnt > 0:
+    for _score, cat_cnt, _direct_cnt, _call_cnt, func_off in ranked:
+        if cat_cnt == len(want):
             return func_off
-    if ranked:
-        return ranked[0][3]
     raise RuntimeError(
         "Could not locate the region-detection routine in this SiglusEngine.exe build."
     )
