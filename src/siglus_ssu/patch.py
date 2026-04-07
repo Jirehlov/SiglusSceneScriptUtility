@@ -4,6 +4,7 @@ import re
 import argparse
 import hashlib
 import json
+import struct
 
 from .common import (
     read_bytes,
@@ -18,6 +19,9 @@ from .common import (
     read_siglus_engine_exe_el,
     siglus_engine_exe_element,
 )
+
+_LOC_FUNC_PROLOG = b"\x55\x8b\xec"
+_LOC_BYPASS_STUB = b"\xb0\x01\xc3"
 
 
 def _parse_key_literal(s: str) -> bytes:
@@ -93,6 +97,320 @@ def _default_out_path_lang(in_exe: str, tag: str) -> str:
     if not t:
         t = "LANG"
     return os.path.join(d, f"{stem}_{t.upper()}{ext}")
+
+
+def _default_out_path_loc(in_exe: str, enabled: bool) -> str:
+    return _default_out_path_lang(in_exe, "LOC1" if enabled else "LOC0")
+
+
+def _find_all(blob: bytes, pat: bytes):
+    hits = []
+    start = 0
+    while True:
+        i = blob.find(pat, start)
+        if i == -1:
+            break
+        hits.append(i)
+        start = i + 1
+    return hits
+
+
+def _parse_pe32_sections(exe_bytes: bytes):
+    if len(exe_bytes) < 0x40 or exe_bytes[:2] != b"MZ":
+        raise RuntimeError("Not a PE executable.")
+    try:
+        pe_off = struct.unpack_from("<I", exe_bytes, 0x3C)[0]
+        if exe_bytes[pe_off : pe_off + 4] != b"PE\x00\x00":
+            raise RuntimeError("Invalid PE header.")
+        coff_off = pe_off + 4
+        _machine, sec_cnt, _ts, _sym_ptr, _sym_cnt, opt_sz, _chars = struct.unpack_from(
+            "<HHIIIHH", exe_bytes, coff_off
+        )
+        opt_off = coff_off + 20
+        magic = struct.unpack_from("<H", exe_bytes, opt_off)[0]
+        if magic != 0x10B:
+            raise RuntimeError(
+                "Only 32-bit PE32 SiglusEngine.exe builds are supported for --loc."
+            )
+        image_base = struct.unpack_from("<I", exe_bytes, opt_off + 28)[0]
+        sec_off = opt_off + opt_sz
+        sections = []
+        for i in range(sec_cnt):
+            off = sec_off + i * 40
+            if off + 40 > len(exe_bytes):
+                raise RuntimeError("Truncated PE section table.")
+            raw_name = exe_bytes[off : off + 8]
+            name = raw_name.rstrip(b"\x00").decode("ascii", "ignore")
+            virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+                "<IIII", exe_bytes, off + 8
+            )
+            if raw_offset > len(exe_bytes):
+                raise RuntimeError("Section raw offset out of range.")
+            raw_end = min(len(exe_bytes), raw_offset + raw_size)
+            sections.append(
+                {
+                    "name": name,
+                    "virtual_size": int(virtual_size),
+                    "virtual_address": int(virtual_address),
+                    "raw_size": int(raw_size),
+                    "raw_offset": int(raw_offset),
+                    "data": exe_bytes[raw_offset:raw_end],
+                }
+            )
+    except struct.error as exc:
+        raise RuntimeError("Invalid or truncated PE32 image.") from exc
+    return {"image_base": int(image_base), "sections": sections}
+
+
+def _pe_off_to_va(layout, file_off: int):
+    file_off = int(file_off)
+    for sec in layout["sections"]:
+        raw_start = sec["raw_offset"]
+        raw_end = raw_start + sec["raw_size"]
+        if raw_start <= file_off < raw_end:
+            return (
+                layout["image_base"] + sec["virtual_address"] + (file_off - raw_start)
+            )
+    return None
+
+
+def _find_loc_function_start(text_data: bytes, ref_rel_off: int):
+    ref_rel_off = int(ref_rel_off)
+    lo = max(0, ref_rel_off - 0x800)
+    fallback = None
+    for i in range(ref_rel_off, lo - 1, -1):
+        if text_data[i : i + 3] not in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB):
+            continue
+        if fallback is None:
+            fallback = i
+        if i == 0 or text_data[i - 1] in (0xCC, 0xC3, 0xC2, 0x90, 0x00):
+            return i
+    return fallback
+
+
+def _find_loc_guard_function(data: bytearray):
+    exe_bytes = bytes(data)
+    layout = _parse_pe32_sections(exe_bytes)
+    text_sec = None
+    for sec in layout["sections"]:
+        if sec["name"].casefold() == ".text":
+            text_sec = sec
+            break
+    if text_sec is None:
+        raise RuntimeError("Could not locate the .text section in SiglusEngine.exe.")
+
+    marker_map = {
+        "msg": "This Game is Japan Only".encode("utf-16le"),
+        "title": "日本語版Windows判定".encode("utf-16le"),
+    }
+    candidates = {}
+    for kind, marker in marker_map.items():
+        marker_hits = _find_all(exe_bytes, marker)
+        for marker_off in marker_hits:
+            marker_va = _pe_off_to_va(layout, marker_off)
+            if marker_va is None:
+                continue
+            ref_pat = struct.pack("<I", marker_va)
+            start = 0
+            while True:
+                ref_rel_off = text_sec["data"].find(ref_pat, start)
+                if ref_rel_off == -1:
+                    break
+                func_rel_off = _find_loc_function_start(text_sec["data"], ref_rel_off)
+                if func_rel_off is not None:
+                    func_off = text_sec["raw_offset"] + func_rel_off
+                    info = candidates.setdefault(
+                        func_off, {"msg": 0, "title": 0, "state_hint": False}
+                    )
+                    info[kind] += 1
+                    head = bytes(data[func_off : func_off + 3])
+                    if head in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB):
+                        info["state_hint"] = True
+                start = ref_rel_off + 1
+
+    ranked = []
+    for func_off, info in candidates.items():
+        score = info["msg"] * 4 + info["title"] * 2 + (1 if info["state_hint"] else 0)
+        ranked.append((score, info["msg"], info["title"], func_off))
+    ranked.sort(reverse=True)
+    for _score, msg_cnt, title_cnt, func_off in ranked:
+        if msg_cnt > 0 and title_cnt > 0:
+            return func_off
+    if ranked:
+        return ranked[0][3]
+    raise RuntimeError(
+        "Could not locate the region-detection routine in this SiglusEngine.exe build."
+    )
+
+
+def _find_loc_guard_call_site(data: bytearray, func_off: int):
+    exe_bytes = bytes(data)
+    layout = _parse_pe32_sections(exe_bytes)
+    text_sec = None
+    for sec in layout["sections"]:
+        if sec["name"].casefold() == ".text":
+            text_sec = sec
+            break
+    if text_sec is None:
+        return None
+
+    func_va = _pe_off_to_va(layout, func_off)
+    if func_va is None:
+        return None
+
+    text_va = layout["image_base"] + text_sec["virtual_address"]
+    text_data = text_sec["data"]
+    for rel_off in range(0, max(0, len(text_data) - 5)):
+        if text_data[rel_off] != 0xE8:
+            continue
+        try:
+            disp = struct.unpack_from("<i", text_data, rel_off + 1)[0]
+        except struct.error:
+            continue
+        dest_va = text_va + rel_off + 5 + disp
+        if dest_va != func_va:
+            continue
+        tail = text_data[rel_off + 5 : rel_off + 13]
+        if len(tail) < 4 or tail[:2] != b"\x84\xc0":
+            continue
+        branch_rel = rel_off + 7
+        branch = text_data[branch_rel : branch_rel + 6]
+        if len(branch) >= 2 and branch[0] in (0x74, 0x75):
+            return {
+                "call_off": text_sec["raw_offset"] + rel_off,
+                "branch_off": text_sec["raw_offset"] + branch_rel,
+                "branch_size": 2,
+                "branch_bytes": bytes(branch[:2]),
+            }
+        if len(branch) >= 6 and branch[:2] in (b"\x0f\x84", b"\x0f\x85"):
+            return {
+                "call_off": text_sec["raw_offset"] + rel_off,
+                "branch_off": text_sec["raw_offset"] + branch_rel,
+                "branch_size": 6,
+                "branch_bytes": bytes(branch[:6]),
+            }
+        if len(branch) >= 6 and branch[:6] == b"\x90" * 6:
+            return {
+                "call_off": text_sec["raw_offset"] + rel_off,
+                "branch_off": text_sec["raw_offset"] + branch_rel,
+                "branch_size": 6,
+                "branch_bytes": bytes(branch[:6]),
+            }
+        if len(branch) >= 2 and branch[:2] == b"\x90\x90":
+            return {
+                "call_off": text_sec["raw_offset"] + rel_off,
+                "branch_off": text_sec["raw_offset"] + branch_rel,
+                "branch_size": 2,
+                "branch_bytes": bytes(branch[:2]),
+            }
+    return None
+
+
+def _loc_state(data: bytearray, func_off: int, call_info):
+    head = bytes(data[func_off : func_off + 3])
+    if head == _LOC_BYPASS_STUB:
+        return "disabled", "function stub"
+
+    if call_info:
+        branch = call_info["branch_bytes"]
+        if branch == b"\x90" * len(branch):
+            return "disabled", "caller branch patched"
+        if branch[:1] == b"\x75" or branch[:2] == b"\x0f\x85":
+            return "unknown", "caller branch inverted"
+
+    if head == _LOC_FUNC_PROLOG:
+        return "enabled", "original function"
+
+    return "unknown", f"unexpected bytes at 0x{func_off:X}: {head.hex()}"
+
+
+def _parse_loc_mode(v: str) -> bool:
+    s = str(v or "").strip()
+    if s == "0":
+        return False
+    if s == "1":
+        return True
+    raise ValueError("--loc expects 0 (disable) or 1 (enable)")
+
+
+def patch_loc(data: bytearray, loc_spec: str):
+    want_enabled = _parse_loc_mode(loc_spec)
+    func_off = _find_loc_guard_function(data)
+    call_info = _find_loc_guard_call_site(data, func_off)
+    before_state, before_detail = _loc_state(data, func_off, call_info)
+    target_state = "enabled" if want_enabled else "disabled"
+
+    if before_state == "unknown":
+        raise RuntimeError(
+            f"Could not determine current region-detection state ({before_detail})."
+        )
+    if want_enabled and before_detail == "caller branch patched":
+        raise RuntimeError(
+            "Region detection appears to be disabled by a caller-branch patch; "
+            "--loc 1 can only restore executables patched by this tool's function-stub method."
+        )
+
+    changes = []
+    if want_enabled:
+        if bytes(data[func_off : func_off + 3]) == _LOC_BYPASS_STUB:
+            for i, (old, new) in enumerate(zip(_LOC_BYPASS_STUB, _LOC_FUNC_PROLOG)):
+                off = func_off + i
+                if data[off] != old:
+                    raise RuntimeError(
+                        f"patch verification failed: offset 0x{off:X} expected 0x{old:02X} got 0x{data[off]:02X}"
+                    )
+                if old != new:
+                    data[off] = new
+                    changes.append(
+                        (
+                            off,
+                            old,
+                            new,
+                            "region detection: disabled -> enabled",
+                        )
+                    )
+    else:
+        head = bytes(data[func_off : func_off + 3])
+        if head not in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB):
+            raise RuntimeError(
+                f"Unsupported region-detection prologue at 0x{func_off:X}: {head.hex()}"
+            )
+        if head == _LOC_FUNC_PROLOG:
+            for i, (old, new) in enumerate(zip(_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB)):
+                off = func_off + i
+                if data[off] != old:
+                    raise RuntimeError(
+                        f"patch verification failed: offset 0x{off:X} expected 0x{old:02X} got 0x{data[off]:02X}"
+                    )
+                if old != new:
+                    data[off] = new
+                    changes.append(
+                        (
+                            off,
+                            old,
+                            new,
+                            "region detection: enabled -> disabled",
+                        )
+                    )
+
+    after_state, after_detail = _loc_state(
+        data, func_off, _find_loc_guard_call_site(data, func_off)
+    )
+    if after_state == "unknown":
+        raise RuntimeError(
+            f"Region-detection patch applied but verification failed ({after_detail})."
+        )
+    if after_state != target_state:
+        raise RuntimeError(
+            f"Region-detection patch verification failed: expected {target_state}, got {after_state}."
+        )
+    return (
+        f"loc:{int(want_enabled)}",
+        f"LOC{int(want_enabled)}",
+        changes,
+        before_state,
+        after_state,
+    )
 
 
 def patch_altkey(data: bytearray, key_bytes: bytes):
@@ -421,6 +739,7 @@ def main(argv=None):
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--altkey", action="store_true", help="patch exe_el with <key>")
     g.add_argument("--lang", metavar="LANG_OR_JSON", help="chs/eng or json config")
+    g.add_argument("--loc", metavar="0|1", help="toggle region detection: 0=off, 1=on")
 
     args = ap.parse_args(argv)
 
@@ -435,6 +754,8 @@ def main(argv=None):
 
     mode_name = ""
     suffix = ""
+    loc_before = None
+    loc_after = None
 
     if args.altkey:
         if not args.key:
@@ -454,6 +775,14 @@ def main(argv=None):
             return 1
         mode_name = "altkey"
         suffix = "alt"
+    elif args.loc is not None:
+        try:
+            mode_name, suffix, changes, loc_before, loc_after = patch_loc(
+                data, args.loc
+            )
+        except Exception as e:
+            sys.stderr.write(str(e) + "\n")
+            return 1
     else:
         try:
             tag, suffix, changes = patch_lang(data, args.lang)
@@ -469,6 +798,9 @@ def main(argv=None):
     print(f"Mode  : {mode_name}")
     print(f"SHA256(before): {before_hash}")
     print(f"SHA256(after) : {after_hash}")
+    if loc_before is not None and loc_after is not None:
+        print(f"LOC(before): {loc_before}")
+        print(f"LOC(after) : {loc_after}")
 
     if not changes:
         print("No applicable changes found.")
@@ -487,7 +819,11 @@ def main(argv=None):
             out_path = (
                 _default_out_path_altkey(in_path)
                 if args.altkey
-                else _default_out_path_lang(in_path, suffix)
+                else (
+                    _default_out_path_loc(in_path, args.loc == "1")
+                    if args.loc is not None
+                    else _default_out_path_lang(in_path, suffix)
+                )
             )
 
     try:

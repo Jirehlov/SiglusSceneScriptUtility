@@ -1099,10 +1099,11 @@ siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
 
 ### `-p` / `--patch` — Patch `SiglusEngine.exe`
 
-Applies binary patches to `SiglusEngine.exe`. Supports two patch operations:
+Applies binary patches to `SiglusEngine.exe`. Supports three patch operations:
 
 - **`--altkey`**: Replace the embedded `exe_el` decryption key with a different one.
 - **`--lang`**: Apply a language preset (`chs` or `eng`) or a custom JSON-specified mapping to redirect the engine to a different `.pck` file, save directory, and character encoding.
+- **`--loc`**: Toggle the built-in Japan-only region check (`0` = disable/force pass, `1` = enable/restore original check).
 
 #### Syntax
 
@@ -1112,6 +1113,9 @@ siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
 
 # Apply a language patch
 siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace]
+
+# Toggle region detection
+siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
 
 #### Parameters
@@ -1120,11 +1124,13 @@ siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace
 |---|---|
 | `<input_exe>` | Path to `SiglusEngine.exe` to patch. |
 | `<input_key>` | **(--altkey only)** The new 16-byte key. Accepts: a literal like `0xA9, 0x86, ...`; `key.txt`; `暗号.dat`; `SiglusEngine*.exe`; or a directory (auto-derives key). |
-| `-o`, `--output` | Path for the output patched executable. Defaults to `<stem>_alt.exe` (altkey) or `<stem>_CHS.exe` / `<stem>_ENG.exe` (lang). |
+| `-o`, `--output` | Path for the output patched executable. Defaults to `<stem>_alt.exe` (altkey), `<stem>_CHS.exe` / `<stem>_ENG.exe` (lang), or `<stem>_LOC0.exe` / `<stem>_LOC1.exe` (loc). |
 | `--inplace` | Overwrite the input file directly instead of writing to a new path. If both `-o`/`--output` and `--inplace` are given, `--inplace` takes precedence. |
 | `--lang chs` | Apply the built-in Simplified Chinese preset. |
 | `--lang eng` | Apply the built-in English preset. |
 | `--lang <json>` | Apply a custom JSON-specified patch (see below). Here `<json>` is an **inline JSON string**, not a path to a JSON file. |
+| `--loc 0` | Disable region detection by forcing the Japan-only check to return success. |
+| `--loc 1` | Enable region detection by restoring the original Japan-only check. |
 
 #### Language Patch Presets
 
@@ -1177,6 +1183,12 @@ siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
 
 # Apply a custom JSON language patch
 siglus-ssu -p --lang '{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+
+# Disable region detection
+siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
+
+# Re-enable region detection in-place
+siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
 ```
 
 #### Output
@@ -1195,6 +1207,20 @@ Applied changes: N bytes
  - japanese -> english (N bytes)
  - Gameexe.dat -> Gameexe.eng (N bytes)
 Written: /path/to/SiglusEngine_ENG.exe
+```
+
+For `--loc`, the summary also prints the previous and new switch states:
+
+```
+Input : /path/to/SiglusEngine.exe
+Mode  : loc:0
+SHA256(before): abc123...
+SHA256(after) : def456...
+LOC(before): enabled
+LOC(after) : disabled
+Applied changes: 3 bytes
+ - region detection: enabled -> disabled (3 bytes)
+Written: /path/to/SiglusEngine_LOC0.exe
 ```
 
 

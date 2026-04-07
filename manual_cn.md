@@ -1094,10 +1094,11 @@ siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
 
 ### `-p` / `--patch` — 修改 `SiglusEngine.exe`
 
-对 `SiglusEngine.exe` 进行二进制补丁。支持两种操作：
+对 `SiglusEngine.exe` 进行二进制补丁。支持三种操作：
 
 - **`--altkey`**：用另一个密钥替换内嵌的 `exe_el` 解密密钥。
 - **`--lang`**：应用语言预设（`chs` 或 `eng`）或自定义 JSON 映射，使引擎加载不同的 `.pck` 文件、存档目录和字符编码。
+- **`--loc`**：切换内置的仅限日本地区检测（`0` = 关闭/强制通过，`1` = 开启/恢复原始检测）。
 
 #### 语法
 
@@ -1107,6 +1108,9 @@ siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
 
 # 应用语言补丁
 siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace]
+
+# 切换地域检测
+siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
 
 #### 参数
@@ -1115,11 +1119,13 @@ siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace
 |---|---|
 | `<input_exe>` | 要修改的 `SiglusEngine.exe` 路径。 |
 | `<input_key>` | **（仅 --altkey）** 新的 16 字节密钥。接受：字面格式如 `0xA9, 0x86, ...`；`key.txt`；`暗号.dat`；`SiglusEngine*.exe`；或目录（自动推导）。 |
-| `-o`, `--output` | 输出的修改后可执行文件路径。默认为 `<stem>_alt.exe`（altkey）或 `<stem>_CHS.exe`/`<stem>_ENG.exe`（lang）。 |
+| `-o`, `--output` | 输出的修改后可执行文件路径。默认为 `<stem>_alt.exe`（altkey）、`<stem>_CHS.exe`/`<stem>_ENG.exe`（lang），或 `<stem>_LOC0.exe`/`<stem>_LOC1.exe`（loc）。 |
 | `--inplace` | 直接覆盖输入文件，而非写入新路径。若同时给出 `-o/--output`，则以 `--inplace` 为准。 |
 | `--lang chs` | 应用内置简体中文预设。 |
 | `--lang eng` | 应用内置英文预设。 |
 | `--lang <json>` | 应用自定义 JSON 规格的补丁（见下文）。这里的 `<json>` 是**内联 JSON 字符串**，不是 JSON 文件路径。 |
+| `--loc 0` | 关闭地域检测，强制让 Japan-only 检查返回成功。 |
+| `--loc 1` | 开启地域检测，恢复原始 Japan-only 检查。 |
 
 #### 语言补丁预设
 
@@ -1172,6 +1178,12 @@ siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
 
 # 应用自定义 JSON 语言补丁
 siglus-ssu -p --lang '{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+
+# 关闭地域检测
+siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
+
+# 原地重新开启地域检测
+siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
 ```
 
 #### 输出
@@ -1190,6 +1202,20 @@ Applied changes: N bytes
  - japanese -> english (N bytes)
  - Gameexe.dat -> Gameexe.eng (N bytes)
 Written: /path/to/SiglusEngine_ENG.exe
+```
+
+使用 `--loc` 时，还会额外打印修改前后的开关状态：
+
+```
+Input : /path/to/SiglusEngine.exe
+Mode  : loc:0
+SHA256(before): abc123...
+SHA256(after) : def456...
+LOC(before): enabled
+LOC(after) : disabled
+Applied changes: 3 bytes
+ - region detection: enabled -> disabled (3 bytes)
+Written: /path/to/SiglusEngine_LOC0.exe
 ```
 
 

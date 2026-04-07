@@ -56,7 +56,7 @@ def _usage(out=None):
     out.write("  -g, --g00       Extract/analyze .g00 images\n")
     out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
     out.write("  -v, --video     Extract/analyze .omv videos\n")
-    out.write("  -p, --patch     Patch SiglusEngine.exe (altkey/lang)\n")
+    out.write("  -p, --patch     Patch SiglusEngine.exe (altkey/lang/loc)\n")
     out.write("\n")
     out.write("Init mode:\n")
     out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
@@ -206,11 +206,14 @@ def _usage(out=None):
     out.write(
         f"  {p} -p --lang (chs|eng|<json>) <input_exe> [-o output_exe] [--inplace]\n"
     )
+    out.write(f"  {p} -p --loc (0|1) <input_exe> [-o output_exe] [--inplace]\n")
     out.write("    <input_key> can be either:\n")
     out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
     out.write(
         "      - path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
     )
+    out.write("    --loc 0       Disable region detection (force pass)\n")
+    out.write("    --loc 1       Enable region detection (restore original check)\n")
     out.write("    <json> (custom) fields:\n")
     out.write("      - charset: 0/128/134 or 'eng'/'jp'/'chs'\n")
     out.write("      - suffix: output suffix for default naming\n")
