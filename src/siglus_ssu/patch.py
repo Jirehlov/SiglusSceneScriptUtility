@@ -932,7 +932,7 @@ def main(argv=None):
         if len(key_bytes) != 16:
             sys.stderr.write(
                 "invalid <key>: expected either a 16-byte literal like '0xA9, 0x86, ...'\n"
-                "or a path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive).\n"
+                "or a path to \u6697\u53f7.dat / key.txt / SiglusEngine*.exe / directory (auto-derive).\n"
             )
             return 2
         try:

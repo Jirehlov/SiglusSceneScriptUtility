@@ -947,7 +947,7 @@ def _is_source_word_char(ch: str) -> bool:
         ch in "_$@"
         or _isalpha(ch)
         or _isnum(ch)
-        or (_iszen(ch) and ch not in "【】「」『』\"'")
+        or (_iszen(ch) and ch not in "\u3010\u3011\u300c\u300d\u300e\u300f\"'")
     )
 
 
@@ -2023,7 +2023,7 @@ def hover_for_position(
             scope = f" ({rec.scope})" if rec.scope else ""
             where = ""
             if rec.path:
-                where = f" — `{os.path.basename(rec.path)}`:{rec.line}"
+                where = f" @ `{os.path.basename(rec.path)}`:{rec.line}"
             detail = rec.signature or rec.detail or rec.kind
             lines.append(f"- **{rec.kind}** `{rec.name}`{scope}: {detail}{where}")
         return {

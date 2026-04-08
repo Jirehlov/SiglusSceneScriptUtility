@@ -934,12 +934,12 @@ def compare_gameexe_dat(p1, p2):
     _, m2 = struct.unpack_from("<ii", b2, 0)
     if int(m1) != 0 and (not pck._compute_exe_el(d1)):
         sys.stderr.write(
-            "Missing exe angou key under first Gameexe.dat folder (need 暗号.dat or key.txt).\n"
+            "Missing exe angou key under first Gameexe.dat folder (need \u6697\u53f7.dat or key.txt).\n"
         )
         return 1
     if int(m2) != 0 and (not pck._compute_exe_el(d2)):
         sys.stderr.write(
-            "Missing exe angou key under second Gameexe.dat folder (need 暗号.dat or key.txt).\n"
+            "Missing exe angou key under second Gameexe.dat folder (need \u6697\u53f7.dat or key.txt).\n"
         )
         return 1
 

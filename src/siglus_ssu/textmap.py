@@ -121,7 +121,7 @@ def _needs_quoted_literal(value: str) -> bool:
     if not value:
         return False
     for ch in value:
-        if ch in "【】" or not CA._iszen(ch):
+        if ch in "\u3010\u3011" or not CA._iszen(ch):
             return True
     return False
 
@@ -697,13 +697,13 @@ def _fix_brackets_content(text: str):
     for ch in text:
         if not in_bracket:
             out.append(ch)
-            if ch == "【":
+            if ch == "\u3010":
                 in_bracket = True
                 stage = 0
                 in_str = False
                 esc = False
             continue
-        if ch == "】":
+        if ch == "\u3011":
             in_bracket = False
             stage = 0
             in_str = False
@@ -1109,12 +1109,12 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
             )
         if fixed_quote_count:
             eprint(
-                f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside 【】",
+                f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside \u3010\u3011",
                 errors="replace",
             )
         if fixed_space_count:
             eprint(
-                f"textmap: {fname}: removed {fixed_space_count} space(s) inside 【】",
+                f"textmap: {fname}: removed {fixed_space_count} space(s) inside \u3010\u3011",
                 errors="replace",
             )
 

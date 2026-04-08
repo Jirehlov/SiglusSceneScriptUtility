@@ -170,7 +170,7 @@ def restore_gameexe_ini(
     info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el, base=base)
     if info.get("mode") and not info.get("used_exe_el"):
         raise RuntimeError(
-            "Gameexe.dat is encrypted with exe angou; missing 暗号.dat/key.txt to derive key"
+            "Gameexe.dat is encrypted with exe angou; missing \u6697\u53f7.dat/key.txt to derive key"
         )
     if not txt:
         raise RuntimeError("Failed to decode Gameexe.dat payload")

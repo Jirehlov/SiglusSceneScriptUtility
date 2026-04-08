@@ -354,7 +354,7 @@ def _print_summary(ctx):
         for k in sorted(timings.keys()):
             print(f"{k}: {timings[k]:.3f}s")
     if angou is not None:
-        print("=== 暗号.dat ===")
+        print("=== \u6697\u53f7.dat ===")
         print(angou)
 
 

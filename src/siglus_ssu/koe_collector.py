@@ -21,7 +21,12 @@ _VOICE_CALL_NAMES = frozenset(
     }
 )
 _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
-_TEXT_QUOTE_PAIRS = (("「", "」"), ("『", "』"), ("（", "）"), ('"', '"'))
+_TEXT_QUOTE_PAIRS = (
+    ("\u300c", "\u300d"),
+    ("\u300e", "\u300f"),
+    ("\uff08", "\uff09"),
+    ('"', '"'),
+)
 
 
 def _try_int(value):

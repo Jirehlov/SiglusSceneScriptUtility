@@ -6,7 +6,7 @@ import re
 
 from . import const as C
 
-ANGOU_DAT_NAME = "暗号.dat"
+ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 
 KEY_TXT_NAME = "key.txt"
 
@@ -917,9 +917,13 @@ def _dn(name, width=None):
         w = int(C.NAME_W)
     if len(s) <= w:
         return s
-    if w <= 1:
-        return "…"
-    return s[: w - 1] + "…"
+    if w <= 0:
+        return ""
+    if w == 1:
+        return "."
+    if w <= 3:
+        return s[: w - 1] + "."
+    return s[: w - 3] + "..."
 
 
 def _fmt_ts(ts):

@@ -1529,7 +1529,7 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         exe_el = _resolve_pck_scene_exe_el(dat, input_pck=input_pck, hdr=hdr)
         if not exe_el:
             sys.stderr.write(
-                "Warning: scn_data_exe_angou_mod=1 but 暗号.dat not found/invalid under output folder; scene data may remain encrypted.\n"
+                "Warning: scn_data_exe_angou_mod=1 but \u6697\u53f7.dat not found/invalid under output folder; scene data may remain encrypted.\n"
             )
     D = None
     disam_stats = None

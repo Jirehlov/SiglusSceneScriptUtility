@@ -53,15 +53,15 @@ def la_analize(pcad):
         }
         cur_id += 1
         c = s[i]
-        if c == "【":
+        if c == "\u3010":
             a["type"] = C.LA_T["OPEN_SUMI"]
             i += 1
-        elif c == "】":
+        elif c == "\u3011":
             a["type"] = C.LA_T["CLOSE_SUMI"]
             i += 1
         elif _iszen(c):
             st = i
-            while _iszen(s[i]) and s[i] not in "【】":
+            while _iszen(s[i]) and s[i] not in "\u3010\u3011":
                 i += 1
             str_list.append(s[st:i])
             a["type"] = C.LA_T["VAL_STR"]

@@ -39,8 +39,12 @@ _HANGUL_RANGES = (
     (0xAC00, 0xD7A3),
     (0xD7B0, 0xD7FF),
 )
-_WORD_CONNECTORS = frozenset({"'", "’", "-", "_", "‐", "‑", "﹣", "－"})
-_NUMBER_CONNECTORS = frozenset({".", ",", "/", ":", "．", "，", "／", "："})
+_WORD_CONNECTORS = frozenset(
+    {"'", "\u2019", "-", "_", "\u2010", "\u2011", "\ufe63", "\uff0d"}
+)
+_NUMBER_CONNECTORS = frozenset(
+    {".", ",", "/", ":", "\uff0e", "\uff0c", "\uff0f", "\uff1a"}
+)
 
 
 def _in_ranges(cp: int, ranges) -> bool:

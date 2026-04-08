@@ -111,7 +111,7 @@ def _usage(out=None):
         f"  {p} -a [--disam] [--readall] [--payload] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
     )
     out.write(f"  {p} -a --word <input_pck> [output_csv]\n")
-    out.write(f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n")
+    out.write(f"  {p} -a <path_to_\u6697\u53f7.dat|SiglusEngine.exe|dir> --angou\n")
     out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
     out.write("    --disam        Write .dat disassembly to __DATDIR__\n")
     out.write(
@@ -123,7 +123,9 @@ def _usage(out=None):
     out.write(
         "    --payload      Compare normalized decoded/decompressed scn_bytes semantics (ignores string-pool ids when text matches); expensive\n"
     )
-    out.write("    --angou        Parse as 暗号.dat and print derived exe_el key\n")
+    out.write(
+        "    --angou        Parse as \u6697\u53f7.dat and print derived exe_el key\n"
+    )
     out.write("    --gei          Analyze/compare Gameexe.dat\n")
     out.write("\n")
     out.write("KOE mode:\n")
@@ -210,7 +212,7 @@ def _usage(out=None):
     out.write("    <input_key> can be either:\n")
     out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
     out.write(
-        "      - path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
+        "      - path to \u6697\u53f7.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
     )
     out.write("    --loc 0       Disable region detection (force pass)\n")
     out.write("    --loc 1       Enable region detection (restore original check)\n")
