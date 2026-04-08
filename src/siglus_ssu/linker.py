@@ -5,6 +5,7 @@ import glob
 from . import const as C
 from .CA import _rt
 from .common import (
+    build_empty_ia_data,
     log_stage,
     record_stage_time,
     set_stage_time,
@@ -14,6 +15,7 @@ from .common import (
     angou_to_exe_el,
     read_bytes,
     write_bytes,
+    write_cached_bytes,
     find_named_path,
     ANGOU_DAT_NAME,
     KEY_TXT_NAME,
@@ -311,11 +313,7 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         )
         raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-        if cache_path:
-            cache_dir = os.path.dirname(cache_path)
-            if cache_dir:
-                os.makedirs(cache_dir, exist_ok=True)
-            write_bytes(cache_path, enc_blob)
+        write_cached_bytes(cache_path, enc_blob)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
         (not skip) and chunks.append(enc_blob)
         record_stage_time(ctx, "OS", time.time() - start)
@@ -341,16 +339,7 @@ def link_pack(ctx):
         if ctx.get("inc_list"):
             iad = build_ia_data(ctx)
         else:
-            iad = {
-                "replace_tree": _rt(),
-                "name_set": set(ctx.get("defined_names") or []),
-                "property_list": [],
-                "command_list": [],
-                "property_cnt": 0,
-                "command_cnt": 0,
-                "inc_property_cnt": 0,
-                "inc_command_cnt": 0,
-            }
+            iad = build_empty_ia_data(_rt(), ctx.get("defined_names"))
         ctx["ia_data"] = iad
     inc_props = list(iad.get("property_list") or [])
     inc_cmds = list(iad.get("command_list") or [])

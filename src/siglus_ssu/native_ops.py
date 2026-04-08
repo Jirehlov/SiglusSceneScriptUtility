@@ -45,7 +45,6 @@ def is_native_available() -> bool:
 
 class _LzssTree:
     def ready(self, tree_size: int):
-        self.size = tree_size
         self.root = tree_size
         self.unused = tree_size + 1
         n = tree_size + 2
@@ -126,7 +125,6 @@ class _LzssTreeFind:
         self.src = src
         self.src_cnt = src_cnt
         self.window_size = window_size
-        self.look_ahead_size = look_ahead_size
         self.max_match_len = max(2, min(level, look_ahead_size))
         self.src_index = 0
         self.match_target = 0

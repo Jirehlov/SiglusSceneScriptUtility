@@ -111,18 +111,6 @@ def _default_out_path_loc(in_exe: str, enabled: bool) -> str:
     return _default_out_path_lang(in_exe, "LOC1" if enabled else "LOC0")
 
 
-def _find_all(blob: bytes, pat: bytes):
-    hits = []
-    start = 0
-    while True:
-        i = blob.find(pat, start)
-        if i == -1:
-            break
-        hits.append(i)
-        start = i + 1
-    return hits
-
-
 def _parse_pe32_sections(exe_bytes: bytes):
     if len(exe_bytes) < 0x40 or exe_bytes[:2] != b"MZ":
         raise RuntimeError("Not a PE executable.")

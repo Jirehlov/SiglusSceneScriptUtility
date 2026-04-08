@@ -1,21 +1,12 @@
 from . import const as C
 from .CA import get_form_code_by_name
+from .common import normalize_atom
 
 
 def N(ln, **k):
     d = {"node_line": ln, "node_form": 0, "node_type": 0, "node_sub_type": 0}
     d.update(k)
     return d
-
-
-def A(a):
-    return {
-        "id": a.get("id", 0),
-        "line": a.get("line", 0),
-        "type": a.get("type", C.LA_T["NONE"]),
-        "opt": a.get("opt", 0),
-        "subopt": a.get("subopt", 0),
-    }
 
 
 class SA:
@@ -32,7 +23,7 @@ class SA:
         ]
         s.last = {
             "type": "TNMSERR_SA_NONE",
-            "atom": A(
+            "atom": normalize_atom(
                 s.atom_list[0]
                 if s.atom_list
                 else {"id": 0, "line": 1, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
@@ -53,7 +44,7 @@ class SA:
         if atom is None:
             s.last["type"] = typ
             return 0
-        atom = A(atom)
+        atom = normalize_atom(atom)
         if s.last.get("type") == "TNMSERR_SA_NONE" or s.last.get("atom", {}).get(
             "id", -1
         ) < atom.get("id", -1):
@@ -64,7 +55,7 @@ class SA:
         a = s._a(i)
         if a.get("type") != t:
             return 0, i, None
-        return 1, i + 1, N(a.get("line", 0), atom=A(a))
+        return 1, i + 1, N(a.get("line", 0), atom=normalize_atom(a))
 
     def sa_ss(s, i):
         p = i

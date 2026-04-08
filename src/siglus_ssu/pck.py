@@ -24,6 +24,7 @@ from .common import (
     _print_sections,
     _diff_kv,
     build_sections,
+    build_source_angou_layout,
     read_bytes,
     write_bytes,
     parse_i32_header,
@@ -1263,29 +1264,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
         name = ""
     p += name_len
     lzsz = read_u32_le(md5_code, 64, default=0)
-    mw = (
-        read_u32_le(md5_code, int(sa["mask_w_md5_i"]), default=0)
-        % int(sa["mask_w_sur"])
-    ) + int(sa["mask_w_add"])
-    mh = (
-        read_u32_le(md5_code, int(sa["mask_h_md5_i"]), default=0)
-        % int(sa["mask_h_sur"])
-    ) + int(sa["mask_h_add"])
-    mask = bytearray(mw * mh)
-    ind = int(sa.get("mask_index", 0))
-    mi = int(sa.get("mask_md5_index", 0))
-    for i in range(len(mask)):
-        mask_md5_ofs = (mi % 16) * 4
-        mask[i] = mg[ind % len(mg)] ^ md5_code[mask_md5_ofs]
-        ind += 1
-        mi = (mi + 1) % 16
-    mapw = (
-        read_u32_le(md5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
-    ) + int(sa["map_w_add"])
-    bh = (lzsz + 1) // 2
-    dh = (bh + 3) // 4
-    maph = (dh + (mapw - 1)) // mapw
-    mapt = mapw * maph * 4
+    mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
+        md5_code, sa, mg, lzsz
+    )
     dp1 = dec[p : p + mapt]
     dp2 = dec[p + mapt : p + mapt * 2]
     if len(dp1) < mapt or len(dp2) < mapt:

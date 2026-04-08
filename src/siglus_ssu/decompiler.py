@@ -7,9 +7,17 @@ from . import const as C
 from . import disam
 from .common import (
     augment_receiver_form_codes,
+    binary_result_form as _binary_result_form,
+    build_operator_render_tables,
+    clone_stack_segment,
+    format_named_command_args as _format_command_arg_exprs,
     invert_form_code_map,
+    latest_stack_start,
     normalize_ss_quoted_literal_source,
+    normalize_stack_start,
     quote_ss_text,
+    split_element_code as _element_owner,
+    trim_stack_points,
     unique_out_path,
     write_text,
 )
@@ -481,13 +489,13 @@ def _infer_bundle_global_command_count(bundle):
     return min(seen) if seen else None
 
 
-def _pick_package_global_command_count(bundles):
+def _pick_common_count(bundles, getter, chooser):
     freq = {}
     for bundle in bundles or []:
         try:
-            cnt = _infer_bundle_global_command_count(bundle)
+            cnt = getter(bundle)
         except Exception:
-            cnt = None
+            continue
         if cnt is None:
             continue
         try:
@@ -500,29 +508,20 @@ def _pick_package_global_command_count(bundles):
     if not freq:
         return None
     best = max(freq.values())
-    return min(k for k, v in freq.items() if v == best)
+    return chooser(k for k, v in freq.items() if v == best)
 
 
-def _pick_pack_context_count(bundles, key):
-    freq = {}
-    for bundle in bundles or []:
-        try:
-            pack_ctx = dict((bundle or {}).get("pack_context") or {})
-        except Exception:
-            continue
-        if key not in pack_ctx:
-            continue
-        try:
-            cnt = int(pack_ctx.get(key, 0) or 0)
-        except Exception:
-            continue
-        if cnt < 0:
-            continue
-        freq[cnt] = int(freq.get(cnt, 0) or 0) + 1
-    if not freq:
+def _pack_context_count(bundle, key):
+    try:
+        pack_ctx = dict((bundle or {}).get("pack_context") or {})
+    except Exception:
         return None
-    best = max(freq.values())
-    return min(k for k, v in freq.items() if v == best)
+    if key not in pack_ctx:
+        return None
+    try:
+        return int(pack_ctx.get(key, 0) or 0)
+    except Exception:
+        return None
 
 
 def _infer_bundle_global_property_count(bundle):
@@ -561,28 +560,6 @@ def _infer_bundle_global_property_count(bundle):
             if cand < 0:
                 continue
             freq[cand] = int(freq.get(cand, 0) or 0) + 1
-    if not freq:
-        return None
-    best = max(freq.values())
-    return max(k for k, v in freq.items() if v == best)
-
-
-def _pick_package_global_property_count(bundles):
-    freq = {}
-    for bundle in bundles or []:
-        try:
-            cnt = _infer_bundle_global_property_count(bundle)
-        except Exception:
-            cnt = None
-        if cnt is None:
-            continue
-        try:
-            cnt = int(cnt)
-        except Exception:
-            continue
-        if cnt < 0:
-            continue
-        freq[cnt] = int(freq.get(cnt, 0) or 0) + 1
     if not freq:
         return None
     best = max(freq.values())
@@ -784,14 +761,6 @@ def _drop_terminal_command_return(lines):
     return out
 
 
-def _element_owner(code):
-    try:
-        code = int(code)
-    except Exception:
-        return (None, None)
-    return ((code >> 24) & 0xFF, code & 0xFFFF)
-
-
 def _label_token(label_id):
     try:
         return f"#l{int(label_id):d}"
@@ -806,9 +775,9 @@ def _z_label_token(label_id):
         return "#z00"
 
 
-def _rewrite_label_refs(text, mapping):
+def _rewrite_refs(text, mapping, needle, pattern):
     s = str(text or "")
-    if (not mapping) or ("#l" not in s):
+    if (not mapping) or (needle not in s):
         return s
 
     def _repl(m):
@@ -816,20 +785,7 @@ def _rewrite_label_refs(text, mapping):
         label = str(m.group(2) or "")
         return prefix + str(mapping.get(label, label))
 
-    return _LABEL_REF_SUB_RE.sub(_repl, s)
-
-
-def _rewrite_synth_label_refs(text, mapping):
-    s = str(text or "")
-    if (not mapping) or ("#__" not in s):
-        return s
-
-    def _repl(m):
-        prefix = str(m.group(1) or "")
-        label = str(m.group(2) or "")
-        return prefix + str(mapping.get(label, label))
-
-    return _SYNTH_LABEL_REF_SUB_RE.sub(_repl, s)
+    return pattern.sub(_repl, s)
 
 
 @functools.lru_cache(maxsize=65536)
@@ -1110,12 +1066,20 @@ def _support_inc_lines_from_hints(hints):
 
 def build_decompile_hints(bundles, status=None):
     bundle_list = [x for x in list(bundles or []) if isinstance(x, dict)]
-    global_count = _pick_pack_context_count(bundle_list, "inc_command_cnt")
+    global_count = _pick_common_count(
+        bundle_list, lambda bundle: _pack_context_count(bundle, "inc_command_cnt"), min
+    )
     if global_count is None:
-        global_count = _pick_package_global_command_count(bundle_list)
-    global_prop_count = _pick_pack_context_count(bundle_list, "inc_property_cnt")
+        global_count = _pick_common_count(
+            bundle_list, _infer_bundle_global_command_count, min
+        )
+    global_prop_count = _pick_common_count(
+        bundle_list, lambda bundle: _pack_context_count(bundle, "inc_property_cnt"), min
+    )
     if global_prop_count is None:
-        global_prop_count = _pick_package_global_property_count(bundle_list)
+        global_prop_count = _pick_common_count(
+            bundle_list, _infer_bundle_global_property_count, max
+        )
     prop_max_seed = (
         int(global_prop_count) - 1
         if global_prop_count is not None and int(global_prop_count) > 0
@@ -1729,53 +1693,9 @@ class _Decompiler:
             fm_intlistref: fm_intlist,
             fm_strlistref: fm_strlist,
         }
-        unary_int_ops = {
-            int(x)
-            for x in (
-                getattr(C, "OP_PLUS", -1),
-                getattr(C, "OP_MINUS", -1),
-                getattr(C, "OP_TILDE", -1),
-            )
-            if isinstance(x, int)
-        }
-        string_cmp_ops = {
-            int(x)
-            for x in (
-                getattr(C, "OP_EQUAL", -1),
-                getattr(C, "OP_NOT_EQUAL", -1),
-                getattr(C, "OP_GREATER", -1),
-                getattr(C, "OP_GREATER_EQUAL", -1),
-                getattr(C, "OP_LESS", -1),
-                getattr(C, "OP_LESS_EQUAL", -1),
-            )
-            if isinstance(x, int)
-        }
-        unary_text = {
-            int(getattr(C, "OP_PLUS", -1)): "+",
-            int(getattr(C, "OP_MINUS", -1)): "-",
-            int(getattr(C, "OP_TILDE", -1)): "~",
-        }
-        binary_text = {
-            int(getattr(C, "OP_PLUS", -1)): "+",
-            int(getattr(C, "OP_MINUS", -1)): "-",
-            int(getattr(C, "OP_MULTIPLE", -1)): "*",
-            int(getattr(C, "OP_DIVIDE", -1)): "/",
-            int(getattr(C, "OP_AMARI", -1)): "%",
-            int(getattr(C, "OP_EQUAL", -1)): "==",
-            int(getattr(C, "OP_NOT_EQUAL", -1)): "!=",
-            int(getattr(C, "OP_GREATER", -1)): ">",
-            int(getattr(C, "OP_GREATER_EQUAL", -1)): ">=",
-            int(getattr(C, "OP_LESS", -1)): "<",
-            int(getattr(C, "OP_LESS_EQUAL", -1)): "<=",
-            int(getattr(C, "OP_LOGICAL_AND", -1)): "&&",
-            int(getattr(C, "OP_LOGICAL_OR", -1)): "||",
-            int(getattr(C, "OP_AND", -1)): "&",
-            int(getattr(C, "OP_OR", -1)): "|",
-            int(getattr(C, "OP_HAT", -1)): "^",
-            int(getattr(C, "OP_SL", -1)): "<<",
-            int(getattr(C, "OP_SR", -1)): ">>",
-            int(getattr(C, "OP_SR3", -1)): ">>>",
-        }
+        unary_int_ops, string_cmp_ops, unary_text, binary_text = (
+            build_operator_render_tables()
+        )
         stack = []
         elm_points = []
         elm_point_pending_idx = None
@@ -1886,46 +1806,22 @@ class _Decompiler:
                 return None
             return ref_to_val.get(form_i, form_i if form_i in scalar_forms else None)
 
-        def _latest_elm_stack_start():
-            for ep in reversed(elm_points):
-                try:
-                    sl = int((ep or {}).get("stack_len", 0) or 0)
-                except Exception:
-                    continue
-                if 0 <= sl <= len(stack):
-                    return sl
-            return None
-
-        def _trim_elm_points(stack_start):
-            nonlocal elm_points, elm_point_pending_idx
-            kept = []
-            for ep in elm_points:
-                try:
-                    sl = int((ep or {}).get("stack_len", 0) or 0)
-                except Exception:
-                    continue
-                if sl < int(stack_start):
-                    kept.append(ep)
-            elm_points = kept
+        def _drop_stack_tail(stack_start):
+            nonlocal elm_point_pending_idx
+            stack_start = normalize_stack_start(stack_start, len(stack))
+            if stack_start is None:
+                return
+            del stack[stack_start:]
+            elm_points[:] = trim_stack_points(elm_points, stack_start)
             elm_point_pending_idx = None
 
-        def _drop_stack_tail(stack_start):
-            try:
-                stack_start = int(stack_start)
-            except Exception:
-                return
-            if stack_start < 0:
-                stack_start = 0
-            if stack_start > len(stack):
-                stack_start = len(stack)
-            del stack[stack_start:]
-            _trim_elm_points(stack_start)
-
         def _pop_stack_top():
+            nonlocal elm_point_pending_idx
             if not stack:
                 return None
             it = stack.pop()
-            _trim_elm_points(len(stack))
+            elm_points[:] = trim_stack_points(elm_points, len(stack))
+            elm_point_pending_idx = None
             return it
 
         def _push_stack_value(
@@ -2025,27 +1921,20 @@ class _Decompiler:
 
         def _copy_element():
             nonlocal elm_point_pending_idx
-            stack_start = _latest_elm_stack_start()
-            if stack_start is None or stack_start < 0 or stack_start >= len(stack):
+            stack_start = latest_stack_start(elm_points, len(stack))
+            cloned = clone_stack_segment(stack, stack_start, _stack_int_value)
+            if cloned is None:
                 return
-            seg = [dict(it) for it in stack[stack_start:]]
-            if not seg:
-                return
+            seg, first_int = cloned
             new_start = len(stack)
             stack.extend(seg)
-            first_int = None
-            for it in seg:
-                v = _stack_int_value(it)
-                if v is not None:
-                    first_int = int(v)
-                    break
             elm_points.append(
                 {"ofs": None, "stack_len": new_start, "first_int": first_int}
             )
             elm_point_pending_idx = None
 
         def _consume_element():
-            stack_start = _latest_elm_stack_start()
+            stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is None:
                 _pop_stack_top()
                 return
@@ -2237,44 +2126,8 @@ class _Decompiler:
                 return {"info": info, "call_name": call_name or "<?command>"}
             return None
 
-        def _format_command_arg_exprs(info, arg_exprs, named_ids):
-            args = list(arg_exprs or [])
-            ids = list(named_ids or [])
-            if not ids or not isinstance(info, dict):
-                return args
-            pos_cnt = len(args) - len(ids)
-            if pos_cnt < 0:
-                return args
-            arg_map = info.get("arg_map") or {}
-            named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
-            named_list = (
-                named_spec.get("arg_list") if isinstance(named_spec, dict) else []
-            )
-            if not isinstance(named_list, list):
-                return args
-            name_by_id = {}
-            for item in named_list:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    nid = int(item.get("id", -1))
-                except Exception:
-                    continue
-                nm = str(item.get("name") or "")
-                if nm:
-                    name_by_id[nid] = nm
-            out = list(args[:pos_cnt])
-            for expr, nid in zip(args[pos_cnt:], reversed(ids)):
-                nm = (
-                    name_by_id.get(int(nid)) if name_by_id and nid is not None else None
-                )
-                out.append(f"{nm}={expr}" if nm else expr)
-            if len(args) > pos_cnt + len(ids):
-                out.extend(args[pos_cnt + len(ids) :])
-            return out
-
         def _pop_element_expr():
-            stack_start = _latest_elm_stack_start()
+            stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is None:
                 if stack:
                     rendered = _render_property_expr_items([stack[-1]])
@@ -2333,7 +2186,7 @@ class _Decompiler:
             saved_pending = elm_point_pending_idx
             try:
                 right = _pop_arg_expr({"form": int(right_form)})
-                stack_start = _latest_elm_stack_start()
+                stack_start = latest_stack_start(elm_points, len(stack))
                 left_prop_ids = []
                 left_has_array = False
                 if stack_start is not None and 0 <= int(stack_start) <= len(stack):
@@ -2559,24 +2412,6 @@ class _Decompiler:
                 return res
             return None
 
-        def _binary_result_form(form_l, form_r, opr):
-            try:
-                form_l = int(form_l)
-                form_r = int(form_r)
-                opr = int(opr)
-            except Exception:
-                return None
-            if form_l == int(fm_int) and form_r == int(fm_int):
-                return fm_int
-            if form_l == int(fm_str) and form_r == int(fm_int):
-                return fm_str if opr == int(getattr(C, "OP_MULTIPLE", -1)) else None
-            if form_l == int(fm_str) and form_r == int(fm_str):
-                if opr == int(getattr(C, "OP_PLUS", -1)):
-                    return fm_str
-                if opr in string_cmp_ops:
-                    return fm_int
-            return None
-
         for ev in self.events:
             if not isinstance(ev, dict):
                 continue
@@ -2637,7 +2472,7 @@ class _Decompiler:
                         prop_has_array=prop_has_array,
                     )
                 else:
-                    stack_start = _latest_elm_stack_start()
+                    stack_start = latest_stack_start(elm_points, len(stack))
                     if stack_start is not None:
                         prop_items = stack[stack_start:]
                         prop_ids, prop_has_array = _left_property_info(prop_items)
@@ -2746,7 +2581,7 @@ class _Decompiler:
                     ev["_right_prop_ids"] = list(right_item.get("prop_ids") or [])
                 if right_item.get("prop_has_array"):
                     ev["_right_has_array"] = True
-                stack_start = _latest_elm_stack_start()
+                stack_start = latest_stack_start(elm_points, len(stack))
                 _drop_stack_tail(
                     stack_start
                 ) if stack_start is not None else _pop_stack_top()
@@ -2794,7 +2629,9 @@ class _Decompiler:
                     ev["_rhs_has_array"] = True
                 _pop_stack_top()
                 _pop_stack_top()
-                res_form = _binary_result_form(lf, rf, ev.get("opr"))
+                res_form = _binary_result_form(
+                    lf, rf, ev.get("opr"), fm_int, fm_str, string_cmp_ops
+                )
                 if res_form is not None:
                     _push_stack_value(res_form, expr=expr)
                 continue
@@ -2805,7 +2642,7 @@ class _Decompiler:
                 arg_layout = list(ev.get("arg_layout") or [])
                 arg_exprs = _peek_arg_expr_list(arg_layout)
                 resolved = _resolve_command_expr(len(arg_layout), ev.get("ret_form"))
-                stack_start = _latest_elm_stack_start()
+                stack_start = latest_stack_start(elm_points, len(stack))
                 call_name = ""
                 info = None
                 if resolved is not None:
@@ -3789,12 +3626,17 @@ class _Decompiler:
                     if tail:
                         out.append(
                             _line_item(
-                                indent + _rewrite_label_refs(tail, ref_map),
+                                indent
+                                + _rewrite_refs(tail, ref_map, "#l", _LABEL_REF_SUB_RE),
                                 target,
                             )
                         )
                     continue
-            out.append(_line_item(_rewrite_label_refs(text, ref_map), target))
+            out.append(
+                _line_item(
+                    _rewrite_refs(text, ref_map, "#l", _LABEL_REF_SUB_RE), target
+                )
+            )
         return out
 
     def _restore_empty_cd_nl_sentences(self, lines):
@@ -4052,7 +3894,10 @@ class _Decompiler:
         for idx, line in enumerate(kept):
             text = rewrites.get(idx, _line_text(line))
             out.append(
-                _line_item(_rewrite_label_refs(text, mapping), _line_target(line))
+                _line_item(
+                    _rewrite_refs(text, mapping, "#l", _LABEL_REF_SUB_RE),
+                    _line_target(line),
+                )
             )
         return out
 
@@ -4106,7 +3951,9 @@ class _Decompiler:
                         mapping = {alias: head}
                         for pos in range(alias_idx):
                             text = _line_text(out[pos])
-                            rewrote = _rewrite_synth_label_refs(text, mapping)
+                            rewrote = _rewrite_refs(
+                                text, mapping, "#__", _SYNTH_LABEL_REF_SUB_RE
+                            )
                             if rewrote != text:
                                 out[pos] = _line_item(rewrote, _line_target(out[pos]))
             idx = j
@@ -4239,7 +4086,10 @@ class _Decompiler:
         for idx, line in enumerate(kept):
             text = rewrites.get(idx, _line_text(line))
             out.append(
-                _line_item(_rewrite_label_refs(text, mapping), _line_target(line))
+                _line_item(
+                    _rewrite_refs(text, mapping, "#l", _LABEL_REF_SUB_RE),
+                    _line_target(line),
+                )
             )
         return out
 
@@ -4306,14 +4156,22 @@ class _Decompiler:
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
             if not m:
-                out.append(_line_item(_rewrite_label_refs(text, alias_map), target))
+                out.append(
+                    _line_item(
+                        _rewrite_refs(text, alias_map, "#l", _LABEL_REF_SUB_RE), target
+                    )
+                )
                 continue
             indent, label, tail = m.groups()
             z_label = alias_map.get(label)
             if not z_label:
-                out.append(_line_item(_rewrite_label_refs(text, alias_map), target))
+                out.append(
+                    _line_item(
+                        _rewrite_refs(text, alias_map, "#l", _LABEL_REF_SUB_RE), target
+                    )
+                )
                 continue
-            tail = _rewrite_label_refs(str(tail or ""), alias_map)
+            tail = _rewrite_refs(str(tail or ""), alias_map, "#l", _LABEL_REF_SUB_RE)
             if tail:
                 out.append(_line_item(indent + tail, target))
             continue
@@ -4396,7 +4254,7 @@ class _Decompiler:
             return kept
         return [
             _line_item(
-                _rewrite_label_refs(_line_text(line), mapping),
+                _rewrite_refs(_line_text(line), mapping, "#l", _LABEL_REF_SUB_RE),
                 _line_target(line),
             )
             for line in kept

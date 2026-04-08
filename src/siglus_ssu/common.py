@@ -103,6 +103,174 @@ def unique_out_path(path):
         return path
 
 
+def normalize_atom(a):
+    a = a if isinstance(a, dict) else {}
+    return {
+        "id": a.get("id", 0),
+        "line": a.get("line", 0),
+        "type": a.get("type", C.LA_T["NONE"]),
+        "opt": a.get("opt", 0),
+        "subopt": a.get("subopt", 0),
+    }
+
+
+def build_empty_ia_data(replace_tree, defined_names=None):
+    return {
+        "replace_tree": replace_tree,
+        "name_set": set(defined_names or []),
+        "property_list": [],
+        "command_list": [],
+        "property_cnt": 0,
+        "command_cnt": 0,
+        "inc_property_cnt": 0,
+        "inc_command_cnt": 0,
+    }
+
+
+def split_element_code(code):
+    try:
+        code = int(code)
+    except Exception:
+        return (None, None)
+    return ((code >> 24) & 0xFF, code & 0xFFFF)
+
+
+def build_operator_render_tables():
+    unary_int_ops = {
+        int(x)
+        for x in (
+            getattr(C, "OP_PLUS", -1),
+            getattr(C, "OP_MINUS", -1),
+            getattr(C, "OP_TILDE", -1),
+        )
+        if isinstance(x, int)
+    }
+    string_cmp_ops = {
+        int(x)
+        for x in (
+            getattr(C, "OP_EQUAL", -1),
+            getattr(C, "OP_NOT_EQUAL", -1),
+            getattr(C, "OP_GREATER", -1),
+            getattr(C, "OP_GREATER_EQUAL", -1),
+            getattr(C, "OP_LESS", -1),
+            getattr(C, "OP_LESS_EQUAL", -1),
+        )
+        if isinstance(x, int)
+    }
+    unary_text = {
+        int(getattr(C, "OP_PLUS", -1)): "+",
+        int(getattr(C, "OP_MINUS", -1)): "-",
+        int(getattr(C, "OP_TILDE", -1)): "~",
+    }
+    binary_text = {
+        int(getattr(C, "OP_PLUS", -1)): "+",
+        int(getattr(C, "OP_MINUS", -1)): "-",
+        int(getattr(C, "OP_MULTIPLE", -1)): "*",
+        int(getattr(C, "OP_DIVIDE", -1)): "/",
+        int(getattr(C, "OP_AMARI", -1)): "%",
+        int(getattr(C, "OP_EQUAL", -1)): "==",
+        int(getattr(C, "OP_NOT_EQUAL", -1)): "!=",
+        int(getattr(C, "OP_GREATER", -1)): ">",
+        int(getattr(C, "OP_GREATER_EQUAL", -1)): ">=",
+        int(getattr(C, "OP_LESS", -1)): "<",
+        int(getattr(C, "OP_LESS_EQUAL", -1)): "<=",
+        int(getattr(C, "OP_LOGICAL_AND", -1)): "&&",
+        int(getattr(C, "OP_LOGICAL_OR", -1)): "||",
+        int(getattr(C, "OP_AND", -1)): "&",
+        int(getattr(C, "OP_OR", -1)): "|",
+        int(getattr(C, "OP_HAT", -1)): "^",
+        int(getattr(C, "OP_SL", -1)): "<<",
+        int(getattr(C, "OP_SR", -1)): ">>",
+        int(getattr(C, "OP_SR3", -1)): ">>>",
+    }
+    return unary_int_ops, string_cmp_ops, unary_text, binary_text
+
+
+def unary_result_form(form, opr, fm_int, unary_int_ops):
+    try:
+        if int(form) == int(fm_int) and int(opr) in unary_int_ops:
+            return fm_int
+    except Exception:
+        return None
+    return None
+
+
+def binary_result_form(form_l, form_r, opr, fm_int, fm_str, string_cmp_ops):
+    try:
+        form_l = int(form_l)
+        form_r = int(form_r)
+        opr = int(opr)
+    except Exception:
+        return None
+    if form_l == int(fm_int) and form_r == int(fm_int):
+        return fm_int
+    if form_l == int(fm_str) and form_r == int(fm_int):
+        if opr == int(getattr(C, "OP_MULTIPLE", -1)):
+            return fm_str
+        return None
+    if form_l == int(fm_str) and form_r == int(fm_str):
+        if opr == int(getattr(C, "OP_PLUS", -1)):
+            return fm_str
+        if opr in string_cmp_ops:
+            return fm_int
+    return None
+
+
+def latest_stack_start(elm_points, stack_len):
+    for ep in reversed(elm_points or []):
+        try:
+            sl = int((ep or {}).get("stack_len", 0) or 0)
+        except Exception:
+            continue
+        if 0 <= sl <= int(stack_len):
+            return sl
+    return None
+
+
+def trim_stack_points(elm_points, stack_start):
+    out = []
+    try:
+        stack_start = int(stack_start)
+    except Exception:
+        return out
+    for ep in elm_points or []:
+        try:
+            sl = int((ep or {}).get("stack_len", 0) or 0)
+        except Exception:
+            continue
+        if sl < stack_start:
+            out.append(ep)
+    return out
+
+
+def normalize_stack_start(stack_start, stack_len):
+    try:
+        stack_start = int(stack_start)
+    except Exception:
+        return None
+    if stack_start < 0:
+        return 0
+    if stack_start > int(stack_len):
+        return int(stack_len)
+    return stack_start
+
+
+def clone_stack_segment(stack, stack_start, int_getter):
+    stack_start = normalize_stack_start(stack_start, len(stack or []))
+    if stack_start is None or stack_start >= len(stack or []):
+        return None
+    seg = [dict(it) for it in (stack or [])[stack_start:]]
+    if not seg:
+        return None
+    first_int = None
+    for it in seg:
+        v = int_getter(it)
+        if v is not None:
+            first_int = int(v)
+            break
+    return seg, first_int
+
+
 def find_siglus_engine_exe(base_dir: str) -> str:
     base_dir = _safe_abspath(base_dir)
     if not base_dir or (not os.path.isdir(base_dir)):
@@ -474,6 +642,15 @@ def write_bytes(path: str, data: bytes) -> None:
     ensure_parent_dir(path)
     with open(path, "wb") as f:
         f.write(data)
+
+
+def write_cached_bytes(cache_path: str, data: bytes) -> None:
+    if not cache_path:
+        return
+    cache_dir = os.path.dirname(cache_path)
+    if cache_dir:
+        os.makedirs(cache_dir, exist_ok=True)
+    write_bytes(cache_path, data)
 
 
 def write_text(path: str, text: str, enc: str = "utf-8") -> None:
@@ -1195,6 +1372,75 @@ def _diff_kv(k, a, b):
     return f"{k}: {a!r} -> {b!r}"
 
 
+def build_source_angou_layout(md5_code, sa, mask_code, lzsz):
+    mw = (
+        read_u32_le(md5_code, int(sa["mask_w_md5_i"]), default=0)
+        % int(sa["mask_w_sur"])
+    ) + int(sa["mask_w_add"])
+    mh = (
+        read_u32_le(md5_code, int(sa["mask_h_md5_i"]), default=0)
+        % int(sa["mask_h_sur"])
+    ) + int(sa["mask_h_add"])
+    mask = bytearray(mw * mh)
+    ind = int(sa.get("mask_index", 0))
+    mi = int(sa.get("mask_md5_index", 0))
+    mask_len = len(mask_code)
+    for i in range(len(mask)):
+        mask[i] = mask_code[ind % mask_len] ^ md5_code[(mi % 16) * 4]
+        ind += 1
+        mi = (mi + 1) % 16
+    mapw = (
+        read_u32_le(md5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
+    ) + int(sa["map_w_add"])
+    bh = (int(lzsz) + 1) // 2
+    dh = (bh + 3) // 4
+    maph = (dh + (mapw - 1)) // mapw
+    return mw, mh, mask, mapw, maph, mapw * maph * 4, bh
+
+
+def format_named_command_args(info, arg_exprs, named_ids):
+    args = list(arg_exprs or [])
+    ids = list(named_ids or [])
+    if not ids or not isinstance(info, dict):
+        return args
+    pos_cnt = len(args) - len(ids)
+    if pos_cnt < 0:
+        return args
+    arg_map = info.get("arg_map") or {}
+    named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
+    named_list = (
+        named_spec.get("arg_list")
+        if isinstance(named_spec, dict)
+        else (named_spec if isinstance(named_spec, list) else [])
+    )
+    if not isinstance(named_list, list):
+        return args
+    name_by_id = {}
+    for item in named_list:
+        if not isinstance(item, dict):
+            continue
+        try:
+            nid = int(item.get("id", -1))
+        except Exception:
+            continue
+        nm = str(item.get("name") or "")
+        if nm:
+            name_by_id[nid] = nm
+    if not name_by_id:
+        return args
+    out = list(args[:pos_cnt])
+    ordered_ids = list(reversed(ids))
+    for expr, nid in zip(args[pos_cnt:], ordered_ids):
+        try:
+            nm = name_by_id.get(int(nid))
+        except Exception:
+            nm = None
+        out.append(f"{nm}={expr}" if nm else expr)
+    if len(args) > pos_cnt + len(ordered_ids):
+        out.extend(args[pos_cnt + len(ordered_ids) :])
+    return out
+
+
 def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
     found = [f for f in flags if f in argv]
     if len(found) != 1:
@@ -1211,17 +1457,18 @@ def missing_input_file(path: str) -> bool:
     return False
 
 
-def run_batch(files, process_fn):
-    total = len(files)
+def run_batch(items, process_fn, item_name_fn=None):
+    total = len(items)
     wrote = failed = 0
-    for idx, src_path in enumerate(files, 1):
-        eprint(f"[{idx}/{total}] processing: {src_path}")
+    for idx, item in enumerate(items, 1):
+        label = item_name_fn(item) if item_name_fn is not None else item
+        eprint(f"[{idx}/{total}] processing: {label}")
         try:
-            n, label = process_fn(src_path)
+            n, out_label = process_fn(item)
             wrote += n
-            eprint(f"[{idx}/{total}] done: wrote {label}")
+            eprint(f"[{idx}/{total}] done: wrote {out_label}")
         except Exception as exc:
             failed += 1
-            eprint(f"[{idx}/{total}] failed: {src_path}\t{exc}")
+            eprint(f"[{idx}/{total}] failed: {label}\t{exc}")
     eprint(f"done total={total} wrote={wrote} failed={failed}")
     return 0 if failed == 0 else 1

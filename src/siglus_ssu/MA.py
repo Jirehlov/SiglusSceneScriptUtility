@@ -1,5 +1,6 @@
 import copy
 from . import const as C
+from .common import normalize_atom
 
 
 def _form_name(f):
@@ -280,21 +281,11 @@ class MA:
         if "inc_property_cnt" not in s.piad:
             s.piad["inc_property_cnt"] = 0
 
-    def A(s, a):
-        return (
-            {
-                "id": a.get("id", 0),
-                "line": a.get("line", 0),
-                "type": a.get("type", C.LA_T["NONE"]),
-                "opt": a.get("opt", 0),
-                "subopt": a.get("subopt", 0),
-            }
-            if isinstance(a, dict)
-            else {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
-        )
-
     def error(s, t, a=None, **kw):
-        s.last = {"type": t, "atom": s.A(a) if a is not None else s.last.get("atom")}
+        s.last = {
+            "type": t,
+            "atom": normalize_atom(a) if a is not None else s.last.get("atom"),
+        }
         if kw:
             s.last.update(kw)
         return 0
@@ -780,7 +771,7 @@ class MA:
             n["smp_exp"] = smp_new
             n["tmp_form"] = C.FM_STR
             n["node_form"] = C.FM_STR
-            s.last = {"type": "TNMSERR_MA_NONE", "atom": s.A(atom)}
+            s.last = {"type": "TNMSERR_MA_NONE", "atom": normalize_atom(atom)}
             return 1
         return 1
 

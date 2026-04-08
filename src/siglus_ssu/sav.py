@@ -93,7 +93,7 @@ def _parse_save_stream_head(b):
         return None
     for sz in (4, 8):
         try:
-            r = _SaveStreamReader(b, size_t_size=sz, s_bool_size=1, argb_size=4)
+            r = _SaveStreamReader(b, size_t_size=sz)
             scn = r.str_u16()
             line_no = int(r.i32())
             prg_cntr = int(r.i32())
@@ -196,7 +196,7 @@ def _parse_local_entry(r):
 
 
 def _parse_local_payload(raw):
-    r = _SaveStreamReader(raw, size_t_size=4, s_bool_size=1, argb_size=4)
+    r = _SaveStreamReader(raw, size_t_size=4)
     out = {}
     out["local_save"] = _parse_local_entry(r)
     pos0 = r.tell()
@@ -360,14 +360,12 @@ def _unpack_tnm_data(enc):
 
 
 class _SaveStreamReader:
-    __slots__ = ("buf", "pos", "size_t_size", "s_bool_size", "argb_size")
+    __slots__ = ("buf", "pos", "size_t_size")
 
-    def __init__(self, buf, *, size_t_size=4, s_bool_size=1, argb_size=4):
+    def __init__(self, buf, *, size_t_size=4):
         self.buf = buf
         self.pos = 0
         self.size_t_size = int(size_t_size)
-        self.s_bool_size = int(s_bool_size)
-        self.argb_size = int(argb_size)
 
     def tell(self):
         return self.pos
@@ -458,7 +456,7 @@ def _read_fixed_str_list(r):
 
 
 def _parse_global_payload(raw, major, minor, *, size_t_size=4):
-    r = _SaveStreamReader(raw, size_t_size=size_t_size, s_bool_size=1, argb_size=4)
+    r = _SaveStreamReader(raw, size_t_size=size_t_size)
     out = {}
     out["global_real_time"] = (
         int(r.i64()) if (major > 1 or (major == 1 and minor >= 2)) else 0
@@ -501,7 +499,7 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4):
 
 
 def _parse_config_payload(raw, major, minor, *, size_t_size=4):
-    r = _SaveStreamReader(raw, size_t_size=size_t_size, s_bool_size=1, argb_size=4)
+    r = _SaveStreamReader(raw, size_t_size=size_t_size)
     out = {}
     if major > 1 or (major == 1 and minor >= 3):
         out["screen_size_mode"] = int(r.i32())

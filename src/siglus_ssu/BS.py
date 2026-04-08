@@ -10,6 +10,7 @@ from .LA import la_analize
 from .SA import SA
 from .MA import MA
 from .common import (
+    build_empty_ia_data,
     format_scene_name,
     log_stage,
     record_stage_time,
@@ -164,16 +165,7 @@ def build_ia_data(ctx):
         )
         if isinstance(ctx, dict):
             ctx["inc_list"] = inc_list
-    iad = {
-        "replace_tree": _rt(),
-        "name_set": set(ctx.get("defined_names") or []),
-        "property_list": [],
-        "command_list": [],
-        "property_cnt": 0,
-        "command_cnt": 0,
-        "inc_property_cnt": 0,
-        "inc_command_cnt": 0,
-    }
+    iad = build_empty_ia_data(_rt(), ctx.get("defined_names"))
     ia2 = []
     start = time.time()
     for inc in inc_list:
@@ -415,17 +407,11 @@ def _build_scn_dat(plad, out_scn):
 
 class BS:
     def __init__(s):
-        s.el = 0
-        s.es = ""
-        s.ea = {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0}
         s.last_error = {
             "type": TNMSERR_BS_NONE,
             "atom": {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0},
         }
         s.m_piad = None
-        s.m_plad = None
-        s.m_psad = None
-        s.m_pbsd = None
         s.m_is_test = False
         s.out_scn = None
         s.out_txt = []
@@ -437,9 +423,6 @@ class BS:
             "type": TNMSERR_BS_NONE,
             "atom": {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0},
         }
-        s.el = 0
-        s.es = ""
-        s.ea = {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0}
 
     def error(s, etype, atom):
         try:
@@ -450,8 +433,6 @@ class BS:
             if k not in at:
                 at[k] = 0
         s.last_error = {"type": int(etype or 0), "atom": at}
-        s.el = int(at.get("line", 0) or 0)
-        s.ea = at
         return False
 
     def add_out_txt(s, t):
@@ -544,14 +525,12 @@ class BS:
                 if not s.bs_sentence(sn):
                     return False
             return True
-        s.es = "Invalid block node"
         return False
 
     def bs_sentence(s, sentense):
         if sentense is None:
             return True
         if not isinstance(sentense, dict):
-            s.es = "Invalid sentence node"
             return False
         node_line = int(sentense.get("node_line", 0) or 0)
         is_inc = bool(sentense.get("is_include_sel"))
@@ -571,7 +550,6 @@ class BS:
         if node is None:
             return True
         if not isinstance(node, dict):
-            s.es = "Invalid sentence node"
             return False
         nt = int(node.get("node_type", 0) or 0)
         if nt == C.NT_S_LABEL:
@@ -608,14 +586,12 @@ class BS:
             return s.bs_name(node.get("name"))
         if nt == C.NT_S_EOF:
             return s.bs_eof()
-        s.es = "Unknown sentence node_type"
         return False
 
     def bs_ss(s, ss):
         if ss is None:
             return True
         if not isinstance(ss, dict):
-            s.es = "Invalid ss node"
             return False
         sl = ss.get("sentense_list")
         if isinstance(sl, dict):
@@ -636,7 +612,6 @@ class BS:
         if isinstance(label, dict) and "label" in label:
             label = label.get("label")
         if not isinstance(label, dict):
-            s.es = "Invalid label node"
             return False
         atom = (label.get("atom") or {}) if isinstance(label, dict) else {}
         opt = atom.get("opt", None)
@@ -657,7 +632,6 @@ class BS:
         if isinstance(z_label, dict) and "z_label" in z_label:
             z_label = z_label.get("z_label")
         if not isinstance(z_label, dict):
-            s.es = "Invalid z_label node"
             return False
         atom = (z_label.get("atom") or {}) if isinstance(z_label, dict) else {}
         opt_v = atom.get("opt", None)
@@ -682,7 +656,6 @@ class BS:
         if def_prop is None:
             return True
         if not isinstance(def_prop, dict):
-            s.es = "Invalid def_prop node"
             return False
         form_code = def_prop.get("form_code")
         if form_code in (C.FM_INTLIST, C.FM_STRLIST):
@@ -703,7 +676,6 @@ class BS:
         if def_cmd is None:
             return True
         if not isinstance(def_cmd, dict):
-            s.es = "Invalid def_cmd node"
             return False
         label_no_end = len(s.out_scn["label_list"])
         s.out_scn["label_list"].append(0)
@@ -735,11 +707,9 @@ class BS:
         if goto is None:
             return True
         if not isinstance(goto, dict):
-            s.es = "Invalid goto node"
             return False
         gt = goto.get("Goto")
         if not isinstance(gt, dict):
-            s.es = "Invalid goto target"
             return False
         nt = int(gt.get("node_type", 0) or 0)
         if nt == C.NT_GOTO_GOTO:
@@ -774,14 +744,12 @@ class BS:
             s.scn_push_i32(_fc(form))
             s.add_out_txt("CD_POP, " + s.tostr_form(form))
             return True
-        s.es = "Unknown goto node_type"
         return False
 
     def bs_goto_exp(s, goto):
         if goto is None:
             return True
         if not isinstance(goto, dict):
-            s.es = "Invalid goto_exp node"
             return False
         if not s.bs_arg_list(goto.get("arg_list"), True):
             return False
@@ -817,11 +785,9 @@ class BS:
         if ret is None:
             return True
         if not isinstance(ret, dict):
-            s.es = "Invalid return node"
             return False
         rt = ret.get("Return")
         if not isinstance(rt, dict):
-            s.es = "Invalid return payload"
             return False
         nt = int(rt.get("node_type", 0) or 0)
         if nt == C.NT_RETURN_WITH_ARG:
@@ -838,14 +804,12 @@ class BS:
             s.scn_push_i32(0)
             s.add_out_txt("CD_RETURN, 0")
             return True
-        s.es = "Unknown return node_type"
         return False
 
     def bs_if(s, if_):
         if if_ is None:
             return True
         if not isinstance(if_, dict):
-            s.es = "Invalid if node"
             return False
         sub = list(if_.get("if_list") or if_.get("sub") or [])
         label_no_end = len(s.out_scn["label_list"])
@@ -877,7 +841,6 @@ class BS:
         if for_ is None:
             return True
         if not isinstance(for_, dict):
-            s.es = "Invalid for node"
             return False
         label_size = len(s.out_scn["label_list"])
         label_no_init = label_size
@@ -909,7 +872,6 @@ class BS:
         if while_ is None:
             return True
         if not isinstance(while_, dict):
-            s.es = "Invalid while node"
             return False
         label_size = len(s.out_scn["label_list"])
         label_no_loop = label_size
@@ -957,7 +919,6 @@ class BS:
         if switch is None:
             return True
         if not isinstance(switch, dict):
-            s.es = "Invalid switch node"
             return False
         form_l = _fc(dereference((switch.get("cond") or {}).get("node_form")))
         cases = list(switch.get("case") or switch.get("Case") or [])
@@ -1007,7 +968,6 @@ class BS:
         if assign is None:
             return True
         if not isinstance(assign, dict):
-            s.es = "Invalid assign node"
             return False
         if not s.bs_left(assign.get("left")):
             return False
@@ -1043,7 +1003,6 @@ class BS:
         if command is None:
             return True
         if not isinstance(command, dict):
-            s.es = "Invalid command node"
             return False
         if not s.bs_elm_exp(command.get("command"), True):
             return False
@@ -1103,7 +1062,6 @@ class BS:
         if exp is None:
             return True
         if not isinstance(exp, dict):
-            s.es = "Invalid expression node"
             return False
         nt = int(exp.get("node_type", 0) or 0)
         if nt == C.NT_EXP_SIMPLE:
@@ -1132,14 +1090,12 @@ class BS:
             s.scn_push_i32(form_r)
             s.add_out_txt("CD_OPERATE_2")
             return s.bs_operator_1(exp.get("opr"))
-        s.es = "Unknown expression node_type"
         return False
 
     def bs_smp_exp(s, smp_exp, need_value):
         if smp_exp is None:
             return True
         if not isinstance(smp_exp, dict):
-            s.es = "Invalid simple expression node"
             return False
         nt = int(smp_exp.get("node_type", 0) or 0)
         if nt in (C.NT_EXP_SIMPLE, C.NT_EXP_OPR1, C.NT_EXP_OPR2):
@@ -1160,14 +1116,12 @@ class BS:
             if not need_value:
                 return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(smp_exp))
             return s.bs_literal(smp_exp.get("Literal"))
-        s.es = "Unknown simple expression node_type"
         return False
 
     def bs_exp_list(s, exp_list):
         if exp_list is None:
             return True
         if not isinstance(exp_list, dict):
-            s.es = "Invalid expression list"
             return False
         for e in exp_list.get("exp") or []:
             if not s.bs_exp(e, True):
@@ -1178,12 +1132,10 @@ class BS:
         if arg_list is None:
             return True
         if not isinstance(arg_list, dict):
-            s.es = "Invalid argument list"
             return False
         args = list(arg_list.get("arg") or [])
         for a in args:
             if not isinstance(a, dict):
-                s.es = "Invalid argument node"
                 return False
             form = (a.get("exp") or {}).get("tmp_form") or (a.get("exp") or {}).get(
                 "node_form"
@@ -1197,7 +1149,6 @@ class BS:
         if element is None:
             return True
         if not isinstance(element, dict):
-            s.es = "Invalid element node"
             return False
         nt = int(element.get("node_type", 0) or 0)
         if nt == C.NT_ELM_ELEMENT:
@@ -1286,14 +1237,12 @@ class BS:
             s.add_out_txt("CD_PUSH, " + s.tostr_form(C.FM_INT) + ", ELM_ARRAY")
             s.bs_exp(element.get("exp"), True)
             return True
-        s.es = "Unknown element node_type"
         return False
 
     def bs_elm_list(s, elm_list):
         if elm_list is None:
             return True
         if not isinstance(elm_list, dict):
-            s.es = "Invalid element list"
             return False
         if "element" not in elm_list and "value" in elm_list:
             return s.bs_exp(elm_list.get("value"), True)
@@ -1302,7 +1251,6 @@ class BS:
         if elm_list.get("parent_form_code") == C.FM_CALL:
             cur = C.ELM_GLOBAL_CUR_CALL
             if not isinstance(cur, int):
-                s.es = "Missing ELM_GLOBAL_CUR_CALL"
                 return False
             s.scn_push_u8(C.CD_PUSH)
             s.scn_push_i32(_fc(C.FM_INT))
@@ -1320,13 +1268,11 @@ class BS:
 
     def bs_left(s, left):
         if not isinstance(left, dict):
-            s.es = "Invalid left node"
             return False
         return s.bs_elm_list(left.get("elm_list"))
 
     def bs_elm_exp(s, elm_exp, need_value):
         if not isinstance(elm_exp, dict):
-            s.es = "Invalid element expression"
             return False
         elm_list = elm_exp.get("elm_list")
         if (
@@ -1380,7 +1326,6 @@ class BS:
         if arg is None:
             return True
         if not isinstance(arg, dict):
-            s.es = "Invalid argument node"
             return False
         if not s.bs_exp(arg.get("exp"), bool(need_value)):
             return False
@@ -1390,7 +1335,6 @@ class BS:
         if Literal is None:
             return True
         if not isinstance(Literal, dict):
-            s.es = "Invalid literal node"
             return False
         form = Literal.get("node_form", Literal.get("form"))
         opt = (
@@ -1459,9 +1403,6 @@ class BS:
             plad = plad or {}
             psad = psad or {}
             s.m_piad = piad
-            s.m_plad = plad
-            s.m_psad = psad
-            s.m_pbsd = pbsd
             s.m_is_test = bool(is_test)
             if isinstance(pbsd, dict):
                 pbsd["out_scn"] = b""
@@ -1547,8 +1488,7 @@ class BS:
                     return 0
             out_scn["scn_bytes"] = out_scn["scn"].to_bytes()
             out = _build_scn_dat(plad, out_scn)
-        except Exception as e:
-            s.es = str(e)
+        except Exception:
             return 0
         if isinstance(pbsd, dict):
             pbsd["out_scn"] = out

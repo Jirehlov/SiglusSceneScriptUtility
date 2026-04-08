@@ -258,7 +258,7 @@ def _source_encrypt_task(
     rel, src_path, cache_path, source_angou, skip, lzss_level = args
 
     try:
-        from .common import read_bytes, write_bytes
+        from .common import read_bytes, write_cached_bytes
         from . import compiler as _m
 
         if not os.path.isfile(src_path):
@@ -268,11 +268,7 @@ def _source_encrypt_task(
 
         raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-        if cache_path:
-            cache_dir = os.path.dirname(cache_path)
-            if cache_dir:
-                os.makedirs(cache_dir, exist_ok=True)
-            write_bytes(cache_path, enc_blob)
+        write_cached_bytes(cache_path, enc_blob)
 
         size = len(enc_blob) & 0xFFFFFFFF
         chunk = enc_blob if not skip else b""

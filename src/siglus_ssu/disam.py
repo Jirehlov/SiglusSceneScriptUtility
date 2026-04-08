@@ -1,10 +1,19 @@
 from . import const as C
 from .common import (
     augment_receiver_form_codes,
+    binary_result_form as _binary_result_form,
+    build_operator_render_tables,
+    clone_stack_segment,
+    format_named_command_args as _format_command_arg_exprs,
     hx,
     invert_form_code_map,
+    latest_stack_start,
     quote_ss_text,
     read_i32_le,
+    split_element_code as _element_owner,
+    trim_stack_points,
+    unary_result_form as _unary_result_form,
+    normalize_stack_start,
 )
 
 
@@ -470,53 +479,9 @@ def disassemble_scn_bytes(
     fm_intlist = _form_code(C.FM_INTLIST)
     fm_strlist = _form_code(C.FM_STRLIST)
     scalar_forms = {int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)}
-    unary_int_ops = {
-        int(x)
-        for x in (
-            getattr(C, "OP_PLUS", -1),
-            getattr(C, "OP_MINUS", -1),
-            getattr(C, "OP_TILDE", -1),
-        )
-        if isinstance(x, int)
-    }
-    string_cmp_ops = {
-        int(x)
-        for x in (
-            getattr(C, "OP_EQUAL", -1),
-            getattr(C, "OP_NOT_EQUAL", -1),
-            getattr(C, "OP_GREATER", -1),
-            getattr(C, "OP_GREATER_EQUAL", -1),
-            getattr(C, "OP_LESS", -1),
-            getattr(C, "OP_LESS_EQUAL", -1),
-        )
-        if isinstance(x, int)
-    }
-    unary_text = {
-        int(getattr(C, "OP_PLUS", -1)): "+",
-        int(getattr(C, "OP_MINUS", -1)): "-",
-        int(getattr(C, "OP_TILDE", -1)): "~",
-    }
-    binary_text = {
-        int(getattr(C, "OP_PLUS", -1)): "+",
-        int(getattr(C, "OP_MINUS", -1)): "-",
-        int(getattr(C, "OP_MULTIPLE", -1)): "*",
-        int(getattr(C, "OP_DIVIDE", -1)): "/",
-        int(getattr(C, "OP_AMARI", -1)): "%",
-        int(getattr(C, "OP_EQUAL", -1)): "==",
-        int(getattr(C, "OP_NOT_EQUAL", -1)): "!=",
-        int(getattr(C, "OP_GREATER", -1)): ">",
-        int(getattr(C, "OP_GREATER_EQUAL", -1)): ">=",
-        int(getattr(C, "OP_LESS", -1)): "<",
-        int(getattr(C, "OP_LESS_EQUAL", -1)): "<=",
-        int(getattr(C, "OP_LOGICAL_AND", -1)): "&&",
-        int(getattr(C, "OP_LOGICAL_OR", -1)): "||",
-        int(getattr(C, "OP_AND", -1)): "&",
-        int(getattr(C, "OP_OR", -1)): "|",
-        int(getattr(C, "OP_HAT", -1)): "^",
-        int(getattr(C, "OP_SL", -1)): "<<",
-        int(getattr(C, "OP_SR", -1)): ">>",
-        int(getattr(C, "OP_SR3", -1)): ">>>",
-    }
+    unary_int_ops, string_cmp_ops, unary_text, binary_text = (
+        build_operator_render_tables()
+    )
 
     def fmt_form(f):
         try:
@@ -582,13 +547,6 @@ def disassemble_scn_bytes(
             return int(v)
         except Exception:
             return None
-
-    def _element_owner(code):
-        try:
-            code = int(code)
-        except Exception:
-            return (None, None)
-        return ((code >> 24) & 0xFF, code & 0xFFFF)
 
     def _array_element_info(parent_form):
         try:
@@ -671,75 +629,22 @@ def disassemble_scn_bytes(
         }
         return ref_to_val.get(form, form if form in scalar_forms else None)
 
-    def _unary_result_form(form, opr):
-        try:
-            if int(form) == fm_int and int(opr) in unary_int_ops:
-                return fm_int
-        except Exception:
-            return None
-        return None
-
-    def _binary_result_form(form_l, form_r, opr):
-        try:
-            form_l = int(form_l)
-            form_r = int(form_r)
-            opr = int(opr)
-        except Exception:
-            return None
-        if form_l == fm_int and form_r == fm_int:
-            return fm_int
-        if form_l == fm_str and form_r == fm_int:
-            if opr == int(getattr(C, "OP_MULTIPLE", -1)):
-                return fm_str
-            return None
-        if form_l == fm_str and form_r == fm_str:
-            if opr == int(getattr(C, "OP_PLUS", -1)):
-                return fm_str
-            if opr in string_cmp_ops:
-                return fm_int
-        return None
-
-    def _latest_elm_stack_start():
-        for ep in reversed(elm_points):
-            try:
-                sl = int((ep or {}).get("stack_len", 0) or 0)
-            except Exception:
-                continue
-            if 0 <= sl <= len(stack):
-                return sl
-        return None
-
-    def _trim_elm_points(stack_start):
-        nonlocal elm_points, elm_point_pending_idx
-        kept = []
-        for ep in elm_points:
-            try:
-                sl = int((ep or {}).get("stack_len", 0) or 0)
-            except Exception:
-                continue
-            if sl < int(stack_start):
-                kept.append(ep)
-        elm_points = kept
+    def _drop_stack_tail(stack_start):
+        nonlocal elm_point_pending_idx
+        stack_start = normalize_stack_start(stack_start, len(stack))
+        if stack_start is None:
+            return
+        del stack[stack_start:]
+        elm_points[:] = trim_stack_points(elm_points, stack_start)
         elm_point_pending_idx = None
 
-    def _drop_stack_tail(stack_start):
-        nonlocal elm_points, elm_point_pending_idx
-        try:
-            stack_start = int(stack_start)
-        except Exception:
-            return
-        if stack_start < 0:
-            stack_start = 0
-        if stack_start > len(stack):
-            stack_start = len(stack)
-        del stack[stack_start:]
-        _trim_elm_points(stack_start)
-
     def _pop_stack_top():
+        nonlocal elm_point_pending_idx
         if not stack:
             return None
         it = stack.pop()
-        _trim_elm_points(len(stack))
+        elm_points[:] = trim_stack_points(elm_points, len(stack))
+        elm_point_pending_idx = None
         return it
 
     def _push_stack_value(form, val=None, receiver=None, expr=None, origin=None):
@@ -811,25 +716,18 @@ def disassemble_scn_bytes(
 
     def _copy_element():
         nonlocal elm_points, elm_point_pending_idx
-        stack_start = _latest_elm_stack_start()
-        if stack_start is None or stack_start < 0 or stack_start >= len(stack):
+        stack_start = latest_stack_start(elm_points, len(stack))
+        cloned = clone_stack_segment(stack, stack_start, _stack_int_value)
+        if cloned is None:
             return
-        seg = [dict(it) for it in stack[stack_start:]]
-        if not seg:
-            return
+        seg, first_int = cloned
         new_start = len(stack)
         stack.extend(seg)
-        first_int = None
-        for it in seg:
-            v = _stack_int_value(it)
-            if v is not None:
-                first_int = int(v)
-                break
         elm_points.append({"ofs": None, "stack_len": new_start, "first_int": first_int})
         elm_point_pending_idx = None
 
     def _consume_element():
-        stack_start = _latest_elm_stack_start()
+        stack_start = latest_stack_start(elm_points, len(stack))
         if stack_start is None:
             _pop_stack_top()
             return
@@ -1103,52 +1001,8 @@ def disassemble_scn_bytes(
             }
         return None
 
-    def _format_command_arg_exprs(info, arg_exprs, named_ids):
-        args = list(arg_exprs or [])
-        ids = list(named_ids or [])
-        if not ids or not isinstance(info, dict):
-            return args
-        pos_cnt = len(args) - len(ids)
-        if pos_cnt < 0:
-            return args
-        arg_map = info.get("arg_map") or {}
-        named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
-        named_list = (
-            named_spec.get("arg_list")
-            if isinstance(named_spec, dict)
-            else (named_spec if isinstance(named_spec, list) else [])
-        )
-        if not isinstance(named_list, list):
-            return args
-        name_by_id = {}
-        for item in named_list:
-            if not isinstance(item, dict):
-                continue
-            try:
-                nid = int(item.get("id", -1))
-            except Exception:
-                continue
-            nm = str(item.get("name") or "")
-            if nm:
-                name_by_id[nid] = nm
-        if not name_by_id:
-            return args
-        out = list(args[:pos_cnt])
-        ordered_ids = list(reversed(ids))
-        for expr, nid in zip(args[pos_cnt:], ordered_ids):
-            try:
-                key = int(nid)
-            except Exception:
-                out.append(expr)
-                continue
-            nm = name_by_id.get(key)
-            out.append(f"{nm}={expr}" if nm else expr)
-        if len(args) > pos_cnt + len(ordered_ids):
-            out.extend(args[pos_cnt + len(ordered_ids) :])
-        return out
-
     def _pop_element_expr():
-        stack_start = _latest_elm_stack_start()
+        stack_start = latest_stack_start(elm_points, len(stack))
         if stack_start is None:
             if stack:
                 rendered = _render_property_expr_items([stack[-1]])
@@ -1752,7 +1606,7 @@ def disassemble_scn_bytes(
                         expr=prop_expr,
                     )
                 else:
-                    stack_start = _latest_elm_stack_start()
+                    stack_start = latest_stack_start(elm_points, len(stack))
                     if stack_start is not None:
                         rendered = _render_property_expr_items(stack[stack_start:])
                         prop_expr = (
@@ -1968,7 +1822,7 @@ def disassemble_scn_bytes(
                 right_form=int(b),
                 arg_list_id=int(c),
             )
-            stack_start = _latest_elm_stack_start()
+            stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is not None:
                 _drop_stack_tail(stack_start)
             else:
@@ -1990,7 +1844,7 @@ def disassemble_scn_bytes(
                 opr=int(opr),
             )
             _pop_stack_top()
-            res_form = _unary_result_form(form, opr)
+            res_form = _unary_result_form(form, opr, fm_int, unary_int_ops)
             if res_form is not None:
                 _push_stack_value(
                     res_form,
@@ -2023,7 +1877,7 @@ def disassemble_scn_bytes(
             )
             _pop_stack_top()
             _pop_stack_top()
-            res_form = _binary_result_form(fl, fr, opr)
+            res_form = _binary_result_form(fl, fr, opr, fm_int, fm_str, string_cmp_ops)
             if res_form is not None:
                 lhs = pair_expr[0] if len(pair_expr) >= 1 else None
                 rhs = pair_expr[1] if len(pair_expr) >= 2 else None
@@ -2140,7 +1994,7 @@ def disassemble_scn_bytes(
             qname = ""
             info = {}
             resolved_cmd = _resolve_command_expr(len(arg_forms or []), ret_form)
-            cmd_stack_start = _latest_elm_stack_start()
+            cmd_stack_start = latest_stack_start(elm_points, len(stack))
             cmd_parent_form = None
             if resolved_cmd is not None:
                 cmd_stack_start = resolved_cmd.get("stack_start")

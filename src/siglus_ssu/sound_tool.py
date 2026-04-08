@@ -395,8 +395,6 @@ def main(argv=None) -> int:
         os.makedirs(out_root, exist_ok=True)
 
         files = iter_files_by_ext(inp, [".ogg"]) if src_is_dir else [inp]
-        wrote = 0
-        failed = 0
 
         if not files:
             eprint("no supported audio files found")
@@ -434,37 +432,26 @@ def main(argv=None) -> int:
             base = os.path.splitext(os.path.basename(src_path))[0]
             tasks.append(("owp", src_path, rel_dir, base))
 
-        total = len(tasks)
-        for idx, t in enumerate(tasks, 1):
-            kind = t[0]
-            eprint(f"[{idx}/{total}] processing: {kind}")
-            try:
-                if kind == "owp":
-                    _, src_path, rel_dir, _base = t
-                    n = _pack_one(src_path, out_root, rel_dir)
-                    wrote += n
-                    eprint(f"[{idx}/{total}] done: wrote {n}")
-                    continue
+        def _proc(task):
+            kind = task[0]
+            if kind == "owp":
+                _, src_path, rel_dir, _base = task
+                n = _pack_one(src_path, out_root, rel_dir)
+                return n, n
+            _, items, rel_dir, base2 = task
+            out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
+            os.makedirs(out_dir, exist_ok=True)
+            entry_list = []
+            for no, src_path in sorted(items, key=lambda x: x[0]):
+                with open(src_path, "rb") as f:
+                    ogg = f.read()
+                entry_list.append((no, ogg))
+            ovk = sound.encode_oggs_to_ovk_bytes(entry_list)
+            out_path = os.path.join(out_dir, base2 + ".ovk")
+            write_bytes(out_path, ovk)
+            return 1, 1
 
-                _, items, rel_dir, base2 = t
-                out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
-                os.makedirs(out_dir, exist_ok=True)
-                entry_list = []
-                for no, src_path in sorted(items, key=lambda x: x[0]):
-                    with open(src_path, "rb") as f:
-                        ogg = f.read()
-                    entry_list.append((no, ogg))
-                ovk = sound.encode_oggs_to_ovk_bytes(entry_list)
-                out_path = os.path.join(out_dir, base2 + ".ovk")
-                write_bytes(out_path, ovk)
-                wrote += 1
-                eprint(f"[{idx}/{total}] done: wrote 1")
-            except Exception as e:
-                failed += 1
-                eprint(f"[{idx}/{total}] failed\t{e}")
-
-        eprint(f"done total={total} wrote={wrote} failed={failed}")
-        return 0 if failed == 0 else 1
+        return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
 
     trim_path = ""
     if "--trim" in argv:
