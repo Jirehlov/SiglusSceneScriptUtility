@@ -1,4 +1,5 @@
 import os
+from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict
 
@@ -11,6 +12,13 @@ def get_max_workers(max_workers: Optional[int] = None) -> int:
 
     cpu_count = os.cpu_count() or 4
     return min(cpu_count, 32)
+
+
+def _env_or(name, parse, default):
+    try:
+        return parse(os.environ.get(name, "") or 0)
+    except Exception:
+        return default
 
 
 def _compile_one_process(
@@ -113,7 +121,7 @@ def parallel_compile(
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
 
     with ProcessPoolExecutor(max_workers=workers) as executor:
-        futures = {
+        futures = [
             executor.submit(
                 _compile_one_process,
                 ss_path,
@@ -122,12 +130,11 @@ def parallel_compile(
                 ia_data,
                 enc,
                 format_scene_name(ss_path, ctx),
-            ): ss_path
+            )
             for ss_path in ss_files
-        }
+        ]
 
         for future in as_completed(futures):
-            _ = futures[future]
             display_name, error = future.result()
             completed += 1
 
@@ -218,9 +225,7 @@ def parallel_lzss_compress(
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(_lzss_compress_task, task): task[0] for task in tasks
-        }
+        futures = [executor.submit(_lzss_compress_task, task) for task in tasks]
 
         for future in as_completed(futures):
             nm, dat, lz, error = future.result()
@@ -310,9 +315,7 @@ def parallel_source_encrypt(
     print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(_source_encrypt_task, task): task[0] for task in tasks
-        }
+        futures = [executor.submit(_source_encrypt_task, task) for task in tasks]
 
         for future in as_completed(futures):
             rel, size, chunk, error = future.result()
@@ -346,7 +349,7 @@ def _seed_chunk_worker(args):
     n = int(n)
     ss = int(seed_start)
     cc = int(count)
-    target_pairs = [(int(o), int(ln)) for (o, ln) in list(target_pairs)]
+    target_pairs = [(int(o), int(ln)) for o, ln in target_pairs]
     target_ofs = [p[0] for p in target_pairs]
     lens = [p[1] for p in target_pairs]
     for s in range(ss, ss + cc):
@@ -383,32 +386,23 @@ def find_shuffle_seed_parallel(
 
     import math
 
-    target = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
+    target = [(int(o), int(ln)) for o, ln in target_idx_pairs]
     n = len(target)
 
     if workers is None:
-        try:
-            workers = int(os.environ.get("SSU_TEST_SHUFFLE_WORKERS", "") or 0)
-        except Exception:
-            workers = 0
+        workers = _env_or("SSU_TEST_SHUFFLE_WORKERS", int, 0)
         if not workers:
             workers = get_max_workers(None)
     workers = max(1, int(workers))
 
     if chunk is None:
-        try:
-            chunk = int(os.environ.get("SSU_TEST_SHUFFLE_CHUNK", "") or 0)
-        except Exception:
-            chunk = 0
+        chunk = _env_or("SSU_TEST_SHUFFLE_CHUNK", int, 0)
         if not chunk:
             chunk = 200
     chunk = max(1, int(chunk))
 
     if progress_iv is None:
-        try:
-            progress_iv = float(os.environ.get("SSU_TEST_SHUFFLE_PROGRESS", "") or 0)
-        except Exception:
-            progress_iv = 0.0
+        progress_iv = _env_or("SSU_TEST_SHUFFLE_PROGRESS", float, 0.0)
         if progress_iv <= 0:
             progress_iv = 1.0
 
@@ -494,10 +488,8 @@ def find_shuffle_seed_parallel(
 
                 if found is not None:
                     for fut in futs:
-                        try:
+                        with suppress(Exception):
                             fut.cancel()
-                        except Exception:
-                            pass
                     return found
 
                 done += scheduled

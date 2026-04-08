@@ -80,7 +80,8 @@ def _csv_unescape_text(s: str) -> str:
 
 
 def _read_text(path: str):
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
 
     if b"\r\n" in data:
         newline = "\r\n"
@@ -165,10 +166,9 @@ def _int_value(value, default=-1):
 def _collect_compiled_string_kinds(root, atom_type_map):
     out = {}
 
-    unknown_list = []
-    try:
-        unknown_list = list((root or {}).get("_unknown_list") or [])
-    except Exception:
+    if isinstance(root, dict):
+        unknown_list = list(root.get("_unknown_list") or [])
+    else:
         unknown_list = []
 
     def _add(atom, kind):
@@ -196,16 +196,11 @@ def _collect_compiled_string_kinds(root, atom_type_map):
             _mark_string_atoms(value, kind)
 
     def _command_name(node):
-        try:
-            atom = ((node.get("name") or {}).get("atom")) or {}
-            opt = _int_value(atom.get("opt"), -1)
-        except Exception:
-            opt = -1
+        name_node = node.get("name")
+        atom = name_node.get("atom") if isinstance(name_node, dict) else {}
+        opt = _int_value(atom.get("opt"), -1)
         if 0 <= opt < len(unknown_list):
-            try:
-                return str(unknown_list[opt] or "")
-            except Exception:
-                return ""
+            return str(unknown_list[opt] or "")
         return ""
 
     def _walk(node):
@@ -368,37 +363,32 @@ def _collect_disam_string_kinds(bundle):
     if fm_str < 0:
         return out
     for i, ev in enumerate(trace):
-        op = str((ev or {}).get("op") or "")
+        if not isinstance(ev, dict):
+            continue
+        op = str(ev.get("op") or "")
         if op == "CD_TEXT":
-            try:
-                sid = _int_value((ev or {}).get("str_id"), -1)
-            except Exception:
-                sid = -1
+            sid = _int_value(ev.get("str_id"), -1)
             if sid >= 0:
                 out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
             continue
         if op == "CD_NAME":
-            try:
-                sid = _int_value((ev or {}).get("str_id"), -1)
-            except Exception:
-                sid = -1
+            sid = _int_value(ev.get("str_id"), -1)
             if sid >= 0:
                 out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
             continue
         if op != "CD_PUSH":
             continue
-        try:
-            if _int_value((ev or {}).get("form"), -1) != fm_str:
-                continue
-            sid = _int_value((ev or {}).get("value"), -1)
-        except Exception:
+        if _int_value(ev.get("form"), -1) != fm_str:
             continue
+        sid = _int_value(ev.get("value"), -1)
         if sid < 0:
             continue
         out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_OTHER)
         if i + 1 >= len(trace):
             continue
-        next_ev = trace[i + 1] or {}
+        next_ev = trace[i + 1]
+        if not isinstance(next_ev, dict):
+            continue
         next_op = str(next_ev.get("op") or "")
         if next_op == "CD_COMMAND":
             if _is_trace_command_base(next_ev, "print"):
@@ -1005,7 +995,8 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
         eprint(f"textmap: file not found: {dat_path}", errors="replace")
         return 1
     try:
-        blob = open(dat_path, "rb").read()
+        with open(dat_path, "rb") as f:
+            blob = f.read()
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1

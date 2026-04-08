@@ -83,11 +83,12 @@ def _iter_scene_dat_paths(scene_root: str):
 
 
 def _bundle_relpath(bundle, scene_root: str):
-    source = str((bundle or {}).get("koe_source") or "")
+    bundle = bundle if isinstance(bundle, dict) else {}
+    source = str(bundle.get("koe_source") or "")
     if source:
         return source.replace("\\", "/")
-    dat_path = str((bundle or {}).get("dat_path") or "")
-    scene_name = str((bundle or {}).get("scene_name") or "")
+    dat_path = str(bundle.get("dat_path") or "")
+    scene_name = str(bundle.get("scene_name") or "")
     if dat_path:
         if os.path.isdir(scene_root):
             try:
@@ -180,10 +181,13 @@ def _line_name_text(events):
     name = ""
     texts = []
     for ev in events or []:
-        op = str((ev or {}).get("op") or "")
-        text = str((ev or {}).get("text") or "")
+        if not isinstance(ev, dict):
+            continue
+        text = ev.get("text")
         if not text:
             continue
+        op = str(ev.get("op") or "")
+        text = str(text)
         if op == "CD_NAME":
             name = text
             continue
@@ -220,10 +224,12 @@ def _remember_voice_meta(voice_meta, koe_no, name, text):
 
 
 def _voice_call_base_name(ev):
-    base = str((ev or {}).get("_call_base_name") or "").strip()
+    if not isinstance(ev, dict):
+        return ""
+    base = str(ev.get("_call_base_name") or "").strip()
     if base:
         return base
-    call_name = str((ev or {}).get("_call_name") or "").strip()
+    call_name = str(ev.get("_call_name") or "").strip()
     if "." in call_name:
         return call_name.rsplit(".", 1)[-1]
     return call_name
@@ -240,13 +246,19 @@ def _normalize_koe_no(koe_no, scene_no=None):
 
 
 def _voice_ref_from_event(ev, scene_no=None):
-    if str((ev or {}).get("op") or "") != "CD_COMMAND":
+    if not isinstance(ev, dict) or str(ev.get("op") or "") != "CD_COMMAND":
         return None
     base = _voice_call_base_name(ev)
     if base not in _VOICE_CALL_NAMES:
         return None
-    named = dict((ev or {}).get("_named_values") or {})
-    args = list((ev or {}).get("_arg_values") or [])
+    named = ev.get("_named_values")
+    if not isinstance(named, dict):
+        named = {}
+    args = ev.get("_arg_values")
+    if not isinstance(args, (list, tuple)):
+        args = []
+    else:
+        args = list(args)
     koe_no = named.get("koe_no")
     if koe_no is None and args:
         koe_no = args[0]
@@ -263,11 +275,15 @@ def _voice_ref_from_event(ev, scene_no=None):
 def _line_inline_voice_meta(events, scene_no=None):
     out = {}
     for ev in events or []:
-        if str((ev or {}).get("op") or "") != "CD_COMMAND":
+        if not isinstance(ev, dict) or str(ev.get("op") or "") != "CD_COMMAND":
             continue
         if _voice_call_base_name(ev) in _VOICE_CALL_NAMES:
             continue
-        args = list((ev or {}).get("_arg_values") or [])
+        args = ev.get("_arg_values")
+        if not isinstance(args, (list, tuple)):
+            args = []
+        else:
+            args = list(args)
         if len(args) < 4:
             continue
         koe_no = _normalize_koe_no(args[0], scene_no=scene_no)
@@ -283,10 +299,11 @@ def _line_inline_voice_meta(events, scene_no=None):
 
 
 def _scan_bundle_calls(bundle, scene_root: str):
+    bundle = bundle if isinstance(bundle, dict) else {}
     refs = []
-    trace = [x for x in list((bundle or {}).get("trace") or []) if isinstance(x, dict)]
+    trace = [x for x in bundle.get("trace") or [] if isinstance(x, dict)]
     rel = _bundle_relpath(bundle, scene_root)
-    scene_no = (bundle or {}).get("scene_no")
+    scene_no = bundle.get("scene_no")
     voice_meta = {}
     pending = []
     last_name = ""
