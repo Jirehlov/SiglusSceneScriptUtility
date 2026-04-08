@@ -25,21 +25,15 @@ def _resolve_form_code(value):
                 return int(out)
     except Exception:
         pass
-    try:
-        fm = C._FORM_CODE
-        if isinstance(fm, dict) and text in fm:
-            return int(fm[text])
-    except Exception:
-        pass
+    fm = C._FORM_CODE
+    if isinstance(fm, dict) and text in fm:
+        return int(fm[text])
     return None
 
 
 def _read_flag_command_codes():
-    try:
-        codes = getattr(C, "READ_FLAG_COMMAND_CODES")
-        return frozenset((int(a), int(b)) for a, b in (codes or ()))
-    except Exception:
-        return frozenset()
+    codes = getattr(C, "READ_FLAG_COMMAND_CODES")
+    return frozenset((int(a), int(b)) for a, b in (codes or ()))
 
 
 def _build_system_element_index():
@@ -296,10 +290,7 @@ def disassemble_scn_bytes(
         "CD_SEL_BLOCK_START",
         "CD_SEL_BLOCK_END",
     ):
-        try:
-            op_names[int(getattr(C, nm))] = nm
-        except Exception:
-            pass
+        op_names[int(getattr(C, nm))] = nm
     read_flag_command_codes = _read_flag_command_codes()
 
     _form_code = _resolve_form_code
@@ -349,22 +340,10 @@ def disassemble_scn_bytes(
     elm_exact = _build_system_element_index()
     elm_array_exact = _build_array_element_index()
     receiver_forms = set()
-    try:
-        for key in elm_exact:
-            try:
-                receiver_forms.add(int(key[0]))
-            except Exception:
-                continue
-    except Exception:
-        pass
-    try:
-        for key in elm_array_exact:
-            try:
-                receiver_forms.add(int(key))
-            except Exception:
-                continue
-    except Exception:
-        pass
+    for key in elm_exact:
+        receiver_forms.add(int(key[0]))
+    for key in elm_array_exact:
+        receiver_forms.add(int(key))
     receiver_forms = augment_receiver_form_codes(receiver_forms)
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))

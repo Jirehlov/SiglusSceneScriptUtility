@@ -364,10 +364,7 @@ def _collect_disam_string_kinds(bundle):
     if not isinstance(bundle, dict):
         return out
     trace = list(bundle.get("trace") or [])
-    try:
-        fm_str = int((C._FORM_CODE or {}).get(C.FM_STR, -1))
-    except Exception:
-        fm_str = -1
+    fm_str = int((C._FORM_CODE or {}).get(C.FM_STR, -1))
     if fm_str < 0:
         return out
     for i, ev in enumerate(trace):

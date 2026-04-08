@@ -286,15 +286,9 @@ def _element_indexes():
             elm_array_exact = {}
         receiver_forms = set()
         for key in elm_exact.keys():
-            try:
-                receiver_forms.add(int(key[0]))
-            except Exception:
-                continue
+            receiver_forms.add(int(key[0]))
         for key in elm_array_exact.keys():
-            try:
-                receiver_forms.add(int(key))
-            except Exception:
-                continue
+            receiver_forms.add(int(key))
         receiver_forms = augment_receiver_form_codes(receiver_forms)
         _ELEMENT_INDEX_CACHE = (elm_exact, elm_array_exact, frozenset(receiver_forms))
         _ELEMENT_INDEX_CACHE_KEY = cache_key

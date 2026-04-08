@@ -13,16 +13,10 @@ KEY_TXT_NAME = "key.txt"
 
 def invert_form_code_map():
     out = {}
-    try:
-        fm = C._FORM_CODE
-        if isinstance(fm, dict):
-            for k, v in fm.items():
-                try:
-                    out[int(v)] = str(k)
-                except Exception:
-                    continue
-    except Exception:
-        pass
+    fm = C._FORM_CODE
+    if isinstance(fm, dict):
+        for k, v in fm.items():
+            out[int(v)] = str(k)
     return out
 
 
@@ -33,18 +27,12 @@ def augment_receiver_form_codes(forms=None):
             out.add(int(form))
         except Exception:
             continue
-    try:
-        fm = C._FORM_CODE
-    except Exception:
-        fm = {}
+    fm = C._FORM_CODE
     if not isinstance(fm, dict):
         fm = {}
     for name in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
-        try:
-            if name in fm:
-                out.add(int(fm[name]))
-        except Exception:
-            continue
+        if name in fm:
+            out.add(int(fm[name]))
     return out
 
 

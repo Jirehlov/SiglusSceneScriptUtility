@@ -6869,12 +6869,9 @@ def resolve_form_code(value):
         return int(text, 0)
     except Exception:
         pass
-    try:
-        forms = _FORM_CODE
-        if isinstance(forms, dict) and text in forms:
-            return int(forms[text])
-    except Exception:
-        pass
+    forms = _FORM_CODE
+    if isinstance(forms, dict) and text in forms:
+        return int(forms[text])
     return None
 
 
@@ -6893,80 +6890,73 @@ def _sanitize_ident(s):
     return t
 
 
-try:
-    _defs = SYSTEM_ELEMENT_DEFS or []
-    for it in _defs:
-        if not isinstance(it, (list, tuple)) or len(it) < 7:
-            continue
-        tp, parent, form, name, owner, group, code, *rest = it
-        if not isinstance(parent, str) or not isinstance(name, str):
-            continue
-        k = f"ELM_{_sanitize_ident(parent)}_{_sanitize_ident(name)}"
-        globals()[k] = create_elm_code(owner, group, code)
-except Exception:
-    pass
-try:
-    _fm_global_code = int(_FORM_CODE[FM_GLOBAL])
-    _fm_mwnd_code = int(_FORM_CODE[FM_MWND])
-    _message_block_names = (
-        (FM_GLOBAL, "ELM_GLOBAL_KOE"),
-        (FM_GLOBAL, "ELM_GLOBAL_SET_FACE"),
-        (FM_GLOBAL, "ELM_GLOBAL_SET_NAMAE"),
-        (FM_GLOBAL, "ELM_GLOBAL_PRINT"),
-        (FM_GLOBAL, "ELM_GLOBAL_RUBY"),
-        (FM_GLOBAL, "ELM_GLOBAL_NL"),
-        (FM_GLOBAL, "ELM_GLOBAL_NLI"),
-        (FM_MWND, "ELM_MWND_KOE"),
-        (FM_MWND, "ELM_MWND_SET_FACE"),
-        (FM_MWND, "ELM_MWND_SET_NAMAE"),
-        (FM_MWND, "ELM_MWND_PRINT"),
-        (FM_MWND, "ELM_MWND_RUBY"),
-        (FM_MWND, "ELM_MWND_NL"),
-        (FM_MWND, "ELM_MWND_NLI"),
-    )
-    _read_flag_names = (
-        (FM_GLOBAL, "ELM_GLOBAL_PRINT"),
-        (FM_GLOBAL, "ELM_GLOBAL_KOE"),
-        (FM_GLOBAL, "ELM_GLOBAL_KOE_PLAY_WAIT"),
-        (FM_GLOBAL, "ELM_GLOBAL_KOE_PLAY_WAIT_KEY"),
-        (FM_GLOBAL, "ELM_GLOBAL_SEL"),
-        (FM_GLOBAL, "ELM_GLOBAL_SEL_CANCEL"),
-        (FM_GLOBAL, "ELM_GLOBAL_SELMSG"),
-        (FM_GLOBAL, "ELM_GLOBAL_SELMSG_CANCEL"),
-        (FM_GLOBAL, "ELM_GLOBAL_SELBTN"),
-        (FM_GLOBAL, "ELM_GLOBAL_SELBTN_CANCEL"),
-        (FM_GLOBAL, "ELM_GLOBAL_SELBTN_START"),
-        (FM_GLOBAL, "ELM_GLOBAL_SEL_IMAGE"),
-        (FM_MWND, "ELM_MWND_PRINT"),
-        (FM_MWND, "ELM_MWND_KOE"),
-        (FM_MWND, "ELM_MWND_KOE_PLAY_WAIT"),
-        (FM_MWND, "ELM_MWND_KOE_PLAY_WAIT_KEY"),
-        (FM_MWND, "ELM_MWND_SEL"),
-        (FM_MWND, "ELM_MWND_SEL_CANCEL"),
-        (FM_MWND, "ELM_MWND_SELMSG"),
-        (FM_MWND, "ELM_MWND_SELMSG_CANCEL"),
-    )
-    MESSAGE_BLOCK_COMMAND_CODES = frozenset(
-        {
-            (
-                _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
-                int(globals()[element_name]),
-            )
-            for parent, element_name in _message_block_names
-        }
-    )
-    READ_FLAG_COMMAND_CODES = frozenset(
-        {
-            (
-                _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
-                int(globals()[element_name]),
-            )
-            for parent, element_name in _read_flag_names
-        }
-    )
-except Exception:
-    MESSAGE_BLOCK_COMMAND_CODES = frozenset()
-    READ_FLAG_COMMAND_CODES = frozenset()
+_defs = SYSTEM_ELEMENT_DEFS or []
+for it in _defs:
+    if not isinstance(it, (list, tuple)) or len(it) < 7:
+        continue
+    tp, parent, form, name, owner, group, code, *rest = it
+    if not isinstance(parent, str) or not isinstance(name, str):
+        continue
+    k = f"ELM_{_sanitize_ident(parent)}_{_sanitize_ident(name)}"
+    globals()[k] = create_elm_code(owner, group, code)
+_fm_global_code = int(_FORM_CODE[FM_GLOBAL])
+_fm_mwnd_code = int(_FORM_CODE[FM_MWND])
+_message_block_names = (
+    (FM_GLOBAL, "ELM_GLOBAL_KOE"),
+    (FM_GLOBAL, "ELM_GLOBAL_SET_FACE"),
+    (FM_GLOBAL, "ELM_GLOBAL_SET_NAMAE"),
+    (FM_GLOBAL, "ELM_GLOBAL_PRINT"),
+    (FM_GLOBAL, "ELM_GLOBAL_RUBY"),
+    (FM_GLOBAL, "ELM_GLOBAL_NL"),
+    (FM_GLOBAL, "ELM_GLOBAL_NLI"),
+    (FM_MWND, "ELM_MWND_KOE"),
+    (FM_MWND, "ELM_MWND_SET_FACE"),
+    (FM_MWND, "ELM_MWND_SET_NAMAE"),
+    (FM_MWND, "ELM_MWND_PRINT"),
+    (FM_MWND, "ELM_MWND_RUBY"),
+    (FM_MWND, "ELM_MWND_NL"),
+    (FM_MWND, "ELM_MWND_NLI"),
+)
+_read_flag_names = (
+    (FM_GLOBAL, "ELM_GLOBAL_PRINT"),
+    (FM_GLOBAL, "ELM_GLOBAL_KOE"),
+    (FM_GLOBAL, "ELM_GLOBAL_KOE_PLAY_WAIT"),
+    (FM_GLOBAL, "ELM_GLOBAL_KOE_PLAY_WAIT_KEY"),
+    (FM_GLOBAL, "ELM_GLOBAL_SEL"),
+    (FM_GLOBAL, "ELM_GLOBAL_SEL_CANCEL"),
+    (FM_GLOBAL, "ELM_GLOBAL_SELMSG"),
+    (FM_GLOBAL, "ELM_GLOBAL_SELMSG_CANCEL"),
+    (FM_GLOBAL, "ELM_GLOBAL_SELBTN"),
+    (FM_GLOBAL, "ELM_GLOBAL_SELBTN_CANCEL"),
+    (FM_GLOBAL, "ELM_GLOBAL_SELBTN_START"),
+    (FM_GLOBAL, "ELM_GLOBAL_SEL_IMAGE"),
+    (FM_MWND, "ELM_MWND_PRINT"),
+    (FM_MWND, "ELM_MWND_KOE"),
+    (FM_MWND, "ELM_MWND_KOE_PLAY_WAIT"),
+    (FM_MWND, "ELM_MWND_KOE_PLAY_WAIT_KEY"),
+    (FM_MWND, "ELM_MWND_SEL"),
+    (FM_MWND, "ELM_MWND_SEL_CANCEL"),
+    (FM_MWND, "ELM_MWND_SELMSG"),
+    (FM_MWND, "ELM_MWND_SELMSG_CANCEL"),
+)
+MESSAGE_BLOCK_COMMAND_CODES = frozenset(
+    {
+        (
+            _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
+            int(globals()[element_name]),
+        )
+        for parent, element_name in _message_block_names
+    }
+)
+READ_FLAG_COMMAND_CODES = frozenset(
+    {
+        (
+            _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
+            int(globals()[element_name]),
+        )
+        for parent, element_name in _read_flag_names
+    }
+)
 OP_AMARI = 5
 OP_AND = 49
 OP_DIVIDE = 4
