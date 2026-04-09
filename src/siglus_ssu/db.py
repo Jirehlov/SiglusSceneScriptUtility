@@ -13,6 +13,7 @@ from .common import (
     run_batch,
 )
 from . import dbs
+from .native_ops import msvcrt_rand_byte
 
 
 def _analyze_one(path):
@@ -81,12 +82,6 @@ def _is_int_token(s) -> bool:
         return False
 
 
-def _msvcrt_next(state: int):
-    state = (int(state) * 214013 + 2531011) & 0xFFFFFFFF
-    b = ((state >> 16) & 0x7FFF) & 0xFF
-    return state, b
-
-
 def _find_rand_skip(
     seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
 ):
@@ -103,7 +98,7 @@ def _find_rand_skip(
     pos = -1
     target_end = start_skip + max_scan + pat_len - 1
     while pos + 1 < target_end:
-        state, b = _msvcrt_next(state)
+        state, b = msvcrt_rand_byte(state)
         pos += 1
         buf.append(b)
         if len(buf) > pat_len:

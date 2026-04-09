@@ -5,7 +5,7 @@ import csv
 import re
 
 from . import const as C
-from .native_ops import lzss_pack, lzss_unpack, tile_copy
+from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
 from .common import _sha1, read_bytes, write_bytes
 
 
@@ -427,8 +427,8 @@ def burn_msvcrt_rand(n: int) -> None:
 
 def _msvcrt_rand_byte() -> int:
     global _MSVCRT_RAND_STATE
-    _MSVCRT_RAND_STATE = (_MSVCRT_RAND_STATE * 214013 + 2531011) & 0xFFFFFFFF
-    return ((_MSVCRT_RAND_STATE >> 16) & 0x7FFF) & 0xFF
+    _MSVCRT_RAND_STATE, value = msvcrt_rand_byte(_MSVCRT_RAND_STATE)
+    return value
 
 
 def _wtoi_prefix(s):

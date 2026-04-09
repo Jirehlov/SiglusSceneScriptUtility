@@ -6862,7 +6862,7 @@ def create_elm_code(owner, group, code):
 def resolve_form_code(value):
     if isinstance(value, int):
         return int(value)
-    text = str(value or "")
+    text = str(value or "").strip()
     if not text:
         return None
     try:

@@ -530,6 +530,16 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim)
 
 
+def msvcrt_rand15(state: int):
+    s = (int(state) * 214013 + 2531011) & 0xFFFFFFFF
+    return s, (s >> 16) & 0x7FFF
+
+
+def msvcrt_rand_byte(state: int):
+    s, v = msvcrt_rand15(state)
+    return s, v & 0xFF
+
+
 def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
     s = int(state) & 0xFFFFFFFF
     n = len(a)
@@ -547,8 +557,8 @@ def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
         while 1:
             rnd = 0
             for _ in range(chunks):
-                s = (s * 214013 + 2531011) & 0xFFFFFFFF
-                rnd = ((rnd << n32) | ((s >> 16) & 0x7FFF)) & 0xFFFFFFFF
+                s, v = msvcrt_rand15(s)
+                rnd = ((rnd << n32) | v) & 0xFFFFFFFF
             q2, j = divmod(rnd, i)
             if q2 < q1 or r1 == i - 1:
                 break

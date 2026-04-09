@@ -1638,7 +1638,7 @@ class _Decompiler:
     def _annotate_event_fields(self):
         if not self.events:
             return
-        _form_code = getattr(disam, "_resolve_form_code", None)
+        _form_code = C.resolve_form_code
         if not callable(_form_code):
             return
         elm_exact, elm_array_exact, receiver_forms = _element_indexes()

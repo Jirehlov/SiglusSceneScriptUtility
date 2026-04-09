@@ -18,29 +18,6 @@ from .common import (
 )
 
 
-def _resolve_form_code(value):
-    try:
-        if isinstance(value, int):
-            return int(value)
-        text = str(value or "").strip()
-    except Exception:
-        return None
-    if not text:
-        return None
-    try:
-        fn = getattr(C, "resolve_form_code", None)
-        if callable(fn):
-            out = fn(value)
-            if out is not None:
-                return int(out)
-    except Exception:
-        pass
-    fm = C._FORM_CODE
-    if isinstance(fm, dict) and text in fm:
-        return int(fm[text])
-    return None
-
-
 def _read_flag_command_codes():
     codes = getattr(C, "READ_FLAG_COMMAND_CODES")
     return frozenset((int(a), int(b)) for a, b in (codes or ()))
@@ -1009,7 +986,7 @@ def disassemble_scn_bytes(
     ):
         op_names[int(getattr(C, nm))] = nm
     read_flag_command_codes = _read_flag_command_codes()
-    _form_code = _resolve_form_code
+    _form_code = C.resolve_form_code
     cd_none = C.CD_NONE
     cd_nl = C.CD_NL
     cd_push = C.CD_PUSH

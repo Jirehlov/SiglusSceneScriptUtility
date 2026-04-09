@@ -2,6 +2,7 @@ import os
 import sys
 
 from .common import (
+    iter_files_by_ext,
     looks_like_siglus_dat,
     parse_gei_disam_args,
     read_bytes,
@@ -24,12 +25,8 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
 
     input_dir = os.path.abspath(input_dir)
     output_dir = os.path.abspath(output_dir)
-    dat_paths = []
     try:
-        for name in sorted(os.listdir(input_dir)):
-            path = os.path.join(input_dir, name)
-            if os.path.isfile(path) and os.path.splitext(name)[1].lower() == ".dat":
-                dat_paths.append(path)
+        dat_paths = iter_files_by_ext(input_dir, [".dat"], recursive=False)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1

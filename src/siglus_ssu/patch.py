@@ -102,18 +102,6 @@ def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
     return os.path.join(d, f"{stem}_{t}{ext}")
 
 
-def _default_out_path_altkey(in_exe: str) -> str:
-    return _default_out_path(in_exe, "alt", upper=False)
-
-
-def _default_out_path_lang(in_exe: str, tag: str) -> str:
-    return _default_out_path(in_exe, tag)
-
-
-def _default_out_path_loc(in_exe: str, enabled: bool) -> str:
-    return _default_out_path_lang(in_exe, "LOC1" if enabled else "LOC0")
-
-
 def _read_cstr(blob: bytes, off: int):
     off = int(off)
     if off < 0 or off >= len(blob):
@@ -857,12 +845,12 @@ def main(argv=None):
             out_path = os.path.abspath(str(args.output or ""))
         else:
             out_path = (
-                _default_out_path_altkey(in_path)
+                _default_out_path(in_path, "alt", upper=False)
                 if args.altkey
                 else (
-                    _default_out_path_loc(in_path, args.loc == "1")
+                    _default_out_path(in_path, "LOC1" if args.loc == "1" else "LOC0")
                     if args.loc is not None
-                    else _default_out_path_lang(in_path, suffix)
+                    else _default_out_path(in_path, suffix)
                 )
             )
 

@@ -1201,7 +1201,13 @@ def build_sections(blob, header_fields, header_size, header_size_validator=None)
     return h, hs, used, secs, sec, sec_fixed
 
 
-def iter_files_by_ext(root: str, extensions, exclude_names=None, exclude_pred=None):
+def iter_files_by_ext(
+    root: str,
+    extensions,
+    exclude_names=None,
+    exclude_pred=None,
+    recursive: bool = True,
+):
     ext_set = {ext.lower() for ext in extensions}
     exclude_set = {name.lower() for name in (exclude_names or [])}
     out = []
@@ -1220,6 +1226,19 @@ def iter_files_by_ext(root: str, extensions, exclude_names=None, exclude_pred=No
         if os.path.splitext(root)[1].lower() in ext_set:
             return [root]
         return []
+
+    if not recursive:
+        for entry in os.scandir(root):
+            if not entry.is_file():
+                continue
+            name = entry.name
+            if os.path.splitext(name)[1].lower() not in ext_set:
+                continue
+            path = entry.path
+            if should_skip(path):
+                continue
+            out.append(path)
+        return sorted(out)
 
     for dirpath, _dirs, filenames in os.walk(root):
         for name in filenames:
