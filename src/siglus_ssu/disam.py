@@ -5,10 +5,11 @@ from .common import (
     binary_result_form as _binary_result_form,
     build_operator_render_tables,
     clone_stack_segment,
-    format_named_command_args as _format_command_arg_exprs,
+    format_named_command_args,
     hx,
     invert_form_code_map,
     latest_stack_start,
+    named_command_value_map,
     quote_ss_text,
     read_i32_le,
     split_element_code as _element_owner,
@@ -1838,7 +1839,7 @@ def disassemble_scn_bytes(
                 expr = rendered.get("expr")
                 if not expr:
                     call_name = str(rendered.get("call_name") or "<?command>")
-                    args2 = _format_command_arg_exprs(
+                    args2 = format_named_command_args(
                         rendered.get("info"), arg_exprs, named_ids
                     )
                     expr = f"{call_name}({', '.join(args2)})"
@@ -1849,47 +1850,7 @@ def disassemble_scn_bytes(
         return None
 
     def _command_named_values(info, arg_values, named_ids):
-        args = list(arg_values or [])
-        ids = list(named_ids or [])
-        if not ids or not isinstance(info, dict):
-            return {}
-        pos_cnt = len(args) - len(ids)
-        if pos_cnt < 0:
-            return {}
-        arg_map = info.get("arg_map") or {}
-        named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
-        named_list = (
-            named_spec.get("arg_list")
-            if isinstance(named_spec, dict)
-            else (named_spec if isinstance(named_spec, list) else [])
-        )
-        if not isinstance(named_list, list):
-            return {}
-        name_by_id = {}
-        for item in named_list:
-            if not isinstance(item, dict):
-                continue
-            try:
-                nid = int(item.get("id", -1))
-            except Exception:
-                continue
-            nm = str(item.get("name") or "")
-            if nm:
-                name_by_id[nid] = nm
-        if not name_by_id:
-            return {}
-        out = {}
-        ordered_ids = list(reversed(ids))
-        for value, nid in zip(args[pos_cnt:], ordered_ids):
-            try:
-                key = int(nid)
-            except Exception:
-                continue
-            nm = name_by_id.get(key)
-            if not nm:
-                continue
-            out[nm] = value
-        return out
+        return named_command_value_map(info, arg_values, named_ids)
 
     def _scan_property_slice(items):
         parent_form = _form_code(C.FM_GLOBAL)

@@ -13,6 +13,7 @@ from .common import (
     ANGOU_DAT_NAME,
     KEY_TXT_NAME,
     read_exe_el_key,
+    scan_text_comments,
 )
 
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
@@ -41,71 +42,20 @@ class IniFileAnalizer:
         return True, self._last
 
     def _comment_cut(self, text):
-        text = text + "\0" * 256
-        SN, SD, SE, CL, CB = 0, 1, 2, 3, 4
-        st = SN
-        line = 1
-        bl = 1
-        out = []
-        i = 0
-        n = len(text)
-        while i < n and text[i] != "\0":
-            ch = text[i]
-            if ch == "\n":
-                if st in (SD, SE):
-                    return self._error(
-                        line, "Newline is not allowed inside double quotes."
-                    )
-                if st == CL:
-                    st = SN
-                line += 1
-            elif st == SD:
-                if ch == "\\":
-                    st = SE
-                if ch == '"':
-                    st = SN
-            elif st == SE:
-                if ch in ("\\", '"'):
-                    st = SD
-                else:
-                    return self._error(
-                        line, "Invalid escape (\\). Use '\\\\' to write a backslash."
-                    )
-            elif st == CL:
-                i += 1
-                continue
-            elif st == CB:
-                if ch == "*" and i + 1 < n and text[i + 1] == "/":
-                    st = SN
-                    i += 2
-                    continue
-                i += 1
-                continue
-            else:
-                if ch == '"':
-                    st = SD
-                elif ch == ";":
-                    st = CL
-                    i += 1
-                    continue
-                elif ch == "/" and i + 1 < n and text[i + 1] == "/":
-                    st = CL
-                    i += 2
-                    continue
-                elif ch == "/" and i + 1 < n and text[i + 1] == "*":
-                    bl = line
-                    st = CB
-                    i += 2
-                    continue
-                elif "a" <= ch <= "z":
-                    ch = chr(ord(ch) - 32)
-            out.append(ch)
-            i += 1
-        if st in (SD, SE):
-            return self._error(line, "Unclosed double quote.")
-        if st == CB:
-            return self._error(bl, "Unclosed /* comment.")
-        self._last = "".join(out)
+        result = scan_text_comments(
+            text,
+            case_mode="upper",
+            single_quote_mode="none",
+            double_escape_chars='\\"',
+            block_comment_enter_advance=2,
+            newline_double_message="Newline is not allowed inside double quotes.",
+            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
+            unclosed_double_message="Unclosed double quote.",
+            unclosed_block_message="Unclosed /* comment.",
+        )
+        if not result.get("ok"):
+            return self._error(result.get("line", 0), result.get("message", ""))
+        self._last = result.get("text", "")
         return True
 
 

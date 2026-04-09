@@ -1,12 +1,12 @@
 import struct
 import os
-import sys
 from .common import (
+    collect_batch_files,
     eprint,
     fmt_kv,
     hint_help,
-    iter_files_by_ext,
-    parse_mode_flag,
+    parse_main_argv,
+    prepare_batch_paths,
     missing_input_file,
     run_batch,
 )
@@ -114,13 +114,9 @@ def _analyze_one(path):
 
 
 def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if (not argv) or argv[0] in ("-h", "--help", "help"):
-        hint_help()
-        return 0
-    mode, argv = parse_mode_flag(argv)
-    if mode is None:
-        return 2
+    mode, argv, rc = parse_main_argv(argv, hint_help)
+    if rc is not None:
+        return rc
     if mode == "a":
         if len(argv) != 1:
             eprint("error: expected 1 input file for --a")
@@ -247,22 +243,17 @@ def main(argv=None):
         print(fmt_kv("wrote", outp2))
         return 0
 
-    if len(argv) != 2:
-        eprint("error: expected <input> <output_dir> for --x")
-        hint_help()
-        return 2
-    inp, out_root = argv[0], argv[1]
-    src_is_dir = os.path.isdir(inp)
-    if not src_is_dir and missing_input_file(inp):
-        return 1
-    os.makedirs(out_root, exist_ok=True)
+    inp, out_root, src_is_dir, rc = prepare_batch_paths(
+        argv, hint_help, "error: expected <input> <output_dir> for --x"
+    )
+    if rc is not None:
+        return rc
     if not src_is_dir and os.path.splitext(inp)[1].lower() != ".omv":
         eprint("error: unsupported file type (expected .omv)")
         return 1
-    files = iter_files_by_ext(inp, [".omv"]) if src_is_dir else [inp]
-    if not files:
-        eprint("no .omv files found")
-        return 0
+    files, rc = collect_batch_files(inp, src_is_dir, [".omv"], "no .omv files found")
+    if rc is not None:
+        return rc
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""

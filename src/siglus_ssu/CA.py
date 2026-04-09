@@ -1,6 +1,7 @@
 import unicodedata
 from functools import lru_cache
 from . import const as C
+from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
 
 
 def _isalpha(c):
@@ -104,104 +105,26 @@ class CharacterAnalizer:
         return i, "", 0
 
     def analize_file_1(self, in_text):
-        t = in_text + ("\0" * 256)
-        out = []
-        self.m_line = 1
-        bcl = 1
-        st = 0
-        i = 0
-        while t[i] != "\0":
-            c = t[i]
-            moji = c
-            if c == "\n":
-                if st in (1, 2, 3):
-                    return self.error(
-                        self.m_line, "Newline is not allowed inside single quotes."
-                    )
-                if st in (4, 5):
-                    return self.error(
-                        self.m_line, "Newline is not allowed inside double quotes."
-                    )
-                if st == 6:
-                    st = 0
-                self.m_line += 1
-            elif st == 1:
-                if c == "\\":
-                    st = 2
-                elif c == "'":
-                    return self.error(
-                        self.m_line, "Single quotes must enclose exactly one character."
-                    )
-                else:
-                    st = 3
-            elif st == 2:
-                if c in "\\'n":
-                    st = 3
-                else:
-                    return self.error(
-                        self.m_line,
-                        "Invalid escape (\\). Use '\\\\' to write a backslash.",
-                    )
-            elif st == 3:
-                if c == "'":
-                    st = 0
-                else:
-                    return self.error(
-                        self.m_line,
-                        "Single quotes are not closed or contain more than one character.",
-                    )
-            elif st == 4:
-                if c == "\\":
-                    st = 5
-                elif c == '"':
-                    st = 0
-            elif st == 5:
-                if c in '\\"n':
-                    st = 4
-                else:
-                    return self.error(
-                        self.m_line,
-                        "Invalid escape (\\). Use '\\\\' to write a backslash.",
-                    )
-            elif st == 6:
-                i += 1
-                continue
-            elif st == 7:
-                if c == "*" and t[i + 1] == "/":
-                    st = 0
-                    i += 2
-                    continue
-                i += 1
-                continue
-            else:
-                if c == "'":
-                    st = 1
-                elif c == '"':
-                    st = 4
-                elif c == ";":
-                    st = 6
-                    i += 1
-                    continue
-                elif c == "/" and t[i + 1] == "/":
-                    st = 6
-                    i += 2
-                    continue
-                elif c == "/" and t[i + 1] == "*":
-                    bcl = self.m_line
-                    st = 7
-                    i += 1
-                    continue
-                elif "A" <= c <= "Z":
-                    moji = chr(ord(c) + 32)
-            out.append(moji)
-            i += 1
-        if st in (1, 2, 3):
-            return self.error(self.m_line, "Unclosed single quote.")
-        if st in (4, 5):
-            return self.error(self.m_line, "Unclosed double quote.")
-        if st == 7:
-            return self.error(bcl, "Unclosed /* comment.")
-        return "".join(out)
+        result = scan_text_comments(
+            in_text,
+            case_mode="lower",
+            single_quote_mode="char",
+            single_escape_chars="\\'n",
+            double_escape_chars='\\"n',
+            block_comment_enter_advance=1,
+            newline_single_message="Newline is not allowed inside single quotes.",
+            newline_double_message="Newline is not allowed inside double quotes.",
+            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
+            single_empty_message="Single quotes must enclose exactly one character.",
+            single_invalid_message="Single quotes are not closed or contain more than one character.",
+            unclosed_single_message="Unclosed single quote.",
+            unclosed_double_message="Unclosed double quote.",
+            unclosed_block_message="Unclosed /* comment.",
+        )
+        if not result.get("ok"):
+            return self.error(result.get("line", 0), result.get("message", ""))
+        self.m_line = int(result.get("line", 1) or 1)
+        return result.get("text", "")
 
     def analize_file_2(self, in_text):
         t = in_text + ("\0" * 256)
@@ -284,12 +207,9 @@ class CharacterAnalizer:
                         if ifs[d] > 0:
                             i, w, ok2 = self._check_word(t, j)
                             if ok2:
-                                if ifs[d] == 3:
-                                    continue
-                                if ifs[d] == 1:
-                                    ifs[d] = 3
-                                    continue
-                                ifs[d] = 1 if w in self.iad["name_set"] else 2
+                                ifs[d] = next_elseif_ifdef_state(
+                                    ifs[d], w in self.iad["name_set"]
+                                )
                                 continue
                             return self.error(
                                 self.m_line, "Missing word after #elseifdef."
@@ -301,12 +221,7 @@ class CharacterAnalizer:
                     if ok:
                         if ifs[d] > 0:
                             i = j
-                            if ifs[d] == 3:
-                                continue
-                            if ifs[d] == 1:
-                                ifs[d] = 3
-                                continue
-                            ifs[d] = 1
+                            ifs[d] = next_else_ifdef_state(ifs[d])
                             continue
                         return self.error(
                             self.m_line, "#else does not have a matching #if."

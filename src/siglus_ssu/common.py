@@ -127,6 +127,159 @@ def build_empty_ia_data(replace_tree, defined_names=None):
     }
 
 
+def next_elseif_ifdef_state(state: int, matched: bool) -> int:
+    if state == 3:
+        return 3
+    if state == 1:
+        return 3
+    if matched:
+        return 1
+    return 2
+
+
+def next_else_ifdef_state(state: int) -> int:
+    if state == 3:
+        return 3
+    if state == 1:
+        return 3
+    return 1
+
+
+def scan_text_comments(
+    text,
+    *,
+    case_mode=None,
+    single_quote_mode: str = "none",
+    single_escape_chars: str = "",
+    double_escape_chars: str = "",
+    semicolon_line_comment: bool = True,
+    slash_line_comment: bool = True,
+    block_comment: bool = True,
+    block_comment_enter_advance: int = 2,
+    newline_single_message: str = "",
+    newline_double_message: str = "",
+    invalid_escape_message: str = "",
+    single_empty_message: str = "",
+    single_invalid_message: str = "",
+    unclosed_single_message: str = "",
+    unclosed_double_message: str = "",
+    unclosed_block_message: str = "",
+    allow_trailing_escape_eof: bool = False,
+):
+    text = str(text or "") + ("\0" * 256)
+    out = []
+    state = 0
+    line = 1
+    block_line = 1
+    i = 0
+    while text[i] != "\0":
+        ch = text[i]
+        out_ch = ch
+        if ch == "\n":
+            if single_quote_mode == "string" and state in (1, 2):
+                return {
+                    "ok": False,
+                    "line": line,
+                    "message": newline_single_message,
+                }
+            if single_quote_mode == "char" and state in (1, 2, 3):
+                return {
+                    "ok": False,
+                    "line": line,
+                    "message": newline_single_message,
+                }
+            if state in (4, 5):
+                return {
+                    "ok": False,
+                    "line": line,
+                    "message": newline_double_message,
+                }
+            if state == 6:
+                state = 0
+            line += 1
+        elif state == 1:
+            if single_quote_mode == "string":
+                if ch == "'":
+                    state = 0
+                elif ch == "\\":
+                    state = 2
+            else:
+                if ch == "\\":
+                    state = 2
+                elif ch == "'":
+                    return {
+                        "ok": False,
+                        "line": line,
+                        "message": single_empty_message,
+                    }
+                else:
+                    state = 3
+        elif state == 2:
+            if ch in single_escape_chars:
+                state = 1 if single_quote_mode == "string" else 3
+            else:
+                return {"ok": False, "line": line, "message": invalid_escape_message}
+        elif state == 3:
+            if ch == "'":
+                state = 0
+            else:
+                return {"ok": False, "line": line, "message": single_invalid_message}
+        elif state == 4:
+            if ch == "\\":
+                state = 5
+            elif ch == '"':
+                state = 0
+        elif state == 5:
+            if ch in double_escape_chars:
+                state = 4
+            else:
+                return {"ok": False, "line": line, "message": invalid_escape_message}
+        elif state == 6:
+            i += 1
+            continue
+        elif state == 7:
+            if ch == "*" and text[i + 1] == "/":
+                state = 0
+                i += 2
+                continue
+            i += 1
+            continue
+        else:
+            if single_quote_mode != "none" and ch == "'":
+                state = 1
+            elif ch == '"':
+                state = 4
+            elif semicolon_line_comment and ch == ";":
+                state = 6
+                i += 1
+                continue
+            elif slash_line_comment and ch == "/" and text[i + 1] == "/":
+                state = 6
+                i += 2
+                continue
+            elif block_comment and ch == "/" and text[i + 1] == "*":
+                block_line = line
+                state = 7
+                i += block_comment_enter_advance
+                continue
+            elif case_mode == "lower" and "A" <= ch <= "Z":
+                out_ch = chr(ord(ch) + 32)
+            elif case_mode == "upper" and "a" <= ch <= "z":
+                out_ch = chr(ord(ch) - 32)
+        out.append(out_ch)
+        i += 1
+    if single_quote_mode == "string":
+        if state == 1 or (state == 2 and not allow_trailing_escape_eof):
+            return {"ok": False, "line": line, "message": unclosed_single_message}
+    if single_quote_mode == "char" and state in (1, 2, 3):
+        return {"ok": False, "line": line, "message": unclosed_single_message}
+    if state == 4 or (state == 5 and not allow_trailing_escape_eof):
+        return {"ok": False, "line": line, "message": unclosed_double_message}
+    if state == 7:
+        return {"ok": False, "line": block_line, "message": unclosed_block_message}
+    return {"ok": True, "text": "".join(out), "line": line}
+
+
 def split_element_code(code):
     try:
         code = int(code)
@@ -1570,6 +1723,59 @@ def build_source_angou_layout(md5_code, sa, mask_code, lzsz):
     return mw, mh, mask, mapw, maph, mapw * maph * 4, bh
 
 
+def named_command_arg_names(info):
+    if not isinstance(info, dict):
+        return {}
+    arg_map = info.get("arg_map")
+    if not isinstance(arg_map, dict):
+        return {}
+    named_spec = arg_map.get(-1)
+    if isinstance(named_spec, dict):
+        named_list = named_spec.get("arg_list")
+    else:
+        named_list = named_spec
+    if not isinstance(named_list, list):
+        return {}
+    out = {}
+    for item in named_list:
+        if not isinstance(item, dict):
+            continue
+        try:
+            nid = int(item.get("id", -1))
+        except Exception:
+            continue
+        name = item.get("name")
+        if name is None:
+            continue
+        name = str(name)
+        if name:
+            out[nid] = name
+    return out
+
+
+def named_command_value_map(info, arg_values, named_ids):
+    args = list(arg_values or [])
+    ids = list(named_ids or [])
+    if not ids:
+        return {}
+    pos_cnt = len(args) - len(ids)
+    if pos_cnt < 0:
+        return {}
+    name_by_id = named_command_arg_names(info)
+    if not name_by_id:
+        return {}
+    out = {}
+    for value, nid in zip(args[pos_cnt:], reversed(ids)):
+        try:
+            key = int(nid)
+        except Exception:
+            continue
+        name = name_by_id.get(key)
+        if name:
+            out[name] = value
+    return out
+
+
 def format_named_command_args(info, arg_exprs, named_ids):
     args = list(arg_exprs or [])
     ids = list(named_ids or [])
@@ -1578,26 +1784,7 @@ def format_named_command_args(info, arg_exprs, named_ids):
     pos_cnt = len(args) - len(ids)
     if pos_cnt < 0:
         return args
-    arg_map = info.get("arg_map") or {}
-    named_spec = arg_map.get(-1) if isinstance(arg_map, dict) else None
-    named_list = (
-        named_spec.get("arg_list")
-        if isinstance(named_spec, dict)
-        else (named_spec if isinstance(named_spec, list) else [])
-    )
-    if not isinstance(named_list, list):
-        return args
-    name_by_id = {}
-    for item in named_list:
-        if not isinstance(item, dict):
-            continue
-        try:
-            nid = int(item.get("id", -1))
-        except Exception:
-            continue
-        nm = str(item.get("name") or "")
-        if nm:
-            name_by_id[nid] = nm
+    name_by_id = named_command_arg_names(info)
     if not name_by_id:
         return args
     out = list(args[:pos_cnt])
@@ -1627,6 +1814,53 @@ def missing_input_file(path: str) -> bool:
         eprint(f"input not found: {path}")
         return True
     return False
+
+
+def parse_main_argv(argv, help_fn, flags=("--x", "--a", "--c")):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if (not args) or args[0] in ("-h", "--help", "help"):
+        help_fn()
+        return None, args, 0
+    mode, args = parse_mode_flag(args, flags=flags)
+    if mode is None:
+        return None, args, 2
+    return mode, args, None
+
+
+def prepare_batch_paths(
+    argv, help_fn, error_message: str, *, create_output: bool = True
+):
+    if len(argv) != 2:
+        eprint(error_message)
+        help_fn()
+        return None, None, None, 2
+    inp, out_root = argv
+    src_is_dir = os.path.isdir(inp)
+    if not src_is_dir and missing_input_file(inp):
+        return None, None, None, 1
+    if create_output:
+        os.makedirs(out_root, exist_ok=True)
+    return inp, out_root, src_is_dir, None
+
+
+def collect_batch_files(
+    inp,
+    src_is_dir,
+    extensions,
+    empty_message: str,
+    *,
+    recursive: bool = True,
+    sort_key=None,
+):
+    files = (
+        iter_files_by_ext(inp, extensions, recursive=recursive) if src_is_dir else [inp]
+    )
+    if sort_key is not None and src_is_dir:
+        files = sorted(files, key=sort_key)
+    if not files:
+        eprint(empty_message)
+        return [], 0
+    return files, None
 
 
 def run_batch(items, process_fn, item_name_fn=None):

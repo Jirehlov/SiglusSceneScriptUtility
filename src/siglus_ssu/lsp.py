@@ -17,7 +17,7 @@ from .LA import la_analize
 from .MA import MA, FormTable
 from .SA import SA
 from ._const_manager import _package_version
-from .common import read_text_auto
+from .common import build_empty_ia_data, read_text_auto
 
 
 SEVERITY_ERROR = 1
@@ -194,20 +194,6 @@ SEMANTIC_TOKEN_TYPE_INDEX = {
     name: index for index, name in enumerate(SEMANTIC_TOKEN_TYPES)
 }
 SEMANTIC_TOKEN_MODIFIER_BITS = {"declaration": 1 << 0}
-
-
-def _new_iad(defined_names: Iterable[str] | None = None) -> dict[str, Any]:
-    iad = {
-        "replace_tree": _rt(),
-        "name_set": set(defined_names or []),
-        "property_list": [],
-        "command_list": [],
-        "property_cnt": 0,
-        "command_cnt": 0,
-        "inc_property_cnt": 0,
-        "inc_command_cnt": 0,
-    }
-    return iad
 
 
 def _normalize_source_text(text: str) -> str:
@@ -458,7 +444,7 @@ def _enrich_project_definitions(
 
 def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectContext:
     root = os.path.abspath(root_dir or ".")
-    iad = _new_iad()
+    iad = build_empty_ia_data(_rt())
     defs: dict[str, list[DefinitionRecord]] = {}
     inc_paths = _sorted_dir_paths(root, overlays, ".inc")
     passes: list[tuple[str, dict[str, Any]]] = []
@@ -725,7 +711,9 @@ def _analyze_ss_document(
     abs_path: str, text: str, project: ProjectContext
 ) -> AnalysisResult:
     result = AnalysisResult(path=abs_path, text=text, project=project)
-    base_iad = project.iad if isinstance(project.iad, dict) else _new_iad()
+    base_iad = (
+        project.iad if isinstance(project.iad, dict) else build_empty_ia_data(_rt())
+    )
     iad = _copy_ia_data(base_iad)
     pcad: dict[str, Any] = {}
 

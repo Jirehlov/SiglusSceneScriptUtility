@@ -8,6 +8,7 @@ from .CA import (
     _rt_add,
 )
 from .MA import FormTable
+from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
 
 
 class IncAnalyzer:
@@ -25,95 +26,25 @@ class IncAnalyzer:
             self.es = s
 
     def cc(self):
-        t = self.t
-        out = []
-        st = 0
-        bcl = 1
-        line = 1
-        i = 0
-        n = len(t)
-        while i < n:
-            c = t[i]
-            moji = c
-            if c == "\n":
-                if st in (1, 2):
-                    self.err(line, "Found newline inside single quotes.")
-                    return 0
-                if st in (3, 4):
-                    self.err(line, "Found newline inside double quotes.")
-                    return 0
-                if st == 5:
-                    st = 0
-                line += 1
-            elif st == 1:
-                if c == "'":
-                    st = 0
-                elif c == "\\":
-                    st = 2
-            elif st == 2:
-                if c in '"\\n':
-                    st = 1
-                else:
-                    self.err(
-                        line, "Invalid escape (\\). Use '\\\\' to write a backslash."
-                    )
-                    return 0
-            elif st == 3:
-                if c == '"':
-                    st = 0
-                elif c == "\\":
-                    st = 4
-            elif st == 4:
-                if c in '"\\n':
-                    st = 3
-                else:
-                    self.err(
-                        line, "Invalid escape (\\). Use '\\\\' to write a backslash."
-                    )
-                    return 0
-            elif st == 5:
-                i += 1
-                continue
-            elif st == 6:
-                if i + 1 < n and c == "*" and t[i + 1] == "/":
-                    st = 0
-                    i += 2
-                    continue
-                i += 1
-                continue
-            else:
-                if c == "'":
-                    st = 1
-                elif c == '"':
-                    st = 3
-                elif c == ";":
-                    st = 5
-                    i += 1
-                    continue
-                elif i + 1 < n and c == "/" and t[i + 1] == "/":
-                    st = 5
-                    i += 2
-                    continue
-                elif i + 1 < n and c == "/" and t[i + 1] == "*":
-                    bcl = line
-                    st = 6
-                    i += 2
-                    continue
-                else:
-                    if "A" <= moji <= "Z":
-                        moji = chr(ord(moji) + 32)
-            out.append(moji)
-            i += 1
-        if st == 1:
-            self.err(line, "Single quote is not closed.")
+        result = scan_text_comments(
+            self.t,
+            case_mode="lower",
+            single_quote_mode="string",
+            single_escape_chars='"\\n',
+            double_escape_chars='"\\n',
+            block_comment_enter_advance=2,
+            newline_single_message="Found newline inside single quotes.",
+            newline_double_message="Found newline inside double quotes.",
+            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
+            unclosed_single_message="Single quote is not closed.",
+            unclosed_double_message="Double quote is not closed.",
+            unclosed_block_message=" Comment (/*) is not closed.",
+            allow_trailing_escape_eof=True,
+        )
+        if not result.get("ok"):
+            self.err(result.get("line", 0), result.get("message", ""))
             return 0
-        if st == 3:
-            self.err(line, "Double quote is not closed.")
-            return 0
-        if st == 6:
-            self.err(bcl, " Comment (/*) is not closed.")
-            return 0
-        self.t = "".join(out)
+        self.t = result.get("text", "")
         return 1
 
     def _skip(self, i, line):
@@ -460,24 +391,14 @@ class IncAnalyzer:
                     if not ok2:
                         self.err(line, "Missing word after #elseifdef.")
                         return None, i, line, 0
-                    if ifs[d] == 3:
-                        continue
-                    if ifs[d] == 1:
-                        ifs[d] = 3
-                        continue
-                    ifs[d] = 1 if w in self.iad["name_set"] else 2
+                    ifs[d] = next_elseif_ifdef_state(ifs[d], w in self.iad["name_set"])
                     continue
                 self.err(line, "#elseifdef does not have a matching #if.")
                 return None, i, line, 0
             if t.startswith("#else", i):
                 i += 5
                 if ifs[d] > 0:
-                    if ifs[d] == 3:
-                        continue
-                    if ifs[d] == 1:
-                        ifs[d] = 3
-                        continue
-                    ifs[d] = 1
+                    ifs[d] = next_else_ifdef_state(ifs[d])
                     continue
                 self.err(line, "#else does not have a matching #if.")
                 return None, i, line, 0

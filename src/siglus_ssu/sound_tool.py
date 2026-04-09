@@ -1,16 +1,16 @@
 import os
-import sys
 import shutil
 import re
 import subprocess
 import tempfile
 
 from .common import (
+    collect_batch_files,
     eprint,
     hint_help as _hint_help,
     fmt_kv as _fmt_kv,
-    iter_files_by_ext,
-    parse_mode_flag,
+    parse_main_argv,
+    prepare_batch_paths,
     write_bytes,
     missing_input_file,
     run_batch,
@@ -351,16 +351,9 @@ def _extract_one(
 
 
 def main(argv=None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
-
-    if not argv or argv[0] in ("-h", "--help", "help"):
-        _hint_help()
-        return 0
-
-    mode, argv = parse_mode_flag(list(argv))
-    if mode is None:
-        return 2
+    mode, argv, rc = parse_main_argv(argv, _hint_help)
+    if rc is not None:
+        return rc
 
     if mode == "a":
         if "--trim" in argv:
@@ -379,23 +372,16 @@ def main(argv=None) -> int:
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
-        if len(argv) != 2:
-            eprint("error: expected <input> <output_dir> for --c")
-            _hint_help()
-            return 2
-        inp, out_root = argv[0], argv[1]
-
-        src_is_dir = os.path.isdir(inp)
-        if not src_is_dir and missing_input_file(inp):
-            return 1
-
-        os.makedirs(out_root, exist_ok=True)
-
-        files = iter_files_by_ext(inp, [".ogg"]) if src_is_dir else [inp]
-
-        if not files:
-            eprint("no supported audio files found")
-            return 0
+        inp, out_root, src_is_dir, rc = prepare_batch_paths(
+            argv, _hint_help, "error: expected <input> <output_dir> for --c"
+        )
+        if rc is not None:
+            return rc
+        files, rc = collect_batch_files(
+            inp, src_is_dir, [".ogg"], "no supported audio files found"
+        )
+        if rc is not None:
+            return rc
 
         tasks = []
         if src_is_dir:
@@ -460,16 +446,14 @@ def main(argv=None) -> int:
         trim_path = argv[i + 1]
         del argv[i : i + 2]
 
-    if len(argv) != 2:
-        eprint("error: expected <input> <output_dir> for --x")
-        _hint_help()
-        return 2
-
-    inp, out_root = argv[0], argv[1]
-
-    src_is_dir = os.path.isdir(inp)
-    if not src_is_dir and missing_input_file(inp):
-        return 1
+    inp, out_root, src_is_dir, rc = prepare_batch_paths(
+        argv,
+        _hint_help,
+        "error: expected <input> <output_dir> for --x",
+        create_output=False,
+    )
+    if rc is not None:
+        return rc
 
     trim_table = None
     ffmpeg_path = ""
@@ -500,12 +484,12 @@ def main(argv=None) -> int:
 
     os.makedirs(out_root, exist_ok=True)
 
-    files = iter_files_by_ext(inp, [".owp", ".nwa", ".ovk"]) if src_is_dir else [inp]
-
-    if not files:
-        eprint("no supported audio files found")
+    files, rc = collect_batch_files(
+        inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
+    )
+    if rc is not None:
         _cleanup_tmp_dir(tmp_dir, out_root, remove_owned=tmp_dir_owned)
-        return 0
+        return rc
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""

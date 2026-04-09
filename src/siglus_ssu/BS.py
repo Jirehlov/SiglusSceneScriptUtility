@@ -127,16 +127,7 @@ def _copy_replace_tree(rt):
 
 def _copy_ia_data(base):
     if not isinstance(base, dict):
-        return {
-            "replace_tree": _rt(),
-            "name_set": set(),
-            "property_list": [],
-            "command_list": [],
-            "property_cnt": 0,
-            "command_cnt": 0,
-            "inc_property_cnt": 0,
-            "inc_command_cnt": 0,
-        }
+        return build_empty_ia_data(_rt())
     return {
         "form_table": copy.deepcopy(base.get("form_table")),
         "replace_tree": _copy_replace_tree(base.get("replace_tree")),

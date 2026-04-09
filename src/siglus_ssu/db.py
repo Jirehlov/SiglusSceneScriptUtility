@@ -1,14 +1,14 @@
 import os
-import sys
 
 from .common import (
+    collect_batch_files,
     eprint,
     fmt_kv,
     hint_help,
-    iter_files_by_ext,
     read_bytes,
     _sha1,
-    parse_mode_flag,
+    parse_main_argv,
+    prepare_batch_paths,
     missing_input_file,
     run_batch,
 )
@@ -63,15 +63,6 @@ def _compare_two(p1, p2):
     b1 = read_bytes(p1)
     b2 = read_bytes(p2)
     return dbs.compare_dbs(b1, b2)
-
-
-def _iter_files_sorted(root: str, exts):
-    files = iter_files_by_ext(root, exts)
-    if not files:
-        return []
-    if not os.path.isdir(root):
-        return list(files)
-    return sorted(files, key=lambda p: os.path.relpath(p, root).replace("\\", "/"))
 
 
 def _is_int_token(s) -> bool:
@@ -144,13 +135,9 @@ def _extract_padding_pattern_from_dbs(dbs_path: str):
 
 
 def main(argv=None):
-    argv = list(sys.argv[1:] if argv is None else argv)
-    if (not argv) or argv[0] in ("-h", "--help", "help"):
-        hint_help()
-        return 0
-    mode, argv = parse_mode_flag(argv)
-    if mode is None:
-        return 2
+    mode, argv, rc = parse_main_argv(argv, hint_help)
+    if rc is not None:
+        return rc
 
     opt_type = None
     if "--type" in argv:
@@ -210,19 +197,20 @@ def main(argv=None):
         return _compare_two(argv[0], argv[1])
 
     if mode == "x":
-        if len(argv) != 2:
-            eprint("error: expected 2 arguments")
-            hint_help()
-            return 2
-        inp, out_root = argv[0], argv[1]
-        src_is_dir = os.path.isdir(inp)
-        if not src_is_dir and missing_input_file(inp):
-            return 1
-        files = _iter_files_sorted(inp, [".dbs"]) if src_is_dir else [inp]
-        if not files:
-            eprint("no .dbs files found")
-            return 0
-        os.makedirs(out_root, exist_ok=True)
+        inp, out_root, src_is_dir, rc = prepare_batch_paths(
+            argv, hint_help, "error: expected 2 arguments"
+        )
+        if rc is not None:
+            return rc
+        files, rc = collect_batch_files(
+            inp,
+            src_is_dir,
+            [".dbs"],
+            "no .dbs files found",
+            sort_key=lambda p: os.path.relpath(p, inp).replace("\\", "/"),
+        )
+        if rc is not None:
+            return rc
 
         def _proc(src_path):
             rel_dir = (
@@ -264,10 +252,15 @@ def main(argv=None):
         if test_shuffle:
             eprint("error: --test-shuffle supports only single file mode")
             return 2
-        files = _iter_files_sorted(inp, [".csv"])
-        if not files:
-            eprint("no .csv files found")
-            return 0
+        files, rc = collect_batch_files(
+            inp,
+            True,
+            [".csv"],
+            "no .csv files found",
+            sort_key=lambda p: os.path.relpath(p, inp).replace("\\", "/"),
+        )
+        if rc is not None:
+            return rc
         if os.path.splitext(out_root)[1].lower() == ".dbs":
             eprint("error: output must be a directory when input is a directory")
             return 2

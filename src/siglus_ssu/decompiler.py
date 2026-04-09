@@ -9,7 +9,7 @@ from .common import (
     augment_receiver_form_codes,
     binary_result_form as _binary_result_form,
     build_operator_render_tables,
-    format_named_command_args as _format_command_arg_exprs,
+    format_named_command_args,
     invert_form_code_map,
     latest_stack_start,
     normalize_ss_quoted_literal_source,
@@ -2239,7 +2239,7 @@ class _Decompiler:
                 if call_name:
                     ev["_call_name"] = call_name
                     ev["_expr"] = (
-                        f"{call_name}({', '.join(_format_command_arg_exprs(info, arg_exprs, ev.get('named_ids') or []))})"
+                        f"{call_name}({', '.join(format_named_command_args(info, arg_exprs, ev.get('named_ids') or []))})"
                     )
                 if stack_start is not None:
                     _collapse_command_expr(
