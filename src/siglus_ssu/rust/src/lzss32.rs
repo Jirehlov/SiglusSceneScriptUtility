@@ -264,3 +264,62 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
     pack_buf[4..8].copy_from_slice(&org.to_le_bytes());
     Ok(pack_buf)
 }
+
+pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
+    if src.len() < 8 {
+        return Err("lzss32 short".to_string());
+    }
+    let org = u32::from_le_bytes(
+        src[4..8]
+            .try_into()
+            .map_err(|_| "lzss32 short".to_string())?,
+    ) as usize;
+    let mut p = 8usize;
+    let mut out = Vec::with_capacity(org);
+    while out.len() < org {
+        if p >= src.len() {
+            return Err("lzss32 eof".to_string());
+        }
+        let mut flags = src[p];
+        p += 1;
+        for _ in 0..8 {
+            if out.len() >= org {
+                break;
+            }
+            if (flags & 1) != 0 {
+                if p + 3 > src.len() {
+                    return Err("lzss32 eof".to_string());
+                }
+                out.push(src[p]);
+                out.push(src[p + 1]);
+                out.push(src[p + 2]);
+                out.push(255);
+                p += 3;
+            } else {
+                if p + 2 > src.len() {
+                    return Err("lzss32 eof".to_string());
+                }
+                let token = u16::from_le_bytes([src[p], src[p + 1]]);
+                p += 2;
+                let off = ((token >> 4) as usize) * 4;
+                let ln = ((token & 15) as usize + 1) * 4;
+                if off == 0 {
+                    return Err("lzss32 off0".to_string());
+                }
+                if off > out.len() {
+                    return Err("lzss32 back".to_string());
+                }
+                let start = out.len() - off;
+                for i in 0..ln {
+                    if out.len() >= org {
+                        break;
+                    }
+                    let b = out[start + i];
+                    out.push(b);
+                }
+            }
+            flags >>= 1;
+        }
+    }
+    Ok(out)
+}

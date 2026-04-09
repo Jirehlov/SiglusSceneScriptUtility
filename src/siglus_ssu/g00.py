@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from . import const as C
-from .native_ops import lzss_unpack, lzss_pack, lzss32_pack
+from .native_ops import lzss_unpack, lzss_pack, lzss32_pack, lzss32_unpack as lzss32
 from .common import read_u16_le, write_bytes
 
 try:
@@ -44,49 +44,6 @@ def lzss(b: bytes) -> bytes:
     if org and len(out) != org:
         raise ValueError("lzss eof")
     return out
-
-
-def lzss32(b: bytes) -> bytes:
-    if len(b) < 8:
-        raise ValueError("lzss32 short")
-    _, org = struct.unpack_from("<II", b, 0)
-    p = 8
-    o = bytearray()
-    ap = o.append
-    while len(o) < org:
-        if p >= len(b):
-            raise ValueError("lzss32 eof")
-        f = b[p]
-        p += 1
-        for _ in range(8):
-            if len(o) >= org:
-                break
-            if f & 1:
-                if p + 3 > len(b):
-                    raise ValueError("lzss32 eof")
-                ap(b[p])
-                ap(b[p + 1])
-                ap(b[p + 2])
-                ap(255)
-                p += 3
-            else:
-                if p + 2 > len(b):
-                    raise ValueError("lzss32 eof")
-                v = struct.unpack_from("<H", b, p)[0]
-                p += 2
-                off = (v >> 4) * 4
-                ln = ((v & 15) + 1) * 4
-                if off == 0:
-                    raise ValueError("lzss32 off0")
-                s = len(o) - off
-                if s < 0:
-                    raise ValueError("lzss32 back")
-                for i in range(ln):
-                    if len(o) >= org:
-                        break
-                    ap(o[s + i])
-            f >>= 1
-    return bytes(o)
 
 
 def de_xor(b: bytes) -> bytes:

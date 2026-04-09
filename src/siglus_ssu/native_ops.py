@@ -19,6 +19,7 @@ try:
     _native_lzss_pack_level = native_accel.lzss_pack_level
     _native_lzss_unpack = native_accel.lzss_unpack
     _native_lzss32_pack = getattr(native_accel, "lzss32_pack", None)
+    _native_lzss32_unpack = getattr(native_accel, "lzss32_unpack", None)
     _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
     _native_md5_digest = native_accel.md5_digest
     _native_tile_copy = native_accel.tile_copy
@@ -31,6 +32,7 @@ except (ImportError, AttributeError):
     _USE_NATIVE = False
     _native_lzss_pack_level = None
     _native_lzss32_pack = None
+    _native_lzss32_unpack = None
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
 
@@ -297,6 +299,49 @@ def _py_lzss32_pack(src: bytes) -> bytes:
     return bytes(pack_buf)
 
 
+def _py_lzss32_unpack(src: bytes) -> bytes:
+    if len(src) < 8:
+        raise ValueError("lzss32 short")
+    _, org = struct.unpack_from("<II", src, 0)
+    p = 8
+    out = bytearray()
+    ap = out.append
+    while len(out) < org:
+        if p >= len(src):
+            raise ValueError("lzss32 eof")
+        flags = src[p]
+        p += 1
+        for _ in range(8):
+            if len(out) >= org:
+                break
+            if flags & 1:
+                if p + 3 > len(src):
+                    raise ValueError("lzss32 eof")
+                ap(src[p])
+                ap(src[p + 1])
+                ap(src[p + 2])
+                ap(255)
+                p += 3
+            else:
+                if p + 2 > len(src):
+                    raise ValueError("lzss32 eof")
+                tok = src[p] | (src[p + 1] << 8)
+                p += 2
+                off = (tok >> 4) * 4
+                ln = ((tok & 15) + 1) * 4
+                if off == 0:
+                    raise ValueError("lzss32 off0")
+                s = len(out) - off
+                if s < 0:
+                    raise ValueError("lzss32 back")
+                for i in range(ln):
+                    if len(out) >= org:
+                        break
+                    ap(out[s + i])
+            flags >>= 1
+    return bytes(out)
+
+
 def _py_lzss_unpack(src: bytes) -> bytes:
     if not src or len(src) < 8:
         return b""
@@ -445,6 +490,15 @@ def lzss32_pack(src: bytes) -> bytes:
         except Exception:
             pass
     return _py_lzss32_pack(src)
+
+
+def lzss32_unpack(src: bytes) -> bytes:
+    if _USE_NATIVE and _native_lzss32_unpack is not None:
+        try:
+            return _native_lzss32_unpack(src)
+        except Exception:
+            pass
+    return _py_lzss32_unpack(src)
 
 
 def xor_cycle_inplace(b, code, st=0):
