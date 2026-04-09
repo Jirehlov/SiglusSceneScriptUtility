@@ -421,7 +421,7 @@ class _SaveStreamReader:
         return (int(self.i32()), int(self.i32()))
 
 
-def _read_fixed_int_list(r):
+def _read_fixed_array_header(r, item_size=None):
     start = r.tell()
     if start + 8 > len(r.buf):
         raise ValueError("eof")
@@ -429,10 +429,16 @@ def _read_fixed_int_list(r):
     cnt = struct.unpack_from("<i", r.buf, start + 4)[0]
     if not (start + 8 <= jump <= len(r.buf)) or cnt < 0:
         raise ValueError("bad fixed array")
-    need = start + 8 + cnt * 4
-    if need > jump:
-        raise ValueError("bad fixed array")
+    if item_size is not None:
+        need = start + 8 + cnt * int(item_size)
+        if need > jump:
+            raise ValueError("bad fixed array")
     r.seek(start + 8)
+    return jump, cnt
+
+
+def _read_fixed_int_list(r):
+    jump, cnt = _read_fixed_array_header(r, item_size=4)
     data = r._read(cnt * 4)
     out = list(struct.unpack_from(f"<{cnt:d}i", data, 0)) if cnt else []
     r.seek(jump)
@@ -440,14 +446,7 @@ def _read_fixed_int_list(r):
 
 
 def _read_fixed_str_list(r):
-    start = r.tell()
-    if start + 8 > len(r.buf):
-        raise ValueError("eof")
-    jump = struct.unpack_from("<i", r.buf, start)[0]
-    cnt = struct.unpack_from("<i", r.buf, start + 4)[0]
-    if not (start + 8 <= jump <= len(r.buf)) or cnt < 0:
-        raise ValueError("bad fixed array")
-    r.seek(start + 8)
+    jump, cnt = _read_fixed_array_header(r)
     out = []
     for _ in range(cnt):
         out.append(r.str_u16())

@@ -18,6 +18,9 @@ from .common import (
     KEY_TXT_NAME,
     read_siglus_engine_exe_el,
     siglus_engine_exe_element,
+    _parse_pe32_layout,
+    _pe32_file_off_to_va,
+    _pe32_rva_to_off,
 )
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
@@ -84,17 +87,7 @@ def parse_input_key(arg: str) -> bytes:
     return b""
 
 
-def _default_out_path_altkey(in_exe: str) -> str:
-    ap = os.path.abspath(str(in_exe or ""))
-    d = os.path.dirname(ap) or "."
-    bn = os.path.basename(ap)
-    stem, ext = os.path.splitext(bn)
-    if not ext:
-        ext = ".exe"
-    return os.path.join(d, f"{stem}_alt{ext}")
-
-
-def _default_out_path_lang(in_exe: str, tag: str) -> str:
+def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
     ap = os.path.abspath(str(in_exe or ""))
     d = os.path.dirname(ap) or "."
     bn = os.path.basename(ap)
@@ -104,101 +97,21 @@ def _default_out_path_lang(in_exe: str, tag: str) -> str:
     t = re.sub(r"[^0-9A-Za-z_\-]+", "", str(tag or "").strip())
     if not t:
         t = "LANG"
-    return os.path.join(d, f"{stem}_{t.upper()}{ext}")
+    if upper:
+        t = t.upper()
+    return os.path.join(d, f"{stem}_{t}{ext}")
+
+
+def _default_out_path_altkey(in_exe: str) -> str:
+    return _default_out_path(in_exe, "alt", upper=False)
+
+
+def _default_out_path_lang(in_exe: str, tag: str) -> str:
+    return _default_out_path(in_exe, tag)
 
 
 def _default_out_path_loc(in_exe: str, enabled: bool) -> str:
     return _default_out_path_lang(in_exe, "LOC1" if enabled else "LOC0")
-
-
-def _parse_pe32_sections(exe_bytes: bytes):
-    if len(exe_bytes) < 0x40 or exe_bytes[:2] != b"MZ":
-        raise RuntimeError("Not a PE executable.")
-    try:
-        pe_off = struct.unpack_from("<I", exe_bytes, 0x3C)[0]
-        if exe_bytes[pe_off : pe_off + 4] != b"PE\x00\x00":
-            raise RuntimeError("Invalid PE header.")
-        coff_off = pe_off + 4
-        _machine, sec_cnt, _ts, _sym_ptr, _sym_cnt, opt_sz, _chars = struct.unpack_from(
-            "<HHIIIHH", exe_bytes, coff_off
-        )
-        opt_off = coff_off + 20
-        magic = struct.unpack_from("<H", exe_bytes, opt_off)[0]
-        if magic != 0x10B:
-            raise RuntimeError(
-                "Only 32-bit PE32 SiglusEngine.exe builds are supported for --loc."
-            )
-        image_base = struct.unpack_from("<I", exe_bytes, opt_off + 28)[0]
-        data_dir_off = opt_off + 96
-        import_rva = 0
-        import_size = 0
-        if opt_sz >= 104 and data_dir_off + 16 <= len(exe_bytes):
-            import_rva, import_size = struct.unpack_from(
-                "<II", exe_bytes, data_dir_off + 8
-            )
-        sec_off = opt_off + opt_sz
-        sections = []
-        for i in range(sec_cnt):
-            off = sec_off + i * 40
-            if off + 40 > len(exe_bytes):
-                raise RuntimeError("Truncated PE section table.")
-            raw_name = exe_bytes[off : off + 8]
-            name = raw_name.rstrip(b"\x00").decode("ascii", "ignore")
-            virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
-                "<IIII", exe_bytes, off + 8
-            )
-            if raw_offset > len(exe_bytes):
-                raise RuntimeError("Section raw offset out of range.")
-            raw_end = min(len(exe_bytes), raw_offset + raw_size)
-            sections.append(
-                {
-                    "name": name,
-                    "virtual_size": int(virtual_size),
-                    "virtual_address": int(virtual_address),
-                    "raw_size": int(raw_size),
-                    "raw_offset": int(raw_offset),
-                    "data": exe_bytes[raw_offset:raw_end],
-                }
-            )
-    except struct.error as exc:
-        raise RuntimeError("Invalid or truncated PE32 image.") from exc
-    return {
-        "image_base": int(image_base),
-        "sections": sections,
-        "import_rva": int(import_rva),
-        "import_size": int(import_size),
-    }
-
-
-def _pe_off_to_va(layout, file_off: int):
-    file_off = int(file_off)
-    for sec in layout["sections"]:
-        raw_start = sec["raw_offset"]
-        raw_end = raw_start + sec["raw_size"]
-        if raw_start <= file_off < raw_end:
-            return (
-                layout["image_base"] + sec["virtual_address"] + (file_off - raw_start)
-            )
-    return None
-
-
-def _rva_to_off(layout, rva: int):
-    rva = int(rva)
-    if rva < 0:
-        return None
-    raw_starts = [
-        sec["raw_offset"] for sec in layout["sections"] if sec["raw_offset"] > 0
-    ]
-    if raw_starts:
-        header_end = min(raw_starts)
-        if rva < header_end and rva < header_end:
-            return rva
-    for sec in layout["sections"]:
-        va0 = sec["virtual_address"]
-        span = max(sec["virtual_size"], sec["raw_size"])
-        if va0 <= rva < va0 + span:
-            return sec["raw_offset"] + (rva - va0)
-    return None
 
 
 def _read_cstr(blob: bytes, off: int):
@@ -213,7 +126,7 @@ def _read_cstr(blob: bytes, off: int):
 
 def _parse_pe32_imports(exe_bytes: bytes, layout):
     imports = {}
-    desc_off = _rva_to_off(layout, layout.get("import_rva", 0))
+    desc_off = _pe32_rva_to_off(layout, layout.get("import_rva", 0))
     if desc_off is None:
         return imports
     max_off = len(exe_bytes)
@@ -228,8 +141,8 @@ def _parse_pe32_imports(exe_bytes: bytes, layout):
         if oft_rva == 0 and name_rva == 0 and ft_rva == 0:
             break
         thunk_rva = oft_rva or ft_rva
-        thunk_off = _rva_to_off(layout, thunk_rva)
-        ft_off = _rva_to_off(layout, ft_rva)
+        thunk_off = _pe32_rva_to_off(layout, thunk_rva)
+        ft_off = _pe32_rva_to_off(layout, ft_rva)
         if thunk_off is None or ft_off is None:
             desc_off += 20
             continue
@@ -241,7 +154,7 @@ def _parse_pe32_imports(exe_bytes: bytes, layout):
             if thunk & 0x80000000:
                 idx += 1
                 continue
-            ibn_off = _rva_to_off(layout, thunk)
+            ibn_off = _pe32_rva_to_off(layout, thunk)
             if ibn_off is None or ibn_off + 2 > max_off:
                 idx += 1
                 continue
@@ -362,7 +275,7 @@ def _closure_categories(start_func: int, call_graph, func_cats):
 
 def _find_loc_guard_function(data: bytearray):
     exe_bytes = bytes(data)
-    layout = _parse_pe32_sections(exe_bytes)
+    layout = _parse_pe32_layout(exe_bytes)
     text_sec = _find_text_section(layout)
     import_cats = _find_loc_import_categories(exe_bytes, layout)
     want = set(import_cats)
@@ -400,16 +313,9 @@ def _find_loc_guard_function(data: bytearray):
 
 def _find_loc_guard_call_site(data: bytearray, func_off: int):
     exe_bytes = bytes(data)
-    layout = _parse_pe32_sections(exe_bytes)
-    text_sec = None
-    for sec in layout["sections"]:
-        if sec["name"].casefold() == ".text":
-            text_sec = sec
-            break
-    if text_sec is None:
-        return None
-
-    func_va = _pe_off_to_va(layout, func_off)
+    layout = _parse_pe32_layout(exe_bytes)
+    text_sec = _find_text_section(layout)
+    func_va = _pe32_file_off_to_va(layout, func_off)
     if func_va is None:
         return None
 
@@ -705,7 +611,9 @@ def replace_all_fixedlen(
     return changes
 
 
-def patch_siglus_chs(data: bytearray):
+def _patch_siglus_preset(
+    data: bytearray, tag: str, suffix: str, charset: int, old_values, replacements
+):
     changes = []
     candidates = _find_charset_candidates(data, {0, 128, 134})
     if not candidates:
@@ -715,75 +623,52 @@ def patch_siglus_chs(data: bytearray):
     for i in candidates:
         off = i + 3
         old = data[off]
-        if old != 134:
-            data[off] = 134
-            changes.append((off, old, 134, "lfCharSet: -> 0x86"))
-    changes.extend(
-        replace_all_fixedlen(
-            data, "Scene.pck", "Scene.chs", encoding="utf-16le", skip_standalone=False
+        if old in old_values and old != charset:
+            data[off] = charset
+            changes.append((off, old, charset, f"lfCharSet: -> 0x{charset:02X}"))
+    for old_s, new_s, skip_standalone in replacements:
+        changes.extend(
+            replace_all_fixedlen(
+                data,
+                old_s,
+                new_s,
+                encoding="utf-16le",
+                skip_standalone=skip_standalone,
+            )
         )
+    return tag, suffix, changes
+
+
+def patch_siglus_chs(data: bytearray):
+    return _patch_siglus_preset(
+        data,
+        "chs",
+        "CHS",
+        134,
+        {0, 128, 134},
+        (
+            ("Scene.pck", "Scene.chs", False),
+            ("savedata", "savechs", False),
+            ("japanese", "chinese", False),
+            ("Gameexe.dat", "Gameexe.chs", True),
+        ),
     )
-    changes.extend(
-        replace_all_fixedlen(
-            data, "savedata", "savechs", encoding="utf-16le", skip_standalone=False
-        )
-    )
-    changes.extend(
-        replace_all_fixedlen(
-            data, "japanese", "chinese", encoding="utf-16le", skip_standalone=False
-        )
-    )
-    changes.extend(
-        replace_all_fixedlen(
-            data,
-            "Gameexe.dat",
-            "Gameexe.chs",
-            encoding="utf-16le",
-            skip_standalone=True,
-        )
-    )
-    return "chs", "CHS", changes
 
 
 def patch_siglus_eng(data: bytearray):
-    changes = []
-    accept_values = {0, 128, 134}
-    candidates = _find_charset_candidates(data, accept_values)
-    if not candidates:
-        raise RuntimeError(
-            "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
-        )
-    for i in candidates:
-        off = i + 3
-        old = data[off]
-        if old in (128, 134) and old != 0:
-            data[off] = 0
-            changes.append((off, old, 0, "lfCharSet: -> 0x00"))
-    changes.extend(
-        replace_all_fixedlen(
-            data, "Scene.pck", "Scene.eng", encoding="utf-16le", skip_standalone=False
-        )
+    return _patch_siglus_preset(
+        data,
+        "eng",
+        "ENG",
+        0,
+        {128, 134},
+        (
+            ("Scene.pck", "Scene.eng", False),
+            ("savedata", "saveeng", False),
+            ("japanese", "english", False),
+            ("Gameexe.dat", "Gameexe.eng", True),
+        ),
     )
-    changes.extend(
-        replace_all_fixedlen(
-            data, "savedata", "saveeng", encoding="utf-16le", skip_standalone=False
-        )
-    )
-    changes.extend(
-        replace_all_fixedlen(
-            data, "japanese", "english", encoding="utf-16le", skip_standalone=False
-        )
-    )
-    changes.extend(
-        replace_all_fixedlen(
-            data,
-            "Gameexe.dat",
-            "Gameexe.eng",
-            encoding="utf-16le",
-            skip_standalone=True,
-        )
-    )
-    return "eng", "ENG", changes
 
 
 def _load_lang_spec(spec: str):

@@ -10,6 +10,7 @@ from .common import (
     hint_help as _hint_help,
     fmt_kv as _fmt_kv,
     iter_files_by_ext,
+    parse_mode_flag,
     write_bytes,
     missing_input_file,
     run_batch,
@@ -18,18 +19,23 @@ from . import sound
 from . import extract
 
 
-def _cleanup_tmp_dir(tmp_dir: str, out_root: str) -> None:
+def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) -> None:
     if not tmp_dir:
         return
     try:
-        if os.path.isdir(tmp_dir) and os.path.basename(tmp_dir) == ".tmp_ffmpeg":
-            out_abs = os.path.abspath(out_root)
-            tmp_abs = os.path.abspath(tmp_dir)
-
-            if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
-                out_abs + os.sep
-            ):
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+        if not os.path.isdir(tmp_dir):
+            return
+        if remove_owned:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return
+        if os.path.basename(tmp_dir) != ".tmp_ffmpeg":
+            return
+        out_abs = os.path.abspath(out_root)
+        tmp_abs = os.path.abspath(tmp_dir)
+        if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
+            out_abs + os.sep
+        ):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
     except Exception:
         pass
 
@@ -352,20 +358,11 @@ def main(argv=None) -> int:
         _hint_help()
         return 0
 
-    do_x, do_a, do_c = "--x" in argv, "--a" in argv, "--c" in argv
-    argv = [a for a in argv if a not in ("--x", "--a", "--c")]
-    if sum([do_x, do_a, do_c]) > 1:
-        eprint("error: choose only one of --x or --a or --c")
-        _hint_help()
-        return 2
-    if not (do_x or do_a or do_c):
-        eprint(
-            "error: missing flag: specify --x (extract) or --a (analyze) or --c (create)"
-        )
-        _hint_help()
+    mode, argv = parse_mode_flag(list(argv))
+    if mode is None:
         return 2
 
-    if do_a:
+    if mode == "a":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
@@ -378,7 +375,7 @@ def main(argv=None) -> int:
             return 1
         return _analyze_one(inp)
 
-    if do_c:
+    if mode == "c":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
@@ -477,6 +474,7 @@ def main(argv=None) -> int:
     trim_table = None
     ffmpeg_path = ""
     tmp_dir = ""
+    tmp_dir_owned = False
 
     if trim_path:
         ffmpeg_path = shutil.which("ffmpeg") or ""
@@ -498,6 +496,7 @@ def main(argv=None) -> int:
             os.makedirs(tmp_dir, exist_ok=True)
         except Exception:
             tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
+            tmp_dir_owned = True
 
     os.makedirs(out_root, exist_ok=True)
 
@@ -505,7 +504,7 @@ def main(argv=None) -> int:
 
     if not files:
         eprint("no supported audio files found")
-        _cleanup_tmp_dir(tmp_dir, out_root)
+        _cleanup_tmp_dir(tmp_dir, out_root, remove_owned=tmp_dir_owned)
         return 0
 
     def _proc(src_path):
@@ -521,5 +520,5 @@ def main(argv=None) -> int:
         return n, n
 
     exit_code = run_batch(files, _proc)
-    _cleanup_tmp_dir(tmp_dir, out_root)
+    _cleanup_tmp_dir(tmp_dir, out_root, remove_owned=tmp_dir_owned)
     return exit_code

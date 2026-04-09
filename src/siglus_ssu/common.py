@@ -299,61 +299,117 @@ def find_siglus_engine_exe(base_dir: str) -> str:
     return cands[0]
 
 
-def _pe32_info(b: bytes):
-    if (not b) or len(b) < 0x100:
-        return None
-    if b[:2] != b"MZ":
-        return None
+def _parse_pe32_layout(b: bytes):
+    if (not b) or len(b) < 0x40 or b[:2] != b"MZ":
+        raise RuntimeError("Not a PE executable.")
     try:
-        e = struct.unpack_from("<I", b, 0x3C)[0]
-    except Exception:
-        return None
-    if e <= 0 or e + 0x18 > len(b):
-        return None
-    if b[e : e + 4] != b"PE\x00\x00":
-        return None
-    try:
-        n = struct.unpack_from("<H", b, e + 6)[0]
-        sz_opt = struct.unpack_from("<H", b, e + 20)[0]
-    except Exception:
-        return None
-    opt = e + 24
-    if opt + sz_opt > len(b):
-        return None
-    try:
-        magic = struct.unpack_from("<H", b, opt)[0]
-    except Exception:
-        return None
-    if magic != 0x10B:
-        return None
-    try:
-        ib = struct.unpack_from("<I", b, opt + 28)[0]
-    except Exception:
-        return None
-    sec_hdr = opt + sz_opt
-    secs = []
-    for i in range(int(n) & 0xFFFF):
-        o = sec_hdr + i * 40
-        if o + 40 > len(b):
-            break
-        try:
-            rva = struct.unpack_from("<I", b, o + 12)[0]
-            rawsz = struct.unpack_from("<I", b, o + 16)[0]
-            rawptr = struct.unpack_from("<I", b, o + 20)[0]
-            chs = struct.unpack_from("<I", b, o + 36)[0]
-        except Exception:
-            continue
-        secs.append(
-            (
-                int(rva) & 0xFFFFFFFF,
-                int(rawptr) & 0xFFFFFFFF,
-                int(rawsz) & 0xFFFFFFFF,
-                int(chs) & 0xFFFFFFFF,
-            )
+        pe_off = struct.unpack_from("<I", b, 0x3C)[0]
+        if (
+            pe_off <= 0
+            or pe_off + 24 > len(b)
+            or b[pe_off : pe_off + 4] != b"PE\x00\x00"
+        ):
+            raise RuntimeError("Invalid PE header.")
+        coff_off = pe_off + 4
+        _machine, sec_cnt, _ts, _sym_ptr, _sym_cnt, opt_sz, _chars = struct.unpack_from(
+            "<HHIIIHH", b, coff_off
         )
-    if not secs:
+        opt_off = coff_off + 20
+        if opt_off + opt_sz > len(b):
+            raise RuntimeError("Invalid or truncated PE32 image.")
+        magic = struct.unpack_from("<H", b, opt_off)[0]
+        if magic != 0x10B:
+            raise RuntimeError("Only 32-bit PE32 images are supported.")
+        image_base = struct.unpack_from("<I", b, opt_off + 28)[0]
+        data_dir_off = opt_off + 96
+        import_rva = 0
+        import_size = 0
+        if opt_sz >= 104 and data_dir_off + 16 <= len(b):
+            import_rva, import_size = struct.unpack_from("<II", b, data_dir_off + 8)
+        sec_off = opt_off + opt_sz
+        sections = []
+        for i in range(int(sec_cnt) & 0xFFFF):
+            off = sec_off + i * 40
+            if off + 40 > len(b):
+                raise RuntimeError("Truncated PE section table.")
+            raw_name = b[off : off + 8]
+            name = raw_name.rstrip(b"\x00").decode("ascii", "ignore")
+            virtual_size, virtual_address, raw_size, raw_offset = struct.unpack_from(
+                "<IIII", b, off + 8
+            )
+            characteristics = struct.unpack_from("<I", b, off + 36)[0]
+            if raw_offset > len(b):
+                raise RuntimeError("Section raw offset out of range.")
+            raw_end = min(len(b), raw_offset + raw_size)
+            sections.append(
+                {
+                    "name": name,
+                    "virtual_size": int(virtual_size),
+                    "virtual_address": int(virtual_address),
+                    "raw_size": int(raw_size),
+                    "raw_offset": int(raw_offset),
+                    "characteristics": int(characteristics),
+                    "data": b[raw_offset:raw_end],
+                }
+            )
+    except struct.error as exc:
+        raise RuntimeError("Invalid or truncated PE32 image.") from exc
+    if not sections:
+        raise RuntimeError("Missing PE sections.")
+    return {
+        "image_base": int(image_base),
+        "sections": sections,
+        "import_rva": int(import_rva),
+        "import_size": int(import_size),
+    }
+
+
+def _pe32_info(b: bytes):
+    try:
+        layout = _parse_pe32_layout(b)
+    except Exception:
         return None
-    return int(ib) & 0xFFFFFFFF, secs
+    secs = [
+        (
+            int(sec["virtual_address"]) & 0xFFFFFFFF,
+            int(sec["raw_offset"]) & 0xFFFFFFFF,
+            int(sec["raw_size"]) & 0xFFFFFFFF,
+            int(sec["characteristics"]) & 0xFFFFFFFF,
+        )
+        for sec in layout["sections"]
+    ]
+    return int(layout["image_base"]) & 0xFFFFFFFF, secs
+
+
+def _pe32_file_off_to_va(layout, file_off: int):
+    file_off = int(file_off)
+    for sec in layout["sections"]:
+        raw_start = sec["raw_offset"]
+        raw_end = raw_start + sec["raw_size"]
+        if raw_start <= file_off < raw_end:
+            return (
+                layout["image_base"] + sec["virtual_address"] + (file_off - raw_start)
+            )
+    return None
+
+
+def _pe32_rva_to_off(layout, rva: int):
+    rva = int(rva)
+    if rva < 0:
+        return None
+    raw_starts = [
+        sec["raw_offset"] for sec in layout["sections"] if sec["raw_offset"] > 0
+    ]
+    if raw_starts:
+        header_end = min(raw_starts)
+        if rva < header_end:
+            return rva
+    for sec in layout["sections"]:
+        va0 = sec["virtual_address"]
+        span = max(sec["virtual_size"], sec["raw_size"])
+        if va0 <= rva < va0 + span:
+            return sec["raw_offset"] + (rva - va0)
+    return None
 
 
 def _va2off_pe32(image_base: int, secs, va: int):

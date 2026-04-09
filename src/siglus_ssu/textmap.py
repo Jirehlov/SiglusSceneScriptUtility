@@ -86,8 +86,6 @@ def _read_text(path: str):
         newline = "\r\n"
     elif b"\r" in data:
         newline = "\r"
-    elif b"\n" in data:
-        newline = "\n"
     else:
         newline = "\n"
 
