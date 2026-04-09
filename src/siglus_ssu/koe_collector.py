@@ -302,10 +302,27 @@ def _line_inline_voice_meta(events, scene_no=None):
 
 
 def _scan_bundle_calls(bundle, scene_root: str):
-    bundle = bundle if isinstance(bundle, dict) else {}
+    if not isinstance(bundle, dict):
+        eprint("koe: skipped invalid disassembly bundle", errors="replace")
+        return []
     refs = []
-    trace = [x for x in bundle.get("trace") or [] if isinstance(x, dict)]
     rel = _bundle_relpath(bundle, scene_root)
+    trace_obj = bundle.get("trace") or []
+    if not isinstance(trace_obj, (list, tuple)):
+        eprint(f"koe: {rel}: skipped invalid trace container", errors="replace")
+        trace = []
+    else:
+        trace = list(trace_obj)
+    skipped_trace = 0
+    for ev in trace:
+        if not isinstance(ev, dict):
+            skipped_trace += 1
+    if skipped_trace:
+        eprint(
+            f"koe: {rel}: skipped {skipped_trace} invalid trace item(s)",
+            errors="replace",
+        )
+    trace = [x for x in trace if isinstance(x, dict)]
     scene_no = bundle.get("scene_no")
     voice_meta = {}
     pending = []

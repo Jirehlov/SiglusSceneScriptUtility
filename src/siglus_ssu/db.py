@@ -198,7 +198,7 @@ def main(argv=None):
 
     if mode == "x":
         inp, out_root, src_is_dir, rc = prepare_batch_paths(
-            argv, hint_help, "error: expected 2 arguments"
+            argv, hint_help, "error: expected 2 arguments", create_output=False
         )
         if rc is not None:
             return rc
@@ -211,6 +211,7 @@ def main(argv=None):
         )
         if rc is not None:
             return rc
+        os.makedirs(out_root, exist_ok=True)
 
         def _proc(src_path):
             rel_dir = (

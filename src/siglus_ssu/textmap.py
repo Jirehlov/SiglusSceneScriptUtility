@@ -354,16 +354,24 @@ def _is_trace_command_base(ev, base_name: str) -> bool:
     return name == base_name or name.endswith("." + base_name)
 
 
-def _collect_disam_string_kinds(bundle):
+def _collect_disam_string_kinds(bundle, source_name: str = ""):
     out = {}
+    prefix = f"textmap: {source_name}" if source_name else "textmap"
     if not isinstance(bundle, dict):
+        eprint(f"{prefix}: skipped invalid disassembly bundle", errors="replace")
         return out
-    trace = list(bundle.get("trace") or [])
+    trace_obj = bundle.get("trace") or []
+    if not isinstance(trace_obj, (list, tuple)):
+        eprint(f"{prefix}: skipped invalid trace container", errors="replace")
+        return out
+    trace = list(trace_obj)
     fm_str = int((C._FORM_CODE or {}).get(C.FM_STR, -1))
     if fm_str < 0:
         return out
+    skipped_trace = 0
     for i, ev in enumerate(trace):
         if not isinstance(ev, dict):
+            skipped_trace += 1
             continue
         op = str(ev.get("op") or "")
         if op == "CD_TEXT":
@@ -395,6 +403,11 @@ def _collect_disam_string_kinds(bundle):
                 out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
             elif _is_trace_command_base(next_ev, "set_namae"):
                 out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
+    if skipped_trace:
+        eprint(
+            f"{prefix}: skipped {skipped_trace} invalid trace item(s)",
+            errors="replace",
+        )
     return out
 
 
@@ -934,7 +947,7 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
         return 1
     str_list, out_scn = parsed
     bundle = DAT._dat_disassembly_bundle(_plain_blob, dat_path)
-    kind_map = _collect_disam_string_kinds(bundle)
+    kind_map = _collect_disam_string_kinds(bundle, fname)
     csv_path = dat_path + ".csv"
     if not apply_mode:
         _write_disam_map(csv_path, str_list, kind_map)
