@@ -52,27 +52,25 @@ def _analyze_one(path: str) -> int:
     print(_fmt_kv("size_bytes", size))
 
     if ext == ".nwa":
-        import struct
-
-        header_struct = struct.Struct("<HHIiiIIIIIII")
         with open(path, "rb") as f:
-            data = f.read(header_struct.size)
-        if len(data) < header_struct.size:
+            data = f.read(sound._NWA_HEADER_STRUCT.size)
+        try:
+            header = sound._parse_nwa_header(data)
+        except EOFError:
             eprint("error: NWA header truncated")
             return 1
-        fields = header_struct.unpack_from(data, 0)
-        channels = int(fields[0])
-        bits_per_sample = int(fields[1])
-        samples_per_sec = int(fields[2])
-        pack_mod = int(fields[3])
-        zero_mod = int(fields[4])
-        unit_cnt = int(fields[5])
-        original_size = int(fields[6])
-        pack_size = int(fields[7])
-        sample_cnt = int(fields[8])
-        unit_sample_cnt = int(fields[9])
-        last_sample_cnt = int(fields[10])
-        last_sample_pack_size = int(fields[11])
+        channels = header.channels
+        bits_per_sample = header.bits_per_sample
+        samples_per_sec = header.samples_per_sec
+        pack_mod = header.pack_mod
+        zero_mod = header.zero_mod
+        unit_cnt = header.unit_cnt
+        original_size = header.original_size
+        pack_size = header.pack_size
+        sample_cnt = header.sample_cnt
+        unit_sample_cnt = header.unit_sample_cnt
+        last_sample_cnt = header.last_sample_cnt
+        last_sample_pack_size = header.last_sample_pack_size
 
         dur = None
         try:
