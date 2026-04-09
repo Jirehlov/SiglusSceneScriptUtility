@@ -3,11 +3,14 @@ import os
 import re
 import sys
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from . import dat
 from . import pck
 from . import sound
 from .common import eprint, read_bytes, write_bytes
+
+C = get_const_module()
 
 _VOICE_CALL_NAMES = frozenset(
     {

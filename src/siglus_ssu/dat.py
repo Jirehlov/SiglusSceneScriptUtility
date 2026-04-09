@@ -4,7 +4,8 @@ import struct
 import sys
 import time
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from . import disam
 from . import pck
 from .decompiler import build_decompile_hints, write_decompiled_ss
@@ -31,6 +32,8 @@ from .common import (
     write_status,
     write_disam_totals,
 )
+
+C = get_const_module()
 
 DAT_TXT_OUT_DIR = None
 

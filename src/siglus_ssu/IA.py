@@ -1,4 +1,5 @@
-from . import const as C
+from ._const_manager import get_const_module
+
 from .CA import (
     CharacterAnalizer,
     get_form_code_by_name,
@@ -9,6 +10,8 @@ from .CA import (
 )
 from .MA import FormTable
 from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
+
+C = get_const_module()
 
 
 class IncAnalyzer:

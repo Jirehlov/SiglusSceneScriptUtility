@@ -1,6 +1,7 @@
 import os
 import struct
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import (
     exe_angou_element,
     read_bytes,
@@ -17,6 +18,8 @@ from .common import (
 )
 
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
+
+C = get_const_module()
 
 
 class IniFileAnalizer:

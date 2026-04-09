@@ -1,5 +1,8 @@
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import hx, read_i32_le_advancing, print_limited_diffs
+
+C = get_const_module()
 
 _GAN_CODE_VERSION = 10000
 _GAN_VERSION_10000 = 10000

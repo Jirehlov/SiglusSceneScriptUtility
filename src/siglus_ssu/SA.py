@@ -1,6 +1,9 @@
-from . import const as C
+from ._const_manager import get_const_module
+
 from .CA import get_form_code_by_name
 from .common import normalize_atom
+
+C = get_const_module()
 
 
 def N(ln, **k):

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import (
     augment_receiver_form_codes,
     binary_result_form as _binary_result_form,
@@ -17,6 +18,8 @@ from .common import (
     unary_result_form as _unary_result_form,
     normalize_stack_start,
 )
+
+C = get_const_module()
 
 
 def _read_flag_command_codes():

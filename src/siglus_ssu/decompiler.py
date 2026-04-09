@@ -3,7 +3,8 @@ import functools
 import os
 import re
 from .CA import _iszen
-from . import const as C
+from ._const_manager import get_const_module
+
 from . import disam
 from .common import (
     augment_receiver_form_codes,
@@ -18,6 +19,8 @@ from .common import (
     unique_out_path,
     write_text,
 )
+
+C = get_const_module()
 
 _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"

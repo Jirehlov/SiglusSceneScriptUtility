@@ -1,7 +1,10 @@
 import unicodedata
 from functools import lru_cache
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
+
+C = get_const_module()
 
 
 def _isalpha(c):

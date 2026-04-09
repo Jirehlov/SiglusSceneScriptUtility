@@ -3,7 +3,8 @@ import glob
 import struct
 import copy
 import time
-from . import const as C
+from ._const_manager import get_const_module
+
 from .CA import _rt, CharacterAnalizer
 from .IA import IncAnalyzer
 from .LA import la_analize
@@ -22,6 +23,8 @@ from .common import (
     write_text,
     write_bytes,
 )
+
+C = get_const_module()
 
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1

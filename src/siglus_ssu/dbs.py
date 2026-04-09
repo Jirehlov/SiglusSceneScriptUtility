@@ -4,9 +4,12 @@ import os
 import csv
 import re
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
 from .common import _sha1, read_bytes, write_bytes
+
+C = get_const_module()
 
 
 def _xor32_inplace(barr, code):

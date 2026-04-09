@@ -6,9 +6,12 @@ import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from .native_ops import lzss_unpack, lzss_pack, lzss32_pack, lzss32_unpack as lzss32
 from .common import read_u16_le, write_bytes
+
+C = get_const_module()
 
 try:
     from PIL import Image

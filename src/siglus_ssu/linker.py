@@ -2,7 +2,8 @@ import os
 import struct
 import time
 import glob
-from . import const as C
+from ._const_manager import get_const_module
+
 from .CA import _rt
 from .common import (
     build_empty_ia_data,
@@ -24,6 +25,8 @@ from .common import (
 )
 from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
+
+C = get_const_module()
 
 
 def _glob_sorted_rel(base, pattern):

@@ -21,6 +21,7 @@ _CONST_SHA512_ALLOWED = {
     "127e60b5010cd5c09c9391ab1f15fd832d12b723282f0b4a422b8e6e1227baf712ee79f519eabe93f09171cbedd647ad54ad048d64b1a306c8fbb029034db333",
     "72a46202d62bd02d95c351d197b7a6d8b81a2cd5b06164b65f8a4e171a4f7fc5ba5bdb3c202771148429fe0e69dcfba16250d8d28849dfdb18d8210fee82d5ec",
 }
+_CONST_MODULE_NAME = "siglus_ssu.const"
 
 
 def _const_path() -> Path:
@@ -31,8 +32,26 @@ def _const_path() -> Path:
     return Path(base) / "siglus-ssu" / "const.py"
 
 
+def _fallback_const_path() -> Path:
+    return Path(__file__).resolve().with_name("const.py")
+
+
+def _const_search_paths(path: Path | None = None) -> tuple[Path, ...]:
+    if path is not None:
+        return (Path(path),)
+    out = []
+    seen = set()
+    for candidate in (_fallback_const_path(), _const_path()):
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(candidate)
+    return tuple(out)
+
+
 def const_exists() -> bool:
-    return _const_path().is_file()
+    return any(candidate.is_file() for candidate in _const_search_paths())
 
 
 def _validate_const_bytes(data: bytes) -> str:
@@ -43,13 +62,20 @@ def _validate_const_bytes(data: bytes) -> str:
 
 
 def _read_validated_const(path: Path | None = None) -> tuple[Path, bytes, str]:
-    p = Path(path) if path else _const_path()
-    if not p.is_file():
+    candidates = _const_search_paths(path)
+    for p in candidates:
+        if not p.is_file():
+            continue
+        data = p.read_bytes()
+        return p, data, _validate_const_bytes(data)
+    if len(candidates) == 1:
         raise FileNotFoundError(
-            f"Missing const.py. Run 'siglus-ssu init' first. Expected at: {p}"
+            f"Missing const.py. Run 'siglus-ssu init' first. Expected at: {candidates[0]}"
         )
-    data = p.read_bytes()
-    return p, data, _validate_const_bytes(data)
+    searched = ", ".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(
+        f"Missing const.py. Run 'siglus-ssu init' first. Searched: {searched}"
+    )
 
 
 def _loaded_const_file(module) -> str | None:
@@ -62,8 +88,14 @@ def _loaded_const_file(module) -> str | None:
         return str(raw)
 
 
+def _bind_const_module(module) -> None:
+    pkg = sys.modules.get("siglus_ssu")
+    if pkg is not None:
+        setattr(pkg, "const", module)
+
+
 def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
-    name = "siglus_ssu.const"
+    name = _CONST_MODULE_NAME
     p, data, digest = _read_validated_const(path)
     resolved_path = str(p.resolve())
     cached = sys.modules.get(name)
@@ -76,6 +108,7 @@ def load_const_module(path: Path | None = None, profile: int | None = None) -> N
             and cached_digest == digest
             and cached_path == resolved_path
         ):
+            _bind_const_module(cached)
             return
         sys.modules.pop(name, None)
     spec = iu.spec_from_file_location(name, p)
@@ -91,6 +124,20 @@ def load_const_module(path: Path | None = None, profile: int | None = None) -> N
     except Exception:
         sys.modules.pop(name, None)
         raise
+    _bind_const_module(m)
+
+
+def get_const_module(path: Path | None = None, profile: int | None = None):
+    cached = sys.modules.get(_CONST_MODULE_NAME)
+    if cached is not None and path is None and profile is None:
+        _bind_const_module(cached)
+        return cached
+    load_const_module(path=path, profile=profile)
+    module = sys.modules.get(_CONST_MODULE_NAME)
+    if module is None:
+        raise RuntimeError("const.py loaded but module cache entry is missing.")
+    _bind_const_module(module)
+    return module
 
 
 def _package_version() -> str:

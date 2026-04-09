@@ -7,7 +7,8 @@ from . import BS
 from . import LA
 from . import MA
 from . import SA
-from . import const as C
+from ._const_manager import get_const_module
+
 from . import dat as DAT
 from . import pck
 from .native_ops import lzss_pack, xor_cycle_inplace
@@ -25,6 +26,8 @@ from .common import (
     read_scn_metadata,
     write_encoded_text,
 )
+
+C = get_const_module()
 
 _TEXTMAP_KIND_DIALOGUE = 1
 _TEXTMAP_KIND_NAME = 2

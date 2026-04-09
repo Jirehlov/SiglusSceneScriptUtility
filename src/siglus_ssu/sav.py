@@ -1,9 +1,12 @@
 import os
 import struct
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
 from .common import _sha1, _dn
+
+C = get_const_module()
 
 
 def _zstr_u16(b):

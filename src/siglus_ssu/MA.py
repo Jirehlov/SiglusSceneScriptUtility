@@ -1,6 +1,9 @@
 import copy
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import normalize_atom
+
+C = get_const_module()
 
 
 def _form_name(f):

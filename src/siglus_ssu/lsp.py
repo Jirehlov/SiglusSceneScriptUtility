@@ -9,7 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from .BS import BS, _copy_ia_data
 from .CA import CharacterAnalizer, _isalpha, _isnum, _iszen, _rt, _rt_search
 from .IA import IncAnalyzer
@@ -19,6 +20,7 @@ from .SA import SA
 from ._const_manager import _package_version
 from .common import build_empty_ia_data, read_text_auto
 
+C = get_const_module()
 
 SEVERITY_ERROR = 1
 

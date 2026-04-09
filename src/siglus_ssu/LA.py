@@ -1,5 +1,8 @@
-from . import const as C
+from ._const_manager import get_const_module
+
 from .CA import _iszen
+
+C = get_const_module()
 
 
 def la_analize(pcad):

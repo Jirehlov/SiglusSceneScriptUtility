@@ -1,6 +1,9 @@
-from . import const as C
+from ._const_manager import get_const_module
+
 from .common import read_i32_le, append_diff, print_limited_diffs
 from .native_ops import xor_cycle_inplace, lzss_unpack
+
+C = get_const_module()
 
 
 def _looks_like_cgm(blob):

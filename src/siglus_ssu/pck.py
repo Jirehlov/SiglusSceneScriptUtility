@@ -8,7 +8,8 @@ import sys
 import time
 import tempfile
 
-from . import const as C
+from ._const_manager import get_const_module
+
 from .native_ops import lzss_unpack, xor_cycle_inplace
 from . import compiler
 from .word_count import count_text_units
@@ -46,6 +47,8 @@ from .common import (
     new_disam_stats,
     write_disam_totals,
 )
+
+C = get_const_module()
 
 MAX_SCENE_LIST = 2000
 

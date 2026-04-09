@@ -6,7 +6,8 @@ import json
 import re
 import time
 import shutil
-from . import const as C
+from ._const_manager import get_const_module
+
 from .BS import (
     compile_all,
     compile_one,
@@ -33,6 +34,8 @@ from .common import (
     ANGOU_DAT_NAME,
     norm_charset,
 )
+
+C = get_const_module()
 
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 

@@ -4,7 +4,9 @@ import struct
 import hashlib
 import re
 
-from . import const as C
+from ._const_manager import get_const_module
+
+C = get_const_module()
 
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 
