@@ -17,13 +17,12 @@ from .common import (
     hint_help as _hint_help,
     decode_text_auto,
     _max_pair_end,
-    _decode_utf16le_strings,
     iter_files_by_ext,
     is_named_filename,
     ANGOU_DAT_NAME,
     _read_struct_list,
     _I32_PAIR_STRUCT,
-    _I32_STRUCT,
+    read_scn_metadata,
     write_encoded_text,
 )
 
@@ -776,95 +775,23 @@ def _parse_scn_dat(blob: bytes):
     if so >= 0 and ss > 0 and so + ss <= len(blob):
         scn_bytes = blob[so : so + ss]
     out_scn = {"scn_bytes": scn_bytes, "str_sort_index": order}
-    out_scn["label_list"] = _read_struct_list(
-        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
-    )
-    out_scn["z_label_list"] = _read_struct_list(
-        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
-    )
-    out_scn["cmd_label_list"] = _read_struct_list(
-        blob,
-        h.get("cmd_label_list_ofs", 0),
-        h.get("cmd_label_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    out_scn["scn_prop_list"] = _read_struct_list(
-        blob, h.get("scn_prop_list_ofs", 0), h.get("scn_prop_cnt", 0), _I32_PAIR_STRUCT
-    )
-
-    spn_idx = _read_struct_list(
-        blob,
-        h.get("scn_prop_name_index_list_ofs", 0),
-        h.get("scn_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + _max_pair_end(spn_idx) * 2
-    spn_list = (
-        _decode_utf16le_strings(
-            blob,
-            spn_idx,
-            h.get("scn_prop_name_list_ofs", 0),
-            spn_end,
-            allow_empty_blob=True,
-        )
-        if spn_idx
-        else []
-    )
-    out_scn["scn_prop_name_index_list"] = spn_idx
-    out_scn["scn_prop_name_list"] = spn_list
-
-    out_scn["scn_cmd_list"] = _read_struct_list(
-        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
-    )
-
-    scn_idx = _read_struct_list(
-        blob,
-        h.get("scn_cmd_name_index_list_ofs", 0),
-        h.get("scn_cmd_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + _max_pair_end(scn_idx) * 2
-    scn_list = (
-        _decode_utf16le_strings(
-            blob,
-            scn_idx,
-            h.get("scn_cmd_name_list_ofs", 0),
-            scn_end,
-            allow_empty_blob=True,
-        )
-        if scn_idx
-        else []
-    )
-    out_scn["scn_cmd_name_index_list"] = scn_idx
-    out_scn["scn_cmd_name_list"] = scn_list
-
-    cpn_idx = _read_struct_list(
-        blob,
-        h.get("call_prop_name_index_list_ofs", 0),
-        h.get("call_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + _max_pair_end(cpn_idx) * 2
-    cpn_list = (
-        _decode_utf16le_strings(
-            blob,
-            cpn_idx,
-            h.get("call_prop_name_list_ofs", 0),
-            cpn_end,
-            allow_empty_blob=True,
-        )
-        if cpn_idx
-        else []
-    )
-    out_scn["call_prop_name_index_list"] = cpn_idx
-    out_scn["call_prop_name_list"] = cpn_list
-
-    out_scn["namae_list"] = _read_struct_list(
-        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
-    )
-    out_scn["read_flag_list"] = _read_struct_list(
-        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
-    )
+    scn_meta = read_scn_metadata(blob, h, allow_empty_name_blob=True)
+    for key in (
+        "label_list",
+        "z_label_list",
+        "cmd_label_list",
+        "scn_prop_list",
+        "scn_prop_name_index_list",
+        "scn_prop_name_list",
+        "scn_cmd_list",
+        "scn_cmd_name_index_list",
+        "scn_cmd_name_list",
+        "call_prop_name_index_list",
+        "call_prop_name_list",
+        "namae_list",
+        "read_flag_list",
+    ):
+        out_scn[key] = scn_meta.get(key) or []
     return str_list, out_scn
 
 

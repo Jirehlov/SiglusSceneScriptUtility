@@ -16,7 +16,6 @@ from .common import (
     _I32_PAIR_STRUCT,
     _read_struct_list,
     _max_pair_end,
-    _decode_utf16le_strings,
     _add_gap_sections,
     _print_sections,
     _diff_kv,
@@ -28,6 +27,7 @@ from .common import (
     ANGOU_DAT_NAME,
     new_disam_stats,
     add_elapsed_seconds,
+    read_scn_metadata,
     write_status,
     write_disam_totals,
 )
@@ -608,18 +608,12 @@ def _dat_sections(blob):
     sec_fixed(
         h.get("label_list_ofs", 0), h.get("label_cnt", 0), 4, "L", "label_list (i32)"
     )
-    label_list = _read_struct_list(
-        blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
-    )
     sec_fixed(
         h.get("z_label_list_ofs", 0),
         h.get("z_label_cnt", 0),
         4,
         "Z",
         "z_label_list (i32)",
-    )
-    z_label_list = _read_struct_list(
-        blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
     )
     sec_fixed(
         h.get("cmd_label_list_ofs", 0),
@@ -628,24 +622,12 @@ def _dat_sections(blob):
         "C",
         "cmd_label_list (i32,i32)",
     )
-    cmd_label_list = _read_struct_list(
-        blob,
-        h.get("cmd_label_list_ofs", 0),
-        h.get("cmd_label_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
     sec_fixed(
         h.get("scn_prop_list_ofs", 0),
         h.get("scn_prop_cnt", 0),
         8,
         "P",
         "scn_prop_list (i32,i32)",
-    )
-    scn_prop_list = _read_struct_list(
-        blob,
-        h.get("scn_prop_list_ofs", 0),
-        h.get("scn_prop_cnt", 0),
-        _I32_PAIR_STRUCT,
     )
     sec_fixed(
         h.get("scn_prop_name_index_list_ofs", 0),
@@ -654,26 +636,12 @@ def _dat_sections(blob):
         "p",
         "scn_prop_name_index_list",
     )
-    spn_idx = _read_struct_list(
-        blob,
-        h.get("scn_prop_name_index_list_ofs", 0),
-        h.get("scn_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    spn_end = h.get("scn_prop_name_list_ofs", 0) + _max_pair_end(spn_idx) * 2
-    if h.get("scn_prop_name_list_ofs", 0) > 0 and spn_end > h.get(
-        "scn_prop_name_list_ofs", 0
-    ):
-        sec(h.get("scn_prop_name_list_ofs", 0), spn_end, "s", "scn_prop_name_list")
     sec_fixed(
         h.get("scn_cmd_list_ofs", 0),
         h.get("scn_cmd_cnt", 0),
         4,
         "K",
         "scn_cmd_list (i32)",
-    )
-    scn_cmd_list = _read_struct_list(
-        blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
     )
     sec_fixed(
         h.get("scn_cmd_name_index_list_ofs", 0),
@@ -682,17 +650,6 @@ def _dat_sections(blob):
         "k",
         "scn_cmd_name_index_list",
     )
-    scn_idx = _read_struct_list(
-        blob,
-        h.get("scn_cmd_name_index_list_ofs", 0),
-        h.get("scn_cmd_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    scn_end = h.get("scn_cmd_name_list_ofs", 0) + _max_pair_end(scn_idx) * 2
-    if h.get("scn_cmd_name_list_ofs", 0) > 0 and scn_end > h.get(
-        "scn_cmd_name_list_ofs", 0
-    ):
-        sec(h.get("scn_cmd_name_list_ofs", 0), scn_end, "n", "scn_cmd_name_list")
     sec_fixed(
         h.get("call_prop_name_index_list_ofs", 0),
         h.get("call_prop_name_index_cnt", 0),
@@ -700,22 +657,8 @@ def _dat_sections(blob):
         "q",
         "call_prop_name_index_list",
     )
-    cpn_idx = _read_struct_list(
-        blob,
-        h.get("call_prop_name_index_list_ofs", 0),
-        h.get("call_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
-    )
-    cpn_end = h.get("call_prop_name_list_ofs", 0) + _max_pair_end(cpn_idx) * 2
-    if h.get("call_prop_name_list_ofs", 0) > 0 and cpn_end > h.get(
-        "call_prop_name_list_ofs", 0
-    ):
-        sec(h.get("call_prop_name_list_ofs", 0), cpn_end, "Q", "call_prop_name_list")
     sec_fixed(
         h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), 4, "N", "namae_list (i32)"
-    )
-    namae_list = _read_struct_list(
-        blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
     )
     sec_fixed(
         h.get("read_flag_list_ofs", 0),
@@ -724,17 +667,34 @@ def _dat_sections(blob):
         "R",
         "read_flag_list (i32)",
     )
-    read_flag_list = _read_struct_list(
-        blob, h.get("read_flag_list_ofs", 0), h.get("read_flag_cnt", 0), _I32_STRUCT
-    )
+    scn_meta = read_scn_metadata(blob, h)
+    label_list = scn_meta.get("label_list") or []
+    z_label_list = scn_meta.get("z_label_list") or []
+    cmd_label_list = scn_meta.get("cmd_label_list") or []
+    scn_prop_list = scn_meta.get("scn_prop_list") or []
+    spn_idx = scn_meta.get("scn_prop_name_index_list") or []
+    spn_end = int(scn_meta.get("scn_prop_name_blob_end", 0) or 0)
+    if h.get("scn_prop_name_list_ofs", 0) > 0 and spn_end > h.get(
+        "scn_prop_name_list_ofs", 0
+    ):
+        sec(h.get("scn_prop_name_list_ofs", 0), spn_end, "s", "scn_prop_name_list")
+    scn_cmd_list = scn_meta.get("scn_cmd_list") or []
+    scn_idx = scn_meta.get("scn_cmd_name_index_list") or []
+    scn_end = int(scn_meta.get("scn_cmd_name_blob_end", 0) or 0)
+    if h.get("scn_cmd_name_list_ofs", 0) > 0 and scn_end > h.get(
+        "scn_cmd_name_list_ofs", 0
+    ):
+        sec(h.get("scn_cmd_name_list_ofs", 0), scn_end, "n", "scn_cmd_name_list")
+    cpn_idx = scn_meta.get("call_prop_name_index_list") or []
+    cpn_end = int(scn_meta.get("call_prop_name_blob_end", 0) or 0)
+    if h.get("call_prop_name_list_ofs", 0) > 0 and cpn_end > h.get(
+        "call_prop_name_list_ofs", 0
+    ):
+        sec(h.get("call_prop_name_list_ofs", 0), cpn_end, "Q", "call_prop_name_list")
+    namae_list = scn_meta.get("namae_list") or []
+    read_flag_list = scn_meta.get("read_flag_list") or []
     _add_gap_sections(secs, used, n)
-    scn_prop_names = (
-        _decode_utf16le_strings(
-            blob, spn_idx, h.get("scn_prop_name_list_ofs", 0), spn_end
-        )
-        if spn_idx
-        else []
-    )
+    scn_prop_names = scn_meta.get("scn_prop_name_list") or []
     meta = {
         "header": h,
         "str_blob_end": str_blob_end,
@@ -760,21 +720,9 @@ def _dat_sections(blob):
             if isinstance(it, (list, tuple)) and len(it) >= 2
         ],
         "scn_cmd_list": scn_cmd_list,
-        "scn_cmd_names": (
-            _decode_utf16le_strings(
-                blob, scn_idx, h.get("scn_cmd_name_list_ofs", 0), scn_end
-            )
-            if scn_idx
-            else []
-        ),
+        "scn_cmd_names": scn_meta.get("scn_cmd_name_list") or [],
         "scn_cmd_name_index_list": scn_idx,
-        "call_prop_names": (
-            _decode_utf16le_strings(
-                blob, cpn_idx, h.get("call_prop_name_list_ofs", 0), cpn_end
-            )
-            if cpn_idx
-            else []
-        ),
+        "call_prop_names": scn_meta.get("call_prop_name_list") or [],
         "call_prop_name_index_list": cpn_idx,
         "namae_list": namae_list,
         "read_flag_list": read_flag_list,

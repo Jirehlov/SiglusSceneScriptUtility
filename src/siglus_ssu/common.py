@@ -1285,6 +1285,103 @@ def _decode_utf16le_strings(
     return out
 
 
+def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
+    h = header if isinstance(header, dict) else {}
+    out = {
+        "label_list": _read_struct_list(
+            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
+        ),
+        "z_label_list": _read_struct_list(
+            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
+        ),
+        "cmd_label_list": _read_struct_list(
+            blob,
+            h.get("cmd_label_list_ofs", 0),
+            h.get("cmd_label_cnt", 0),
+            _I32_PAIR_STRUCT,
+        ),
+        "scn_prop_list": _read_struct_list(
+            blob,
+            h.get("scn_prop_list_ofs", 0),
+            h.get("scn_prop_cnt", 0),
+            _I32_PAIR_STRUCT,
+        ),
+        "scn_cmd_list": _read_struct_list(
+            blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
+        ),
+        "namae_list": _read_struct_list(
+            blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
+        ),
+        "read_flag_list": _read_struct_list(
+            blob,
+            h.get("read_flag_list_ofs", 0),
+            h.get("read_flag_cnt", 0),
+            _I32_STRUCT,
+        ),
+    }
+    spn_idx = _read_struct_list(
+        blob,
+        h.get("scn_prop_name_index_list_ofs", 0),
+        h.get("scn_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
+    )
+    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + _max_pair_end(spn_idx) * 2
+    out["scn_prop_name_index_list"] = spn_idx
+    out["scn_prop_name_blob_end"] = spn_end
+    out["scn_prop_name_list"] = (
+        _decode_utf16le_strings(
+            blob,
+            spn_idx,
+            h.get("scn_prop_name_list_ofs", 0),
+            spn_end,
+            allow_empty_blob=allow_empty_name_blob,
+        )
+        if spn_idx
+        else []
+    )
+    scn_idx = _read_struct_list(
+        blob,
+        h.get("scn_cmd_name_index_list_ofs", 0),
+        h.get("scn_cmd_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
+    )
+    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + _max_pair_end(scn_idx) * 2
+    out["scn_cmd_name_index_list"] = scn_idx
+    out["scn_cmd_name_blob_end"] = scn_end
+    out["scn_cmd_name_list"] = (
+        _decode_utf16le_strings(
+            blob,
+            scn_idx,
+            h.get("scn_cmd_name_list_ofs", 0),
+            scn_end,
+            allow_empty_blob=allow_empty_name_blob,
+        )
+        if scn_idx
+        else []
+    )
+    cpn_idx = _read_struct_list(
+        blob,
+        h.get("call_prop_name_index_list_ofs", 0),
+        h.get("call_prop_name_index_cnt", 0),
+        _I32_PAIR_STRUCT,
+    )
+    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + _max_pair_end(cpn_idx) * 2
+    out["call_prop_name_index_list"] = cpn_idx
+    out["call_prop_name_blob_end"] = cpn_end
+    out["call_prop_name_list"] = (
+        _decode_utf16le_strings(
+            blob,
+            cpn_idx,
+            h.get("call_prop_name_list_ofs", 0),
+            cpn_end,
+            allow_empty_blob=allow_empty_name_blob,
+        )
+        if cpn_idx
+        else []
+    )
+    return out
+
+
 def _merge_ranges(ranges):
     if not ranges:
         return []
