@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import os
 import re
@@ -855,6 +856,60 @@ def analyze_document(
 
     result = _analyze_ss_document(abs_path, text, project)
     return result
+
+
+_SCAN_WORKER_PROJECT: ProjectContext | None = None
+
+
+def _scan_worker_count() -> int:
+    try:
+        cpu = os.process_cpu_count()
+    except AttributeError:
+        cpu = os.cpu_count()
+    if not cpu or cpu < 1:
+        return 1
+    return max(1, min(int(cpu), 8))
+
+
+def _init_scan_worker(project: ProjectContext) -> None:
+    global _SCAN_WORKER_PROJECT
+    _SCAN_WORKER_PROJECT = project
+
+
+def _scan_worker_project() -> ProjectContext:
+    project = _SCAN_WORKER_PROJECT
+    if project is None:
+        raise RuntimeError("scan worker project is not initialized")
+    return project
+
+
+def _command_records(result: AnalysisResult) -> list[DefinitionRecord]:
+    return [
+        rec
+        for bucket in result.local_definitions.values()
+        for rec in bucket
+        if rec.kind == "command"
+    ]
+
+
+def _link_scan_result(
+    result: AnalysisResult,
+) -> tuple[bool, list[DefinitionRecord]]:
+    return bool(result.diagnostics), _command_records(result)
+
+
+def _link_scan_worker(
+    path: str,
+    text: str,
+) -> tuple[bool, list[DefinitionRecord]]:
+    return _link_scan_result(
+        analyze_document(path, text, project=_scan_worker_project())
+    )
+
+
+def _occurrence_scan_worker(path: str, text: str) -> list[SymbolOccurrence]:
+    result = analyze_document(path, text, project=_scan_worker_project())
+    return list(occurrences_for_result(result))
 
 
 def _range(line: int, start_char: int, end_char: int) -> dict[str, Any]:
@@ -2177,7 +2232,7 @@ class ScanProgressState:
 
 
 class SSLanguageServer:
-    def __init__(self) -> None:
+    def __init__(self, *, serial: bool = False) -> None:
         self._stdin = sys.stdin.buffer
         self._stdout = sys.stdout.buffer
         self.documents: dict[str, DocumentState] = {}
@@ -2185,6 +2240,7 @@ class SSLanguageServer:
         self.occurrence_index_cache: dict[str, DirectoryOccurrenceIndexEntry] = {}
         self.link_diagnostics_cache: dict[str, DirectoryLinkDiagnosticsEntry] = {}
         self.shutdown_requested = False
+        self.serial = bool(serial)
 
     def log_stderr(self, message: str) -> None:
         try:
@@ -2431,6 +2487,53 @@ class SSLanguageServer:
         doc.analysis_signature = None
         return doc.base_analysis
 
+    def parallel_scan_documents(
+        self,
+        project_entry: ProjectCacheEntry,
+        docs: list[tuple[str, DocumentState]],
+        progress: ScanProgressState | None,
+        worker: Any,
+        fallback: Any,
+    ) -> dict[str, Any]:
+        if not docs:
+            return {}
+        if self.serial:
+            out: dict[str, Any] = {}
+            for path, doc in docs:
+                out[path] = fallback(doc)
+                self.report_scan_progress(progress)
+            return out
+        worker_count = min(len(docs), _scan_worker_count())
+        if worker_count <= 1:
+            out: dict[str, Any] = {}
+            for path, doc in docs:
+                out[path] = fallback(doc)
+                self.report_scan_progress(progress)
+            return out
+        try:
+            with ProcessPoolExecutor(
+                max_workers=worker_count,
+                initializer=_init_scan_worker,
+                initargs=(project_entry.project,),
+            ) as executor:
+                futures = {
+                    executor.submit(worker, doc.path, doc.text): path
+                    for path, doc in docs
+                }
+                out: dict[str, Any] = {}
+                for future in as_completed(futures):
+                    path = futures[future]
+                    out[path] = future.result()
+                    self.report_scan_progress(progress)
+                return out
+        except Exception:
+            self.log_stderr(traceback.format_exc())
+            out = {}
+            for path, doc in docs:
+                out[path] = fallback(doc)
+                self.report_scan_progress(progress)
+            return out
+
     def link_diagnostics_for_directory(
         self, directory: str
     ) -> DirectoryLinkDiagnosticsEntry:
@@ -2474,6 +2577,7 @@ class SSLanguageServer:
             len(dirty_paths),
         )
         try:
+            scan_docs: list[tuple[str, DocumentState]] = []
             for path in dirty_paths:
                 doc = self.get_or_load_document(path_to_uri(path))
                 if doc is None:
@@ -2482,16 +2586,19 @@ class SSLanguageServer:
                     entry.file_has_diagnostics.pop(path, None)
                     self.report_scan_progress(progress)
                     continue
-                result = self.analyze_base(doc)
+                scan_docs.append((path, doc))
+            scan_results = self.parallel_scan_documents(
+                project_entry,
+                scan_docs,
+                progress,
+                _link_scan_worker,
+                lambda doc: _link_scan_result(self.analyze_base(doc)),
+            )
+            for path, doc in scan_docs:
+                result_has_diagnostics, result_commands = scan_results[path]
                 entry.file_signatures[path] = self.document_source_signature(doc)
-                entry.file_has_diagnostics[path] = bool(result.diagnostics)
-                entry.file_commands[path] = [
-                    rec
-                    for bucket in result.local_definitions.values()
-                    for rec in bucket
-                    if rec.kind == "command"
-                ]
-                self.report_scan_progress(progress)
+                entry.file_has_diagnostics[path] = result_has_diagnostics
+                entry.file_commands[path] = result_commands
         finally:
             self.end_scan_progress(progress)
         diagnostics: dict[str, list[SourceDiagnostic]] = {}
@@ -2611,6 +2718,7 @@ class SSLanguageServer:
             len(dirty_paths),
         )
         try:
+            scan_docs: list[tuple[str, DocumentState]] = []
             for path in dirty_paths:
                 doc = self.get_or_load_document(path_to_uri(path))
                 if doc is None:
@@ -2618,10 +2726,17 @@ class SSLanguageServer:
                     entry.file_occurrences.pop(path, None)
                     self.report_scan_progress(progress)
                     continue
-                result = self.analyze_base(doc)
+                scan_docs.append((path, doc))
+            scan_results = self.parallel_scan_documents(
+                project_entry,
+                scan_docs,
+                progress,
+                _occurrence_scan_worker,
+                lambda doc: list(occurrences_for_result(self.analyze_base(doc))),
+            )
+            for path, doc in scan_docs:
                 entry.file_signatures[path] = self.document_source_signature(doc)
-                entry.file_occurrences[path] = list(occurrences_for_result(result))
-                self.report_scan_progress(progress)
+                entry.file_occurrences[path] = scan_results[path]
         finally:
             self.end_scan_progress(progress)
         occurrences: dict[str, list[SymbolOccurrence]] = {}
@@ -3166,12 +3281,24 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     argv = list(argv)
+    serial = False
     if argv and argv[0] in {"-h", "--help"}:
-        sys.stdout.write("siglus-ssu -lsp\n")
+        sys.stdout.write("siglus-ssu -lsp [--serial]\n")
         sys.stdout.write("Run the SiglusSceneScript Language Server over stdio.\n")
+        sys.stdout.write("  --serial  Disable default parallel workspace scanning.\n")
         return 0
-    if argv:
-        sys.stderr.write(f"Unknown argument: {argv[0]}\n")
+    for arg in argv:
+        if arg in {"-h", "--help"}:
+            sys.stdout.write("siglus-ssu -lsp [--serial]\n")
+            sys.stdout.write("Run the SiglusSceneScript Language Server over stdio.\n")
+            sys.stdout.write(
+                "  --serial  Disable default parallel workspace scanning.\n"
+            )
+            return 0
+        if arg == "--serial":
+            serial = True
+            continue
+        sys.stderr.write(f"Unknown argument: {arg}\n")
         return 2
-    server = SSLanguageServer()
+    server = SSLanguageServer(serial=serial)
     return server.run()

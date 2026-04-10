@@ -193,16 +193,17 @@ Starts a standard **stdio JSON-RPC / Language Server Protocol** service for the 
 #### Syntax
 
 ```
-siglus-ssu -lsp
+siglus-ssu -lsp [--serial]
 ```
 
 #### Parameters
 
-None.
+- `--serial`: Disable the default parallel workspace scanning and use serial scanning instead.
 
 #### Notes
 
 - Official entrypoint: `siglus-ssu -lsp`
+- By default, workspace-wide symbol and link scans run in parallel; use `--serial` to force serial scanning when needed
 - Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, and speaker names
 - The language service reuses the same `-c` compiler pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`) wherever they apply; semantic classification comes from that compiler-aligned analysis, while the LSP layer recovers source ranges and packages the results as semantic tokens, locations, and edits
 - The current project scope is directory-based, matching the present `-c` model for `.inc` / `.ss` joint analysis and global `.inc #command` linking

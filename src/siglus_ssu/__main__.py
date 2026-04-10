@@ -57,7 +57,8 @@ def _usage(out=None):
         "    --ref         Git ref (branch/tag/commit), default: current package version release ref\n"
         "\n"
         "LSP mode:\n"
-        f"  {p} -lsp\n"
+        f"  {p} -lsp [--serial]\n"
+        "    --serial       Disable default parallel workspace scanning\n"
         "\n"
         "Compile mode:\n"
         f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
@@ -275,8 +276,11 @@ def main(argv=None):
     mode = argv[0]
     if mode == "-lsp":
         if len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
-            sys.stdout.write(f"{_prog()} -lsp\n")
+            sys.stdout.write(f"{_prog()} -lsp [--serial]\n")
             sys.stdout.write("Run the SiglusSceneScript Language Server over stdio.\n")
+            sys.stdout.write(
+                "  --serial  Disable default parallel workspace scanning.\n"
+            )
             return 0
     elif len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
         _usage()
