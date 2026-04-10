@@ -24,7 +24,6 @@ def _env_or(name, parse, default):
 def _compile_one_process(
     ss_path: str,
     tmp_path: str,
-    stop_after: str,
     ia_data: Dict,
     enc: str,
     display_name: str,
@@ -53,9 +52,6 @@ def _compile_one_process(
         if err:
             return (display_name, f"LA error at {display_name}:{err.get('line', 0)}")
 
-        if stop_after == "la":
-            return (display_name, None)
-
         sa = SA(iad, lad)
         ok, sad = sa.analize()
         if not ok:
@@ -65,18 +61,12 @@ def _compile_one_process(
                 f"{sa.last.get('type') or 'SA_ERROR'} at {display_name}:{line}",
             )
 
-        if stop_after == "sa":
-            return (display_name, None)
-
         ma = MA(iad, lad, sad)
         ok, mad = ma.analize()
         if not ok:
             line = (ma.last.get("atom") or {}).get("line", 0)
             code = ma.last.get("type") or "MA_ERROR"
             return (display_name, f"{code} at {display_name}:{line}")
-
-        if stop_after == "ma":
-            return (display_name, None)
 
         bs = BS()
         bsd = {}
@@ -98,7 +88,6 @@ def _compile_one_process(
 def parallel_compile(
     ctx: Dict,
     ss_files: List[str],
-    stop_after: Optional[str] = None,
     max_workers: Optional[int] = None,
 ) -> None:
     from concurrent.futures import ProcessPoolExecutor
@@ -110,7 +99,6 @@ def parallel_compile(
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
     enc = ctx.get("charset_force") or ""
-    stop = stop_after or ctx.get("stop_after", "bs")
 
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
 
@@ -126,7 +114,6 @@ def parallel_compile(
                 _compile_one_process,
                 ss_path,
                 tmp_path,
-                stop,
                 ia_data,
                 enc,
                 format_scene_name(ss_path, ctx),

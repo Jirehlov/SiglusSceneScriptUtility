@@ -243,8 +243,8 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan `input_dir` for existing `.dat` files, copy them, and pack them directly into a `.pck` file. Useful for packing already-compiled scripts. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--test-shuffle`. |
 | `--no-angou` | Disable LZSS compression and XOR encryption. Sets `header_size = 0`. Useful for debugging or for engines without encryption. |
 | `--no-lzss` | Disable only the LZSS stage while keeping the usual script encryption/header behavior. This matches the official "easy link" style output. |
-| `--parallel` | Enable multi-process parallel compilation to speed up large projects. |
-| `--max-workers N` | Maximum number of parallel worker processes. Only effective with `--parallel`; defaults to auto. |
+| `--serial` | Disable multi-process parallel compilation and force the compile stage to run serially. Parallel compilation is enabled by default. |
+| `--max-workers N` | Maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--lzss-level N` | LZSS compression level, from `2` (fast, large) to `17` (slow, smallest). Default: `17`. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. |
@@ -257,8 +257,11 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 # Compile a translation directory into a new Scene.pck
 siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 
-# Compile with parallel workers and keep temp files for inspection
-siglus-ssu -c --parallel --debug /path/to/src /path/to/out/
+# Compile with the default parallel workers and keep temp files for inspection
+siglus-ssu -c --debug /path/to/src /path/to/out/
+
+# Force serial compilation
+siglus-ssu -c --serial /path/to/src /path/to/Scene.pck
 
 # Incremental compilation: only recompile changed .ss files
 siglus-ssu -c --tmp /path/to/cache /path/to/src /path/to/Scene.pck

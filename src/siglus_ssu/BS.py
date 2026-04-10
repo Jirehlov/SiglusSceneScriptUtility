@@ -1520,16 +1520,12 @@ def find_ss(ctx, only=None):
 def compile_one_pipeline(
     ctx,
     ss_path,
-    stop_after=None,
     ia_data=None,
     test_check=False,
     tmp_path=None,
     log=True,
     record_time=False,
 ):
-    stop_after = stop_after or (
-        ctx.get("stop_after", "bs") if isinstance(ctx, dict) else "bs"
-    )
     nm = os.path.splitext(os.path.basename(ss_path))[0]
     fname = os.path.basename(ss_path)
     display_name = format_scene_name(ss_path, ctx)
@@ -1577,8 +1573,6 @@ def compile_one_pipeline(
         record_stage_time(ctx, "LA", time.time() - t)
     if err:
         raise RuntimeError(fmt_err("UNK_ERROR", err.get("line", 0)))
-    if stop_after == "la":
-        return None
 
     if log:
         log_stage("SA", ss_path, ctx)
@@ -1594,8 +1588,6 @@ def compile_one_pipeline(
                 (sa.last.get("atom") or {}).get("line", 0),
             )
         )
-    if stop_after == "sa":
-        return None
 
     if log:
         log_stage("MA", ss_path, ctx)
@@ -1627,9 +1619,6 @@ def compile_one_pipeline(
                 )
         raise RuntimeError(fmt_err(code, line))
 
-    if stop_after == "ma":
-        return None
-
     if log:
         log_stage("BS", ss_path, ctx)
     t = time.time()
@@ -1644,24 +1633,21 @@ def compile_one_pipeline(
     return {"nm": nm, "fname": fname, "out_scn": bsd.get("out_scn", b"")}
 
 
-def compile_one(ctx, ss_path, stop_after=None):
+def compile_one(ctx, ss_path):
     res = compile_one_pipeline(
         ctx,
         ss_path,
-        stop_after=stop_after,
         ia_data=None,
         test_check=True,
         tmp_path=None,
         log=True,
         record_time=True,
     )
-    if not res:
-        return
     tmp = ctx.get("tmp_path") or "."
     write_bytes(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"])
 
 
-def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=False):
+def compile_all(ctx, only=None, max_workers=None, parallel=True):
     if isinstance(ctx, dict) and not isinstance(ctx.get("ia_data"), dict):
         ctx["ia_data"] = build_ia_data(ctx)
 
@@ -1673,12 +1659,12 @@ def compile_all(ctx, only=None, stop_after=None, max_workers=None, parallel=Fals
         from .parallel import parallel_compile
 
         start = time.time()
-        parallel_compile(ctx, ss_files, stop_after, max_workers)
+        parallel_compile(ctx, ss_files, max_workers)
         set_stage_time(ctx, "Compiling", time.time() - start)
         return
 
     for p in ss_files:
-        compile_one(ctx, p, stop_after)
+        compile_one(ctx, p)
 
 
 BS.get_error_line = get_error_line

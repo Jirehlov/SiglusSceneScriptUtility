@@ -432,15 +432,15 @@ def main(argv=None):
         help="Disable LZSS only (official easy link behavior).",
     )
     ap.add_argument(
-        "--parallel",
+        "--serial",
         action="store_true",
-        help="Enable parallel compilation (default: off).",
+        help="Disable parallel compilation.",
     )
     ap.add_argument(
         "--max-workers",
         type=int,
         default=None,
-        help="Maximum parallel workers for compilation (default: auto).",
+        help="Maximum parallel workers for compilation (default: auto; parallel only).",
     )
     ap.add_argument(
         "--lzss-level",
@@ -549,7 +549,6 @@ def main(argv=None):
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "source_angou": C.SOURCE_ANGOU,
         "defined_names": set(),
-        "stop_after": "link",
         "debug": bool(a.debug),
     }
     _init_stats(ctx)
@@ -715,7 +714,7 @@ def main(argv=None):
                         raise FileNotFoundError(f"expected dat not found: {exp_first}")
 
                     set_shuffle_seed(0)
-                    compile_one(ctx, first_ss, "bs")
+                    compile_one(ctx, first_ss)
                     my_first = os.path.join(bs_dir, first_nm + ".dat")
                     if not os.path.isfile(my_first):
                         raise FileNotFoundError(f"generated dat not found: {my_first}")
@@ -780,7 +779,7 @@ def main(argv=None):
                     set_shuffle_seed(seed)
                     all_ok = True
                     for i, ss_path in enumerate(compile_list):
-                        compile_one(ctx, ss_path, "bs")
+                        compile_one(ctx, ss_path)
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         my_dat = os.path.join(bs_dir, nm + ".dat")
                         if not os.path.isfile(my_dat):
@@ -805,9 +804,8 @@ def main(argv=None):
                     compile_all(
                         ctx,
                         compile_list,
-                        "bs",
                         max_workers=a.max_workers,
-                        parallel=a.parallel,
+                        parallel=(not a.serial),
                     )
             link_pack(ctx)
         ok = True

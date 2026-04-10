@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.2.2] - TBA
 
+- Changed compile mode to remove `--parallel`, keep parallel compilation as the default, add `siglus-ssu -c --serial` to force serial compilation, and remove the unused internal `stop_after` stage cutoff hook from the compiler pipeline.
 - Changed LSP workspace scanning to run in parallel by default, and added `siglus-ssu -lsp --serial` to force serial scanning when needed.
 - Added `patch --loc` support to toggle SiglusEngine region detection, locating the guard routine through PE imports and call flow instead of relying on fixed Japanese-only strings.
 - Changed `const.py` loading to prefer packaged `src/siglus_ssu/const.py` before the external data directory, allow direct use when a packaged const is present, bind `siglus_ssu.const` on import, and report the actual search paths on load failure.

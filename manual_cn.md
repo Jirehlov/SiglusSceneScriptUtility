@@ -242,8 +242,8 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 中现有的 `.dat` 文件并将它们直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密（`header_size=0`）。可用于调试或无加密的引擎。 |
 | `--no-lzss` | 仅禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。这对应官方的“easy link”式输出。 |
-| `--parallel` | 启用多进程并行编译以加速大型项目。 |
-| `--max-workers N` | 最大并行工作进程数。仅在 `--parallel` 下生效；默认为自动。 |
+| `--serial` | 禁用多进程并行编译，并强制编译阶段按串行方式运行。默认启用并行编译。 |
+| `--max-workers N` | 最大并行工作进程数。仅在启用并行编译时生效；默认为自动。 |
 | `--lzss-level N` | LZSS 压缩级别，`2`（快，文件大）到 `17`（慢，文件最小）。默认：`17`。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。 |
@@ -256,8 +256,11 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 # 将翻译目录编译为新的 Scene.pck
 siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 
-# 并行编译，保留临时文件供检查
-siglus-ssu -c --parallel --debug /path/to/src /path/to/out/
+# 使用默认并行工作进程编译，并保留临时文件供检查
+siglus-ssu -c --debug /path/to/src /path/to/out/
+
+# 强制串行编译
+siglus-ssu -c --serial /path/to/src /path/to/Scene.pck
 
 # 增量编译：只重编译已更改的 .ss 文件
 siglus-ssu -c --tmp /path/to/cache /path/to/src /path/to/Scene.pck
