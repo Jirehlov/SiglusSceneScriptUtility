@@ -245,7 +245,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--serial` | 禁用多进程并行编译，并强制编译阶段按串行方式运行。默认启用并行编译。 |
 | `--max-workers N` | 最大并行工作进程数。仅在启用并行编译时生效；默认为自动。 |
 | `--lzss-level N` | LZSS 压缩级别，`2`（快，文件大）到 `17`（慢，文件最小）。默认：`17`。 |
-| `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。 |
+| `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。启用时等同于隐式带上 `--serial`。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。 |
 | `--test-shuffle [seed0]` | 穷举搜索所有可能的 32 位 MSVC `rand()` 种子，以找到能精确重建 `<test_dir>` 中字符串表混淆顺序的种子。可选从 `seed0` 开始扫描。 |
 | `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段，并在输出目录写出固定文件名 `Gameexe.dat`。 |

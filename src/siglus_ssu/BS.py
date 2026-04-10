@@ -180,7 +180,7 @@ def build_ia_data(ctx):
         ia = IncAnalyzer("", C.FM_GLOBAL, iad, iad2)
         if not ia.step2():
             raise RuntimeError(f"{name} line({ia.el}): {ia.es}")
-        if ctx.get("test_check"):
+        if ctx.get("debug_outputs"):
             write_text(
                 os.path.join(
                     ctx.get("tmp_path") or ".",
@@ -406,9 +406,7 @@ class BS:
             "atom": {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0},
         }
         s.m_piad = None
-        s.m_is_test = False
         s.out_scn = None
-        s.out_txt = []
         s.loop_label = []
         s.cur_read_flag_no = 0
 
@@ -428,10 +426,6 @@ class BS:
                 at[k] = 0
         s.last_error = {"type": int(etype or 0), "atom": at}
         return False
-
-    def add_out_txt(s, t):
-        if s.m_is_test:
-            s.out_txt.append(str(t))
 
     def scn_push_u8(s, v):
         s.out_scn["scn"].push_u8(v)
@@ -489,18 +483,9 @@ class BS:
                     return r
         return None
 
-    def tostr_form(s, form):
-        if isinstance(form, str):
-            return form
-        for k, v in C._FORM_CODE.items():
-            if v == form:
-                return k
-        return str(form)
-
     def _bs_write_cd_nl(s, node_line):
         s.scn_push_u8(C.CD_NL)
         s.scn_push_i32(int(node_line or 0))
-        s.add_out_txt("CD_NL, " + str(int(node_line or 0)))
 
     def bs_block(s, block):
         if block is None:
@@ -531,13 +516,11 @@ class BS:
         s._bs_write_cd_nl(node_line)
         if is_inc:
             s.scn_push_u8(C.CD_SEL_BLOCK_START)
-            s.add_out_txt("CD_SEL_BLOCK_START")
         node = sentense.get("sentense") if isinstance(sentense, dict) else None
         if not s.bs_sentence_sub(node if node is not None else sentense):
             return False
         if is_inc:
             s.scn_push_u8(C.CD_SEL_BLOCK_END)
-            s.add_out_txt("CD_SEL_BLOCK_END")
         return True
 
     def bs_sentence_sub(s, node):
@@ -610,14 +593,9 @@ class BS:
         atom = (label.get("atom") or {}) if isinstance(label, dict) else {}
         opt = atom.get("opt", None)
         label_id = int(opt) if opt is not None else int(label.get("label_id", 0) or 0)
-        line_no = int((atom.get("line")) or 0)
         if label_id < 0 or label_id >= len(s.out_scn["label_list"]):
             return True
         s.out_scn["label_list"][label_id] = s.out_scn["scn"].size()
-        if line_no:
-            s.add_out_txt(
-                "label: " + str(label_id) + " @ " + str(s.out_scn["scn"].size())
-            )
         return True
 
     def bs_z_label(s, z_label):
@@ -643,7 +621,6 @@ class BS:
         except Exception:
             pass
         s.out_scn["z_label_list"][opt] = ofs
-        s.add_out_txt("z_label: " + str(opt) + "," + str(sub) + " @ " + str(ofs))
         return True
 
     def bs_def_prop(s, def_prop):
@@ -688,7 +665,6 @@ class BS:
             return False
         s.scn_push_u8(C.CD_RETURN)
         s.scn_push_i32(0)
-        s.add_out_txt("CD_RETURN")
         s.out_scn["label_list"][label_no_end] = s.out_scn["scn"].size()
         inc_cnt = int(s.m_piad.get("inc_command_cnt", 0) or 0)
         if cmd_label["cmd_id"] >= inc_cnt:
@@ -718,7 +694,6 @@ class BS:
                 )
                 s.scn_push_u8(C.CD_GOTO)
                 s.scn_push_i32(lid)
-                s.add_out_txt("CD_GOTO: " + str(lid))
                 return True
             else:
                 lid = int(
@@ -728,7 +703,6 @@ class BS:
                 )
                 s.scn_push_u8(C.CD_GOTO)
                 s.scn_push_i32(lid)
-                s.add_out_txt("CD_GOTO: " + str(lid))
                 return True
         if nt in (C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
             if not s.bs_goto_exp(gt):
@@ -736,7 +710,6 @@ class BS:
             form = C.FM_INT if nt == C.NT_GOTO_GOSUB else C.FM_STR
             s.scn_push_u8(C.CD_POP)
             s.scn_push_i32(_fc(form))
-            s.add_out_txt("CD_POP, " + s.tostr_form(form))
             return True
         return False
 
@@ -766,13 +739,6 @@ class BS:
         for a in args:
             form = dereference(((a or {}).get("exp") or {}).get("tmp_form"))
             s.scn_push_i32(_fc(form))
-        s.add_out_txt(
-            ("CD_GOSUB" if nt == C.NT_GOTO_GOSUB else "CD_GOSUBSTR")
-            + ", "
-            + str(label_no)
-            + ", "
-            + str(len(args))
-        )
         return True
 
     def bs_return(s, ret):
@@ -791,12 +757,10 @@ class BS:
             s.scn_push_i32(1)
             form = _fc(dereference((rt.get("exp") or {}).get("node_form")))
             s.scn_push_i32(form)
-            s.add_out_txt("CD_RETURN, 1, form")
             return True
         if nt == C.NT_RETURN_WITHOUT_ARG:
             s.scn_push_u8(C.CD_RETURN)
             s.scn_push_i32(0)
-            s.add_out_txt("CD_RETURN, 0")
             return True
         return False
 
@@ -969,8 +933,6 @@ class BS:
         if opr_opt != C.OP_NONE:
             s.scn_push_u8(C.CD_COPY_ELM)
             s.scn_push_u8(C.CD_PROPERTY)
-            s.add_out_txt("CD_COPY_ELM")
-            s.add_out_txt("CD_PROPERTY")
         if not s.bs_exp(assign.get("right"), not bool(assign.get("set_flag"))):
             return False
         form_l = _fc(dereference((assign.get("left") or {}).get("node_form")))
@@ -985,12 +947,6 @@ class BS:
         s.scn_push_i32(_fc((assign.get("left") or {}).get("node_form")))
         s.scn_push_i32(form_r2)
         s.scn_push_i32(int(assign.get("al_id", 0) or 0))
-        s.add_out_txt(
-            "CD_ASSIGN, "
-            + s.tostr_form((assign.get("left") or {}).get("node_form"))
-            + ", "
-            + s.tostr_form(assign.get("node_form"))
-        )
         return True
 
     def bs_command(s, command):
@@ -1003,7 +959,6 @@ class BS:
         form = _fc((command.get("command") or {}).get("node_form"))
         s.scn_push_u8(C.CD_POP)
         s.scn_push_i32(form)
-        s.add_out_txt("CD_POP, " + s.tostr_form(form))
         return True
 
     def bs_text(s, text):
@@ -1023,7 +978,6 @@ class BS:
         s.scn_push_i32(s.cur_read_flag_no)
         s.cur_read_flag_no += 1
         s.out_scn["read_flag_list"].append({"line_no": line})
-        s.add_out_txt("CD_TEXT")
         return True
 
     def bs_name(s, name):
@@ -1034,7 +988,6 @@ class BS:
             return False
         opt = int(((name.get("name") or {}).get("atom") or {}).get("opt", 0) or 0)
         s.scn_push_u8(C.CD_NAME)
-        s.add_out_txt("CD_NAME, " + str(opt))
         new_name = True
         sl = s.out_scn.get("str_list") or []
         for nid in s.out_scn.get("namae_list") or []:
@@ -1049,7 +1002,6 @@ class BS:
 
     def bs_eof(s):
         s.scn_push_u8(C.CD_EOF)
-        s.add_out_txt("CD_EOF")
         return True
 
     def bs_exp(s, exp, need_value):
@@ -1068,7 +1020,6 @@ class BS:
             form = _fc(dereference((exp.get("exp_1") or {}).get("node_form")))
             s.scn_push_u8(C.CD_OPERATE_1)
             s.scn_push_i32(form)
-            s.add_out_txt("CD_OPERATE_1")
             return s.bs_operator_1(exp.get("opr"))
         if nt == C.NT_EXP_OPR2:
             if not need_value:
@@ -1082,7 +1033,6 @@ class BS:
             s.scn_push_u8(C.CD_OPERATE_2)
             s.scn_push_i32(form_l)
             s.scn_push_i32(form_r)
-            s.add_out_txt("CD_OPERATE_2")
             return s.bs_operator_1(exp.get("opr"))
         return False
 
@@ -1149,12 +1099,6 @@ class BS:
             s.scn_push_u8(C.CD_PUSH)
             s.scn_push_i32(_fc(C.FM_INT))
             s.scn_push_i32(_to_int(element.get("element_code", 0) or 0))
-            s.add_out_txt(
-                "CD_PUSH, "
-                + s.tostr_form(C.FM_INT)
-                + ", "
-                + str(_to_int(element.get("element_code", 0) or 0))
-            )
             if int(element.get("element_type", 0) or 0) == C.ET_COMMAND:
                 arg_list = element.get("arg_list") or {}
                 arg_cnt = (
@@ -1228,7 +1172,6 @@ class BS:
             s.scn_push_u8(C.CD_PUSH)
             s.scn_push_i32(_fc(C.FM_INT))
             s.scn_push_i32(int(C.ELM_ARRAY))
-            s.add_out_txt("CD_PUSH, " + s.tostr_form(C.FM_INT) + ", ELM_ARRAY")
             s.bs_exp(element.get("exp"), True)
             return True
         return False
@@ -1241,7 +1184,6 @@ class BS:
         if "element" not in elm_list and "value" in elm_list:
             return s.bs_exp(elm_list.get("value"), True)
         s.scn_push_u8(C.CD_ELM_POINT)
-        s.add_out_txt("CD_ELM_POINT")
         if elm_list.get("parent_form_code") == C.FM_CALL:
             cur = C.ELM_GLOBAL_CUR_CALL
             if not isinstance(cur, int):
@@ -1249,7 +1191,6 @@ class BS:
             s.scn_push_u8(C.CD_PUSH)
             s.scn_push_i32(_fc(C.FM_INT))
             s.scn_push_i32(int(cur))
-            s.add_out_txt("CD_PUSH, " + s.tostr_form(C.FM_INT) + ", " + str(int(cur)))
         for el in elm_list.get("element") or []:
             if not s.bs_element(el):
                 return False
@@ -1257,7 +1198,6 @@ class BS:
                 C.ELM_OWNER_CALL_PROP
             ) and not is_value((el or {}).get("node_form")):
                 s.scn_push_u8(C.CD_PROPERTY)
-                s.add_out_txt("CD_PROPERTY")
         return True
 
     def bs_left(s, left):
@@ -1288,7 +1228,6 @@ class BS:
                 return False
             if (parent_form_code, element_code) in C.READ_FLAG_COMMAND_CODES:
                 s.scn_push_i32(s.cur_read_flag_no)
-                s.add_out_txt("\tread_flag_no = " + str(s.cur_read_flag_no))
                 s.cur_read_flag_no += 1
                 s.out_scn["read_flag_list"].append(
                     {"line_no": int((el[-1] or {}).get("node_line", 0) if el else 0)}
@@ -1299,7 +1238,6 @@ class BS:
                     pass
                 elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
                     s.scn_push_u8(C.CD_PROPERTY)
-                    s.add_out_txt("CD_PROPERTY")
                 else:
                     return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         elif et == C.ET_PROPERTY:
@@ -1311,7 +1249,6 @@ class BS:
                     pass
                 elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
                     s.scn_push_u8(C.CD_PROPERTY)
-                    s.add_out_txt("CD_PROPERTY")
                 else:
                     return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         return True
@@ -1342,12 +1279,6 @@ class BS:
             s.scn_push_i32(
                 int(opt if opt is not None else Literal.get("label_id", 0) or 0)
             )
-            s.add_out_txt(
-                "CD_PUSH, "
-                + s.tostr_form(C.FM_INT)
-                + ", "
-                + str(int(opt if opt is not None else Literal.get("label_id", 0) or 0))
-            )
         else:
             s.scn_push_u8(C.CD_PUSH)
             s.scn_push_i32(_fc(form))
@@ -1356,18 +1287,6 @@ class BS:
                     opt
                     if opt is not None
                     else Literal.get("int", Literal.get("str_id", 0)) or 0
-                )
-            )
-            s.add_out_txt(
-                "CD_PUSH, "
-                + s.tostr_form(form)
-                + ", "
-                + str(
-                    int(
-                        opt
-                        if opt is not None
-                        else Literal.get("int", Literal.get("str_id", 0)) or 0
-                    )
                 )
             )
         return True
@@ -1390,19 +1309,15 @@ class BS:
         s.scn_push_i32(0)
         s.scn_push_i32(_fc(C.FM_VOID))
 
-    def compile(s, piad, plad, psad, pbsd, is_test=False):
+    def compile(s, piad, plad, psad, pbsd):
         s.clear_error()
         try:
             piad = piad or {}
             plad = plad or {}
             psad = psad or {}
             s.m_piad = piad
-            s.m_is_test = bool(is_test)
             if isinstance(pbsd, dict):
                 pbsd["out_scn"] = b""
-                pbsd["out_dbg"] = b""
-                pbsd["out_txt"] = []
-            s.out_txt = []
             s.loop_label = []
             s.cur_read_flag_no = 0
             out_scn = {
@@ -1486,8 +1401,6 @@ class BS:
             return 0
         if isinstance(pbsd, dict):
             pbsd["out_scn"] = out
-            pbsd["out_txt"] = list(s.out_txt) if s.m_is_test else []
-            pbsd["out_dbg"] = b""
         return 1
 
 
@@ -1521,7 +1434,7 @@ def compile_one_pipeline(
     ctx,
     ss_path,
     ia_data=None,
-    test_check=False,
+    debug_outputs=False,
     tmp_path=None,
     log=True,
     record_time=False,
@@ -1560,7 +1473,7 @@ def compile_one_pipeline(
         record_stage_time(ctx, "CA", time.time() - t)
 
     tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
-    if test_check and isinstance(ctx, dict) and ctx.get("test_check"):
+    if debug_outputs and isinstance(ctx, dict) and ctx.get("debug_outputs"):
         write_text(
             os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), enc=enc
         )
@@ -1624,9 +1537,7 @@ def compile_one_pipeline(
     t = time.time()
     bs = BS()
     bsd = {}
-    if not bs.compile(
-        iad, lad, mad, bsd, bool(isinstance(ctx, dict) and ctx.get("test_check"))
-    ):
+    if not bs.compile(iad, lad, mad, bsd):
         raise RuntimeError(fmt_err(bs.get_error_code(), bs.get_error_line()))
     if record_time:
         record_stage_time(ctx, "BS", time.time() - t)
@@ -1638,7 +1549,7 @@ def compile_one(ctx, ss_path):
         ctx,
         ss_path,
         ia_data=None,
-        test_check=True,
+        debug_outputs=True,
         tmp_path=None,
         log=True,
         record_time=True,

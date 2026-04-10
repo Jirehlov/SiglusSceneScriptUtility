@@ -26,6 +26,8 @@ def _compile_one_process(
     tmp_path: str,
     ia_data: Dict,
     enc: str,
+    utf8: bool,
+    debug_outputs: bool,
     display_name: str,
 ) -> Tuple[str, Optional[str]]:
     fname = os.path.basename(ss_path)
@@ -33,7 +35,7 @@ def _compile_one_process(
 
     try:
         from .CA import CharacterAnalizer
-        from .common import read_text_auto, write_bytes
+        from .common import read_text_auto, write_bytes, write_text
         from .LA import la_analize
         from .SA import SA
         from .MA import MA
@@ -47,6 +49,12 @@ def _compile_one_process(
         ca = CharacterAnalizer()
         if not ca.analize_file(scn, iad, pcad):
             return (display_name, f"CA error at {display_name}:{ca.get_error_line()}")
+        if debug_outputs:
+            write_text(
+                os.path.join(tmp_path, "ca", nm + ".txt"),
+                pcad.get("scn_text", ""),
+                enc=("utf-8" if utf8 else "cp932"),
+            )
 
         lad, err = la_analize(pcad)
         if err:
@@ -70,7 +78,7 @@ def _compile_one_process(
 
         bs = BS()
         bsd = {}
-        if not bs.compile(iad, lad, mad, bsd, False):
+        if not bs.compile(iad, lad, mad, bsd):
             return (
                 display_name,
                 f"{bs.get_error_code()} at {display_name}:{bs.get_error_line()}",
@@ -99,6 +107,8 @@ def parallel_compile(
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
     enc = ctx.get("charset_force") or ""
+    utf8 = bool(ctx.get("utf8"))
+    debug_outputs = bool(ctx.get("debug_outputs"))
 
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
 
@@ -116,6 +126,8 @@ def parallel_compile(
                 tmp_path,
                 ia_data,
                 enc,
+                utf8,
+                debug_outputs,
                 format_scene_name(ss_path, ctx),
             )
             for ss_path in ss_files

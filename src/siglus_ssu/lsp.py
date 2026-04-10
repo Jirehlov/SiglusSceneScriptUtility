@@ -778,7 +778,7 @@ def _analyze_ss_document(
 
     bs = BS()
     bsd: dict[str, Any] = {}
-    if not bs.compile(iad, lad, mad, bsd, False):
+    if not bs.compile(iad, lad, mad, bsd):
         result.diagnostics.append(
             SourceDiagnostic(
                 path=abs_path,

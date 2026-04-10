@@ -73,7 +73,7 @@ def _usage(out=None):
         "    --serial        Disable parallel compilation\n"
         "    --max-workers   Limit parallel workers (default: auto; parallel only)\n"
         "    --lzss-level    LZSS compression level (2-17, default: 17)\n"
-        "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order\n"
+        "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial\n"
         "    --tmp           Use specific temp directory\n"
         "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order\n"
         "\n"

@@ -454,7 +454,7 @@ def main(argv=None):
         default=None,
         help=(
             "Set initial MSVC-compatible shuffle seed for per-script string table order. "
-            "Accepts decimal or 0x... (default: 1)."
+            "Accepts decimal or 0x... (default: 1; implies --serial)."
         ),
     )
     ap.add_argument("--gei", action="store_true", help="Only generate Gameexe.dat.")
@@ -470,6 +470,7 @@ def main(argv=None):
             user_seed = int(str(a.set_shuffle).strip(), 0) & 0xFFFFFFFF
         except Exception:
             user_seed = None
+    force_serial_compile = bool(a.serial or (user_seed is not None))
 
     if test_shuffle:
         if (not test_seed0_given) and (user_seed is not None):
@@ -538,7 +539,7 @@ def main(argv=None):
         "charset": enc,
         "charset_force": charset,
         "lzss_level": a.lzss_level,
-        "test_check": bool(a.debug),
+        "debug_outputs": bool(a.debug),
         "lzss_mode": (not a.no_angou),
         "exe_angou_mode": (not a.no_angou),
         "exe_angou_str": None,
@@ -549,7 +550,6 @@ def main(argv=None):
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "source_angou": C.SOURCE_ANGOU,
         "defined_names": set(),
-        "debug": bool(a.debug),
     }
     _init_stats(ctx)
 
@@ -805,7 +805,7 @@ def main(argv=None):
                         ctx,
                         compile_list,
                         max_workers=a.max_workers,
-                        parallel=(not a.serial),
+                        parallel=(not force_serial_compile),
                     )
             link_pack(ctx)
         ok = True

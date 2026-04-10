@@ -246,7 +246,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--serial` | Disable multi-process parallel compilation and force the compile stage to run serially. Parallel compilation is enabled by default. |
 | `--max-workers N` | Maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--lzss-level N` | LZSS compression level, from `2` (fast, large) to `17` (slow, smallest). Default: `17`. |
-| `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. |
+| `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. |
 | `--test-shuffle [seed0]` | Brute-force scan all possible 32-bit MSVC `rand()` seeds to find the one that reproduces the string table order in `<test_dir>`. Optionally start the scan at `seed0`. |
 | `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage, writing a fixed filename `Gameexe.dat` into the output directory. |
