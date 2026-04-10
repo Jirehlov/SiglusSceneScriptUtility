@@ -27,217 +27,150 @@ def _usage(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"{p} {_get_version()}\n")
-    out.write(
+    text = (
+        f"{p} {_get_version()}\n"
         f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
-    )
-    out.write("\n")
-    out.write("Options:\n")
-    out.write("  -V, --version   Show version and exit\n")
-    out.write(
+        "\n"
+        "Options:\n"
+        "  -V, --version   Show version and exit\n"
         "  --legacy        Force pure Python implementation (disable Rust accel)\n"
-    )
-    out.write("  --const-profile Select const profile (0-2, default: 0)\n")
-    out.write("\n")
-    out.write("Modes:\n")
-    out.write(
+        "  --const-profile Select const profile (0-2, default: 0)\n"
+        "\n"
+        "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
-    )
-    out.write("  init            Download required const.py\n")
-    out.write("  -c, --compile   Compile scripts\n")
-    out.write(
+        "  init            Download required const.py\n"
+        "  -c, --compile   Compile scripts\n"
         "  -x, --extract   Extract .pck, disassemble .dat, or restore Gameexe.ini from Gameexe.dat\n"
-    )
-    out.write("  -a, --analyze   Analyze/compare files\n")
-    out.write("  -d, --db        Export/apply/analyze .dbs\n")
-    out.write("  -k, --koe       Collect KOE/EXKOE voices by character\n")
-    out.write("  -e, --exec      Execute at a #z label\n")
-    out.write("  -m, --textmap   Export/apply text mapping for .ss files\n")
-    out.write("  -g, --g00       Extract/analyze .g00 images\n")
-    out.write("  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n")
-    out.write("  -v, --video     Extract/analyze .omv videos\n")
-    out.write("  -p, --patch     Patch SiglusEngine.exe (altkey/lang/loc)\n")
-    out.write("\n")
-    out.write("Init mode:\n")
-    out.write(f"  {p} init [--force|-f] [--ref <git-ref>]\n")
-    out.write("    --force, -f   Overwrite existing const.py\n")
-    out.write(
+        "  -a, --analyze   Analyze/compare files\n"
+        "  -d, --db        Export/apply/analyze .dbs\n"
+        "  -k, --koe       Collect KOE/EXKOE voices by character\n"
+        "  -e, --exec      Execute at a #z label\n"
+        "  -m, --textmap   Export/apply text mapping for .ss files\n"
+        "  -g, --g00       Extract/analyze .g00 images\n"
+        "  -s, --sound     Decode/extract .ovk/.owp/.nwa sounds\n"
+        "  -v, --video     Extract/analyze .omv videos\n"
+        "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/loc)\n"
+        "\n"
+        "Init mode:\n"
+        f"  {p} init [--force|-f] [--ref <git-ref>]\n"
+        "    --force, -f   Overwrite existing const.py\n"
         "    --ref         Git ref (branch/tag/commit), default: current package version release ref\n"
-    )
-    out.write("\n")
-    out.write("LSP mode:\n")
-    out.write(f"  {p} -lsp\n")
-    out.write("\n")
-    out.write("Compile mode:\n")
-    out.write(
+        "\n"
+        "LSP mode:\n"
+        f"  {p} -lsp\n"
+        "\n"
+        "Compile mode:\n"
         f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--parallel] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
-    )
-    out.write(
         f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
-    )
-    out.write(f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n")
-    out.write("    --debug         Keep temp files (also prints stage timings)\n")
-    out.write("    --charset ENC   Force source charset (jis/cp932 or utf8)\n")
-    out.write("    --no-os         Skip OS stage (do not pack source files)\n")
-    out.write(
+        f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
+        "    --debug         Keep temp files (also prints stage timings)\n"
+        "    --charset ENC   Force source charset (jis/cp932 or utf8)\n"
+        "    --no-os         Skip OS stage (do not pack source files)\n"
         "    --dat-repack    Repack existing .dat files in input_dir (skip .ss compilation)\n"
-    )
-    out.write("    --no-angou      Disable encryption/compression (header_size=0)\n")
-    out.write("    --no-lzss       Disable LZSS only (official easy link behavior)\n")
-    out.write("    --parallel      Enable parallel compilation\n")
-    out.write("    --max-workers   Limit parallel workers (default: auto)\n")
-    out.write("    --lzss-level    LZSS compression level (2-17, default: 17)\n")
-    out.write(
+        "    --no-angou      Disable encryption/compression (header_size=0)\n"
+        "    --no-lzss       Disable LZSS only (official easy link behavior)\n"
+        "    --parallel      Enable parallel compilation\n"
+        "    --max-workers   Limit parallel workers (default: auto)\n"
+        "    --lzss-level    LZSS compression level (2-17, default: 17)\n"
         "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order\n"
-    )
-    out.write("    --tmp           Use specific temp directory\n")
-    out.write(
+        "    --tmp           Use specific temp directory\n"
         "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order\n"
-    )
-    out.write("\n")
-    out.write("Extract mode:\n")
-    out.write(f"  {p} -x [--disam] <input_pck|input_dir> [output_dir]\n")
-    out.write(f"  {p} -x --gei <Gameexe.dat|input_dir> [output_dir]\n")
-    out.write(
+        "\n"
+        "Extract mode:\n"
+        f"  {p} -x [--disam] <input_pck|input_dir> [output_dir]\n"
+        f"  {p} -x --gei <Gameexe.dat|input_dir> [output_dir]\n"
         "    --disam        Dump .dat disassembly when extracting .pck or scanning a .dat directory\n"
-    )
-    out.write("    --gei          Restore Gameexe.ini from Gameexe.dat\n")
-    out.write(
+        "    --gei          Restore Gameexe.ini from Gameexe.dat\n"
         "    output_dir     Defaults to the input file directory or the input directory itself\n"
-    )
-    out.write("\n")
-    out.write("Analyze mode:\n")
-    out.write(
+        "\n"
+        "Analyze mode:\n"
         f"  {p} -a [--disam] [--readall] [--payload] <input_file.(pck|dat|gan|sav|cgm|tcr)> [input_file_2]\n"
-    )
-    out.write(f"  {p} -a --word <input_pck> [output_csv]\n")
-    out.write(f"  {p} -a <path_to_\u6697\u53f7.dat|SiglusEngine.exe|dir> --angou\n")
-    out.write(f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n")
-    out.write("    --disam        Write .dat disassembly to __DATDIR__\n")
-    out.write(
+        f"  {p} -a --word <input_pck> [output_csv]\n"
+        f"  {p} -a <path_to_暗号.dat|SiglusEngine.exe|dir> --angou\n"
+        f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n"
+        "    --disam        Write .dat disassembly to __DATDIR__\n"
         "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
-    )
-    out.write(
         "    --word         Count dialogue units for each .dat/.ss inside a .pck and write CSV only\n"
-    )
-    out.write(
         "    --payload      Compare normalized decoded/decompressed scn_bytes semantics (ignores string-pool ids when text matches); expensive\n"
-    )
-    out.write(
-        "    --angou        Parse as \u6697\u53f7.dat and print derived exe_el key\n"
-    )
-    out.write("    --gei          Analyze/compare Gameexe.dat\n")
-    out.write("\n")
-    out.write("KOE mode:\n")
-    out.write(f"  {p} -k [--stats-only] <scene_input> <voice_dir> <output_dir>\n")
-    out.write(f"  {p} -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>\n")
-    out.write(
+        "    --angou        Parse as 暗号.dat and print derived exe_el key\n"
+        "    --gei          Analyze/compare Gameexe.dat\n"
+        "\n"
+        "KOE mode:\n"
+        f"  {p} -k [--stats-only] <scene_input> <voice_dir> <output_dir>\n"
+        f"  {p} -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>\n"
         "    --stats-only   Write summary only, and CSV unless --single is used; do not extract .ogg files\n"
-    )
-    out.write(
         "    --single       Extract only the specified global KOE number directly into output_dir; no CSV or character subdirectories\n"
-    )
-    out.write("\n")
-    out.write("Execute mode:\n")
-    out.write(f"  {p} -e <path_to_engine> <scene_name> <label>\n")
-    out.write("\n")
-    out.write("Textmap mode:\n")
-    out.write(f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n")
-    out.write(f"  {p} -m --disam <path_to_dat|path_to_dir>\n")
-    out.write(f"  {p} -m --disam-apply <path_to_dat|path_to_dir>\n")
-    out.write("    --apply        Apply .ss CSV back to .ss\n")
-    out.write("    --disam        Export .dat string list to .dat.csv\n")
-    out.write("    --disam-apply  Apply .dat.csv back to .dat\n")
-    out.write("\n")
-    out.write("G00 mode:\n")
-    out.write(f"  {p} -g --a <input_g00>\n")
-    out.write(f"  {p} -g --x <input_g00|input_dir> <output_dir>\n")
-    out.write(
+        "\n"
+        "Execute mode:\n"
+        f"  {p} -e <path_to_engine> <scene_name> <label>\n"
+        "\n"
+        "Textmap mode:\n"
+        f"  {p} -m [--apply] <path_to_ss|path_to_dir>\n"
+        f"  {p} -m --disam <path_to_dat|path_to_dir>\n"
+        f"  {p} -m --disam-apply <path_to_dat|path_to_dir>\n"
+        "    --apply        Apply .ss CSV back to .ss\n"
+        "    --disam        Export .dat string list to .dat.csv\n"
+        "    --disam-apply  Apply .dat.csv back to .dat\n"
+        "\n"
+        "G00 mode:\n"
+        f"  {p} -g --a <input_g00>\n"
+        f"  {p} -g --x <input_g00|input_dir> <output_dir>\n"
         f"  {p} -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [input_g00[:cutNNN] ...] --o <output_dir>\n"
-    )
-    out.write(
         "    note: you can select a type2 cut via suffix :cutNNN (e.g. foo.g00:cut002)\n"
-    )
-    out.write(
         f"  {p} -g --c [--type N] [--refer <ref_g00|ref_dir>] <input_png|input_jpeg|input_json(type2 only)|input_dir> [output_g00|output_dir]\n"
-    )
-    out.write(
         "    note: without --refer, --c creates .g00 (type0/type2/type3 supported; JSON input is only accepted with --type 2)\n"
-    )
-    out.write(
         "          with --refer, --c updates from the reference .g00 instead of implicitly reading output as base\n"
-    )
-    out.write(
         "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"
-    )
-    out.write("\n")
-    out.write("Sound mode:\n")
-    out.write(
+        "\n"
+        "Sound mode:\n"
         f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
-    )
-    out.write(f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n")
-    out.write(f"  {p} -s --c <input_ogg|input_dir> <output_dir>\n")
-    out.write("\n")
-    out.write("DB mode:\n")
-    out.write(f"  {p} -d --x <input_dir|input_file> <output_dir>\n")
-    out.write(f"  {p} -d --a <input_file.dbs> [input_file_2.dbs]\n")
-    out.write(
+        f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n"
+        f"  {p} -s --c <input_ogg|input_dir> <output_dir>\n"
+        "\n"
+        "DB mode:\n"
+        f"  {p} -d --x <input_dir|input_file> <output_dir>\n"
+        f"  {p} -d --a <input_file.dbs> [input_file_2.dbs]\n"
         f"  {p} -d --c [--type N] [--set-shuffle SEED] <input_csv|input_dir> <output_dbs|output_dir>\n"
-    )
-    out.write(
         f"  {p} -d --c --test-shuffle [skip0] <expected.dbs> <input_csv> <output_dbs>\n"
-    )
-
-    out.write("\n")
-    out.write("Video mode:\n")
-    out.write(f"  {p} -v --x <input_dir|input_file> <output_dir>\n")
-    out.write(f"  {p} -v --a <input_file.omv>\n")
-    out.write(
+        "\n"
+        "Video mode:\n"
+        f"  {p} -v --x <input_dir|input_file> <output_dir>\n"
+        f"  {p} -v --a <input_file.omv>\n"
         f"  {p} -v --c <input_ogv> <output_omv|output_dir> [--refer ref.omv] [--mode N] [--flags 0x18DE00]\n"
-    )
-    out.write(
         "    --refer  Apply mode and TableB flags_hi24 from ref .omv (overridden by --mode/--flags)\n"
-    )
-    out.write("    --mode   Override header mode (@0x28), default: auto from ogv\n")
-    out.write("    --flags  Override TableB flags high 24 bits, default: 0\n")
-    out.write("\n")
-    out.write("Patch mode:\n")
-    out.write(
+        "    --mode   Override header mode (@0x28), default: auto from ogv\n"
+        "    --flags  Override TableB flags high 24 bits, default: 0\n"
+        "\n"
+        "Patch mode:\n"
         f"  {p} -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]\n"
-    )
-    out.write(
         f"  {p} -p --lang (chs|eng|<json>) <input_exe> [-o output_exe] [--inplace]\n"
-    )
-    out.write(f"  {p} -p --loc (0|1) <input_exe> [-o output_exe] [--inplace]\n")
-    out.write("    <input_key> can be either:\n")
-    out.write("      - 16 bytes formatted like: 0xA9, 0x86, ...\n")
-    out.write(
-        "      - path to \u6697\u53f7.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
-    )
-    out.write("    --loc 0       Disable region detection (force pass)\n")
-    out.write("    --loc 1       Enable region detection (restore original check)\n")
-    out.write("    <json> (custom) fields:\n")
-    out.write("      - charset: 0/128/134 or 'eng'/'jp'/'chs'\n")
-    out.write("      - suffix: output suffix for default naming\n")
-    out.write("      - replace: object mapping old->new\n")
-    out.write(
+        f"  {p} -p --loc (0|1) <input_exe> [-o output_exe] [--inplace]\n"
+        "    <input_key> can be either:\n"
+        "      - 16 bytes formatted like: 0xA9, 0x86, ...\n"
+        "      - path to 暗号.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
+        "    --loc 0       Disable region detection (force pass)\n"
+        "    --loc 1       Enable region detection (restore original check)\n"
+        "    <json> (custom) fields:\n"
+        "      - charset: 0/128/134 or 'eng'/'jp'/'chs'\n"
+        "      - suffix: output suffix for default naming\n"
+        "      - replace: object mapping old->new\n"
         "      - skip_standalone: list of old strings to skip when surrounded by NULs\n"
-    )
-    out.write("      example:\n")
-    out.write(
+        "      example:\n"
         '        \'{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}\'\n'
     )
+    out.write(text)
 
 
 def _usage_short(out=None):
     if out is None:
         out = sys.stderr
     p = _prog()
-    out.write(f"{p} {_get_version()}\n")
-    out.write(
+    text = (
+        f"{p} {_get_version()}\n"
         f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"Try '{p} --help' for more information.\n"
     )
-    out.write(f"Try '{p} --help' for more information.\n")
+    out.write(text)
 
 
 def _drop_const_module():

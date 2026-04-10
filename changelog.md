@@ -3,12 +3,18 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.2] - TBA
+
+- Added `patch --loc` support to toggle SiglusEngine region detection, locating the guard routine through PE imports and call flow instead of relying on fixed Japanese-only strings.
+- Changed `const.py` loading to prefer packaged `src/siglus_ssu/const.py` before the external data directory, allow direct use when a packaged const is present, bind `siglus_ssu.const` on import, and report the actual search paths on load failure.
+
+
 ## [v0.2.1] - 2026-04-06
 
 - Changed `.pck` analysis so word counting no longer runs implicitly. Use `-a --word <input_pck> [output_csv]` to generate word-count output and CSV files, with one row per decoded scene `.dat` and one row per embedded `.ss` source.
 - Added a deterministic built-in word-count rule so mixed CJK and non-CJK text is counted consistently across platforms.
 - Added `-k --stats-only` to collect KOE statistics and write CSV output without extracting audio files.
-- Added `-k --single <koe_no>` to extract only one specific KOE entry while still writing CSV and summary output.
+- Added `-k --single <koe_no>` to extract only one specific KOE entry.
 - `.pck` analysis now also prints `暗号.dat` when an embedded or adjacent source is available, matching compile-mode summary output.
 
 
