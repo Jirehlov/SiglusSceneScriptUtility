@@ -29,6 +29,27 @@ def _build_hi24_ranges(hi24):
     return ranges
 
 
+def _warn_lossy_ogv_streams(path):
+    try:
+        stream_kinds = video.read_ogv_stream_kinds(path)
+    except (EOFError, OSError, ValueError, struct.error):
+        return
+    extra_streams = []
+    for kind in stream_kinds:
+        if kind == "theora" or kind in extra_streams:
+            continue
+        extra_streams.append(kind)
+    if not extra_streams:
+        return
+    all_streams = ",".join(stream_kinds) if stream_kinds else "unknown"
+    dropped = ",".join(extra_streams)
+    eprint(
+        "warning: lossy conversion: "
+        f"input .ogv streams={all_streams}; "
+        f"-v --c keeps only theora video and will drop non-theora streams ({dropped})"
+    )
+
+
 def _analyze_one(path):
     if os.path.splitext(path)[1].lower() != ".omv":
         eprint("error: unsupported file type (expected .omv)")
@@ -233,6 +254,7 @@ def main(argv=None):
                     flags_hi24 = int(uniq[0]) if uniq else 0
                 else:
                     flags_hi24 = _build_hi24_ranges(hi24)
+        _warn_lossy_ogv_streams(inp)
         try:
             video.build_omv_from_ogv(
                 inp, outp2, mode=mode_override, flags_hi24=flags_hi24

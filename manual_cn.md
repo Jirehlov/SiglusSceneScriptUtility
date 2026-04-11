@@ -1073,6 +1073,8 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 
 提供分析、提取和重新编译 `.omv` 视频文件的工具。`.omv` 格式是带有专有 SiglusEngine 包装头的 Ogg 容器（`.ogv`）。
 
+注意：官方 Siglus 手册将 OMV movie object 定位为“无声的视频对象”，并明确说明它不能播放音频，因此并不适合拿来做带声音的 OP 一类影片。基于这一官方设计，本工具也不支持将带音轨的 `.ogv` 回写为 `.omv`。如果对 `-v --c` 提供的是包含多条 Ogg stream 的文件，例如 Theora + Vorbis/Opus，那么构建 `.omv` 时只会使用 Theora 视频流，内嵌音频流不会被保留。
+
 #### 语法
 
 ```

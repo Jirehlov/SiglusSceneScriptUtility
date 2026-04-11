@@ -1078,6 +1078,8 @@ Directory input for `-s --x` also recursively scans subdirectories and preserves
 
 Provides tools for analyzing, extracting, and recompiling `.omv` video files. The `.omv` format is an Ogg container (`.ogv`) with a proprietary SiglusEngine wrapper header.
 
+Note: the official Siglus manual describes OMV movie objects as silent visual objects and explicitly says they cannot play audio, making them unsuitable for OP-style movie playback with embedded sound. In line with that design, this tool does not support writing back audio-bearing `.ogv` inputs. If `-v --c` is given an Ogg file with multiple streams such as Theora + Vorbis/Opus, only the Theora video stream is used when building the `.omv`, and embedded audio streams are not preserved.
+
 #### Syntax
 
 ```

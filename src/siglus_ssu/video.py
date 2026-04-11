@@ -260,6 +260,13 @@ def read_omv_full_info(path):
     )
 
 
+def read_ogv_stream_kinds(path, *, max_pages=256):
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, 0, max_pages=max_pages)
+    return tuple(str(kind) for kind in kinds_by_serial.values())
+
+
 def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     if not os.path.isfile(ogv_path):
         raise FileNotFoundError(ogv_path)
