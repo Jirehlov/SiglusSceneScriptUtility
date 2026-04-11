@@ -8,7 +8,6 @@ OGG_HEADER_STRUCT = struct.Struct("<4sBBqIIIB")
 TABLEA_STRUCT = struct.Struct("<IBBHIIiii")
 TABLEB_STRUCT = struct.Struct("<IIIIIIII")
 OUTER_STRUCT = struct.Struct("<42I")
-
 OMVInfo = namedtuple(
     "OMVInfo",
     "path size_bytes oggs_offset header_size ogv_size stream_kinds",
@@ -263,8 +262,13 @@ def read_omv_full_info(path):
 def read_ogv_stream_kinds(path, *, max_pages=256):
     if not os.path.isfile(path):
         raise FileNotFoundError(path)
-    kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, 0, max_pages=max_pages)
-    return tuple(str(kind) for kind in kinds_by_serial.values())
+    kinds_by_serial = {}
+    for serial, packet in _iter_ogg_packets(path, 0, max_pages=max_pages):
+        if serial in kinds_by_serial:
+            continue
+        kind = _detect_packet_kind(packet)
+        kinds_by_serial[int(serial)] = str(kind) if kind else "unknown"
+    return tuple(kinds_by_serial.values())
 
 
 def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
@@ -504,8 +508,6 @@ def _parse_ogg_stream_kinds_by_serial(path, oggs_off, *, max_pages=256):
         kind = _detect_packet_kind(packet)
         if kind:
             kinds_by_serial[int(serial)] = kind
-        if len(kinds_by_serial) >= 2:
-            break
     return kinds_by_serial
 
 

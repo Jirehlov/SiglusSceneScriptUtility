@@ -8,7 +8,6 @@ import time
 import shutil
 from contextlib import suppress
 from ._const_manager import get_const_module
-
 from .BS import (
     compile_all,
     compile_one,
@@ -37,7 +36,6 @@ from .common import (
 )
 
 C = get_const_module()
-
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
 
@@ -70,7 +68,6 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     hs = sa.get("header_size")
     if not hs:
         raise ValueError("source_angou_encrypt: missing header_size")
-
     lzss_level = ctx.get("lzss_level", 17)
     lz = lzss_pack(data, level=lzss_level)
     lzsz = len(lz)
@@ -190,6 +187,25 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
+def _read_scn_dat(path):
+    b = read_bytes(path)
+    if len(b) < C.SCN_HDR_SIZE:
+        raise ValueError("bad dat header")
+    fields = list(C.SCN_HDR_FIELDS or [])
+    if len(fields) * 4 != C.SCN_HDR_SIZE:
+        raise ValueError("bad const.SCN_HDR_FIELDS")
+    vals = struct.unpack_from("<" + "i" * len(fields), b, 0)
+    h = dict(zip(fields, vals))
+    ofs = h.get("str_index_list_ofs", 0)
+    cnt = h.get("str_index_cnt", 0)
+    if cnt < 0:
+        raise ValueError("bad str_index_cnt")
+    if ofs < C.SCN_HDR_SIZE or ofs + cnt * 8 > len(b):
+        raise ValueError("bad str_index_list")
+    idx = [struct.unpack_from("<ii", b, ofs + i * 8) for i in range(cnt)]
+    return b, h, idx
+
+
 def _read_scn_dat_header_bytes(path):
     b = read_bytes(path)
     if len(b) < C.SCN_HDR_SIZE:
@@ -203,31 +219,21 @@ def _read_scn_dat_header_bytes(path):
 
 
 def _read_scn_dat_str_index(path):
-    b, h = _read_scn_dat_header_bytes(path)
-    ofs = int(h.get("str_index_list_ofs", 0) or 0)
-    cnt = int(h.get("str_index_cnt", 0) or 0)
-    if cnt < 0:
-        raise ValueError("bad str_index_cnt")
-    if ofs < C.SCN_HDR_SIZE or ofs + cnt * 8 > len(b):
-        raise ValueError("bad str_index_list")
-    idx = [struct.unpack_from("<ii", b, ofs + i * 8) for i in range(cnt)]
-    return b, h, idx
+    return _read_scn_dat(path)
 
 
 def _read_scn_dat_idx_pairs(path):
     _, _, idx = _read_scn_dat_str_index(path)
-    return [(int(ofs), int(ln)) for (ofs, ln) in idx]
+    return list(idx)
 
 
 def _read_scn_dat_str_pool(path):
     b, h, idx = _read_scn_dat_str_index(path)
-    order = sorted(range(len(idx)), key=lambda o: int(idx[o][0]))
-    base = int(h.get("str_list_ofs", 0) or 0)
+    order = sorted(range(len(idx)), key=lambda o: idx[o][0])
+    base = h.get("str_list_ofs", 0)
     out = []
     for orig in order:
         ofs_u16, ln_u16 = idx[orig]
-        ofs_u16 = int(ofs_u16)
-        ln_u16 = int(ln_u16)
         if ln_u16 <= 0:
             out.append("")
             continue
@@ -235,11 +241,11 @@ def _read_scn_dat_str_pool(path):
         q = p + ln_u16 * 2
         if p < 0 or q > len(b):
             raise ValueError("bad str_list range")
-        k = (28807 * int(orig)) & 0xFFFFFFFF
+        k = (28807 * orig) & 0xFFFFFFFF
         ws = struct.unpack_from("<" + "H" * ln_u16, b, p)
         bb = bytearray(ln_u16 * 2)
         for i, w in enumerate(ws):
-            v = (int(w) ^ k) & 0xFFFF
+            v = (w ^ k) & 0xFFFF
             bb[i * 2] = v & 0xFF
             bb[i * 2 + 1] = (v >> 8) & 0xFF
         out.append(bytes(bb).decode("utf-16le", "surrogatepass"))
@@ -358,7 +364,6 @@ def main(argv=None):
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
-
         if (
             i < len(argv)
             and _is_int_token(argv[i])
@@ -370,7 +375,6 @@ def main(argv=None):
                 test_seed0 = 0
             test_seed0_given = True
             argv.pop(i)
-
     dat_repack = "--dat-repack" in argv
     if dat_repack:
         if test_shuffle:
@@ -390,7 +394,6 @@ def main(argv=None):
                 f"{prog}: error: --dat-repack only supports being used alone or with --no-os/--no-lzss (got: {', '.join(bad)})\n"
             )
             return 2
-
     test_shuffle_prefix = "[test-shuffle]"
 
     class _ArgParser(argparse.ArgumentParser):
@@ -464,7 +467,6 @@ def main(argv=None):
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
-
     user_seed = None
     if getattr(a, "set_shuffle", None) is not None:
         try:
@@ -472,14 +474,12 @@ def main(argv=None):
         except Exception:
             user_seed = None
     force_serial_compile = bool(a.serial or (user_seed is not None))
-
     if test_shuffle:
         if (not test_seed0_given) and (user_seed is not None):
             test_seed0 = int(user_seed) & 0xFFFFFFFF
     else:
         if user_seed is not None:
             set_shuffle_seed(int(user_seed) & 0xFFFFFFFF)
-
     inp = os.path.abspath(a.input_dir)
     gei_ini = ""
     if a.gei and os.path.isfile(inp):
@@ -553,7 +553,6 @@ def main(argv=None):
         "defined_names": set(),
     }
     _init_stats(ctx)
-
     angou_content = None
     angou_path = find_named_path(inp, ANGOU_DAT_NAME, recursive=False)
     if (not a.no_angou) and angou_path:
@@ -647,7 +646,6 @@ def main(argv=None):
                             if os.path.isfile(lp):
                                 with suppress(OSError):
                                     os.remove(lp)
-
             else:
                 for f in inc or []:
                     p = os.path.join(inp, f)
@@ -694,28 +692,23 @@ def main(argv=None):
                 if test_shuffle:
                     bs_dir = os.path.join(tmp, "bs")
                     os.makedirs(bs_dir, exist_ok=True)
-
                     if isinstance(ctx, dict) and not isinstance(
                         ctx.get("ia_data"), dict
                     ):
                         ctx["ia_data"] = build_ia_data(ctx)
-
                     compile_list = ss
                     if not compile_list:
                         raise RuntimeError("test-shuffle: no .ss files")
-
                     first_ss = compile_list[0]
                     first_nm = os.path.splitext(os.path.basename(first_ss))[0]
                     exp_first = os.path.join(test_dir, first_nm + ".dat")
                     if not os.path.isfile(exp_first):
                         raise FileNotFoundError(f"expected dat not found: {exp_first}")
-
                     set_shuffle_seed(0)
                     compile_one(ctx, first_ss)
                     my_first = os.path.join(bs_dir, first_nm + ".dat")
                     if not os.path.isfile(my_first):
                         raise FileNotFoundError(f"generated dat not found: {my_first}")
-
                     from collections import Counter
 
                     pool_my = Counter(_read_scn_dat_str_pool(my_first))
@@ -724,7 +717,6 @@ def main(argv=None):
                         sys.stderr.write(
                             f"{test_shuffle_prefix} pool mismatch: not the same string pool -> skip brute force\n"
                         )
-
                         only_my = list((pool_my - pool_off).elements())[:8]
                         only_off = list((pool_off - pool_my).elements())[:8]
                         if only_my:
@@ -736,7 +728,6 @@ def main(argv=None):
                             for s0 in only_off:
                                 sys.stderr.write("    " + repr(s0) + "\n")
                         return 1
-
                     targets = []
                     for ss_path in compile_list:
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
@@ -746,7 +737,6 @@ def main(argv=None):
                                 f"expected dat not found: {exp_dat}"
                             )
                         targets.append(_read_scn_dat_idx_pairs(exp_dat))
-
                     seed0 = int(test_seed0) & 0xFFFFFFFF
                     try:
                         from .native_ops import is_native_available
@@ -772,7 +762,6 @@ def main(argv=None):
                         f"{test_shuffle_prefix} using seed={seed} (matched first script)\n"
                     )
                     sys.stderr.flush()
-
                     set_shuffle_seed(seed)
                     all_ok = True
                     for i, ss_path in enumerate(compile_list):

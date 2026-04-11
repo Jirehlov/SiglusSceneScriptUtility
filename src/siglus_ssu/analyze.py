@@ -1,11 +1,10 @@
 import os
 import sys
-
 from .common import (
     hx,
-    _fmt_ts,
+    fmt_ts,
     read_bytes,
-    _sha1,
+    sha1,
     decode_text_auto,
     exe_angou_element,
     ANGOU_DAT_NAME,
@@ -15,7 +14,6 @@ from .common import (
     looks_like_siglus_dat,
     parse_gei_disam_args,
 )
-
 from . import pck
 from . import dat
 from . import gan
@@ -60,8 +58,8 @@ def analyze_angou_dat(path: str) -> int:
     print(f"file: {path}")
     print(f"type: {'siglusengine.exe' if is_exe else 'angou.dat'}")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
-    print(f"mtime: {_fmt_ts(st.st_mtime)}")
-    print(f"sha1: {_sha1(blob)}")
+    print(f"mtime: {fmt_ts(st.st_mtime)}")
+    print(f"sha1: {sha1(blob)}")
     print("")
     if is_exe:
         if exe_el:
@@ -101,13 +99,13 @@ def _detect_type(path, blob):
         return "cgm"
     if ext == ".tcr":
         return "tcr"
-    if pck._looks_like_pck(blob):
+    if pck.looks_like_pck(blob):
         return "pck"
     if looks_like_siglus_dat(blob):
         return "dat"
-    if sav._looks_like_sav(blob):
+    if sav.looks_like_sav(blob):
         return "sav"
-    if cgm._looks_like_cgm(blob):
+    if cgm.looks_like_cgm(blob):
         return "cgm"
     return "bin"
 
@@ -123,8 +121,8 @@ def analyze_file(path, readall=False):
     print(f"file: {path}")
     print(f"type: {ftype}")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
-    print(f"mtime: {_fmt_ts(st.st_mtime)}")
-    print(f"sha1: {_sha1(blob)}")
+    print(f"mtime: {fmt_ts(st.st_mtime)}")
+    print(f"sha1: {sha1(blob)}")
     print("")
     if ftype not in SUPPORTED_TYPES:
         print(f"unsupported file type for -a mode: {ftype}")
@@ -172,8 +170,8 @@ def compare_files(p1, p2, compare_payload=False):
     print(f"file2: {p2}")
     print(f"type1: {t1}  size1={len(b1):d} ({hx(len(b1))})")
     print(f"type2: {t2}  size2={len(b2):d} ({hx(len(b2))})")
-    print(f"sha1_1: {_sha1(b1)}")
-    print(f"sha1_2: {_sha1(b2)}")
+    print(f"sha1_1: {sha1(b1)}")
+    print(f"sha1_2: {sha1(b2)}")
     print("")
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print(f"unsupported file type for -a mode (type1={t1} type2={t2})")
@@ -221,17 +219,14 @@ def main(argv=None):
         disam_action=lambda: setattr(dat, "DAT_TXT_OUT_DIR", "__DATDIR__"),
         allow_gei_disam=True,
     )
-
     readall = False
     if "--readall" in args:
         args.remove("--readall")
         readall = True
-
     compare_payload = False
     if "--payload" in args:
         args.remove("--payload")
         compare_payload = True
-
     angou = False
     if "--angou" in args:
         args.remove("--angou")

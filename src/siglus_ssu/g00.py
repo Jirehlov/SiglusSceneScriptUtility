@@ -5,19 +5,21 @@ import sys
 import re
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-
 from ._const_manager import get_const_module
-
-from .native_ops import lzss_unpack, lzss_pack, lzss32_pack, lzss32_unpack as lzss32
+from .native_ops import (
+    lzss_unpack,
+    lzss_pack,
+    lzss32_pack,
+    lzss32_unpack as lzss32,
+    xor_cycle_inplace,
+)
 from .common import read_u16_le, write_bytes
 
 C = get_const_module()
-
 try:
     from PIL import Image
 except Exception:
     Image = None
-
 _G00_TYPE_DESC = {
     0: "type0 (LZSS32 BGRA)",
     1: "type1 (LZSS paletted)",
@@ -29,7 +31,6 @@ _JPEG_SUFFIXES = (".jpg", ".jpeg")
 _SIMPLE_G00_TYPES = (0, 1, 3)
 _SIMPLE_EXT = {0: ".png", 1: ".png", 3: ".jpeg"}
 _SIMPLE_COMP = {0: "LZSS32", 1: "LZSS"}
-
 if len(C.G00_XOR_T) != 256:
     raise SystemExit(f"bad G00_XOR_T: {len(C.G00_XOR_T)}")
 
@@ -50,8 +51,9 @@ def lzss(b: bytes) -> bytes:
 
 
 def de_xor(b: bytes) -> bytes:
-    t = C.G00_XOR_T
-    return bytes(x ^ t[i & 255] for i, x in enumerate(b))
+    out = bytearray(b)
+    xor_cycle_inplace(out, C.G00_XOR_T, 0)
+    return bytes(out)
 
 
 def _parse_simple_g00(d: bytes):
@@ -263,11 +265,9 @@ def merge_g00_files(g00_paths, output_dir=None):
     for p in ps:
         if not p.is_file():
             raise ValueError(f"missing file: {p}")
-
     base_path, base_cut, _base_lab = specs[0]
     base_xy = _g00_xy(base_path)
     base_img = _decode_g00_main_image_pil(base_path, base_cut)
-
     for p, cut, _lab in specs[1:]:
         xy = _g00_xy(p)
         src_img = _decode_g00_main_image_pil(p, cut)
@@ -479,7 +479,6 @@ def _is_jpeg_file(p: Path) -> bool:
 def _load_image_bgra(p: Path):
     need_pil()
     img = Image.open(p)
-
     rgba = img.convert("RGBA")
     w, h = rgba.size
     bgra = rgba.tobytes("raw", "BGRA")
@@ -599,7 +598,6 @@ def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
     if out_arg is None:
         out_dir = inp if dir_input else inp.parent
         return out_dir / f"{base_name}.g00"
-
     outp = Path(out_arg)
     if dir_input:
         if outp.exists() and outp.is_file():
@@ -608,7 +606,6 @@ def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
             raise ValueError("output must be a directory when input is a directory")
         outp.mkdir(parents=True, exist_ok=True)
         return outp / f"{base_name}.g00"
-
     if outp.exists() and outp.is_dir():
         return outp / f"{base_name}.g00"
     if outp.suffix.lower() == ".g00" or (outp.exists() and outp.is_file()):
@@ -616,7 +613,6 @@ def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
         if out_dir:
             out_dir.mkdir(parents=True, exist_ok=True)
         return outp
-
     outp.mkdir(parents=True, exist_ok=True)
     return outp / f"{base_name}.g00"
 
@@ -1026,7 +1022,6 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
                 "center": (0, 0),
             }
         ]
-
     unp = bytearray()
     unp += struct.pack("<I", len(cuts))
     table_pos = len(unp)
@@ -1081,10 +1076,8 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
         unp += blk
         entries.append((off, len(blk)))
         outer += struct.pack("<6i", tx, ty, tx + tw - 1, ty + th - 1, cx, cy)
-
     for i, (off, size) in enumerate(entries):
         struct.pack_into("<II", unp, table_pos + i * 8, off, size)
-
     hdr = bytearray()
     hdr.append(2)
     hdr += struct.pack("<HH", canvas_w, canvas_h)
@@ -1107,7 +1100,6 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
     if g00_type == 0:
         bgra, w, h = _load_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
-
     if g00_type == 3:
         if not _is_jpeg_file(img_p):
             raise ValueError("type3 create expects .jpg/.jpeg input")
@@ -1116,7 +1108,6 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
             w, h = img.size
         jpeg = img_p.read_bytes()
         return bytes([3]) + struct.pack("<HH", w, h) + de_xor(jpeg)
-
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
     if g00_type == 2:
@@ -1186,7 +1177,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         report["type_desc"] = _G00_TYPE_DESC.get(t, f"type{t}")
     if type_expect is not None and t != type_expect:
         raise ValueError(f"base type={t} != --type {type_expect}")
-
     if t in (0, 1, 3):
         if len(updates) != 1 or updates[0][1] is not None:
             raise ValueError("this g00 type expects a single image (no _cut###)")
@@ -1202,7 +1192,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         if not is_changed:
             return base_bytes
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
-
     if t == 3:
         img_p, _ = updates[0]
         if not _is_jpeg_file(img_p):
@@ -1215,7 +1204,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         if not is_changed:
             return base_bytes
         return bytes([3]) + struct.pack("<HH", bw, bh) + de_xor(jpeg)
-
     if t == 1:
         img_p, _ = updates[0]
         bgra, w, h = _load_image_bgra(img_p)
@@ -1254,7 +1242,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             + struct.pack("<HH", w, h)
             + lzss_pack(bytes(new_unp), suppress_empty_tail_group=True)
         )
-
     if t == 2:
         bw, bh, cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
         if not cuts:
@@ -1318,7 +1305,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             no, ns = new_os.get(ci, (o0, s0))
             struct.pack_into("<II", out, 4 + ci * 8, no, ns)
         return base_bytes[:off] + lzss_pack(bytes(out), suppress_empty_tail_group=True)
-
     raise ValueError("unknown type")
 
 

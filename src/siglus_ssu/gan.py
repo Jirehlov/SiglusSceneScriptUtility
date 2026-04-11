@@ -1,12 +1,9 @@
 from ._const_manager import get_const_module
-
 from .common import hx, read_i32_le_advancing, print_limited_diffs
 
 C = get_const_module()
-
 _GAN_CODE_VERSION = 10000
 _GAN_VERSION_10000 = 10000
-
 _GAN_OPS = {
     10100: "G00NAME",
     20000: "SET_COUNT",
@@ -28,7 +25,6 @@ def _gan_read_i32(blob, ofs):
 def _gan_decode_mb(b):
     if not b:
         return ""
-
     try:
         return b.decode("shift_jis", errors="replace")
     except Exception:
@@ -67,7 +63,6 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
         out["warnings"].append(
             f"unexpected header (code_version={cv!r} version={ver!r})"
         )
-
     ins_cnt = 0
 
     def _add_ins(ofs0, code, arg=None, extra=None):
@@ -194,11 +189,9 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 s["total_time"] = keika
                 out["sets"].append(s)
             continue
-
         _add_ins(ofs0, code)
         out["warnings"].append(f"unknown top-level code {code!r} at {hx(ofs0)}")
         break
-
     if ins_cnt >= max_ins:
         out["warnings"].append("disasm truncated (too many instructions)")
     return out
@@ -232,7 +225,6 @@ def gan(blob):
             print(
                 f"set[{i:d}]: pat_count={len(pats):d} total_time={int(s.get('total_time') or 0):d}"
             )
-
             for j, p in enumerate(pats[: C.MAX_LIST_PREVIEW]):
                 print(
                     f"  pat[{j:d}]: pat_no={int(p.get('pat_no') or 0):d} x={int(p.get('x') or 0):d} y={int(p.get('y') or 0):d} wait={int(p.get('wait') or 0):d} tr={int(p.get('tr') or 0):d} z={int(p.get('z') or 0):d} keika={int(p.get('keika_time') or 0):d}"
@@ -240,7 +232,6 @@ def gan(blob):
             if len(pats) > C.MAX_LIST_PREVIEW:
                 print(f"  ... ({len(pats) - C.MAX_LIST_PREVIEW:d} patterns omitted)")
         print("")
-
     print("==== GAN Disassembly ====")
     for ins in g.get("disasm") or []:
         ofs = ins.get("ofs", 0)
@@ -281,7 +272,6 @@ def compare_gan(b1, b2):
     _d("code_version", g1.get("code_version"), g2.get("code_version"))
     _d("version", g1.get("version"), g2.get("version"))
     _d("g00_file_name", g1.get("g00_file_name") or "", g2.get("g00_file_name") or "")
-
     s1 = g1.get("sets") or []
     s2 = g2.get("sets") or []
     if len(s1) != len(s2):

@@ -1,6 +1,5 @@
 import unicodedata
 
-
 _HAN_RANGES = (
     (0x3400, 0x4DBF),
     (0x4E00, 0x9FFF),

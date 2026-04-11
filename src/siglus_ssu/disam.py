@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 from ._const_manager import get_const_module
-
 from .common import (
     augment_receiver_form_codes,
     binary_result_form as _binary_result_form,
@@ -42,9 +41,9 @@ def _build_system_element_index():
             return out
         fm = C._FORM_CODE or {}
         try:
-            from .MA import _parse_arg_spec
+            from .MA import parse_arg_spec
         except Exception:
-            _parse_arg_spec = None
+            parse_arg_spec = None
 
         def _to_code(t):
             try:
@@ -99,8 +98,8 @@ def _build_system_element_index():
                 code = int(it[6])
                 spec = str(it[7]) if len(it) >= 8 else ""
                 arg_map = (
-                    _parse_arg_spec(spec)
-                    if callable(_parse_arg_spec) and isinstance(spec, str)
+                    parse_arg_spec(spec)
+                    if callable(parse_arg_spec) and isinstance(spec, str)
                     else {}
                 )
                 parent_code = _to_code(parent)
@@ -194,7 +193,7 @@ def _build_array_element_index():
     return out
 
 
-def _new_expression_state(
+def new_expression_state(
     *,
     fm_global,
     fm_void,

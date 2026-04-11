@@ -1,24 +1,23 @@
 import unicodedata
 from functools import lru_cache
 from ._const_manager import get_const_module
-
 from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
 
 C = get_const_module()
 
 
-def _isalpha(c):
+def is_alpha(c):
     o = ord(c)
     return 65 <= o <= 90 or 97 <= o <= 122
 
 
-def _isnum(c):
+def is_num(c):
     o = ord(c)
     return 48 <= o <= 57
 
 
 @lru_cache(maxsize=4096)
-def _iszen(c):
+def is_zen(c):
     if c == "\0":
         return False
     try:
@@ -38,18 +37,18 @@ def get_form_code_by_name(name):
         return -1
 
 
-def _rt():
+def new_replace_tree():
     return {"c": {}, "r": None}
 
 
-def _rt_add(rt, name, rep):
+def add_replace_tree(rt, name, rep):
     n = rt
     for ch in name:
-        n = n["c"].setdefault(ch, _rt())
+        n = n["c"].setdefault(ch, new_replace_tree())
     n["r"] = rep
 
 
-def _rt_search(rt, text, pos):
+def search_replace_tree(rt, text, pos):
     n = rt
     best = None
     i = pos
@@ -95,12 +94,12 @@ class CharacterAnalizer:
         if i >= n:
             return i, "", 0
         c = t[i]
-        if c in "_@" or _isalpha(c) or _iszen(c):
+        if c in "_@" or is_alpha(c) or is_zen(c):
             st = i
             i += 1
             while i < n:
                 c = t[i]
-                if c in "_@" or _isalpha(c) or _isnum(c) or _iszen(c):
+                if c in "_@" or is_alpha(c) or is_num(c) or is_zen(c):
                     i += 1
                 else:
                     break
@@ -270,8 +269,12 @@ class CharacterAnalizer:
         return "".join(out), "".join(inc)
 
     def _std_replace(self, text, pos, default_rt, added_rt):
-        r1 = _rt_search(default_rt, text, pos) if default_rt else None
-        r2 = _rt_search(added_rt, text, pos) if added_rt and added_rt.get("c") else None
+        r1 = search_replace_tree(default_rt, text, pos) if default_rt else None
+        r2 = (
+            search_replace_tree(added_rt, text, pos)
+            if added_rt and added_rt.get("c")
+            else None
+        )
         if not r1 and not r2:
             return text, pos + 1, 1
         rep = (r1 if r1["name"] > r2["name"] else r2) if (r1 and r2) else (r1 or r2)
@@ -392,9 +395,9 @@ class CharacterAnalizer:
             rep["after"] = t[:-256]
             reps.append(rep)
         reps.sort(key=lambda x: len(x["name"]), reverse=True)
-        art = _rt()
+        art = new_replace_tree()
         for r in reps:
-            _rt_add(art, r["name"], r)
+            add_replace_tree(art, r["name"], r)
         t = src + ("\0" * 256)
         p = 0
         while t[p] != "\0":
@@ -415,7 +418,9 @@ class CharacterAnalizer:
                 self.m_line += 1
                 p += 1
             else:
-                t, p, ok = self._std_replace(t, p, self.iad["replace_tree"], _rt())
+                t, p, ok = self._std_replace(
+                    t, p, self.iad["replace_tree"], new_replace_tree()
+                )
                 if not ok:
                     return None
             rest = len(t) - p
@@ -462,7 +467,9 @@ class CharacterAnalizer:
                 self.m_line += 1
                 p += 1
             else:
-                t, p, ok = self._std_replace(t, p, self.iad["replace_tree"], _rt())
+                t, p, ok = self._std_replace(
+                    t, p, self.iad["replace_tree"], new_replace_tree()
+                )
                 if not ok:
                     return 0
             rest = len(t) - p

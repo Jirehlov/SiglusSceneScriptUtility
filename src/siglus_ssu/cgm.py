@@ -1,12 +1,11 @@
 from ._const_manager import get_const_module
-
 from .common import read_i32_le, append_diff, print_limited_diffs
 from .native_ops import xor_cycle_inplace, lzss_unpack
 
 C = get_const_module()
 
 
-def _looks_like_cgm(blob):
+def looks_like_cgm(blob):
     if not isinstance(blob, (bytes, bytearray, memoryview)):
         return False
     b = bytes(blob)
@@ -148,7 +147,6 @@ def compare_cgm(b1, b2):
     a = decode_cgm(b1)
     b = decode_cgm(b2)
     diffs = []
-
     append_diff(diffs, "head", a.get("head"), b.get("head"))
     append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
     append_diff(

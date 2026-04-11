@@ -136,7 +136,7 @@ def get_const_module(path: Path | None = None, profile: int | None = None):
     return module
 
 
-def _package_version() -> str:
+def package_version() -> str:
     try:
         return str(dist_version("siglus-ssu") or "").strip()
     except PackageNotFoundError:
@@ -247,7 +247,7 @@ def _remote_version_refs(
 
 
 def _default_const_refs() -> tuple[str, ...]:
-    version = _package_version()
+    version = package_version()
     if not version:
         return ()
     refs = []
@@ -297,7 +297,7 @@ def _resolve_const_ref(ref: str | None) -> tuple[str, bytes]:
             if exc.code == 404:
                 continue
             raise
-    version = _package_version() or "unknown"
+    version = package_version() or "unknown"
     tried = ", ".join(refs)
     raise RuntimeError(
         f"No const.py ref matched package version {version}. Tried: {tried}. Pass --ref explicitly."

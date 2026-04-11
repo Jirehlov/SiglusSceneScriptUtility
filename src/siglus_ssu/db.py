@@ -1,12 +1,11 @@
 import os
-
 from .common import (
     collect_batch_files,
     eprint,
     fmt_kv,
     hint_help,
     read_bytes,
-    _sha1,
+    sha1,
     parse_main_argv,
     prepare_batch_paths,
     missing_input_file,
@@ -22,8 +21,8 @@ def _analyze_one(path):
         return 1
     try:
         blob = read_bytes(path)
-        m_type, expanded = dbs._dbs_unpack(blob)
-        info = dbs._parse_dbs(m_type, expanded)
+        m_type, expanded = dbs.dbs_unpack(blob)
+        info = dbs.parse_dbs(m_type, expanded)
     except Exception as exc:
         eprint(f"error: analyze failed: {exc}")
         return 1
@@ -33,7 +32,7 @@ def _analyze_one(path):
     print(fmt_kv("packed_bytes", len(blob) - 4))
     print(fmt_kv("m_type", int(m_type)))
     print(fmt_kv("unpacked_bytes", len(expanded)))
-    print(fmt_kv("unpacked_sha1", _sha1(expanded)))
+    print(fmt_kv("unpacked_sha1", sha1(expanded)))
     for k in (
         "data_size",
         "row_cnt",
@@ -122,8 +121,8 @@ def _map_out_path(inp_root: str, out_root: str, csv_path: str, src_is_dir: bool)
 
 def _extract_padding_pattern_from_dbs(dbs_path: str):
     blob = read_bytes(dbs_path)
-    m_type, expanded = dbs._dbs_unpack(blob)
-    info = dbs._parse_dbs(m_type, expanded)
+    m_type, expanded = dbs.dbs_unpack(blob)
+    info = dbs.parse_dbs(m_type, expanded)
     data_size = int(info.get("data_size") or 0)
     raw_size = len(expanded)
     st = data_size + 1
@@ -138,7 +137,6 @@ def main(argv=None):
     mode, argv, rc = parse_main_argv(argv, hint_help)
     if rc is not None:
         return rc
-
     opt_type = None
     if "--type" in argv:
         i = argv.index("--type")
@@ -153,7 +151,6 @@ def main(argv=None):
             hint_help()
             return 2
         del argv[i : i + 2]
-
     opt_seed = 1
     if "--set-shuffle" in argv:
         i = argv.index("--set-shuffle")
@@ -168,7 +165,6 @@ def main(argv=None):
             hint_help()
             return 2
         del argv[i : i + 2]
-
     test_shuffle = False
     test_skip0 = 0
     test_skip0_given = False
@@ -183,7 +179,6 @@ def main(argv=None):
                 test_skip0 = 0
             test_skip0_given = True
             argv.pop(i)
-
     if mode == "a":
         if len(argv) not in (1, 2):
             eprint("error: expected 1 or 2 input files for --a")
@@ -195,7 +190,6 @@ def main(argv=None):
                 return 1
             return _analyze_one(inp)
         return _compare_two(argv[0], argv[1])
-
     if mode == "x":
         inp, out_root, src_is_dir, rc = prepare_batch_paths(
             argv, hint_help, "error: expected 2 arguments", create_output=False
@@ -224,11 +218,9 @@ def main(argv=None):
             return 1, out_path
 
         return run_batch(files, _proc)
-
     if mode != "c":
         eprint("error: unknown mode")
         return 2
-
     expected_dbs = ""
     if test_shuffle:
         if len(argv) != 3:
@@ -246,9 +238,7 @@ def main(argv=None):
             hint_help()
             return 2
         inp, out_root = argv[0], argv[1]
-
     src_is_dir = os.path.isdir(inp)
-
     if src_is_dir:
         if test_shuffle:
             eprint("error: --test-shuffle supports only single file mode")
@@ -276,10 +266,8 @@ def main(argv=None):
             return 1, out_path
 
         return run_batch(files, _proc)
-
     if missing_input_file(inp):
         return 1
-
     out_is_file = os.path.splitext(out_root)[1].lower() == ".dbs"
     if out_is_file:
         out_path = out_root
@@ -287,7 +275,6 @@ def main(argv=None):
     else:
         os.makedirs(out_root, exist_ok=True)
         out_path = os.path.join(out_root, _map_out_name(inp))
-
     if test_shuffle:
         if not os.path.isfile(expected_dbs):
             eprint(f"error: expected dbs not found: {expected_dbs}")
@@ -308,7 +295,6 @@ def main(argv=None):
             return 1
         eprint(f"[test-shuffle] using set-shuffle={seed} rand-skip={found}")
         return 0
-
     m_type = int(opt_type) if opt_type is not None else 1
     dbs.reset_msvcrt_rand(opt_seed)
     dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)

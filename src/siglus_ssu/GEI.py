@@ -1,7 +1,6 @@
 import os
 import struct
 from ._const_manager import get_const_module
-
 from .common import (
     exe_angou_element,
     read_bytes,
@@ -16,7 +15,6 @@ from .common import (
     read_exe_el_key,
     scan_text_comments,
 )
-
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
 
 C = get_const_module()
@@ -188,7 +186,6 @@ def write_gameexe_dat(ctx):
             if k and len(k) == 16:
                 mode = 1
                 el = k
-
     lz = None
     if ged:
         lz = bytearray(lzss_pack(ged.encode("utf-16le")))

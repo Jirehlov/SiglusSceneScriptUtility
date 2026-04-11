@@ -1,6 +1,5 @@
 import os
 import sys
-
 from .common import (
     iter_files_by_ext,
     looks_like_siglus_dat,
@@ -39,7 +38,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
     for dat_path in dat_paths:
         blob = read_bytes(dat_path)
         name = os.path.basename(dat_path)
-        if D._is_decompiler_excluded_dat(dat_path):
+        if D.is_decompiler_excluded_dat(dat_path):
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
@@ -48,7 +47,7 @@ def _disassemble_dat_dir(input_dir: str, output_dir: str) -> int:
             skip_cnt += 1
             continue
         items.append({"dat_path": dat_path, "blob": blob, "out_dir": output_dir})
-    result = D._process_dat_output_items(items, stats=disam_stats)
+    result = D.process_dat_output_items(items, stats=disam_stats)
     written = list((result or {}).get("written") or [])
     failed_paths = list((result or {}).get("failed_paths") or [])
     ok_cnt = len(written)
@@ -86,7 +85,6 @@ def main(argv=None):
         return 2
     if not args or args[0] in ("-h", "--help", "help"):
         return 2
-
     if gei:
         if len(args) == 1:
             in_path = args[0]
@@ -95,12 +93,10 @@ def main(argv=None):
             in_path, out_dir = args
         else:
             return 2
-
         if os.path.isdir(in_path):
             in_path = os.path.join(in_path, "Gameexe.dat")
-
         os_dir = os.path.dirname(os.path.abspath(in_path))
-        cands = list(pck._iter_exe_el_candidates(os_dir))
+        cands = list(pck.iter_exe_el_candidates(os_dir))
         if not cands:
             cands = [b""]
         last_err = None
@@ -113,7 +109,6 @@ def main(argv=None):
                 last_err = e
         sys.stderr.write(str(last_err) + "\n")
         return 1
-
     if len(args) == 1:
         in_path = args[0]
         if dat_txt and os.path.isdir(in_path):

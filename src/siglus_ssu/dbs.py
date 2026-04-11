@@ -1,13 +1,10 @@
 import struct
-
 import os
 import csv
 import re
-
 from ._const_manager import get_const_module
-
 from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
-from .common import _sha1, read_bytes, write_bytes
+from .common import read_bytes, sha1, write_bytes
 
 C = get_const_module()
 
@@ -22,27 +19,21 @@ def _xor32_inplace(barr, code):
         struct.pack_into("<I", barr, i, v)
 
 
-def _dbs_unpack(blob):
+def dbs_unpack(blob):
     if not blob or len(blob) < 12:
         return 0, b""
     m_type = struct.unpack_from("<i", blob, 0)[0]
-
     packed = bytearray(blob[4:])
     _xor32_inplace(packed, C.DBS_XOR32_CODE)
-
     unpack_data = lzss_unpack(bytes(packed))
     if not unpack_data:
         return m_type, b""
-
     unpack_size = len(unpack_data)
-
     yl = unpack_size // (C.DBS_MAP_WIDTH * 4)
     if yl <= 0:
         return m_type, b""
-
     temp_a = bytearray(unpack_size)
     temp_b = bytearray(unpack_size)
-
     tile_copy(
         temp_a,
         bytes(unpack_data),
@@ -69,10 +60,8 @@ def _dbs_unpack(blob):
         1,
         128,
     )
-
     _xor32_inplace(temp_a, C.DBS_XOR32_CODE_A)
     _xor32_inplace(temp_b, C.DBS_XOR32_CODE_B)
-
     dst = bytearray(unpack_size)
     tile_copy(
         dst,
@@ -100,7 +89,6 @@ def _dbs_unpack(blob):
         1,
         128,
     )
-
     return m_type, bytes(dst)
 
 
@@ -117,9 +105,7 @@ def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
         end = sblob.find(b"\x00", ofs)
         if end < 0:
             end = len(sblob)
-
         return sblob[ofs:end].decode("shift_jis", errors="replace")
-
     end = ofs
     while end + 1 < len(sblob):
         if sblob[end] == 0 and sblob[end + 1] == 0:
@@ -128,10 +114,9 @@ def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
     return sblob[ofs:end].decode("utf-16le", errors="replace")
 
 
-def _parse_dbs(m_type: int, data: bytes):
+def parse_dbs(m_type: int, data: bytes):
     if (not data) or len(data) < 28:
         raise ValueError("dbs expanded data too small")
-
     (
         raw_data_size,
         row_cnt,
@@ -141,7 +126,6 @@ def _parse_dbs(m_type: int, data: bytes):
         raw_data_ofs,
         raw_str_ofs,
     ) = struct.unpack_from("<7i", data, 0)
-
     row_cnt = int(row_cnt)
     col_cnt = int(col_cnt)
     if row_cnt < 0 or col_cnt < 0:
@@ -155,14 +139,12 @@ def _parse_dbs(m_type: int, data: bytes):
         col_ofs = int(raw_col_ofs) * scale
         data_ofs = int(raw_data_ofs) * scale
         str_ofs = int(raw_str_ofs) * scale
-
         if data_size <= 0:
             data_size = len(data)
         else:
             data_size = data_size * scale
         if data_size > len(data):
             data_size = len(data)
-
         if not (
             0 <= row_ofs <= len(data)
             and 0 <= col_ofs <= len(data)
@@ -172,25 +154,20 @@ def _parse_dbs(m_type: int, data: bytes):
             return None
         if not (0 <= str_ofs <= data_size <= len(data)):
             return None
-
         row_hdr_sz = row_cnt * 4
         col_hdr_sz = col_cnt * 8
         cell_cnt = row_cnt * col_cnt
-
         if cell_cnt < 0 or cell_cnt > 1_000_000_000:
             return None
         dt_sz = cell_cnt * 4
-
         if not (row_ofs <= col_ofs <= data_ofs <= str_ofs):
             return None
-
         if row_ofs + row_hdr_sz > len(data):
             return None
         if col_ofs + col_hdr_sz > len(data):
             return None
         if data_ofs + dt_sz > len(data):
             return None
-
         return (data_size, row_ofs, col_ofs, data_ofs, str_ofs, dt_sz, scale)
 
     chosen = _try_scale(1)
@@ -198,20 +175,15 @@ def _parse_dbs(m_type: int, data: bytes):
         chosen = _try_scale(4)
     if chosen is None:
         raise ValueError("dbs offset out of range")
-
     data_size, row_ofs, col_ofs, data_ofs, str_ofs, dt_sz, ofs_scale = chosen
-
     row_calls = []
     if row_cnt:
         row_calls = list(struct.unpack_from(f"<{row_cnt:d}i", data, row_ofs))
-
     col_headers = []
     for i in range(col_cnt):
         call_no, data_type = struct.unpack_from("<2i", data, col_ofs + i * 8)
         col_headers.append((int(call_no), int(data_type)))
-
     str_blob = data[str_ofs:data_size] if str_ofs < data_size else b""
-
     return {
         "m_type": int(m_type),
         "data_size": int(data_size),
@@ -231,26 +203,22 @@ def _parse_dbs(m_type: int, data: bytes):
 
 def compare_dbs(b1: bytes, b2: bytes) -> int:
     try:
-        t1, u1 = _dbs_unpack(b1)
-        t2, u2 = _dbs_unpack(b2)
+        t1, u1 = dbs_unpack(b1)
+        t2, u2 = dbs_unpack(b2)
     except Exception as e:
         print(f"dbs: unpack failed: {e}")
         return 1
-
     print("dbs structural compare:")
-    print(f"  m_type_1={int(t1):d}  unpacked_sha1_1={_sha1(u1)}")
-    print(f"  m_type_2={int(t2):d}  unpacked_sha1_2={_sha1(u2)}")
-
+    print(f"  m_type_1={int(t1):d}  unpacked_sha1_1={sha1(u1)}")
+    print(f"  m_type_2={int(t2):d}  unpacked_sha1_2={sha1(u2)}")
     if u1 == u2 and int(t1) == int(t2):
         print("  identical after XOR+LZSS unpack")
         return 0
-
     try:
-        s1 = _parse_dbs(t1, u1)
-        s2 = _parse_dbs(t2, u2)
+        s1 = parse_dbs(t1, u1)
+        s2 = parse_dbs(t2, u2)
     except Exception as e:
         print(f"  parse failed: {e}")
-
         lim = min(len(u1), len(u2), 1024 * 1024)
         first = None
         for i in range(lim):
@@ -284,12 +252,10 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         print("header diffs:")
         for k, a, b in diffs:
             print(f"  {k}: {a!r} -> {b!r}")
-
     r1 = s1["row_calls"]
     r2 = s2["row_calls"]
     c1 = s1["col_headers"]
     c2 = s2["col_headers"]
-
     if r1 != r2:
         set1 = set(r1)
         set2 = set(r2)
@@ -303,7 +269,6 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             print(f"  only in file2 (preview): {', '.join([str(x) for x in only2])}")
         if not only1 and not only2:
             print("  (same set, different order)")
-
     if c1 != c2:
         map1 = {cn: dt for cn, dt in c1}
         map2 = {cn: dt for cn, dt in c2}
@@ -313,7 +278,6 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         typechg = [cn for cn in common if map1.get(cn) != map2.get(cn)][
             : C.MAX_LIST_PREVIEW
         ]
-
         print("")
         print("column call_no diffs:")
         if only1:
@@ -326,7 +290,6 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             )
         if (not only1) and (not only2) and (not typechg):
             print("  (same set, different order)")
-
     if (
         (s1["row_cnt"] == s2["row_cnt"])
         and (s1["col_cnt"] == s2["col_cnt"])
@@ -387,7 +350,6 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             print("")
             print("unpacked byte-level diff:")
             print(f"  first_diff_offset={first:d}")
-
     return 0
 
 
@@ -402,7 +364,6 @@ def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> st
             return _dbs_get_str(m_type, info.get("str_blob") or b"", int(raw_val))
         except Exception:
             return ""
-
     try:
         v = int(raw_val) & 0xFFFFFFFF
         if v >= 0x80000000:
@@ -498,8 +459,8 @@ def _read_official_csv(csv_path: str):
 
 def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
     blob = read_bytes(dbs_path)
-    m_type, expanded = _dbs_unpack(blob)
-    info = _parse_dbs(m_type, expanded)
+    m_type, expanded = dbs_unpack(blob)
+    info = parse_dbs(m_type, expanded)
     row_cnt = int(info.get("row_cnt") or 0)
     col_cnt = int(info.get("col_cnt") or 0)
     data_ofs = int(info.get("data_offset") or 0)

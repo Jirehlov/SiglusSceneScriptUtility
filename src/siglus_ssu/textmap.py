@@ -1,14 +1,12 @@
 import csv
 import os
 import sys
-
 from . import CA
 from . import BS
 from . import LA
 from . import MA
 from . import SA
 from ._const_manager import get_const_module
-
 from . import dat as DAT
 from . import pck
 from .native_ops import lzss_pack, xor_cycle_inplace
@@ -17,21 +15,20 @@ from .common import (
     eprint,
     hint_help as _hint_help,
     decode_text_auto,
-    _max_pair_end,
+    max_pair_end,
     iter_files_by_ext,
     is_named_filename,
     ANGOU_DAT_NAME,
-    _read_struct_list,
-    _I32_PAIR_STRUCT,
+    read_struct_list,
+    I32_PAIR_STRUCT,
     read_scn_metadata,
     write_encoded_text,
 )
 
 C = get_const_module()
-
-_TEXTMAP_KIND_DIALOGUE = 1
-_TEXTMAP_KIND_NAME = 2
-_TEXTMAP_KIND_OTHER = 3
+TEXTMAP_KIND_DIALOGUE = 1
+TEXTMAP_KIND_NAME = 2
+TEXTMAP_KIND_OTHER = 3
 
 
 def _csv_escape_text(s: str) -> str:
@@ -81,19 +78,16 @@ def _csv_unescape_text(s: str) -> str:
     return "".join(out)
 
 
-def _read_text(path: str):
+def read_text(path: str):
     with open(path, "rb") as f:
         data = f.read()
-
     if b"\r\n" in data:
         newline = "\r\n"
     elif b"\r" in data:
         newline = "\r"
     else:
         newline = "\n"
-
     text, chosen, had_bom = decode_text_auto(data)
-
     encoding = "utf-8-sig" if had_bom else chosen
     return text, encoding, newline
 
@@ -122,7 +116,7 @@ def _needs_quoted_literal(value: str) -> bool:
     if not value:
         return False
     for ch in value:
-        if ch in "\u3010\u3011" or not CA._iszen(ch):
+        if ch in "\u3010\u3011" or not CA.is_zen(ch):
             return True
     return False
 
@@ -137,19 +131,19 @@ def _merge_textmap_kind(cur_kind, new_kind):
     except Exception:
         new_kind = None
     if new_kind not in (
-        _TEXTMAP_KIND_DIALOGUE,
-        _TEXTMAP_KIND_NAME,
-        _TEXTMAP_KIND_OTHER,
+        TEXTMAP_KIND_DIALOGUE,
+        TEXTMAP_KIND_NAME,
+        TEXTMAP_KIND_OTHER,
     ):
         return cur_kind
-    if cur_kind in (_TEXTMAP_KIND_DIALOGUE, _TEXTMAP_KIND_NAME):
+    if cur_kind in (TEXTMAP_KIND_DIALOGUE, TEXTMAP_KIND_NAME):
         return cur_kind
-    if cur_kind == _TEXTMAP_KIND_OTHER and new_kind in (
-        _TEXTMAP_KIND_DIALOGUE,
-        _TEXTMAP_KIND_NAME,
+    if cur_kind == TEXTMAP_KIND_OTHER and new_kind in (
+        TEXTMAP_KIND_DIALOGUE,
+        TEXTMAP_KIND_NAME,
     ):
         return new_kind
-    if cur_kind == _TEXTMAP_KIND_OTHER:
+    if cur_kind == TEXTMAP_KIND_OTHER:
         return cur_kind
     return new_kind
 
@@ -165,7 +159,6 @@ def _int_value(value, default=-1):
 
 def _collect_compiled_string_kinds(root, atom_type_map):
     out = {}
-
     if isinstance(root, dict):
         unknown_list = list(root.get("_unknown_list") or [])
     else:
@@ -214,17 +207,17 @@ def _collect_compiled_string_kinds(root, atom_type_map):
         if nt == C.NT_S_TEXT:
             _add(
                 ((node.get("text") or {}).get("atom") or {}),
-                _TEXTMAP_KIND_DIALOGUE,
+                TEXTMAP_KIND_DIALOGUE,
             )
         elif nt == C.NT_S_NAME:
             _add(
                 ((((node.get("name") or {}).get("name") or {}).get("atom")) or {}),
-                _TEXTMAP_KIND_NAME,
+                TEXTMAP_KIND_NAME,
             )
         elif nt == C.NT_SMP_LITERAL:
             _add(
                 (((node.get("Literal") or {}).get("atom")) or {}),
-                _TEXTMAP_KIND_OTHER,
+                TEXTMAP_KIND_OTHER,
             )
         elif nt == C.NT_ELM_ELEMENT:
             if _int_value(node.get("element_type"), -1) == int(C.ET_COMMAND):
@@ -237,9 +230,9 @@ def _collect_compiled_string_kinds(root, atom_type_map):
                     _mark_string_atoms(
                         (node.get("arg_list") or {}).get("arg") or [],
                         (
-                            _TEXTMAP_KIND_DIALOGUE
+                            TEXTMAP_KIND_DIALOGUE
                             if name == "print"
-                            else _TEXTMAP_KIND_NAME
+                            else TEXTMAP_KIND_NAME
                         ),
                     )
         for value in node.values():
@@ -258,7 +251,7 @@ def _collect_replace_symbol_spans(
     p = 0
     n = len(line_text)
     while p < n:
-        rep = CA._rt_search(replace_tree, line_text, p)
+        rep = CA.search_replace_tree(replace_tree, line_text, p)
         if not isinstance(rep, dict):
             p += 1
             continue
@@ -281,11 +274,11 @@ def _is_within_replace_symbol(rel_left: int, rel_right: int, spans) -> bool:
     return False
 
 
-def _collect_tokens(text: str, ctx: dict, iad_base=None):
+def collect_tokens(text: str, ctx: dict, iad_base=None):
     if iad_base is None:
         iad = BS.build_ia_data(ctx)
     else:
-        iad = BS._copy_ia_data(iad_base)
+        iad = BS.copy_ia_data(iad_base)
     pcad = {}
     ca = CA.CharacterAnalizer()
     if not ca.analize_file(text, iad, pcad):
@@ -335,7 +328,7 @@ def _collect_tokens(text: str, ctx: dict, iad_base=None):
                 "index": len(tokens) + 1,
                 "line": int(atom.get("line", 0) or 0),
                 "text": str_list[opt],
-                "kind": int(kind_map.get(aid, _TEXTMAP_KIND_OTHER)),
+                "kind": int(kind_map.get(aid, TEXTMAP_KIND_OTHER)),
             }
         )
     return tokens, iad
@@ -377,12 +370,12 @@ def _collect_disam_string_kinds(bundle, source_name: str = ""):
         if op == "CD_TEXT":
             sid = _int_value(ev.get("str_id"), -1)
             if sid >= 0:
-                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
+                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_DIALOGUE)
             continue
         if op == "CD_NAME":
             sid = _int_value(ev.get("str_id"), -1)
             if sid >= 0:
-                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
+                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_NAME)
             continue
         if op != "CD_PUSH":
             continue
@@ -391,7 +384,7 @@ def _collect_disam_string_kinds(bundle, source_name: str = ""):
         sid = _int_value(ev.get("value"), -1)
         if sid < 0:
             continue
-        out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_OTHER)
+        out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_OTHER)
         if i + 1 >= len(trace):
             continue
         next_ev = trace[i + 1]
@@ -400,9 +393,9 @@ def _collect_disam_string_kinds(bundle, source_name: str = ""):
         next_op = str(next_ev.get("op") or "")
         if next_op == "CD_COMMAND":
             if _is_trace_command_base(next_ev, "print"):
-                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_DIALOGUE)
+                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_DIALOGUE)
             elif _is_trace_command_base(next_ev, "set_namae"):
-                out[sid] = _merge_textmap_kind(out.get(sid), _TEXTMAP_KIND_NAME)
+                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_NAME)
     if skipped_trace:
         eprint(
             f"{prefix}: skipped {skipped_trace} invalid trace item(s)",
@@ -411,7 +404,7 @@ def _collect_disam_string_kinds(bundle, source_name: str = ""):
     return out
 
 
-def _locate_tokens(source_text: str, tokens, iad):
+def locate_tokens(source_text: str, tokens, iad):
     line_spans = []
     pos = 0
     for line in source_text.splitlines(keepends=True):
@@ -480,8 +473,8 @@ def _locate_tokens(source_text: str, tokens, iad):
                 "span_end": abs_end,
                 "quoted": quoted_flag,
                 "text": text,
-                "kind": int(token.get("kind", _TEXTMAP_KIND_OTHER) or 0)
-                or _TEXTMAP_KIND_OTHER,
+                "kind": int(token.get("kind", TEXTMAP_KIND_OTHER) or 0)
+                or TEXTMAP_KIND_OTHER,
             }
         )
     return out
@@ -517,7 +510,7 @@ def _write_map(csv_path: str, entries):
                     e.get("span_start", 0),
                     e.get("span_end", 0),
                     e.get("quoted", 0),
-                    e.get("kind", _TEXTMAP_KIND_OTHER),
+                    e.get("kind", TEXTMAP_KIND_OTHER),
                     _csv_escape_text(e.get("text", "")),
                     _csv_escape_text(e.get("text", "")),
                 ]
@@ -553,7 +546,6 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
             index_map[idx] = entry
         if line > 0 and order > 0:
             line_order_map[(line, order)] = entry
-
     for row in rows:
         line = _to_int(row.get("line", ""), 0)
         order = _to_int(row.get("order", ""), 0)
@@ -577,7 +569,6 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 continue
         if entry is None:
             continue
-
         original = _csv_unescape_text(row.get("original", entry.get("text", "")))
         replacement = row.get("replacement")
         if replacement is not None:
@@ -592,18 +583,15 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 errors="replace",
             )
             continue
-
         row_span_start = _to_int(row.get("span_start", row.get("abs_start", "")), -1)
         row_span_end = _to_int(row.get("span_end", row.get("abs_end", "")), -1)
         entry_span_start = _to_int(entry.get("span_start", ""), -1)
         entry_span_end = _to_int(entry.get("span_end", ""), -1)
-
         candidates = []
         if row_span_start >= 0 and row_span_end > row_span_start:
             candidates.append((row_span_start, row_span_end))
         if entry_span_start >= 0 and entry_span_end > entry_span_start:
             candidates.append((entry_span_start, entry_span_end))
-
         used_span = None
         used_quoted = None
         expected_q = '"' + _encode_quoted(original) + '"'
@@ -620,7 +608,6 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 used_span = (s, e)
                 used_quoted = 0
                 break
-
         if used_span is None:
             line_no = _to_int(entry.get("line", 0), 0)
             if line_no > 0:
@@ -660,14 +647,12 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                             else:
                                 used_quoted = 0
                             used_span = (line_start + rel_left, line_start + rel_right)
-
         if used_span is None:
             eprint(
                 f"textmap: {filename}: original not found at line {line:d} order {order:d}",
                 errors="replace",
             )
             continue
-
         if (
             replacement.startswith('"')
             and replacement.endswith('"')
@@ -679,9 +664,7 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 replacement_lit = '"' + _encode_quoted(replacement) + '"'
             else:
                 replacement_lit = replacement
-
         changes.append((used_span[0], used_span[1], replacement_lit))
-
     if not changes:
         return text, 0
     changes.sort(key=lambda x: x[0], reverse=True)
@@ -760,23 +743,23 @@ def _parse_scn_dat(blob: bytes):
     if not looks_like_siglus_dat(blob):
         return None
     try:
-        _, meta = DAT._dat_sections(blob)
+        _, meta = DAT.dat_sections(blob)
         h = meta.get("header") or {}
     except Exception:
         return None
-    idx_pairs = _read_struct_list(
+    idx_pairs = read_struct_list(
         blob,
         h.get("str_index_list_ofs", 0),
         h.get("str_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
     if int(h.get("str_index_cnt", 0) or 0) and not idx_pairs:
         return None
     str_blob_end = int(meta.get("str_blob_end", 0) or 0)
     if str_blob_end <= 0:
-        str_blob_end = int(h.get("str_list_ofs", 0) or 0) + _max_pair_end(idx_pairs) * 2
+        str_blob_end = int(h.get("str_list_ofs", 0) or 0) + max_pair_end(idx_pairs) * 2
     str_list = (
-        DAT._decode_xor_utf16le_strings(
+        DAT.decode_xor_utf16le_strings(
             blob, idx_pairs, h.get("str_list_ofs", 0), str_blob_end
         )
         if idx_pairs
@@ -826,7 +809,7 @@ def _write_disam_map(csv_path: str, str_list, kind_map):
             w.writerow(
                 [
                     i,
-                    int(kind_map.get(i, _TEXTMAP_KIND_OTHER) or _TEXTMAP_KIND_OTHER),
+                    int(kind_map.get(i, TEXTMAP_KIND_OTHER) or TEXTMAP_KIND_OTHER),
                     _csv_escape_text(s),
                     _csv_escape_text(s),
                 ]
@@ -875,7 +858,7 @@ def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
         return None
 
     def _unpack_if_lzss(b: bytes):
-        if pck._looks_like_lzss(b):
+        if pck.looks_like_lzss(b):
             try:
                 return pck.lzss_unpack(b)
             except Exception:
@@ -949,7 +932,7 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
         eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
         return 1
     str_list, out_scn = parsed
-    bundle = DAT._dat_disassembly_bundle(_plain_blob, dat_path)
+    bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
     kind_map = _collect_disam_string_kinds(bundle, fname)
     csv_path = dat_path + ".csv"
     if not apply_mode:
@@ -965,7 +948,7 @@ def _process_dat(dat_path: str, apply_mode: bool, exe_el: bytes = b"") -> int:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0
     try:
-        out_bytes_plain = BS._build_scn_dat({"str_list": updated_list}, out_scn)
+        out_bytes_plain = BS.build_scn_dat({"str_list": updated_list}, out_scn)
     except Exception:
         eprint(f"textmap: {fname}: rebuild failed", errors="replace")
         return 1
@@ -985,7 +968,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     if not os.path.exists(ss_path):
         eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
-    text, encoding, newline = _read_text(ss_path)
+    text, encoding, newline = read_text(ss_path)
     ctx = {
         "scn_path": os.path.dirname(os.path.abspath(ss_path)),
         "utf8": bool(encoding.startswith("utf-8")),
@@ -997,8 +980,8 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         if iad_base is None:
             iad_base = BS.build_ia_data(ctx)
             iad_cache[key] = iad_base
-    tokens, iad = _collect_tokens(text, ctx, iad_base=iad_base)
-    entries = _locate_tokens(text, tokens, iad)
+    tokens, iad = collect_tokens(text, ctx, iad_base=iad_base)
+    entries = locate_tokens(text, tokens, iad)
     csv_path = ss_path + ".csv"
     if not apply_mode:
         _write_map(csv_path, entries)
@@ -1012,7 +995,6 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0
-
     out_encoding = encoding
     try:
         write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
@@ -1022,8 +1004,7 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         )
         out_encoding = "utf-8"
         write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
-
-    written_text, _written_enc, _nl2 = _read_text(ss_path)
+    written_text, _written_enc, _nl2 = read_text(ss_path)
     fixed_text, fixed_quote_count, fixed_space_count = _fix_brackets_content(
         written_text
     )
@@ -1052,7 +1033,6 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
                 f"textmap: {fname}: removed {fixed_space_count} space(s) inside \u3010\u3011",
                 errors="replace",
             )
-
     if fixed_total:
         print(
             f"textmap: applied {count} changes, fixed {fixed_quote_count} bracket quote(s), removed {fixed_space_count} bracket space(s)"
@@ -1068,7 +1048,6 @@ def main(argv=None):
     if not argv or argv[0] in ("-h", "--help", "help"):
         _hint_help(sys.stdout)
         return 0
-
     apply_mode = False
     disam_mode = False
     disam_apply_mode = False
@@ -1082,7 +1061,6 @@ def main(argv=None):
             disam_apply_mode = True
         else:
             args.append(a)
-
     if apply_mode and (disam_mode or disam_apply_mode):
         eprint(
             "textmap: --apply cannot be used with --disam/--disam-apply",
@@ -1097,13 +1075,11 @@ def main(argv=None):
         )
         _hint_help()
         return 2
-
     if len(args) != 1:
         eprint("textmap: expected exactly 1 path argument", errors="replace")
         _hint_help()
         return 2
     ss_path = args[0]
-
     if disam_mode or disam_apply_mode:
         dat_path = ss_path
         base_dir = (
@@ -1111,7 +1087,7 @@ def main(argv=None):
             if os.path.isdir(dat_path)
             else (os.path.dirname(os.path.abspath(dat_path)) or ".")
         )
-        exe_el = pck._compute_exe_el(base_dir) if base_dir else b""
+        exe_el = pck.compute_exe_el(base_dir) if base_dir else b""
         if os.path.isdir(dat_path):
             dat_files = iter_files_by_ext(
                 dat_path,
@@ -1131,7 +1107,6 @@ def main(argv=None):
                     errors += 1
             return 1 if errors else 0
         return _process_dat(dat_path, disam_apply_mode, exe_el)
-
     if os.path.isdir(ss_path):
         ss_files = iter_files_by_ext(ss_path, [".ss"])
         if not ss_files:

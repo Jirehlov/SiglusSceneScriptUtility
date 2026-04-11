@@ -5,7 +5,6 @@ import argparse
 import hashlib
 import json
 import struct
-
 from .common import (
     read_bytes,
     write_bytes,
@@ -18,9 +17,9 @@ from .common import (
     KEY_TXT_NAME,
     read_siglus_engine_exe_el,
     siglus_engine_exe_element,
-    _parse_pe32_layout,
-    _pe32_file_off_to_va,
-    _pe32_rva_to_off,
+    parse_pe32_layout,
+    pe32_file_off_to_va,
+    pe32_rva_to_off,
 )
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
@@ -53,26 +52,20 @@ def _derive_key_from_path(p: str) -> bytes:
     p = os.path.abspath(str(p or ""))
     if not p or not os.path.exists(p):
         return b""
-
     if os.path.isdir(p):
         el = find_exe_el(p, recursive=False)
         return el if el and len(el) == 16 else b""
-
     bn = os.path.basename(p)
     cf = bn.casefold()
-
     if is_named_filename(bn, KEY_TXT_NAME):
         el = read_exe_el_key(p)
         return el if el and len(el) == 16 else b""
-
     if is_named_filename(bn, ANGOU_DAT_NAME):
         el = angou_to_exe_el(read_angou_first_line(p))
         return el if el and len(el) == 16 else b""
-
     if cf.startswith("siglusengine") and cf.endswith(".exe"):
         el = read_siglus_engine_exe_el(p)
         return el if el and len(el) == 16 else b""
-
     el = read_exe_el_key(p)
     return el if el and len(el) == 16 else b""
 
@@ -114,7 +107,7 @@ def _read_cstr(blob: bytes, off: int):
 
 def _parse_pe32_imports(exe_bytes: bytes, layout):
     imports = {}
-    desc_off = _pe32_rva_to_off(layout, layout.get("import_rva", 0))
+    desc_off = pe32_rva_to_off(layout, layout.get("import_rva", 0))
     if desc_off is None:
         return imports
     max_off = len(exe_bytes)
@@ -129,8 +122,8 @@ def _parse_pe32_imports(exe_bytes: bytes, layout):
         if oft_rva == 0 and name_rva == 0 and ft_rva == 0:
             break
         thunk_rva = oft_rva or ft_rva
-        thunk_off = _pe32_rva_to_off(layout, thunk_rva)
-        ft_off = _pe32_rva_to_off(layout, ft_rva)
+        thunk_off = pe32_rva_to_off(layout, thunk_rva)
+        ft_off = pe32_rva_to_off(layout, ft_rva)
         if thunk_off is None or ft_off is None:
             desc_off += 20
             continue
@@ -142,7 +135,7 @@ def _parse_pe32_imports(exe_bytes: bytes, layout):
             if thunk & 0x80000000:
                 idx += 1
                 continue
-            ibn_off = _pe32_rva_to_off(layout, thunk)
+            ibn_off = pe32_rva_to_off(layout, thunk)
             if ibn_off is None or ibn_off + 2 > max_off:
                 idx += 1
                 continue
@@ -263,7 +256,7 @@ def _closure_categories(start_func: int, call_graph, func_cats):
 
 def _find_loc_guard_function(data: bytearray):
     exe_bytes = bytes(data)
-    layout = _parse_pe32_layout(exe_bytes)
+    layout = parse_pe32_layout(exe_bytes)
     text_sec = _find_text_section(layout)
     import_cats = _find_loc_import_categories(exe_bytes, layout)
     want = set(import_cats)
@@ -301,12 +294,11 @@ def _find_loc_guard_function(data: bytearray):
 
 def _find_loc_guard_call_site(data: bytearray, func_off: int):
     exe_bytes = bytes(data)
-    layout = _parse_pe32_layout(exe_bytes)
+    layout = parse_pe32_layout(exe_bytes)
     text_sec = _find_text_section(layout)
-    func_va = _pe32_file_off_to_va(layout, func_off)
+    func_va = pe32_file_off_to_va(layout, func_off)
     if func_va is None:
         return None
-
     text_va = layout["image_base"] + text_sec["virtual_address"]
     text_data = text_sec["data"]
     for rel_off in range(0, max(0, len(text_data) - 5)):
@@ -359,17 +351,14 @@ def _loc_state(data: bytearray, func_off: int, call_info):
     head = bytes(data[func_off : func_off + 3])
     if head == _LOC_BYPASS_STUB:
         return "disabled", "function stub"
-
     if call_info:
         branch = call_info["branch_bytes"]
         if branch == b"\x90" * len(branch):
             return "disabled", "caller branch patched"
         if branch[:1] == b"\x75" or branch[:2] == b"\x0f\x85":
             return "unknown", "caller branch inverted"
-
     if head == _LOC_FUNC_PROLOG:
         return "enabled", "original function"
-
     return "unknown", f"unexpected bytes at 0x{func_off:X}: {head.hex()}"
 
 
@@ -388,7 +377,6 @@ def patch_loc(data: bytearray, loc_spec: str):
     call_info = _find_loc_guard_call_site(data, func_off)
     before_state, before_detail = _loc_state(data, func_off, call_info)
     target_state = "enabled" if want_enabled else "disabled"
-
     if before_state == "unknown":
         raise RuntimeError(
             f"Could not determine current region-detection state ({before_detail})."
@@ -398,7 +386,6 @@ def patch_loc(data: bytearray, loc_spec: str):
             "Region detection appears to be disabled by a caller-branch patch; "
             "--loc 1 can only restore executables patched by this tool's function-stub method."
         )
-
     changes = []
     if want_enabled:
         if bytes(data[func_off : func_off + 3]) == _LOC_BYPASS_STUB:
@@ -441,7 +428,6 @@ def patch_loc(data: bytearray, loc_spec: str):
                             "region detection: enabled -> disabled",
                         )
                     )
-
     after_state, after_detail = _loc_state(
         data, func_off, _find_loc_guard_call_site(data, func_off)
     )
@@ -685,7 +671,6 @@ def patch_lang(data: bytearray, lang_spec: str):
         if tag == "eng":
             return patch_siglus_eng(data)
         raise ValueError(f"unknown preset: {tag!r}")
-
     reserved = {
         "charset",
         "suffix",
@@ -698,13 +683,11 @@ def patch_lang(data: bytearray, lang_spec: str):
         "name",
         "id",
     }
-
     charset = _charset_from_value(obj.get("charset")) if "charset" in obj else None
     suffix = obj.get("suffix")
     if suffix is None:
         suffix = obj.get("tag") or obj.get("name") or obj.get("id") or "LANG"
     suffix = str(suffix).strip() or "LANG"
-
     encoding = str(obj.get("encoding") or "utf-16le")
     skip_list = obj.get("skip_standalone", obj.get("skipStandalone", []))
     if skip_list is None:
@@ -713,7 +696,6 @@ def patch_lang(data: bytearray, lang_spec: str):
         skip_set = {str(skip_list)}
     else:
         skip_set = {str(x) for x in (skip_list or [])}
-
     mapping = None
     if "replace" in obj:
         mapping = obj.get("replace")
@@ -721,17 +703,13 @@ def patch_lang(data: bytearray, lang_spec: str):
         mapping = obj.get("map")
     else:
         mapping = {k: v for k, v in obj.items() if k not in reserved}
-
     if mapping is None:
         mapping = {}
-
     if not isinstance(mapping, dict):
         raise ValueError("json config 'replace' must be an object mapping old->new")
-
     changes = []
     if charset is not None:
         changes.extend(patch_lfcharset_any(data, charset))
-
     for old_s, new_s in mapping.items():
         changes.extend(
             replace_all_fixedlen(
@@ -742,7 +720,6 @@ def patch_lang(data: bytearray, lang_spec: str):
                 skip_standalone=(str(old_s) in skip_set),
             )
         )
-
     tag2 = obj.get("tag") or obj.get("name") or obj.get("id") or suffix
     tag2 = str(tag2).strip() or "custom"
     return tag2, suffix, changes
@@ -758,7 +735,6 @@ def _summarize_changes(changes):
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-
     ap = argparse.ArgumentParser(description="Patch SiglusEngine.exe.")
     ap.add_argument("input", help="input exe path")
     ap.add_argument("key", nargs="?", help="key literal/path (for --altkey)")
@@ -768,23 +744,18 @@ def main(argv=None):
     g.add_argument("--altkey", action="store_true", help="patch exe_el with <key>")
     g.add_argument("--lang", metavar="LANG_OR_JSON", help="chs/eng or json config")
     g.add_argument("--loc", metavar="0|1", help="toggle region detection: 0=off, 1=on")
-
     args = ap.parse_args(argv)
-
     in_path = os.path.abspath(str(args.input or ""))
     if not os.path.isfile(in_path):
         sys.stderr.write(f"not found: {in_path}\n")
         return 2
-
     raw = read_bytes(in_path)
     before_hash = hashlib.sha256(raw).hexdigest()
     data = bytearray(raw)
-
     mode_name = ""
     suffix = ""
     loc_before = None
     loc_after = None
-
     if args.altkey:
         if not args.key:
             sys.stderr.write("missing <key> for --altkey\n")
@@ -818,10 +789,8 @@ def main(argv=None):
             sys.stderr.write(str(e) + "\n")
             return 1
         mode_name = f"lang:{tag}"
-
     after = bytes(data)
     after_hash = hashlib.sha256(after).hexdigest()
-
     print(f"Input : {in_path}")
     print(f"Mode  : {mode_name}")
     print(f"SHA256(before): {before_hash}")
@@ -829,15 +798,12 @@ def main(argv=None):
     if loc_before is not None and loc_after is not None:
         print(f"LOC(before): {loc_before}")
         print(f"LOC(after) : {loc_after}")
-
     if not changes:
         print("No applicable changes found.")
         return 0
-
     print(f"Applied changes: {len(changes)} bytes")
     for r, c in _summarize_changes(changes).items():
         print(f" - {r} ({c} bytes)")
-
     if args.inplace:
         out_path = in_path
     else:
@@ -853,12 +819,10 @@ def main(argv=None):
                     else _default_out_path(in_path, suffix)
                 )
             )
-
     try:
         write_bytes(out_path, after)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1
-
     print(f"Written: {out_path}")
     return 0

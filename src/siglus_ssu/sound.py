@@ -1,16 +1,13 @@
 from __future__ import annotations
-
 import struct
 import sys
 from array import array
 from dataclasses import dataclass
 from typing import Iterator, List, Tuple
-
 from .common import read_u32_le_from_file
-from .native_ops import _legacy_mode_enabled
+from .native_ops import legacy_mode_enabled
 
-_LEGACY_MODE = _legacy_mode_enabled()
-
+_LEGACY_MODE = legacy_mode_enabled()
 try:
     if _LEGACY_MODE:
         raise ImportError("Legacy mode requested")
@@ -113,7 +110,7 @@ def estimate_ogg_duration_seconds(ogg_bytes: bytes) -> float | None:
     _codec, sample_rate, pre_skip = info
     if sample_rate <= 0:
         return None
-    sample_count = _ogg_calc_smp_cnt(ogg_bytes)
+    sample_count = ogg_calc_smp_cnt(ogg_bytes)
     if sample_count <= 0:
         return None
     if pre_skip > 0 and sample_count > pre_skip:
@@ -132,7 +129,7 @@ def encode_ogg_to_owp_bytes(ogg_bytes: bytes, key: int = 0x39) -> bytes:
     return bytes((x ^ key) for x in ogg_bytes)
 
 
-def _ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
+def ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
     if len(ogg_bytes) < 27 or ogg_bytes[:4] != b"OggS":
         return 0
     i = 0
@@ -175,7 +172,6 @@ def encode_oggs_to_ovk_bytes(entries: List[Tuple[int, bytes]]) -> bytes:
         seen.add(no)
         if len(ogg) < 4 or ogg[:4] != b"OggS":
             raise ValueError(f"OVK encode failed: entry_no={no} is not OggS")
-
     cnt = len(ordered)
     header_size = 4 + _OVK_ENTRY_STRUCT.size * cnt
     table = bytearray()
@@ -183,7 +179,7 @@ def encode_oggs_to_ovk_bytes(entries: List[Tuple[int, bytes]]) -> bytes:
     off = header_size
     for no, ogg in ordered:
         size = len(ogg)
-        smp = _ogg_calc_smp_cnt(ogg)
+        smp = ogg_calc_smp_cnt(ogg)
         table += _OVK_ENTRY_STRUCT.pack(size, off, no, smp)
         payload += ogg
         off += size
@@ -257,7 +253,7 @@ def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
             yield e.entry_no, chunk
 
 
-_NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")
+NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")
 
 
 @dataclass(frozen=True)
@@ -289,14 +285,12 @@ class _BitReader:
         data = self._data
         bp = self.byte_pos
         bit = self.bit_pos
-
         if bp + 1 < self._len:
             w = data[bp] | (data[bp + 1] << 8)
         else:
             b0 = data[bp] if bp < self._len else 0
             b1 = 0
             w = b0 | (b1 << 8)
-
         val = (w >> bit) & ((1 << nbits) - 1)
         bit += nbits
         bp += bit >> 3
@@ -335,7 +329,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
         nowsmp = _int16_le(data, 0)
         br = _BitReader(data, byte_pos=2, bit_pos=0)
         out = array("h", [0]) * src_smp_cnt
-
         pack_mod = header.pack_mod
         if pack_mod == 0:
             pack_mod = 2
@@ -343,10 +336,8 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             pack_mod = 1
         elif pack_mod == 2:
             pack_mod = 0
-
         mod = 3 + pack_mod
         zero_cnt = 0
-
         for i in range(src_smp_cnt):
             if zero_cnt:
                 zero_cnt -= 1
@@ -380,18 +371,14 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
                             _apply_by_mod(mod, apply_delta, which=7)
                         else:
                             nowsmp = 0
-
             out[i] = _s16(nowsmp)
-
         if sys.byteorder != "little":
             out.byteswap()
         return out.tobytes()
-
     nowsmp_l = _int16_le(data, 0)
     nowsmp_r = _int16_le(data, 2)
     br = _BitReader(data, byte_pos=4, bit_pos=0)
     out = array("h", [0]) * src_smp_cnt
-
     pack_mod = header.pack_mod
     if pack_mod == 0:
         pack_mod = 2
@@ -400,7 +387,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
     elif pack_mod == 2:
         pack_mod = 0
     mod = 3 + pack_mod
-
     zero_cnt = 0
     nowsmp = 0
     for i in range(src_smp_cnt):
@@ -408,7 +394,6 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
             nowsmp = nowsmp_l
         else:
             nowsmp = nowsmp_r
-
         if zero_cnt:
             zero_cnt -= 1
         else:
@@ -441,14 +426,11 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
                         _apply_by_mod(mod, apply_delta, which=7)
                     else:
                         nowsmp = 0
-
         out[i] = _s16(nowsmp)
-
         if (i & 1) == 0:
             nowsmp_l = nowsmp
         else:
             nowsmp_r = nowsmp
-
     if sys.byteorder != "little":
         out.byteswap()
     return out.tobytes()
@@ -535,7 +517,6 @@ def _apply_by_mod(mod: int, apply_delta, which: int):
         else:
             apply_delta(8, 0x80, 9)
         return
-
     if which == 1:
         apply_delta(8, 0x80, 2)
     elif which == 2:
@@ -552,10 +533,10 @@ def _apply_by_mod(mod: int, apply_delta, which: int):
         apply_delta(8, 0x80, 9)
 
 
-def _parse_nwa_header(data: bytes) -> NWAHeader:
-    if len(data) < _NWA_HEADER_STRUCT.size:
+def parse_nwa_header(data: bytes) -> NWAHeader:
+    if len(data) < NWA_HEADER_STRUCT.size:
         raise EOFError("NWA header truncated")
-    fields = _NWA_HEADER_STRUCT.unpack_from(data, 0)
+    fields = NWA_HEADER_STRUCT.unpack_from(data, 0)
     return NWAHeader(
         channels=int(fields[0]),
         bits_per_sample=int(fields[1]),
@@ -573,19 +554,16 @@ def _parse_nwa_header(data: bytes) -> NWAHeader:
 
 
 def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
-    h = _parse_nwa_header(data)
-
+    h = parse_nwa_header(data)
     if h.bits_per_sample != 16:
         raise ValueError(f"Unsupported NWA bits_per_sample: {h.bits_per_sample}")
     if h.channels not in (1, 2):
         raise ValueError(f"Unsupported NWA channels: {h.channels}")
-
     if h.pack_mod == -1:
-        pcm = data[_NWA_HEADER_STRUCT.size : _NWA_HEADER_STRUCT.size + h.original_size]
+        pcm = data[NWA_HEADER_STRUCT.size : NWA_HEADER_STRUCT.size + h.original_size]
         if len(pcm) != h.original_size:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
-
     if _USE_NATIVE_NWA and _native_nwa_decode_pcm is not None:
         pcm = _native_nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):
@@ -596,18 +574,14 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
                 f"native_accel.nwa_decode_pcm size mismatch: got={len(pcm_b)} expected={h.original_size}"
             )
         return pcm_b, h
-
-    table_off = _NWA_HEADER_STRUCT.size
+    table_off = NWA_HEADER_STRUCT.size
     table_size = h.unit_cnt * 4
     if len(data) < table_off + table_size:
         raise EOFError("NWA table truncated")
-
     offsets = struct.unpack_from(f"<{h.unit_cnt}I", data, table_off)
     mv = memoryview(data)
-
     out = bytearray(h.original_size)
     dst = 0
-
     for unit_no in range(h.unit_cnt):
         start = int(offsets[unit_no])
         if unit_no == h.unit_cnt - 1:
@@ -616,18 +590,14 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
         else:
             end = int(offsets[unit_no + 1])
             unit_smp_cnt = h.unit_sample_cnt
-
         if start < 0 or end < start or end > len(mv):
             raise ValueError("Invalid NWA unit offsets")
-
         chunk = _nwa_unpack_unit_16(mv[start:end], unit_smp_cnt, h)
-
         if dst >= len(out):
             break
         n = min(len(chunk), len(out) - dst)
         out[dst : dst + n] = chunk[:n]
         dst += n
-
     return bytes(out), h
 
 
@@ -637,12 +607,10 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
     byte_rate = rate * block_align
     data_size = len(pcm)
     riff_size = 36 + data_size
-
     out = bytearray()
     out += b"RIFF"
     out += struct.pack("<I", riff_size)
     out += b"WAVE"
-
     out += b"fmt "
     out += struct.pack("<I", 16)
     out += struct.pack("<H", 1)
@@ -651,7 +619,6 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
     out += struct.pack("<I", byte_rate)
     out += struct.pack("<H", block_align)
     out += struct.pack("<H", bits)
-
     out += b"data"
     out += struct.pack("<I", data_size)
     out += pcm

@@ -3,13 +3,10 @@ import sys
 import struct
 import hashlib
 import re
-
 from ._const_manager import get_const_module
 
 C = get_const_module()
-
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
-
 KEY_TXT_NAME = "key.txt"
 
 
@@ -454,7 +451,7 @@ def find_siglus_engine_exe(base_dir: str) -> str:
     return cands[0]
 
 
-def _parse_pe32_layout(b: bytes):
+def parse_pe32_layout(b: bytes):
     if (not b) or len(b) < 0x40 or b[:2] != b"MZ":
         raise RuntimeError("Not a PE executable.")
     try:
@@ -521,7 +518,7 @@ def _parse_pe32_layout(b: bytes):
 
 def _pe32_info(b: bytes):
     try:
-        layout = _parse_pe32_layout(b)
+        layout = parse_pe32_layout(b)
     except Exception:
         return None
     secs = [
@@ -536,7 +533,7 @@ def _pe32_info(b: bytes):
     return int(layout["image_base"]) & 0xFFFFFFFF, secs
 
 
-def _pe32_file_off_to_va(layout, file_off: int):
+def pe32_file_off_to_va(layout, file_off: int):
     file_off = int(file_off)
     for sec in layout["sections"]:
         raw_start = sec["raw_offset"]
@@ -548,7 +545,7 @@ def _pe32_file_off_to_va(layout, file_off: int):
     return None
 
 
-def _pe32_rva_to_off(layout, rva: int):
+def pe32_rva_to_off(layout, rva: int):
     rva = int(rva)
     if rva < 0:
         return None
@@ -760,7 +757,6 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
             return _fix(_d8()), "utf-8", had_bom
         except UnicodeDecodeError:
             pass
-
     t8 = t9 = None
     try:
         t8 = _d8()
@@ -770,7 +766,6 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
         t9 = _d9()
     except UnicodeDecodeError:
         pass
-
     if t8 is None and t9 is None:
         return _fix(b.decode("utf-8", "strict")), "utf-8", had_bom
     if t8 is None:
@@ -1294,7 +1289,7 @@ def parse_gei_disam_args(argv, *, disam_action=None, allow_gei_disam: bool = Tru
     return args, gei, disam
 
 
-def _dn(name, width=None):
+def dn(name, width=None):
     s = str(name or "")
     try:
         w = int(width) if width is not None else int(C.NAME_W)
@@ -1311,7 +1306,7 @@ def _dn(name, width=None):
     return s[: w - 3] + "..."
 
 
-def _fmt_ts(ts):
+def fmt_ts(ts):
     import time
 
     try:
@@ -1321,7 +1316,7 @@ def _fmt_ts(ts):
     return time.strftime("%Y-%m-%d %H:%M:%S", lt)
 
 
-def _sha1(b):
+def sha1(b):
     try:
         return hashlib.sha1(b).hexdigest()
     except Exception:
@@ -1378,7 +1373,6 @@ def iter_files_by_ext(
         if os.path.splitext(root)[1].lower() in ext_set:
             return [root]
         return []
-
     if not recursive:
         for entry in os.scandir(root):
             if not entry.is_file():
@@ -1391,7 +1385,6 @@ def iter_files_by_ext(
                 continue
             out.append(path)
         return sorted(out)
-
     for dirpath, _dirs, filenames in os.walk(root):
         for name in filenames:
             if os.path.splitext(name)[1].lower() not in ext_set:
@@ -1403,11 +1396,11 @@ def iter_files_by_ext(
     return sorted(out)
 
 
-_I32_STRUCT = struct.Struct("<i")
-_I32_PAIR_STRUCT = struct.Struct("<2i")
+I32_STRUCT = struct.Struct("<i")
+I32_PAIR_STRUCT = struct.Struct("<2i")
 
 
-def _read_struct_list(dat, ofs, cnt, st: struct.Struct):
+def read_struct_list(dat, ofs, cnt, st: struct.Struct):
     out = []
     try:
         ofs = int(ofs)
@@ -1427,7 +1420,7 @@ def _read_struct_list(dat, ofs, cnt, st: struct.Struct):
     return out
 
 
-def _max_pair_end(pairs):
+def max_pair_end(pairs):
     m = 0
     for a, b in pairs or []:
         if a >= 0 and b > 0:
@@ -1435,7 +1428,7 @@ def _max_pair_end(pairs):
     return m
 
 
-def _decode_utf16le_strings(
+def decode_utf16le_strings(
     dat,
     idx_pairs,
     blob_ofs,
@@ -1453,14 +1446,12 @@ def _decode_utf16le_strings(
     out = []
     if not idx_pairs:
         return out
-
     try:
         blob_ofs = int(blob_ofs)
         blob_end = int(blob_end)
         min_blob_ofs = int(min_blob_ofs)
     except Exception:
         return out
-
     if blob_ofs < min_blob_ofs or blob_ofs < 0:
         return out
     if blob_ofs > len(dat):
@@ -1469,7 +1460,6 @@ def _decode_utf16le_strings(
         return out
     if strict_blob_end and blob_end > len(dat):
         return out
-
     blob_end = max(0, min(blob_end, len(dat)))
     if blob_end < blob_ofs:
         return out
@@ -1488,75 +1478,70 @@ def _decode_utf16le_strings(
         except Exception as exc:
             _handle("bad-pair", si, exc, on_error)
             continue
-
         if o < 0 or ln <= 0:
             _handle("bad-range", si, None, on_error)
             continue
-
         a = blob_ofs + o * 2
         b = a + ln * 2
         if a < 0 or b > blob_end:
             _handle("out-of-range", si, None, on_error)
             continue
-
         try:
             s = dat[a:b].decode("utf-16le", errors=errors)
         except Exception as exc:
             _handle("decode-error", si, exc, on_decode_error)
             continue
-
         if strip_null and s:
             s = s.replace("\x00", "")
         out.append(s)
-
     return out
 
 
 def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
     h = header if isinstance(header, dict) else {}
     out = {
-        "label_list": _read_struct_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
+        "label_list": read_struct_list(
+            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), I32_STRUCT
         ),
-        "z_label_list": _read_struct_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
+        "z_label_list": read_struct_list(
+            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), I32_STRUCT
         ),
-        "cmd_label_list": _read_struct_list(
+        "cmd_label_list": read_struct_list(
             blob,
             h.get("cmd_label_list_ofs", 0),
             h.get("cmd_label_cnt", 0),
-            _I32_PAIR_STRUCT,
+            I32_PAIR_STRUCT,
         ),
-        "scn_prop_list": _read_struct_list(
+        "scn_prop_list": read_struct_list(
             blob,
             h.get("scn_prop_list_ofs", 0),
             h.get("scn_prop_cnt", 0),
-            _I32_PAIR_STRUCT,
+            I32_PAIR_STRUCT,
         ),
-        "scn_cmd_list": _read_struct_list(
-            blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), _I32_STRUCT
+        "scn_cmd_list": read_struct_list(
+            blob, h.get("scn_cmd_list_ofs", 0), h.get("scn_cmd_cnt", 0), I32_STRUCT
         ),
-        "namae_list": _read_struct_list(
-            blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), _I32_STRUCT
+        "namae_list": read_struct_list(
+            blob, h.get("namae_list_ofs", 0), h.get("namae_cnt", 0), I32_STRUCT
         ),
-        "read_flag_list": _read_struct_list(
+        "read_flag_list": read_struct_list(
             blob,
             h.get("read_flag_list_ofs", 0),
             h.get("read_flag_cnt", 0),
-            _I32_STRUCT,
+            I32_STRUCT,
         ),
     }
-    spn_idx = _read_struct_list(
+    spn_idx = read_struct_list(
         blob,
         h.get("scn_prop_name_index_list_ofs", 0),
         h.get("scn_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + _max_pair_end(spn_idx) * 2
+    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + max_pair_end(spn_idx) * 2
     out["scn_prop_name_index_list"] = spn_idx
     out["scn_prop_name_blob_end"] = spn_end
     out["scn_prop_name_list"] = (
-        _decode_utf16le_strings(
+        decode_utf16le_strings(
             blob,
             spn_idx,
             h.get("scn_prop_name_list_ofs", 0),
@@ -1566,17 +1551,17 @@ def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
         if spn_idx
         else []
     )
-    scn_idx = _read_struct_list(
+    scn_idx = read_struct_list(
         blob,
         h.get("scn_cmd_name_index_list_ofs", 0),
         h.get("scn_cmd_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + _max_pair_end(scn_idx) * 2
+    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + max_pair_end(scn_idx) * 2
     out["scn_cmd_name_index_list"] = scn_idx
     out["scn_cmd_name_blob_end"] = scn_end
     out["scn_cmd_name_list"] = (
-        _decode_utf16le_strings(
+        decode_utf16le_strings(
             blob,
             scn_idx,
             h.get("scn_cmd_name_list_ofs", 0),
@@ -1586,17 +1571,17 @@ def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
         if scn_idx
         else []
     )
-    cpn_idx = _read_struct_list(
+    cpn_idx = read_struct_list(
         blob,
         h.get("call_prop_name_index_list_ofs", 0),
         h.get("call_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + _max_pair_end(cpn_idx) * 2
+    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + max_pair_end(cpn_idx) * 2
     out["call_prop_name_index_list"] = cpn_idx
     out["call_prop_name_blob_end"] = cpn_end
     out["call_prop_name_list"] = (
-        _decode_utf16le_strings(
+        decode_utf16le_strings(
             blob,
             cpn_idx,
             h.get("call_prop_name_list_ofs", 0),
@@ -1626,7 +1611,7 @@ def _merge_ranges(ranges):
     return out
 
 
-def _add_gap_sections(secs, used, total):
+def add_gap_sections(secs, used, total):
     used = _merge_ranges(used or [])
     prev = 0
     for a, b in used:
@@ -1637,7 +1622,7 @@ def _add_gap_sections(secs, used, total):
         secs.append((prev, total, "G", "gap/unknown"))
 
 
-def _print_sections(secs, total):
+def print_sections(secs, total):
     secs = [s for s in (secs or []) if s[1] > s[0]]
     secs.sort(key=lambda t: (t[0], -t[1], t[2], t[3]))
     w = int(C.NAME_W)
@@ -1647,7 +1632,7 @@ def _print_sections(secs, total):
     for a, b, sym, name in secs:
         print(
             "%3s  %-10s  %-10s  %10d  %-*s"
-            % (sym, hx(a), hx(b - 1), b - a, w, _dn(name, w))
+            % (sym, hx(a), hx(b - 1), b - a, w, dn(name, w))
         )
     used = _merge_ranges([(a, b) for a, b, _, nm in secs if nm != "gap/unknown"])
     cov = sum(b - a for a, b in used)
@@ -1692,7 +1677,7 @@ def exe_angou_element(angou_bytes: bytes) -> bytes:
     return bytes(r)
 
 
-def _diff_kv(k, a, b):
+def diff_kv(k, a, b):
     return f"{k}: {a!r} -> {b!r}"
 
 

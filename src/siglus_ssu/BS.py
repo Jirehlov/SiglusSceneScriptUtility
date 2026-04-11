@@ -4,8 +4,7 @@ import struct
 import copy
 import time
 from ._const_manager import get_const_module
-
-from .CA import _rt, CharacterAnalizer
+from .CA import CharacterAnalizer, new_replace_tree
 from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
@@ -25,7 +24,6 @@ from .common import (
 )
 
 C = get_const_module()
-
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1
 TNMSERR_BS_CONTINUE_NO_LOOP = 2
@@ -131,9 +129,9 @@ def _copy_replace_tree(rt):
     }
 
 
-def _copy_ia_data(base):
+def copy_ia_data(base):
     if not isinstance(base, dict):
-        return build_empty_ia_data(_rt())
+        return build_empty_ia_data(new_replace_tree())
     return {
         "form_table": copy.deepcopy(base.get("form_table")),
         "replace_tree": _copy_replace_tree(base.get("replace_tree")),
@@ -162,7 +160,7 @@ def build_ia_data(ctx):
         )
         if isinstance(ctx, dict):
             ctx["inc_list"] = inc_list
-    iad = build_empty_ia_data(_rt(), ctx.get("defined_names"))
+    iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
     ia2 = []
     start = time.time()
     for inc in inc_list:
@@ -197,7 +195,7 @@ def build_ia_data(ctx):
     return iad
 
 
-class _MSVCRand:
+class MSVCRand:
     def __init__(s, seed=1):
         s.x = seed & 0xFFFFFFFF
 
@@ -207,7 +205,7 @@ class _MSVCRand:
         s.x = msvcrand_shuffle_inplace(s.x, a)
 
 
-_MSR = _MSVCRand()
+_MSR = MSVCRand()
 
 
 def set_shuffle_seed(seed=1):
@@ -216,7 +214,7 @@ def set_shuffle_seed(seed=1):
         seed_i = int(seed) & 0xFFFFFFFF
     except (TypeError, ValueError):
         seed_i = 1
-    _MSR = _MSVCRand(seed_i)
+    _MSR = MSVCRand(seed_i)
     return seed_i
 
 
@@ -267,7 +265,7 @@ class BinaryStream:
         s.buf.extend(struct.pack("<i", int(v)))
 
 
-def _build_scn_dat(plad, out_scn):
+def build_scn_dat(plad, out_scn):
     b = bytearray(b"\0" * C.SCN_HDR_SIZE)
     h = {"header_size": C.SCN_HDR_SIZE}
 
@@ -1392,7 +1390,7 @@ class BS:
                 if not s.bs_ss(root):
                     return 0
             out_scn["scn_bytes"] = out_scn["scn"].to_bytes()
-            out = _build_scn_dat(plad, out_scn)
+            out = build_scn_dat(plad, out_scn)
         except Exception:
             return 0
         if isinstance(pbsd, dict):
@@ -1447,7 +1445,6 @@ def compile_one_pipeline(
         ss_path,
         force_charset=(ctx.get("charset_force") if isinstance(ctx, dict) else ""),
     )
-
     base = ia_data
     if not isinstance(base, dict) and isinstance(ctx, dict):
         base = ctx.get("ia_data")
@@ -1455,10 +1452,8 @@ def compile_one_pipeline(
         base = build_ia_data(ctx)
         if isinstance(ctx, dict):
             ctx["ia_data"] = base
-
-    iad = _copy_ia_data(base)
+    iad = copy_ia_data(base)
     pcad = {}
-
     ca = CharacterAnalizer()
     if log:
         log_stage("CA", ss_path, ctx)
@@ -1467,13 +1462,11 @@ def compile_one_pipeline(
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
     if record_time:
         record_stage_time(ctx, "CA", time.time() - t)
-
     tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
     if debug_outputs and isinstance(ctx, dict) and ctx.get("debug_outputs"):
         write_text(
             os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), enc=enc
         )
-
     if log:
         log_stage("LA", ss_path, ctx)
     t = time.time()
@@ -1482,7 +1475,6 @@ def compile_one_pipeline(
         record_stage_time(ctx, "LA", time.time() - t)
     if err:
         raise RuntimeError(fmt_err("UNK_ERROR", err.get("line", 0)))
-
     if log:
         log_stage("SA", ss_path, ctx)
     t = time.time()
@@ -1497,7 +1489,6 @@ def compile_one_pipeline(
                 (sa.last.get("atom") or {}).get("line", 0),
             )
         )
-
     if log:
         log_stage("MA", ss_path, ctx)
     while True:
@@ -1529,7 +1520,6 @@ def compile_one_pipeline(
                     f"{code}({qname or unknown_name}) at {display_name}:{line}"
                 )
         raise RuntimeError(fmt_err(code, line))
-
     if log:
         log_stage("BS", ss_path, ctx)
     t = time.time()
@@ -1559,11 +1549,9 @@ def compile_one(ctx, ss_path):
 def compile_all(ctx, only=None, max_workers=None, parallel=True):
     if isinstance(ctx, dict) and not isinstance(ctx.get("ia_data"), dict):
         ctx["ia_data"] = build_ia_data(ctx)
-
     ss_files = list(find_ss(ctx, only))
     if not ss_files:
         return
-
     if parallel and len(ss_files) > 1:
         from .parallel import parallel_compile
 
@@ -1571,7 +1559,6 @@ def compile_all(ctx, only=None, max_workers=None, parallel=True):
         parallel_compile(ctx, ss_files, max_workers)
         set_stage_time(ctx, "Compiling", time.time() - start)
         return
-
     for p in ss_files:
         compile_one(ctx, p)
 

@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import os
@@ -9,41 +8,37 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
-
 from ._const_manager import get_const_module
-
-from .BS import BS, _copy_ia_data
-from .CA import CharacterAnalizer, _isalpha, _isnum, _iszen, _rt, _rt_search
+from .BS import BS, copy_ia_data
+from .CA import (
+    CharacterAnalizer,
+    is_alpha,
+    is_num,
+    is_zen,
+    new_replace_tree,
+    search_replace_tree,
+)
 from .IA import IncAnalyzer
 from .LA import la_analize
 from .MA import MA, FormTable
 from .SA import SA
-from ._const_manager import _package_version
+from ._const_manager import package_version
 from .common import build_empty_ia_data, read_text_auto
 
 C = get_const_module()
-
 SEVERITY_ERROR = 1
-
-
 COMPLETION_KIND_FUNCTION = 3
 COMPLETION_KIND_VARIABLE = 6
 COMPLETION_KIND_KEYWORD = 14
 COMPLETION_KIND_REFERENCE = 18
 COMPLETION_KIND_CONSTANT = 21
 COMPLETION_KIND_TYPE_PARAMETER = 25
-
-
 SYMBOL_KIND_FUNCTION = 12
 SYMBOL_KIND_VARIABLE = 13
 SYMBOL_KIND_CONSTANT = 14
 SYMBOL_KIND_STRING = 15
 SYMBOL_KIND_KEY = 20
-
-
 LABEL_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
-
-
 KEYWORD_DOCS: dict[str, str] = {
     "command": "Defines a user command. Syntax: `command name([property ...]) [: form] { ... }`. The default return type is `int`.",
     "property": "Defines a call property inside a `command` block. The default type is `int`; when declared as `intlist` or `strlist`, `[exp]` may be appended as a size expression.",
@@ -62,8 +57,6 @@ KEYWORD_DOCS: dict[str, str] = {
     "case": "Branch arm of `switch`. Its value type must match the `switch` condition type.",
     "default": "Default branch of `switch`. At most one per `switch`.",
 }
-
-
 DIRECTIVE_DOCS: dict[str, str] = {
     "#replace": "Text replacement declaration. After replacement, scanning advances past the replacement result; the replacement output is not rescanned at the same position.",
     "#define": "Definition declaration. After replacement, the scan position stays unchanged, so inserted text immediately participates in expansion again.",
@@ -79,8 +72,6 @@ DIRECTIVE_DOCS: dict[str, str] = {
     "#inc_start": "Starts an inline `inc` block inside a scene. The block contents are parsed with the `IncAnalyzer` rules for the `scene` scope.",
     "#inc_end": "Ends an inline `inc` block.",
 }
-
-
 FORM_DOCS: dict[str, str] = {
     "void": "Valueless type. A command may declare a `void` return type; a property may not be `void`.",
     "int": "32-bit integer value. Integer arithmetic, conditions, and most bitwise operations use this type.",
@@ -447,11 +438,10 @@ def _enrich_project_definitions(
 
 def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectContext:
     root = os.path.abspath(root_dir or ".")
-    iad = build_empty_ia_data(_rt())
+    iad = build_empty_ia_data(new_replace_tree())
     defs: dict[str, list[DefinitionRecord]] = {}
     inc_paths = _sorted_dir_paths(root, overlays, ".inc")
     passes: list[tuple[str, dict[str, Any]]] = []
-
     for inc_path in inc_paths:
         text = _read_text(inc_path, overlays)
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
@@ -472,7 +462,6 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
         for record in _extract_inc_decl_records(inc_path, text, iad2):
             _append_definition(defs, record)
         passes.append((inc_path, iad2))
-
     for inc_path, iad2 in passes:
         ia = IncAnalyzer("", C.FM_GLOBAL, iad, iad2)
         if not ia.step2():
@@ -486,7 +475,6 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
                     code="INC_STEP2",
                 ),
             )
-
     _enrich_project_definitions(defs, iad)
     return ProjectContext(
         iad=iad,
@@ -551,7 +539,6 @@ def _collect_scene_symbols(
 ]:
     if not isinstance(lad, dict) or not isinstance(sad, dict):
         return {}, {}, {}, []
-
     local_defs: dict[str, list[DefinitionRecord]] = {}
     label_defs: dict[str, DefinitionRecord] = {}
     z_label_defs: dict[str, DefinitionRecord] = {}
@@ -699,7 +686,6 @@ def _collect_scene_symbols(
     root = sad.get("root") or {}
     for sentence in root.get("sentense_list") or []:
         walk_sentence(sentence)
-
     return local_defs, label_defs, z_label_defs, doc_symbols
 
 
@@ -715,11 +701,12 @@ def _analyze_ss_document(
 ) -> AnalysisResult:
     result = AnalysisResult(path=abs_path, text=text, project=project)
     base_iad = (
-        project.iad if isinstance(project.iad, dict) else build_empty_ia_data(_rt())
+        project.iad
+        if isinstance(project.iad, dict)
+        else build_empty_ia_data(new_replace_tree())
     )
-    iad = _copy_ia_data(base_iad)
+    iad = copy_ia_data(base_iad)
     pcad: dict[str, Any] = {}
-
     ca = CharacterAnalizer()
     if not ca.analize_file(text, iad, pcad):
         result.diagnostics.append(
@@ -731,7 +718,6 @@ def _analyze_ss_document(
             )
         )
         return result
-
     lad, err = la_analize(pcad)
     if err:
         result.diagnostics.append(
@@ -744,7 +730,6 @@ def _analyze_ss_document(
         )
         return result
     result.lad = lad
-
     sa = SA(iad, lad)
     ok, sad = sa.analize()
     if not ok:
@@ -759,7 +744,6 @@ def _analyze_ss_document(
         )
         return result
     result.sad = sad
-
     ma = MA(iad, lad, sad)
     ok, mad = ma.analize()
     if not ok:
@@ -775,7 +759,6 @@ def _analyze_ss_document(
         )
         return result
     result.sad = sad
-
     bs = BS()
     bsd: dict[str, Any] = {}
     if not bs.compile(iad, lad, mad, bsd):
@@ -788,7 +771,6 @@ def _analyze_ss_document(
             )
         )
         return result
-
     local_defs, label_defs, z_label_defs, doc_symbols = _collect_scene_symbols(lad, sad)
     for bucket in local_defs.values():
         for item in bucket:
@@ -826,10 +808,8 @@ def analyze_document(
     if project is None:
         project = _build_project_context(os.path.dirname(abs_path) or ".", overlays)
     result = AnalysisResult(path=abs_path, text=text, project=project)
-
     if kind == "other":
         return result
-
     if project.build_error is not None:
         if os.path.abspath(project.build_error.path) == abs_path:
             result.diagnostics.append(project.build_error)
@@ -846,14 +826,12 @@ def analyze_document(
             )
         )
         return result
-
     if kind == "inc":
         for rec in project.definitions.values():
             for item in rec:
                 if os.path.abspath(item.path) == abs_path:
                     result.document_symbols.append(item)
         return result
-
     result = _analyze_ss_document(abs_path, text, project)
     return result
 
@@ -958,41 +936,37 @@ def word_at_position(
 
     if src[idx] == "#":
         return scan_hash(idx)
-
     if src[idx] in LABEL_CHARS and idx > 0 and src[idx - 1] == "#":
         return scan_hash(idx - 1)
-
     if _is_ident_char(src[idx]):
         token, rng, kind = ident_token(idx)
         if token:
             return token, rng, kind
-
     if idx > 0 and _is_ident_char(src[idx - 1]):
         token, rng, kind = ident_token(idx - 1)
         if token:
             return token, rng, kind
-
     return "", None, ""
 
 
 def _is_hash_name_char(ch: str) -> bool:
-    return ch == "_" or _isalpha(ch) or _isnum(ch)
+    return ch == "_" or is_alpha(ch) or is_num(ch)
 
 
 def _is_ident_start(ch: str) -> bool:
-    return ch in "_$@" or _isalpha(ch)
+    return ch in "_$@" or is_alpha(ch)
 
 
 def _is_ident_char(ch: str) -> bool:
-    return _is_ident_start(ch) or _isnum(ch) or _iszen(ch)
+    return _is_ident_start(ch) or is_num(ch) or is_zen(ch)
 
 
 def _is_source_word_char(ch: str) -> bool:
     return (
         ch in "_$@"
-        or _isalpha(ch)
-        or _isnum(ch)
-        or (_iszen(ch) and ch not in "\u3010\u3011\u300c\u300d\u300e\u300f\"'")
+        or is_alpha(ch)
+        or is_num(ch)
+        or (is_zen(ch) and ch not in "\u3010\u3011\u300c\u300d\u300e\u300f\"'")
     )
 
 
@@ -1005,7 +979,7 @@ def _replace_symbol_span(
         return None
     if not isinstance(replace_tree, dict):
         return None
-    rep = _rt_search(replace_tree, line_text, start_char)
+    rep = search_replace_tree(replace_tree, line_text, start_char)
     if not isinstance(rep, dict):
         return None
     name = str(rep.get("name") or "")
@@ -1634,7 +1608,7 @@ def _source_uses_utf8(path: str, text: str) -> bool:
     from . import textmap as tm
 
     try:
-        _disk_text, encoding, _newline = tm._read_text(path)
+        _disk_text, encoding, _newline = tm.read_text(path)
         return str(encoding or "").lower().startswith("utf-8")
     except OSError:
         pass
@@ -1655,7 +1629,7 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
         "utf8": _source_uses_utf8(path, text),
     }
     try:
-        tokens, iad = tm._collect_tokens(
+        tokens, iad = tm.collect_tokens(
             text,
             ctx,
             iad_base=tm.BS.build_ia_data(ctx),
@@ -1689,7 +1663,7 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
             )
         )
 
-    for entry in tm._locate_tokens(text, tokens, iad):
+    for entry in tm.locate_tokens(text, tokens, iad):
         line = max(0, int(entry.get("line", 1) or 1) - 1)
         if line >= len(line_offsets):
             continue
@@ -1697,11 +1671,11 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
         span_end = int(entry.get("span_end", -1) or -1)
         if span_start < 0 or span_end <= span_start:
             continue
-        kind = int(entry.get("kind", tm._TEXTMAP_KIND_OTHER) or tm._TEXTMAP_KIND_OTHER)
+        kind = int(entry.get("kind", tm.TEXTMAP_KIND_OTHER) or tm.TEXTMAP_KIND_OTHER)
         semantic_type = (
             "dialogue"
-            if kind == tm._TEXTMAP_KIND_DIALOGUE
-            else ("speakerName" if kind == tm._TEXTMAP_KIND_NAME else "string")
+            if kind == tm.TEXTMAP_KIND_DIALOGUE
+            else ("speakerName" if kind == tm.TEXTMAP_KIND_NAME else "string")
         )
         line_start = line_offsets[line]
         start_char = max(0, span_start - line_start)
@@ -1980,7 +1954,6 @@ def completion_items(
             if label.startswith(prefix):
                 add(label, COMPLETION_KIND_KEYWORD, DIRECTIVE_DOCS.get(label, ""))
         return items
-
     for name in KEYWORDS:
         if not prefix or name.startswith(prefix):
             add(name, COMPLETION_KIND_KEYWORD, KEYWORD_DOCS.get(name, ""))
@@ -1990,7 +1963,6 @@ def completion_items(
     for name in FORM_NAMES:
         if not prefix or name.casefold().startswith(prefix):
             add(name, COMPLETION_KIND_TYPE_PARAMETER, FORM_DOCS.get(name, ""))
-
     for mapping in (
         result.project.definitions,
         result.local_definitions,
@@ -2010,14 +1982,12 @@ def completion_items(
                 elif rec.kind in ("macro", "define", "replace"):
                     kind = COMPLETION_KIND_CONSTANT
                 add(rec.name, kind, rec.detail or rec.signature or rec.scope)
-
     for rec in result.label_definitions.values():
         if not prefix or rec.name.casefold().startswith(prefix):
             add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
     for rec in result.z_label_definitions.values():
         if not prefix or rec.name.casefold().startswith(prefix):
             add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
-
     items.sort(
         key=lambda x: (str(x.get("label", "")).casefold(), int(x.get("kind", 999)))
     )
@@ -2031,7 +2001,6 @@ def hover_for_position(
     if not token or rng is None:
         return None
     key = token.casefold()
-
     if key in KEYWORD_DOCS:
         return {
             "range": rng,
@@ -2056,13 +2025,11 @@ def hover_for_position(
                 "value": f"**Type/form** `{token}`\n\n{FORM_DOCS[key]}",
             },
         }
-
     if token_kind == "label":
         rec = result.label_definitions.get(key) or result.z_label_definitions.get(key)
         if rec:
             text = f"**{rec.kind}** `{rec.name}`\n\nDefined on line {rec.line}."
             return {"range": rng, "contents": {"kind": "markdown", "value": text}}
-
     candidates: list[DefinitionRecord] = []
     for mapping in (
         result.local_definitions,
@@ -2098,7 +2065,6 @@ def definition_locations(
     key = token.casefold()
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
-
     if token_kind == "label":
         rec = result.label_definitions.get(key) or result.z_label_definitions.get(key)
         if rec:
@@ -2111,7 +2077,6 @@ def definition_locations(
                 current_text=result.text,
             )
         return locations
-
     for mapping in (result.local_definitions, result.project.definitions):
         for rec in mapping.get(key, []):
             _append_definition_location(
@@ -2132,7 +2097,6 @@ def definition_locations_for_occurrence(
     key = occurrence.name.casefold()
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
-
     if occurrence.symbol_id.startswith("cmd:"):
         for mapping in (result.local_definitions, result.project.definitions):
             for rec in mapping.get(key, []):
@@ -2886,7 +2850,7 @@ class SSLanguageServer:
             },
             "serverInfo": {
                 "name": "siglus-ssu",
-                "version": _package_version() or "unknown",
+                "version": package_version() or "unknown",
             },
         }
         self.respond(msg_id, result=result)
@@ -3214,7 +3178,6 @@ class SSLanguageServer:
         method = message.get("method")
         msg_id = message.get("id")
         params = message.get("params") or {}
-
         if method == "initialize":
             self.handle_initialize(msg_id, params)
             return

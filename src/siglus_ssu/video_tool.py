@@ -34,19 +34,13 @@ def _warn_lossy_ogv_streams(path):
         stream_kinds = video.read_ogv_stream_kinds(path)
     except (EOFError, OSError, ValueError, struct.error):
         return
-    extra_streams = []
-    for kind in stream_kinds:
-        if kind == "theora" or kind in extra_streams:
-            continue
-        extra_streams.append(kind)
-    if not extra_streams:
+    if len(stream_kinds) <= 1 or "theora" not in stream_kinds:
         return
     all_streams = ",".join(stream_kinds) if stream_kinds else "unknown"
-    dropped = ",".join(extra_streams)
     eprint(
         "warning: lossy conversion: "
         f"input .ogv streams={all_streams}; "
-        f"-v --c keeps only theora video and will drop non-theora streams ({dropped})"
+        "-v --c keeps only the first theora stream and ignores all other streams"
     )
 
 
@@ -264,7 +258,6 @@ def main(argv=None):
             return 1
         print(fmt_kv("wrote", outp2))
         return 0
-
     inp, out_root, src_is_dir, rc = prepare_batch_paths(
         argv, hint_help, "error: expected <input> <output_dir> for --x"
     )

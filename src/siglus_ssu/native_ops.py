@@ -3,13 +3,12 @@ import struct
 import math
 
 
-def _legacy_mode_enabled() -> bool:
+def legacy_mode_enabled() -> bool:
     value = os.environ.get("SIGLUS_SSU_LEGACY", "")
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-_LEGACY_MODE = _legacy_mode_enabled()
-
+_LEGACY_MODE = legacy_mode_enabled()
 try:
     if _LEGACY_MODE:
         raise ImportError("Legacy mode requested")
@@ -35,7 +34,6 @@ except (ImportError, AttributeError):
     _native_lzss32_unpack = None
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
-
 HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
     _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
 )

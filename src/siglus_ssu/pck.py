@@ -2,28 +2,25 @@ import csv
 import struct
 import io
 from contextlib import redirect_stdout
-
 import os
 import sys
 import time
 import tempfile
-
 from ._const_manager import get_const_module
-
 from .native_ops import lzss_unpack, xor_cycle_inplace
 from . import compiler
 from .word_count import count_text_units
 from .common import (
     hx,
-    _dn,
-    _sha1,
-    _I32_PAIR_STRUCT,
-    _read_struct_list,
-    _max_pair_end,
-    _decode_utf16le_strings,
-    _add_gap_sections,
-    _print_sections,
-    _diff_kv,
+    dn,
+    sha1,
+    I32_PAIR_STRUCT,
+    read_struct_list,
+    max_pair_end,
+    decode_utf16le_strings,
+    add_gap_sections,
+    print_sections,
+    diff_kv,
     build_sections,
     build_source_angou_layout,
     read_bytes,
@@ -49,7 +46,6 @@ from .common import (
 )
 
 C = get_const_module()
-
 MAX_SCENE_LIST = 2000
 
 
@@ -139,7 +135,7 @@ def _looks_like_flix_pck(blob) -> bool:
     return bool(_parse_flix_pck(blob))
 
 
-def _looks_like_pck(blob):
+def looks_like_pck(blob):
     return looks_like_siglus_pck(blob) or _looks_like_flix_pck(blob)
 
 
@@ -189,27 +185,27 @@ def _pck_sections(blob, preview=False):
         "I",
         "scn_data_index_list",
     )
-    inc_prop_name_idx = _read_struct_list(
+    inc_prop_name_idx = read_struct_list(
         blob,
         h.get("inc_prop_name_index_list_ofs", 0),
         h.get("inc_prop_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    inc_cmd_name_idx = _read_struct_list(
+    inc_cmd_name_idx = read_struct_list(
         blob,
         h.get("inc_cmd_name_index_list_ofs", 0),
         h.get("inc_cmd_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    scn_name_idx = _read_struct_list(
+    scn_name_idx = read_struct_list(
         blob,
         h.get("scn_name_index_list_ofs", 0),
         h.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    ipp_end = h.get("inc_prop_name_list_ofs", 0) + _max_pair_end(inc_prop_name_idx) * 2
-    icn_end = h.get("inc_cmd_name_list_ofs", 0) + _max_pair_end(inc_cmd_name_idx) * 2
-    sn_end = h.get("scn_name_list_ofs", 0) + _max_pair_end(scn_name_idx) * 2
+    ipp_end = h.get("inc_prop_name_list_ofs", 0) + max_pair_end(inc_prop_name_idx) * 2
+    icn_end = h.get("inc_cmd_name_list_ofs", 0) + max_pair_end(inc_cmd_name_idx) * 2
+    sn_end = h.get("scn_name_list_ofs", 0) + max_pair_end(scn_name_idx) * 2
     if h.get("inc_prop_name_list_ofs", 0) > 0 and ipp_end > h.get(
         "inc_prop_name_list_ofs", 0
     ):
@@ -220,19 +216,19 @@ def _pck_sections(blob, preview=False):
         sec(h.get("inc_cmd_name_list_ofs", 0), icn_end, "n", "inc_cmd_name_list")
     if h.get("scn_name_list_ofs", 0) > 0 and sn_end > h.get("scn_name_list_ofs", 0):
         sec(h.get("scn_name_list_ofs", 0), sn_end, "S", "scn_name_list")
-    scn_data_idx = _read_struct_list(
+    scn_data_idx = read_struct_list(
         blob,
         h.get("scn_data_index_list_ofs", 0),
         h.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    scn_data_end = h.get("scn_data_list_ofs", 0) + _max_pair_end(scn_data_idx)
+    scn_data_end = h.get("scn_data_list_ofs", 0) + max_pair_end(scn_data_idx)
     if h.get("scn_data_list_ofs", 0) > 0 and scn_data_end > h.get(
         "scn_data_list_ofs", 0
     ):
         sec(h.get("scn_data_list_ofs", 0), scn_data_end, "L", "scn_data_list")
     scn_names = (
-        _decode_utf16le_strings(
+        decode_utf16le_strings(
             blob, scn_name_idx, h.get("scn_name_list_ofs", 0), sn_end
         )
         if scn_name_idx
@@ -272,19 +268,19 @@ def _pck_sections(blob, preview=False):
                 sec(last, n, "U", "unknown data")
         else:
             sec(tail_start, n, "U", "unknown data" if preview else "original_sources")
-    _add_gap_sections(secs, used, n)
+    add_gap_sections(secs, used, n)
     meta = {
         "header": h,
         "scn_names": scn_names,
         "inc_prop_names": (
-            _decode_utf16le_strings(
+            decode_utf16le_strings(
                 blob, inc_prop_name_idx, h.get("inc_prop_name_list_ofs", 0), ipp_end
             )
             if inc_prop_name_idx
             else []
         ),
         "inc_cmd_names": (
-            _decode_utf16le_strings(
+            decode_utf16le_strings(
                 blob, inc_cmd_name_idx, h.get("inc_cmd_name_list_ofs", 0), icn_end
             )
             if inc_cmd_name_idx
@@ -302,7 +298,6 @@ def _flix_pck_sections(blob, preview=False):
     info = _parse_flix_pck(blob)
     if not info:
         return [], {"header": {}, "file_names": [], "entries": [], "item_cnt": 0}
-
     cnt = int(info.get("cnt", 0) or 0)
     base = int(info.get("base", 0) or 0)
     idx_abs = int(info.get("idx_abs", 0) or 0)
@@ -310,7 +305,6 @@ def _flix_pck_sections(blob, preview=False):
     names = list(info.get("names") or [])
     entries = list(info.get("entries") or [])
     item_cnt = min(len(names), len(entries)) if names else len(entries)
-
     h = {
         "header_size": base,
         "version": int(info.get("version", 0) or 0),
@@ -318,7 +312,6 @@ def _flix_pck_sections(blob, preview=False):
         "data_start_rel": int(info.get("data_rel", 0) or 0),
         "index_table_rel": int(info.get("idx_rel", 0) or 0),
     }
-
     secs = []
     used = []
 
@@ -337,14 +330,12 @@ def _flix_pck_sections(blob, preview=False):
     sec(base, base + cnt * 4, "L", "name_len_list")
     sec(base + cnt * 4, idx_abs, "S", "name_list")
     sec(idx_abs, data_abs, "I", "index_table")
-
     if item_cnt and (preview or item_cnt <= MAX_SCENE_LIST):
         for i in range(item_cnt):
             off, sz = entries[i]
             nm = names[i] if i < len(names) and names[i] else (f"file#{i:d}")
             sec(off, off + sz, "D", nm)
-
-    _add_gap_sections(secs, used, n)
+    add_gap_sections(secs, used, n)
     meta = {"header": h, "file_names": names, "entries": entries, "item_cnt": item_cnt}
     return secs, meta
 
@@ -386,7 +377,7 @@ def _pck_original_sources(blob, h, scn_data_end):
             nm = ""
         if not nm:
             nm = "unknown.bin"
-        out.append((str(nm), pos, pos + sz, len(raw), _sha1(raw)))
+        out.append((str(nm), pos, pos + sz, len(raw), sha1(raw)))
         pos += sz
     return out
 
@@ -403,11 +394,11 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None):
     orig_hsz = int(hdr.get("original_source_header_size", 0) or 0)
     if orig_hsz <= 0:
         return
-    scn_data_idx = _read_struct_list(
+    scn_data_idx = read_struct_list(
         blob,
         hdr.get("scn_data_index_list_ofs", 0),
         hdr.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
     blob_end = hdr.get("scn_data_list_ofs", 0) + max(
         [a + b for a, b in scn_data_idx], default=0
@@ -493,14 +484,14 @@ def _read_pck_scene_lists(blob: bytes, hdr=None):
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     if not hdr:
         return ([], [])
-    scn_name_idx = _read_struct_list(
+    scn_name_idx = read_struct_list(
         blob,
         hdr.get("scn_name_index_list_ofs", 0),
         hdr.get("scn_name_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
     scn_name_blob_len = max([a + b for a, b in scn_name_idx], default=0) * 2
-    scn_names = _decode_utf16le_strings(
+    scn_names = decode_utf16le_strings(
         blob,
         scn_name_idx,
         hdr.get("scn_name_list_ofs", 0),
@@ -514,11 +505,11 @@ def _read_pck_scene_lists(blob: bytes, hdr=None):
         allow_empty_blob=True,
         strict_blob_end=True,
     )
-    scn_data_idx = _read_struct_list(
+    scn_data_idx = read_struct_list(
         blob,
         hdr.get("scn_data_index_list_ofs", 0),
         hdr.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
     scn_data = _read_blobs(
         blob,
@@ -547,12 +538,12 @@ def _resolve_pck_scene_exe_el(blob: bytes, input_pck: str = "", hdr=None):
     if exe_el:
         return exe_el
     try:
-        return _compute_exe_el("", os.path.dirname(os.path.abspath(input_pck)))
+        return compute_exe_el("", os.path.dirname(os.path.abspath(input_pck)))
     except Exception:
         return b""
 
 
-def _iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
+def iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         return
     if not looks_like_siglus_pck(blob):
@@ -627,7 +618,7 @@ def _pck_cd_word_rows(blob: bytes, input_pck: str = "", hdr=None) -> dict:
         "cd_text_dialogue_lines": 0,
         "cd_text_dialogue_count": 0,
     }
-    for item in _iter_pck_scene_dat_items(blob, input_pck=input_pck, hdr=hdr) or []:
+    for item in iter_pck_scene_dat_items(blob, input_pck=input_pck, hdr=hdr) or []:
         stats["scene_files"] += 1
         row = {
             "type": "dat",
@@ -641,7 +632,7 @@ def _pck_cd_word_rows(blob: bytes, input_pck: str = "", hdr=None) -> dict:
             row["status"] = "failed"
             stats["rows"].append(row)
             continue
-        bundle = _dat._dat_disassembly_bundle(
+        bundle = _dat.dat_disassembly_bundle(
             scn_blob,
             item.get("relpath"),
             pack_context=item.get("pack_context"),
@@ -738,7 +729,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 "count": 0,
             }
             try:
-                text, encoding, _newline = _textmap._read_text(ss_path)
+                text, encoding, _newline = _textmap.read_text(ss_path)
                 ctx = {
                     "scn_path": os.path.dirname(os.path.abspath(ss_path)),
                     "utf8": bool(str(encoding or "").startswith("utf-8")),
@@ -749,8 +740,8 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                     with redirect_stdout(io.StringIO()):
                         iad_base = _textmap.BS.build_ia_data(ctx)
                     iad_cache[key] = iad_base
-                tokens, iad = _textmap._collect_tokens(text, ctx, iad_base=iad_base)
-                entries = _textmap._locate_tokens(text, tokens, iad)
+                tokens, iad = _textmap.collect_tokens(text, ctx, iad_base=iad_base)
+                entries = _textmap.locate_tokens(text, tokens, iad)
                 for entry in entries:
                     if int(entry.get("kind", 0) or 0) != 1:
                         continue
@@ -846,9 +837,8 @@ def pck(blob: bytes, input_pck: str = "") -> int:
                 f"note: entries={meta.get('item_cnt', 0):d} (listing omitted; limit={MAX_SCENE_LIST:d})"
             )
         print("")
-        _print_sections(secs, len(blob))
+        print_sections(secs, len(blob))
         return 0
-
     if len(blob) < C.PACK_HDR_SIZE:
         print("too small for pck header")
         return 1
@@ -888,7 +878,7 @@ def pck(blob: bytes, input_pck: str = "") -> int:
             f"note: scene_data entries={meta.get('item_cnt', 0):d} (listing omitted; limit={MAX_SCENE_LIST:d})"
         )
     print("")
-    _print_sections(secs, len(blob))
+    print_sections(secs, len(blob))
     angou = _pck_angou_content(blob, input_pck=input_pck, hdr=h)
     if angou:
         print("")
@@ -903,7 +893,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [
-        _diff_kv(k, h1.get(k), h2.get(k))
+        diff_kv(k, h1.get(k), h2.get(k))
         for k in C.PACK_HDR_FIELDS
         if h1.get(k) != h2.get(k)
     ]
@@ -913,18 +903,17 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             print("  " + d)
     else:
         print("Header: identical")
-
-    idx1 = _read_struct_list(
+    idx1 = read_struct_list(
         b1,
         h1.get("scn_data_index_list_ofs", 0),
         h1.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    idx2 = _read_struct_list(
+    idx2 = read_struct_list(
         b2,
         h2.get("scn_data_index_list_ofs", 0),
         h2.get("scn_data_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
     names1, _ = _read_pck_scene_lists(b1, hdr=h1)
     names2, _ = _read_pck_scene_lists(b2, hdr=h2)
@@ -942,12 +931,11 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             nm = (names[i] if names and i < len(names) else (f"scene#{i:d}")) or (
                 f"scene#{i:d}"
             )
-            m.setdefault(nm, []).append((a, b, _sha1(blob[a:b])))
+            m.setdefault(nm, []).append((a, b, sha1(blob[a:b])))
         return m
 
     sm1 = _scene_map(names1, idx1, h1.get("scn_data_list_ofs", 0), b1)
     sm2 = _scene_map(names2, idx2, h2.get("scn_data_list_ofs", 0), b2)
-
     exe_el1 = b""
     exe_el2 = b""
     pack_ctx1 = None
@@ -982,12 +970,12 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             )
             if not blob1 or not blob2:
                 return "-"
-            c1 = DAT._scn_payload_hash_bundle(
+            c1 = DAT.scn_payload_hash_bundle(
                 blob1,
                 pack_context=pack_ctx1,
                 scene_name=scene_name,
             )
-            c2 = DAT._scn_payload_hash_bundle(
+            c2 = DAT.scn_payload_hash_bundle(
                 blob2,
                 pack_context=pack_ctx2,
                 scene_name=scene_name,
@@ -1026,12 +1014,11 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, payload_cmp))
             else:
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z))
-
     os1 = _pck_original_sources(
-        b1, h1, h1.get("scn_data_list_ofs", 0) + _max_pair_end(idx1)
+        b1, h1, h1.get("scn_data_list_ofs", 0) + max_pair_end(idx1)
     )
     os2 = _pck_original_sources(
-        b2, h2, h2.get("scn_data_list_ofs", 0) + _max_pair_end(idx2)
+        b2, h2, h2.get("scn_data_list_ofs", 0) + max_pair_end(idx2)
     )
 
     def _os_map(lst):
@@ -1064,7 +1051,6 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
                 orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, "-"))
             else:
                 orows.append((nm, a1, l1x, s1z, a2, l2x, s2z))
-
     allrows = rows + orows
     if not allrows:
         print("Sections: identical by (name,size,sha1)")
@@ -1085,7 +1071,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             for nm, a1, l1x, s1z, a2, l2x, s2z, payload_cmp in allrows[:5000]:
                 print(
                     "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-9s  %-*s"
-                    % (a1, l1x, s1z, a2, l2x, s2z, payload_cmp, C.NAME_W, _dn(nm))
+                    % (a1, l1x, s1z, a2, l2x, s2z, payload_cmp, C.NAME_W, dn(nm))
                 )
         else:
             print(
@@ -1098,7 +1084,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             for nm, a1, l1x, s1z, a2, l2x, s2z in allrows[:5000]:
                 print(
                     "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-*s"
-                    % (a1, l1x, s1z, a2, l2x, s2z, C.NAME_W, _dn(nm))
+                    % (a1, l1x, s1z, a2, l2x, s2z, C.NAME_W, dn(nm))
                 )
         if len(allrows) > 5000:
             print(f"... ({len(allrows) - 5000:d} rows omitted)")
@@ -1144,9 +1130,9 @@ def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
             cand = bytes(_b)
         except Exception:
             cand = b""
-    if cand and _looks_like_lzss(cand):
+    if cand and looks_like_lzss(cand):
         lz = cand
-    elif _looks_like_lzss(b):
+    elif looks_like_lzss(b):
         lz = b
     if lz:
         try:
@@ -1156,7 +1142,7 @@ def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
     return b
 
 
-def _looks_like_lzss(blob: bytes) -> bool:
+def looks_like_lzss(blob: bytes) -> bool:
     if not blob or len(blob) < 8:
         return False
     try:
@@ -1317,10 +1303,9 @@ def _compute_exe_el_from_scene_pck(os_dir: str):
         return b""
 
 
-def _iter_exe_el_candidates(os_dir: str):
+def iter_exe_el_candidates(os_dir: str):
     seen = set()
     yielded = False
-
     paths = list_named_paths(os_dir, ANGOU_DAT_NAME, recursive=True)
     for p in paths:
         try:
@@ -1331,7 +1316,6 @@ def _iter_exe_el_candidates(os_dir: str):
                 yield el
         except Exception:
             continue
-
     if not yielded:
         kp = find_named_path(os_dir, KEY_TXT_NAME, recursive=True)
         if kp:
@@ -1340,7 +1324,6 @@ def _iter_exe_el_candidates(os_dir: str):
                 seen.add(el)
                 yielded = True
                 yield el
-
     ep = find_siglus_engine_exe(os_dir)
     if ep:
         el = read_siglus_engine_exe_el(ep)
@@ -1348,7 +1331,6 @@ def _iter_exe_el_candidates(os_dir: str):
             seen.add(el)
             yielded = True
             yield el
-
     try:
         for raw in _iter_scene_pck_angou_sources(os_dir):
             el = angou_to_exe_el(decode_angou_first_line(raw))
@@ -1359,7 +1341,7 @@ def _iter_exe_el_candidates(os_dir: str):
         return
 
 
-def _compute_exe_el(os_dir: str, alt_dir: str = ""):
+def compute_exe_el(os_dir: str, alt_dir: str = ""):
     dirs = []
     for d in (os_dir, alt_dir):
         if not d:
@@ -1399,17 +1381,17 @@ def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):
                 meta = merged
             else:
                 meta = auto_meta
-        inc_prop_list = _read_struct_list(
+        inc_prop_list = read_struct_list(
             blob,
             hdr.get("inc_prop_list_ofs", 0),
             hdr.get("inc_prop_cnt", 0),
-            _I32_PAIR_STRUCT,
+            I32_PAIR_STRUCT,
         )
-        inc_cmd_list = _read_struct_list(
+        inc_cmd_list = read_struct_list(
             blob,
             hdr.get("inc_cmd_list_ofs", 0),
             hdr.get("inc_cmd_cnt", 0),
-            _I32_PAIR_STRUCT,
+            I32_PAIR_STRUCT,
         )
         inc_prop_names = list((meta or {}).get("inc_prop_names") or [])
         inc_cmd_names = list((meta or {}).get("inc_cmd_names") or [])
@@ -1480,7 +1462,6 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
             ok_cnt += 1
         sys.stdout.write(f"Extracted files: {ok_cnt:d}\n")
         return 0
-
     if not looks_like_siglus_pck(dat):
         sys.stderr.write("Invalid pck\n")
         return 1
@@ -1517,18 +1498,18 @@ def extract_pck(input_pck: str, output_dir: str, dat_txt: bool = False) -> int:
         from . import dat as D
 
         disam_stats = new_disam_stats()
-    for item in _iter_pck_scene_dat_items(dat, input_pck=input_pck, hdr=hdr) or []:
+    for item in iter_pck_scene_dat_items(dat, input_pck=input_pck, hdr=hdr) or []:
         nm = str(item.get("scene_name") or "")
         rel = str(item.get("relpath") or (_safe_relpath(nm + ".dat") or (nm + ".dat")))
         out_dat = bytes(item.get("blob") or b"")
         out_name = os.path.basename(rel) or rel
         out_path = _unique_outpath(bs_dir, out_name)
         write_bytes(out_path, out_dat)
-        if D and (not D._is_decompiler_excluded_dat(out_path, nm)):
+        if D and (not D.is_decompiler_excluded_dat(out_path, nm)):
             dat_items.append((out_path, out_dat, item))
         ok_cnt += 1
     if D and dat_items:
-        D._process_dat_output_items(
+        D.process_dat_output_items(
             [
                 {
                     "dat_path": dat_path,

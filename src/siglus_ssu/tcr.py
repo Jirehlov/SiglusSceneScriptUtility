@@ -1,5 +1,4 @@
 import struct
-
 from .common import read_i32_le, hx, append_diff, print_limited_diffs
 
 _TONE = 0
@@ -130,7 +129,6 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
     a = _parse(b1, want_payload=True)
     b = _parse(b2, want_payload=True)
     diffs = []
-
     append_diff(diffs, "max", int(a.get("max") or 0), int(b.get("max") or 0))
     append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
     oa = a.get("offsets") or ()
@@ -163,7 +161,6 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
                 diffs.append(f"curve[{i:03d}].{k}: different")
         if len(diffs) > 5000:
             break
-
     return print_limited_diffs(
         diffs,
         "==== TCR Differences ====",

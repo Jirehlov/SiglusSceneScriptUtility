@@ -2,16 +2,13 @@ import csv
 import os
 import re
 import sys
-
 from ._const_manager import get_const_module
-
 from . import dat
 from . import pck
 from . import sound
 from .common import eprint, read_bytes, write_bytes
 
 C = get_const_module()
-
 _VOICE_CALL_NAMES = frozenset(
     {
         "koe",
@@ -117,7 +114,7 @@ def _iter_scene_bundles(scene_root: str):
         except Exception:
             blob = b""
             hdr = None
-        for item in pck._iter_pck_scene_dat_items(
+        for item in pck.iter_pck_scene_dat_items(
             blob,
             input_pck=scene_root,
             hdr=hdr,
@@ -131,7 +128,7 @@ def _iter_scene_bundles(scene_root: str):
             pack_context = item.get("pack_context")
             display = f"{pck_name}!{rel.replace('\\', '/')}" if rel else pck_name
             try:
-                bundle = dat._dat_disassembly_bundle(
+                bundle = dat.dat_disassembly_bundle(
                     scene_blob,
                     os.path.abspath(scene_root) + "!" + rel.replace("/", "!"),
                     pack_context=pack_context,
@@ -150,7 +147,7 @@ def _iter_scene_bundles(scene_root: str):
         except Exception:
             continue
         try:
-            bundle = dat._dat_disassembly_bundle(blob, dat_path)
+            bundle = dat.dat_disassembly_bundle(blob, dat_path)
         except Exception:
             bundle = None
         if isinstance(bundle, dict):
@@ -546,7 +543,6 @@ def main(argv=None):
         scene_root = ""
         voice_dir, out_dir = pos
     os.makedirs(out_dir, exist_ok=True)
-
     scene_map, entries, ovk_files, z_files, entry_count, table_failed = _index_ovk(
         voice_dir
     )
@@ -576,7 +572,6 @@ def main(argv=None):
         missing_rows = []
         referenced = 0
         unreferenced = 0
-
     csv_path = ""
     total_rows = 0
     if single_koe_no is None:

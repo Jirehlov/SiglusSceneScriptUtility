@@ -1,12 +1,11 @@
 from ._const_manager import get_const_module
-
 from .CA import (
     CharacterAnalizer,
     get_form_code_by_name,
-    _isalpha,
-    _isnum,
-    _iszen,
-    _rt_add,
+    is_alpha,
+    is_num,
+    is_zen,
+    add_replace_tree,
 )
 from .MA import FormTable
 from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
@@ -68,11 +67,11 @@ class IncAnalyzer:
     def _get_word_ex(self, i):
         t = self.t
         n = len(t)
-        if i >= n or not (_isalpha(t[i]) or _iszen(t[i]) or t[i] in "_@"):
+        if i >= n or not (is_alpha(t[i]) or is_zen(t[i]) or t[i] in "_@"):
             return i, "", 0
         j = i + 1
         while j < n and (
-            _isalpha(t[j]) or _isnum(t[j]) or _iszen(t[j]) or t[j] in "_@"
+            is_alpha(t[j]) or is_num(t[j]) or is_zen(t[j]) or t[j] in "_@"
         ):
             j += 1
         return j, t[i:j], 1
@@ -80,10 +79,10 @@ class IncAnalyzer:
     def _get_word(self, i):
         t = self.t
         n = len(t)
-        if i >= n or not (_isalpha(t[i]) or t[i] == "_"):
+        if i >= n or not (is_alpha(t[i]) or t[i] == "_"):
             return i, "", 0
         j = i + 1
-        while j < n and (_isalpha(t[j]) or _isnum(t[j]) or t[j] == "_"):
+        while j < n and (is_alpha(t[j]) or is_num(t[j]) or t[j] == "_"):
             j += 1
         return j, t[i:j], 1
 
@@ -98,10 +97,10 @@ class IncAnalyzer:
     def _get_num(self, i):
         t = self.t
         n = len(t)
-        if i >= n or not _isnum(t[i]):
+        if i >= n or not is_num(t[i]):
             return i, 0, 0
         num = 0
-        while i < n and _isnum(t[i]):
+        while i < n and is_num(t[i]):
             num = num * 10 + (ord(t[i]) - 48)
             i += 1
         return i, num, 1
@@ -502,7 +501,7 @@ class IncAnalyzer:
                 "after": after,
                 "args": [],
             }
-            _rt_add(self.iad["replace_tree"], nm, rep)
+            add_replace_tree(self.iad["replace_tree"], nm, rep)
             return rep, i, line, 1
         if tp == "macro":
             nm, i, line = self._name_until(i, line, set(" \t\n("))
@@ -525,7 +524,7 @@ class IncAnalyzer:
                 return None, i, line, 0
             self.iad["name_set"].add(nm)
             rep = {"type": "macro", "name": nm, "after": after, "args": args}
-            _rt_add(self.iad["replace_tree"], nm, rep)
+            add_replace_tree(self.iad["replace_tree"], nm, rep)
             return rep, i, line, 1
         if tp == "property":
             txt, i, line, name_line = self._prop_cmd_text(i, line)

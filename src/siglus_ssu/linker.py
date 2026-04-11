@@ -3,8 +3,7 @@ import struct
 import time
 import glob
 from ._const_manager import get_const_module
-
-from .CA import _rt
+from .CA import new_replace_tree
 from .common import (
     build_empty_ia_data,
     log_stage,
@@ -24,7 +23,7 @@ from .common import (
     parse_i32_header,
 )
 from .BS import build_ia_data
-from .native_ops import xor_cycle_inplace as _xor_cycle_inplace_native
+from .native_ops import xor_cycle_inplace
 
 C = get_const_module()
 
@@ -69,14 +68,6 @@ def _parse_cmd_labels(dat):
     return out
 
 
-def _xor_cycle_inplace(buf, code, start=0):
-    if not code:
-        return
-    n = len(code)
-    st = int(start) % n
-    _xor_cycle_inplace_native(buf, code, st)
-
-
 def _resolve_exe_angou(ctx):
     if (not ctx.get("exe_angou_mode")) or (not ctx.get("lzss_mode", True)):
         return (False, b"")
@@ -116,7 +107,6 @@ def _get_scene_names(ctx):
 def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True):
     tmp = ctx.get("tmp_path") or ""
     bs_dir = os.path.join(tmp, "bs")
-
     if parallel and lzss_mode and len(scn_names) > 1:
         from .parallel import parallel_lzss_compress
 
@@ -124,14 +114,12 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
         result = parallel_lzss_compress(ctx, scn_names, bs_dir, lzss_mode, max_workers)
         set_stage_time(ctx, "LZSS", time.time() - start)
         return result
-
     from . import compiler as _m
 
     enc_names = []
     dat_list = []
     lzss_list = []
     easy_code = ctx.get("easy_angou_code") or b""
-
     for nm in scn_names:
         dat_path = os.path.join(bs_dir, nm + ".dat")
         if not os.path.isfile(dat_path):
@@ -139,7 +127,6 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
         enc_names.append(nm)
         if lzss_mode:
             lz_path = os.path.join(bs_dir, nm + ".lzss")
-
             lzss_level = ctx.get("lzss_level", 17)
             t = time.time()
             if not easy_code:
@@ -147,7 +134,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
             dat = read_bytes(dat_path)
             lz = _m.lzss_pack(dat, level=lzss_level)
             b = bytearray(lz)
-            _xor_cycle_inplace(b, easy_code, 0)
+            xor_cycle_inplace(b, easy_code, 0)
             lz = bytes(b)
             write_bytes(lz_path, lz)
             record_stage_time(ctx, "LZSS", time.time() - t)
@@ -282,13 +269,11 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
     if not scn_path:
         return (0, [])
-
     from . import compiler as _m
 
     rel_list = _make_original_source_rel_list(scn_path)
     if not rel_list:
         return (0, [])
-
     if parallel and len(rel_list) > 1:
         from .parallel import parallel_source_encrypt
 
@@ -302,7 +287,6 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
         size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
         size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
         return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
-
     sizes = []
     chunks = []
     for rel in rel_list:
@@ -342,7 +326,7 @@ def link_pack(ctx):
         if ctx.get("inc_list"):
             iad = build_ia_data(ctx)
         else:
-            iad = build_empty_ia_data(_rt(), ctx.get("defined_names"))
+            iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
         ctx["ia_data"] = iad
     inc_props = list(iad.get("property_list") or [])
     inc_cmds = list(iad.get("command_list") or [])
@@ -399,7 +383,7 @@ def link_pack(ctx):
     ang = []
     for blob in noangou_scene_data:
         b = bytearray(blob)
-        _xor_cycle_inplace(b, exe_el, 0)
+        xor_cycle_inplace(b, exe_el, 0)
         ang.append(bytes(b))
     pack_a = _build_pack_bytes(
         inc_props,

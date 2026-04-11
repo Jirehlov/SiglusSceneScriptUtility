@@ -1,6 +1,5 @@
 import copy
 from ._const_manager import get_const_module
-
 from .common import normalize_atom
 
 C = get_const_module()
@@ -28,7 +27,7 @@ def _form_code(f):
     return None
 
 
-def _parse_arg_spec(arg_spec):
+def parse_arg_spec(arg_spec):
     if not arg_spec:
         return {}
     if isinstance(arg_spec, dict):
@@ -136,13 +135,13 @@ class FormTable:
                 group = it.get("group", 0)
                 code = it.get("code", 0)
                 size = int(it.get("size", 0) or 0)
-                args = _parse_arg_spec(it.get("args") or it.get("arg_map"))
+                args = parse_arg_spec(it.get("args") or it.get("arg_map"))
             elif isinstance(it, (list, tuple)) and len(it) >= 7:
                 tp, it_parent, it_form, name, owner, group, code, *rest = it
                 parent = _form_name(it_parent)
                 form = _form_name(it_form)
                 size = int(rest[1]) if len(rest) >= 2 else 0
-                args = _parse_arg_spec(rest[0]) if rest else {}
+                args = parse_arg_spec(rest[0]) if rest else {}
             else:
                 continue
             et = (
@@ -158,7 +157,7 @@ class FormTable:
                 continue
             am = args if isinstance(args, dict) else {}
             if am and any(not isinstance(v, dict) for v in am.values()):
-                am = _parse_arg_spec(args)
+                am = parse_arg_spec(args)
             info = {
                 "type": et,
                 "code": C.create_elm_code(owner, group, int(code)),
@@ -213,7 +212,6 @@ class FormTable:
         bucket = form.get("element_map_by_name") or {}
         code_bucket = form.get("element_map_by_code") or {}
         nm = e.get("name")
-
         if nm in bucket:
             if (
                 _form_name(fc) == C.FM_CALL

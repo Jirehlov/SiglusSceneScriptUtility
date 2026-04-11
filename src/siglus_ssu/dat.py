@@ -3,23 +3,21 @@ import os
 import struct
 import sys
 import time
-
 from ._const_manager import get_const_module
-
 from . import disam
 from . import pck
 from .decompiler import build_decompile_hints, write_decompiled_ss
 from .common import (
     hx,
-    _fmt_ts,
-    _sha1,
-    _I32_STRUCT,
-    _I32_PAIR_STRUCT,
-    _read_struct_list,
-    _max_pair_end,
-    _add_gap_sections,
-    _print_sections,
-    _diff_kv,
+    fmt_ts,
+    sha1,
+    I32_STRUCT,
+    I32_PAIR_STRUCT,
+    read_struct_list,
+    max_pair_end,
+    add_gap_sections,
+    print_sections,
+    diff_kv,
     build_sections,
     read_bytes,
     is_named_filename,
@@ -34,11 +32,10 @@ from .common import (
 )
 
 C = get_const_module()
-
 DAT_TXT_OUT_DIR = None
 
 
-def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
+def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
     out = []
     try:
         blob_ofs = int(blob_ofs)
@@ -118,7 +115,7 @@ def _ensure_decompile_hints(bundles, decompile_hints=None, stats=None):
     return out
 
 
-def _is_decompiler_excluded_dat(dat_path=None, scene_name=None):
+def is_decompiler_excluded_dat(dat_path=None, scene_name=None):
     names = []
     if dat_path:
         name = os.path.basename(str(dat_path))
@@ -159,37 +156,37 @@ def _build_read_flag_defs(read_flag_list):
     return out
 
 
-def _dat_disassembly_bundle(
+def dat_disassembly_bundle(
     blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
 ):
     try:
-        decompiler_excluded = _is_decompiler_excluded_dat(dat_path, scene_name)
+        decompiler_excluded = is_decompiler_excluded_dat(dat_path, scene_name)
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
-        secs, meta = _dat_sections(blob)
+        secs, meta = dat_sections(blob)
         h = meta.get("header") or {}
         so, ss = bounds
         scn = blob[so : so + ss]
-        str_idx = _read_struct_list(
+        str_idx = read_struct_list(
             blob,
             h.get("str_index_list_ofs", 0),
             h.get("str_index_cnt", 0),
-            _I32_PAIR_STRUCT,
+            I32_PAIR_STRUCT,
         )
-        str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
+        str_blob_end = h.get("str_list_ofs", 0) + max_pair_end(str_idx) * 2
         str_list = (
-            _decode_xor_utf16le_strings(
+            decode_xor_utf16le_strings(
                 blob, str_idx, h.get("str_list_ofs", 0), str_blob_end
             )
             if str_idx
             else []
         )
-        label_list = _read_struct_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), _I32_STRUCT
+        label_list = read_struct_list(
+            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), I32_STRUCT
         )
-        z_label_list = _read_struct_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), _I32_STRUCT
+        z_label_list = read_struct_list(
+            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), I32_STRUCT
         )
         namae_defs = _build_namae_defs(meta.get("namae_list"), str_list)
         read_flag_defs = _build_read_flag_defs(meta.get("read_flag_list"))
@@ -249,7 +246,7 @@ def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
         if not isinstance(bundle, dict):
             if not isinstance(blob, (bytes, bytearray)):
                 return None, None
-            bundle = _dat_disassembly_bundle(blob, dat_path)
+            bundle = dat_disassembly_bundle(blob, dat_path)
         if not isinstance(bundle, dict):
             return None, None
         return out_dir, bundle
@@ -384,7 +381,7 @@ def _write_dat_decompiled(
         return None
 
 
-def _process_dat_output_items(items, stats=None):
+def process_dat_output_items(items, stats=None):
     bundle_list = []
     ready_items = []
     failed_paths = []
@@ -397,7 +394,7 @@ def _process_dat_output_items(items, stats=None):
         name = os.path.basename(str(dat_path or ""))
         write_status(f"Disassembling {name} ...")
         started = time.perf_counter()
-        bundle = _dat_disassembly_bundle(
+        bundle = dat_disassembly_bundle(
             blob,
             dat_path,
             pack_context=item.get("pack_context"),
@@ -548,10 +545,10 @@ def _payload_trace_lines(trace):
     return lines
 
 
-def _scn_payload_hash_bundle(
+def scn_payload_hash_bundle(
     blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
 ):
-    bundle = _dat_disassembly_bundle(
+    bundle = dat_disassembly_bundle(
         blob,
         dat_path=dat_path,
         pack_context=pack_context,
@@ -562,10 +559,10 @@ def _scn_payload_hash_bundle(
         return None
     lines = _payload_trace_lines(bundle.get("trace") or [])
     data = "\n".join(lines).encode("utf-8", "surrogatepass")
-    return {"size": len(data), "sha1": _sha1(data)}
+    return {"size": len(data), "sha1": sha1(data)}
 
 
-def _dat_sections(blob):
+def dat_sections(blob):
     n = len(blob)
 
     def _validate_header_size(hs, n, default):
@@ -576,15 +573,14 @@ def _dat_sections(blob):
     h, hs, used, secs, sec, sec_fixed = build_sections(
         blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE, _validate_header_size
     )
-
     sec(0, hs, "H", "scene_header")
-    str_idx = _read_struct_list(
+    str_idx = read_struct_list(
         blob,
         h.get("str_index_list_ofs", 0),
         h.get("str_index_cnt", 0),
-        _I32_PAIR_STRUCT,
+        I32_PAIR_STRUCT,
     )
-    str_blob_end = h.get("str_list_ofs", 0) + _max_pair_end(str_idx) * 2
+    str_blob_end = h.get("str_list_ofs", 0) + max_pair_end(str_idx) * 2
     sec_fixed(
         h.get("str_index_list_ofs", 0),
         h.get("str_index_cnt", 0),
@@ -686,7 +682,7 @@ def _dat_sections(blob):
         sec(h.get("call_prop_name_list_ofs", 0), cpn_end, "Q", "call_prop_name_list")
     namae_list = scn_meta.get("namae_list") or []
     read_flag_list = scn_meta.get("read_flag_list") or []
-    _add_gap_sections(secs, used, n)
+    add_gap_sections(secs, used, n)
     scn_prop_names = scn_meta.get("scn_prop_name_list") or []
     meta = {
         "header": h,
@@ -727,7 +723,7 @@ def dat(path, blob: bytes) -> int:
     if len(blob) < C.SCN_HDR_SIZE:
         print("too small for dat header")
         return 1
-    secs, meta = _dat_sections(blob)
+    secs, meta = dat_sections(blob)
     h = meta.get("header") or {}
     print("header:")
     print(f"  header_size={h.get('header_size', 0):d}")
@@ -761,7 +757,7 @@ def dat(path, blob: bytes) -> int:
             f"call_prop_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(cp) > len(pv) else '')}"
         )
     print("")
-    _print_sections(secs, len(blob))
+    print_sections(secs, len(blob))
     disam_stats = new_disam_stats()
     out_txt = _write_dat_disassembly(path, blob, stats=disam_stats)
     if out_txt:
@@ -778,7 +774,7 @@ def _gei_decode_txt(path):
     _, mode = struct.unpack_from("<ii", blob, 0)
     exe_el = b""
     if int(mode) != 0:
-        exe_el = pck._compute_exe_el(os.path.dirname(os.path.abspath(path)))
+        exe_el = pck.compute_exe_el(os.path.dirname(os.path.abspath(path)))
     from . import GEI
 
     info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
@@ -817,8 +813,8 @@ def analyze_gameexe_dat(path):
     print(f"file: {path}")
     print("type: gameexe_dat")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
-    print(f"mtime: {_fmt_ts(st.st_mtime)}")
-    print(f"sha1: {_sha1(blob)}")
+    print(f"mtime: {fmt_ts(st.st_mtime)}")
+    print(f"sha1: {sha1(blob)}")
     print("")
     if not blob or len(blob) < 8:
         print("invalid gameexe.dat: too small")
@@ -827,7 +823,7 @@ def analyze_gameexe_dat(path):
     payload_size = max(0, len(blob) - 8)
     exe_el = b""
     if int(mode) != 0:
-        exe_el = pck._compute_exe_el(os.path.dirname(os.path.abspath(path)))
+        exe_el = pck.compute_exe_el(os.path.dirname(os.path.abspath(path)))
     from . import GEI
 
     info = None
@@ -873,17 +869,16 @@ def compare_gameexe_dat(p1, p2):
         return 1
     _, m1 = struct.unpack_from("<ii", b1, 0)
     _, m2 = struct.unpack_from("<ii", b2, 0)
-    if int(m1) != 0 and (not pck._compute_exe_el(d1)):
+    if int(m1) != 0 and (not pck.compute_exe_el(d1)):
         sys.stderr.write(
             "Missing exe angou key under first Gameexe.dat folder (need \u6697\u53f7.dat or key.txt).\n"
         )
         return 1
-    if int(m2) != 0 and (not pck._compute_exe_el(d2)):
+    if int(m2) != 0 and (not pck.compute_exe_el(d2)):
         sys.stderr.write(
             "Missing exe angou key under second Gameexe.dat folder (need \u6697\u53f7.dat or key.txt).\n"
         )
         return 1
-
     try:
         _, t1 = _gei_decode_txt(p1)
         _, t2 = _gei_decode_txt(p2)
@@ -911,12 +906,12 @@ def compare_gameexe_dat(p1, p2):
 
 
 def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
-    s1, m1 = _dat_sections(b1)
-    s2, m2 = _dat_sections(b2)
+    s1, m1 = dat_sections(b1)
+    s2, m2 = dat_sections(b2)
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [
-        _diff_kv(k, h1.get(k), h2.get(k))
+        diff_kv(k, h1.get(k), h2.get(k))
         for k in C.SCN_HDR_FIELDS
         if h1.get(k) != h2.get(k)
     ]
@@ -956,8 +951,8 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
     c1 = None
     c2 = None
     if compare_payload:
-        c1 = _scn_payload_hash_bundle(b1)
-        c2 = _scn_payload_hash_bundle(b2)
+        c1 = scn_payload_hash_bundle(b1)
+        c2 = scn_payload_hash_bundle(b2)
         if c1 and c2:
             payload_same = c1.get("size") == c2.get("size") and c1.get(
                 "sha1"
@@ -984,5 +979,4 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
         else:
             print(f"failed to write: {p2}.txt")
         write_disam_totals(sys.stdout, disam_stats)
-
     return 0

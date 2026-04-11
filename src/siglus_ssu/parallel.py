@@ -2,14 +2,12 @@ import os
 from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Tuple, Dict
-
 from .common import format_scene_name
 
 
 def get_max_workers(max_workers: Optional[int] = None) -> int:
     if max_workers is not None and max_workers > 0:
         return max_workers
-
     cpu_count = os.cpu_count() or 4
     return min(cpu_count, 32)
 
@@ -32,20 +30,17 @@ def _compile_one_process(
 ) -> Tuple[str, Optional[str]]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
-
     try:
         from .CA import CharacterAnalizer
         from .common import read_text_auto, write_bytes, write_text
         from .LA import la_analize
         from .SA import SA
         from .MA import MA
-        from .BS import BS, _copy_ia_data
+        from .BS import BS, copy_ia_data
 
         scn = read_text_auto(ss_path, force_charset=(enc or ""))
-
-        iad = _copy_ia_data(ia_data)
+        iad = copy_ia_data(ia_data)
         pcad = {}
-
         ca = CharacterAnalizer()
         if not ca.analize_file(scn, iad, pcad):
             return (display_name, f"CA error at {display_name}:{ca.get_error_line()}")
@@ -55,11 +50,9 @@ def _compile_one_process(
                 pcad.get("scn_text", ""),
                 enc=("utf-8" if utf8 else "cp932"),
             )
-
         lad, err = la_analize(pcad)
         if err:
             return (display_name, f"LA error at {display_name}:{err.get('line', 0)}")
-
         sa = SA(iad, lad)
         ok, sad = sa.analize()
         if not ok:
@@ -68,14 +61,12 @@ def _compile_one_process(
                 display_name,
                 f"{sa.last.get('type') or 'SA_ERROR'} at {display_name}:{line}",
             )
-
         ma = MA(iad, lad, sad)
         ok, mad = ma.analize()
         if not ok:
             line = (ma.last.get("atom") or {}).get("line", 0)
             code = ma.last.get("type") or "MA_ERROR"
             return (display_name, f"{code} at {display_name}:{line}")
-
         bs = BS()
         bsd = {}
         if not bs.compile(iad, lad, mad, bsd):
@@ -83,12 +74,9 @@ def _compile_one_process(
                 display_name,
                 f"{bs.get_error_code()} at {display_name}:{bs.get_error_line()}",
             )
-
         out_path = os.path.join(tmp_path, "bs", nm + ".dat")
         write_bytes(out_path, bsd["out_scn"])
-
         return (display_name, None)
-
     except Exception as e:
         return (display_name, str(e))
 
@@ -102,22 +90,17 @@ def parallel_compile(
 
     if not ss_files:
         return
-
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
     enc = ctx.get("charset_force") or ""
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
-
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
-
     errors = []
     completed = 0
     total = len(ss_files)
-
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
-
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -132,23 +115,18 @@ def parallel_compile(
             )
             for ss_path in ss_files
         ]
-
         for future in as_completed(futures):
             display_name, error = future.result()
             completed += 1
-
             if error:
                 errors.append((display_name, error))
                 print(f"  [{completed}/{total}] FAIL: {display_name}")
             else:
                 print(f"  [{completed}/{total}] OK: {display_name}")
-
     if errors:
         for display_name, err in errors:
             print(f"  ERROR in {display_name}: {err}")
-
         raise RuntimeError(str(errors[0][1]))
-
     print(f"[PARALLEL] Compilation complete: {total} files")
 
 
@@ -156,7 +134,6 @@ def _lzss_compress_task(
     args: Tuple[str, str, str, bytes, int],
 ) -> Tuple[str, bytes, bytes, Optional[Exception]]:
     nm, dat_path, lz_path, easy_code, lzss_level = args
-
     try:
         from .common import read_bytes, write_bytes
         from . import compiler as _m
@@ -165,7 +142,6 @@ def _lzss_compress_task(
         if not os.path.isfile(dat_path):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         dat = read_bytes(dat_path)
-
         if not easy_code:
             raise RuntimeError("ctx.easy_angou_code is not set")
         lz = _m.lzss_pack(dat, level=lzss_level)
@@ -173,9 +149,7 @@ def _lzss_compress_task(
         xor_cycle_inplace(b, easy_code, 0)
         lz = bytes(b)
         write_bytes(lz_path, lz)
-
         return (nm, dat, lz, None)
-
     except Exception as e:
         return (nm, b"", b"", e)
 
@@ -190,7 +164,6 @@ def parallel_lzss_compress(
     from .common import read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
-
     if not lzss_mode:
         enc_names = []
         dat_list = []
@@ -202,9 +175,7 @@ def parallel_lzss_compress(
             dat_list.append(dat)
             enc_names.append(nm)
         return (enc_names, dat_list, [])
-
     lzss_level = ctx.get("lzss_level", 17)
-
     tasks = [
         (
             nm,
@@ -215,17 +186,12 @@ def parallel_lzss_compress(
         )
         for nm in scn_names
     ]
-
     workers = get_max_workers(max_workers)
-
     results = {}
     errors = []
-
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
-
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(_lzss_compress_task, task) for task in tasks]
-
         for future in as_completed(futures):
             nm, dat, lz, error = future.result()
             if error:
@@ -233,10 +199,8 @@ def parallel_lzss_compress(
             else:
                 results[nm] = (dat, lz)
                 print(f"  LZSS: {format_scene_name(nm + '.ss', ctx)}")
-
     if errors:
         raise RuntimeError(str(errors[0][1]))
-
     enc_names = []
     dat_list = []
     lzss_list = []
@@ -246,7 +210,6 @@ def parallel_lzss_compress(
             enc_names.append(nm)
             dat_list.append(dat)
             lzss_list.append(lz)
-
     print("[PARALLEL] LZSS compression complete")
     return (enc_names, dat_list, lzss_list)
 
@@ -255,25 +218,19 @@ def _source_encrypt_task(
     args: Tuple[str, str, str, Dict, bool, int],
 ) -> Tuple[str, int, bytes, Optional[Exception]]:
     rel, src_path, cache_path, source_angou, skip, lzss_level = args
-
     try:
         from .common import read_bytes, write_cached_bytes
         from . import compiler as _m
 
         if not os.path.isfile(src_path):
             return (rel, 0, b"", None)
-
         ctx = {"source_angou": source_angou, "lzss_level": lzss_level}
-
         raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         write_cached_bytes(cache_path, enc_blob)
-
         size = len(enc_blob) & 0xFFFFFFFF
         chunk = enc_blob if not skip else b""
-
         return (rel, size, chunk, None)
-
     except Exception as e:
         return (rel, 0, b"", e)
 
@@ -289,10 +246,8 @@ def parallel_source_encrypt(
     source_angou = ctx.get("source_angou")
     if not source_angou:
         return ([], [])
-
     if tmp_path:
         os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
-
     tasks = []
     lzss_level = ctx.get("lzss_level", 17)
     for rel in rel_list:
@@ -301,17 +256,12 @@ def parallel_source_encrypt(
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
         tasks.append((rel, src_path, cache_path, source_angou, skip, lzss_level))
-
     workers = get_max_workers(max_workers)
-
     results = {}
     errors = []
-
     print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
-
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(_source_encrypt_task, task) for task in tasks]
-
         for future in as_completed(futures):
             rel, size, chunk, error = future.result()
             if error:
@@ -319,10 +269,8 @@ def parallel_source_encrypt(
             elif size > 0:
                 results[rel] = (size, chunk)
                 print(f"  OS: {rel}")
-
     if errors:
         raise RuntimeError(str(errors[0][1]))
-
     sizes = []
     chunks = []
     for rel in rel_list:
@@ -331,15 +279,13 @@ def parallel_source_encrypt(
             sizes.append(size)
             if not skip and chunk:
                 chunks.append(chunk)
-
     print(f"[PARALLEL] Source encryption complete: {len(sizes)} files")
     return (sizes, chunks)
 
 
 def _seed_chunk_worker(args):
     seed_start, count, n, target_pairs = args
-
-    from .BS import _MSVCRand
+    from .BS import MSVCRand
 
     n = int(n)
     ss = int(seed_start)
@@ -348,7 +294,7 @@ def _seed_chunk_worker(args):
     target_ofs = [p[0] for p in target_pairs]
     lens = [p[1] for p in target_pairs]
     for s in range(ss, ss + cc):
-        rng = _MSVCRand(int(s) & 0xFFFFFFFF)
+        rng = MSVCRand(int(s) & 0xFFFFFFFF)
         a = list(range(n))
         rng.shuffle(a)
         ofs = 0
@@ -378,33 +324,26 @@ def find_shuffle_seed_parallel(
     import concurrent.futures
     import sys
     import time
-
     import math
 
     target = [(int(o), int(ln)) for o, ln in target_idx_pairs]
     n = len(target)
-
     if workers is None:
         workers = _env_or("SSU_TEST_SHUFFLE_WORKERS", int, 0)
         if not workers:
             workers = get_max_workers(None)
     workers = max(1, int(workers))
-
     if chunk is None:
         chunk = _env_or("SSU_TEST_SHUFFLE_CHUNK", int, 0)
         if not chunk:
             chunk = 200
     chunk = max(1, int(chunk))
-
     if progress_iv is None:
         progress_iv = _env_or("SSU_TEST_SHUFFLE_PROGRESS", float, 0.0)
         if progress_iv <= 0:
             progress_iv = 1.0
-
     seed0 = int(seed0) & 0xFFFFFFFF
-
     prefix = "[test-shuffle]"
-
     try:
         from . import native_ops as _native_ops
 
@@ -415,7 +354,6 @@ def find_shuffle_seed_parallel(
     except Exception:
         find_shuffle_seed_first = None
         has_native_scan = False
-
     if has_native_scan and callable(find_shuffle_seed_first):
         r = find_shuffle_seed_first(
             target,
@@ -426,9 +364,7 @@ def find_shuffle_seed_parallel(
         )
         if r is not None:
             return int(r) & 0xFFFFFFFF
-
         return None
-
     t0 = time.time()
     last = t0
     limit = 2**32
@@ -473,20 +409,17 @@ def find_shuffle_seed_parallel(
                     scheduled += count
                 if not futs:
                     break
-
                 found = None
                 for fut in concurrent.futures.as_completed(futs):
                     r = fut.result()
                     if r is not None:
                         found = int(r) & 0xFFFFFFFF
                         break
-
                 if found is not None:
                     for fut in futs:
                         with suppress(Exception):
                             fut.cancel()
                     return found
-
                 done += scheduled
                 now = time.time()
                 if now - last >= progress_iv:

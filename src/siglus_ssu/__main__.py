@@ -11,9 +11,9 @@ def _prog():
 
 
 def _get_version() -> str:
-    from ._const_manager import _package_version
+    from ._const_manager import package_version
 
-    return _package_version() or "unknown"
+    return package_version() or "unknown"
 
 
 def _print_version(out=None) -> None:

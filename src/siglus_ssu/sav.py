@@ -1,10 +1,8 @@
 import os
 import struct
-
 from ._const_manager import get_const_module
-
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
-from .common import _sha1, _dn
+from .common import dn, sha1
 
 C = get_const_module()
 
@@ -115,7 +113,7 @@ def _stream_info(b):
     bb = bytes(b) if b else b""
     return {
         "size": int(len(bb)),
-        "sha1": _sha1(bb),
+        "sha1": sha1(bb),
         "head": _parse_save_stream_head(bb),
     }
 
@@ -126,7 +124,7 @@ def _parse_local_stream_ex(b):
     if n == 0:
         return {
             "size": 0,
-            "sha1": _sha1(b""),
+            "sha1": sha1(b""),
             "local_extra_switch": [],
             "local_extra_mode": [],
         }
@@ -146,7 +144,7 @@ def _parse_local_stream_ex(b):
         if n < md_off + md_bytes:
             sw_stride = None
     if sw_stride is None:
-        return {"size": int(n), "sha1": _sha1(bb), "raw_hex": bb.hex()}
+        return {"size": int(n), "sha1": sha1(bb), "raw_hex": bb.hex()}
     out_sw = []
     off = 0
     for _ in range(sw_cnt):
@@ -168,7 +166,7 @@ def _parse_local_stream_ex(b):
     tail = bb[off:]
     d = {
         "size": int(n),
-        "sha1": _sha1(bb),
+        "sha1": sha1(bb),
         "local_extra_switch": out_sw,
         "local_extra_mode": out_md,
     }
@@ -319,7 +317,7 @@ def _parse_read_sav(blob):
         "scn_cnt": int(scn_cnt),
         "pack_size": int(pack_sz),
         "org_size": int(org_sz),
-        "unpacked_sha1": _sha1(unpacked),
+        "unpacked_sha1": sha1(unpacked),
         "rows": rows,
         "total_read": tr,
         "total_cnt": tc,
@@ -607,7 +605,7 @@ def _parse_global_or_config(blob):
         raise ValueError("not global/config sav")
     enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
     raw = _unpack_tnm_data(enc)
-    sha1 = _sha1(raw)
+    sha1_hex = sha1(raw)
     if k["kind"] == "global":
         payload, variant, err = _try_parse_global_payload(raw, k["major"], k["minor"])
     else:
@@ -615,7 +613,7 @@ def _parse_global_or_config(blob):
     return {
         **k,
         "unpacked_size": len(raw),
-        "unpacked_sha1": sha1,
+        "unpacked_sha1": sha1_hex,
         "payload": payload,
         "payload_variant": variant,
         "payload_error": err,
@@ -764,7 +762,7 @@ def _detect_kind(blob):
     return None
 
 
-def _looks_like_sav(blob):
+def looks_like_sav(blob):
     return _detect_kind(blob) is not None
 
 
@@ -835,7 +833,7 @@ def sav(blob, path=None):
             if cnt <= 0:
                 continue
             pct = (r * 1000) // cnt
-            print(f"{r:6d}/{cnt:6d}   {pct // 10:3d}.{pct % 10:d}%   {_dn(name, w)}")
+            print(f"{r:6d}/{cnt:6d}   {pct // 10:3d}.{pct % 10:d}%   {dn(name, w)}")
         print("-" * 40)
         tr = info["total_read"]
         tc = info["total_cnt"]
@@ -888,7 +886,7 @@ def sav(blob, path=None):
         else:
             print(f"screen_size_mode: {p.get('screen_size_mode')}")
             print(f"all_sound_user_volume: {p.get('all_sound_user_volume')}")
-            print(f"font_name: {_dn(p.get('font_name', ''), 40)}")
+            print(f"font_name: {dn(p.get('font_name', ''), 40)}")
             print(f"koe_mode: {p.get('koe_mode')}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
             print(f"object_disp_flag_cnt: {len(p.get('object_disp_flag') or [])}")
@@ -904,7 +902,6 @@ def sav(blob, path=None):
             else:
                 _dump_payload_full("", p)
         return 0
-
     if k["kind"] == "local":
         w = int(C.NAME_W)
         print("==== local save (.sav) ====")
@@ -912,12 +909,12 @@ def sav(blob, path=None):
         print(
             f"time: {k['year']:04d}-{k['month']:02d}-{k['day']:02d} (w={k['weekday']}) {k['hour']:02d}:{k['minute']:02d}:{k['second']:02d}.{k['millisecond']:03d}"
         )
-        print(f"append_name: {_dn(k['append_name'], w)}")
-        print(f"title: {_dn(k['title'], w)}")
-        print(f"message: {_dn(k['message'], w)}")
-        print(f"full_message: {_dn(k['full_message'], w)}")
-        print(f"comment: {_dn(k['comment'], w)}")
-        print(f"comment2: {_dn(k['comment2'], w)}")
+        print(f"append_name: {dn(k['append_name'], w)}")
+        print(f"title: {dn(k['title'], w)}")
+        print(f"message: {dn(k['message'], w)}")
+        print(f"full_message: {dn(k['full_message'], w)}")
+        print(f"comment: {dn(k['comment'], w)}")
+        print(f"comment2: {dn(k['comment2'], w)}")
         print(f"flags_nonzero: {k['flags_nonzero']}/256")
         print(f"data_size: {k['data_size']}")
         if k.get("pack_size") is not None:
@@ -932,7 +929,7 @@ def sav(blob, path=None):
             xor_cycle_inplace(enc, C.TPC, 0)
             try:
                 unpacked = lzss_unpack(bytes(enc))
-                print(f"unpacked_sha1: {_sha1(unpacked)}")
+                print(f"unpacked_sha1: {sha1(unpacked)}")
                 try:
                     p, var = _parse_local_payload(unpacked)
                     print(f"parse_variant: {var!s}")
@@ -994,7 +991,7 @@ def compare_sav(b1, b2):
                 cnt2, r2 = cb
                 pct2 = (r2 * 1000) // cnt2 if cnt2 else 0
                 print(
-                    f"{'-':>6s}/{'-':>6s} -> {r2:6d}/{cnt2:6d}   {pct2 // 10:3d}.{pct2 % 10:d}%   {_dn(name, w)}"
+                    f"{'-':>6s}/{'-':>6s} -> {r2:6d}/{cnt2:6d}   {pct2 // 10:3d}.{pct2 % 10:d}%   {dn(name, w)}"
                 )
                 changed += 1
                 continue
@@ -1002,7 +999,7 @@ def compare_sav(b1, b2):
                 cnt1, r1 = ca
                 pct1 = (r1 * 1000) // cnt1 if cnt1 else 0
                 print(
-                    f"{r1:6d}/{cnt1:6d} -> {'-':>6s}/{'-':>6s}   {pct1 // 10:3d}.{pct1 % 10:d}%   {_dn(name, w)}"
+                    f"{r1:6d}/{cnt1:6d} -> {'-':>6s}/{'-':>6s}   {pct1 // 10:3d}.{pct1 % 10:d}%   {dn(name, w)}"
                 )
                 changed += 1
                 continue
@@ -1013,7 +1010,7 @@ def compare_sav(b1, b2):
             pct1 = (r1 * 1000) // cnt1 if cnt1 else 0
             pct2 = (r2 * 1000) // cnt2 if cnt2 else 0
             print(
-                f"{r1:6d}/{cnt1:6d} -> {r2:6d}/{cnt2:6d}   {pct1 // 10:3d}.{pct1 % 10:d}% -> {pct2 // 10:3d}.{pct2 % 10:d}%   {_dn(name, w)}"
+                f"{r1:6d}/{cnt1:6d} -> {r2:6d}/{cnt2:6d}   {pct1 // 10:3d}.{pct1 % 10:d}% -> {pct2 // 10:3d}.{pct2 % 10:d}%   {dn(name, w)}"
             )
             changed += 1
         print("")
@@ -1082,7 +1079,7 @@ def compare_sav(b1, b2):
                         continue
                     if (not va) and (not vb):
                         continue
-                    print(f"{key}[{i}]: {_dn(va, 60)!s} -> {_dn(vb, 60)!s}")
+                    print(f"{key}[{i}]: {dn(va, 60)!s} -> {dn(vb, 60)!s}")
                     shown += 1
                     if shown >= 200:
                         break
@@ -1109,7 +1106,7 @@ def compare_sav(b1, b2):
                 laa = ea.get("look_flag") if isinstance(ea, dict) else None
                 lbb = eb.get("look_flag") if isinstance(eb, dict) else None
                 print(
-                    f"chrkoe[{i}]: ({_dn(na, 60)!s},{laa!s}) -> ({_dn(nb, 60)!s},{lbb!s})"
+                    f"chrkoe[{i}]: ({dn(na, 60)!s},{laa!s}) -> ({dn(nb, 60)!s},{lbb!s})"
                 )
                 shown += 1
                 if shown >= 200:
@@ -1169,8 +1166,8 @@ def compare_sav(b1, b2):
                 v1 = pa.get(k)
                 v2 = pb.get(k)
                 if isinstance(v1, str) or isinstance(v2, str):
-                    v1 = _dn(v1 or "", 80)
-                    v2 = _dn(v2 or "", 80)
+                    v1 = dn(v1 or "", 80)
+                    v2 = dn(v2 or "", 80)
                 print(f"{k}: {v1!s} -> {v2!s}")
             for k in (
                 "screen_size_scale",
@@ -1234,10 +1231,10 @@ def compare_sav(b1, b2):
             return f"{k['year']:04d}-{k['month']:02d}-{k['day']:02d} {k['hour']:02d}:{k['minute']:02d}:{k['second']:02d}.{k['millisecond']:03d}"
 
         print(
-            f"ver1: {k1['major']}.{k1['minor']}  time1={ts(k1)}  title1={_dn(k1['title'], w)}"
+            f"ver1: {k1['major']}.{k1['minor']}  time1={ts(k1)}  title1={dn(k1['title'], w)}"
         )
         print(
-            f"ver2: {k2['major']}.{k2['minor']}  time2={ts(k2)}  title2={_dn(k2['title'], w)}"
+            f"ver2: {k2['major']}.{k2['minor']}  time2={ts(k2)}  title2={dn(k2['title'], w)}"
         )
         diff = []
         for key in (
@@ -1268,8 +1265,8 @@ def compare_sav(b1, b2):
             v1 = k1.get(key)
             v2 = k2.get(key)
             if isinstance(v1, str) or isinstance(v2, str):
-                v1 = _dn(v1, w)
-                v2 = _dn(v2, w)
+                v1 = dn(v1, w)
+                v2 = dn(v2, w)
             print(f"{key}: {v1!s} -> {v2!s}")
         return 0
     return 0

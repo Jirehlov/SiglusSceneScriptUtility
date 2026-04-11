@@ -1,6 +1,5 @@
 from ._const_manager import get_const_module
-
-from .CA import _iszen
+from .CA import is_zen
 
 C = get_const_module()
 
@@ -62,9 +61,9 @@ def la_analize(pcad):
         elif c == "\u3011":
             a["type"] = C.LA_T["CLOSE_SUMI"]
             i += 1
-        elif _iszen(c):
+        elif is_zen(c):
             st = i
-            while _iszen(s[i]) and s[i] not in "\u3010\u3011":
+            while is_zen(s[i]) and s[i] not in "\u3010\u3011":
                 i += 1
             str_list.append(s[st:i])
             a["type"] = C.LA_T["VAL_STR"]

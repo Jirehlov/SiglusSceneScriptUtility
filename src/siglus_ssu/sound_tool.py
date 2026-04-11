@@ -7,10 +7,9 @@ import tempfile
 import threading
 from contextlib import suppress
 from dataclasses import dataclass
-
 import psutil
-
 from .common import (
+    ANGOU_DAT_NAME,
     collect_batch_files,
     eprint,
     hint_help as _hint_help,
@@ -55,12 +54,11 @@ def _analyze_one(path: str) -> int:
     print(_fmt_kv("path", path))
     print(_fmt_kv("type", ext.lstrip(".") or "unknown"))
     print(_fmt_kv("size_bytes", size))
-
     if ext == ".nwa":
         with open(path, "rb") as f:
-            data = f.read(sound._NWA_HEADER_STRUCT.size)
+            data = f.read(sound.NWA_HEADER_STRUCT.size)
         try:
-            header = sound._parse_nwa_header(data)
+            header = sound.parse_nwa_header(data)
         except EOFError:
             eprint("error: NWA header truncated")
             return 1
@@ -76,9 +74,7 @@ def _analyze_one(path: str) -> int:
         unit_sample_cnt = header.unit_sample_cnt
         last_sample_cnt = header.last_sample_cnt
         last_sample_pack_size = header.last_sample_pack_size
-
         dur = sample_cnt / float(samples_per_sec) if samples_per_sec else None
-
         print(_fmt_kv("channels", channels))
         print(_fmt_kv("bits_per_sample", bits_per_sample))
         print(_fmt_kv("samples_per_sec", samples_per_sec))
@@ -94,7 +90,6 @@ def _analyze_one(path: str) -> int:
         print(_fmt_kv("pack_size", pack_size))
         print(_fmt_kv("last_sample_pack_size", last_sample_pack_size))
         return 0
-
     if ext == ".ovk":
         import struct
 
@@ -121,7 +116,6 @@ def _analyze_one(path: str) -> int:
             print(_fmt_kv(f"entry[{i}].size", int(size_)))
             print(_fmt_kv(f"entry[{i}].smp_cnt", int(smp_cnt_)))
         return 0
-
     if ext == ".owp":
         try:
             with open(path, "rb") as f:
@@ -138,7 +132,6 @@ def _analyze_one(path: str) -> int:
             print(_fmt_kv("looks_like_ogg", bool(is_ogg)))
             if xor_key is not None:
                 print(_fmt_kv("xor_key_candidate", xor_key))
-
             ogg = sound.decode_owp_to_ogg_bytes(path)
             print(
                 _fmt_kv("decoded_magic", ogg[:4].decode("latin1", "backslashreplace"))
@@ -148,7 +141,6 @@ def _analyze_one(path: str) -> int:
             eprint(f"error: OWP decode failed: {e}")
             return 1
         return 0
-
     eprint("error: unsupported file type (expected .nwa/.ovk/.owp)")
     return 1
 
@@ -186,7 +178,7 @@ def _load_gameexe_ini_text(gameexe_path: str) -> str:
     if ext == ".ini":
         return read_text_auto(gameexe_path)
     os_dir = os.path.dirname(os.path.abspath(gameexe_path))
-    cands = list(pck._iter_exe_el_candidates(os_dir))
+    cands = list(pck.iter_exe_el_candidates(os_dir))
     if not cands:
         cands = [b""]
     last_err = None
@@ -195,7 +187,7 @@ def _load_gameexe_ini_text(gameexe_path: str) -> str:
             info, txt = GEI.read_gameexe_dat(gameexe_path, exe_el=exe_el)
             if info.get("mode") and not info.get("used_exe_el"):
                 raise RuntimeError(
-                    "Gameexe.dat is encrypted with exe angou; missing 暗号.dat/key.txt to derive key"
+                    f"Gameexe.dat is encrypted with exe angou; missing {ANGOU_DAT_NAME}/key.txt to derive key"
                 )
             if not txt:
                 raise RuntimeError("Failed to decode Gameexe.dat payload")
@@ -220,7 +212,6 @@ def _ffmpeg_trim_ogg_bytes(
         raise RuntimeError("invalid repeat position (start_sample < 0)")
     if end_sample != -1 and end_sample <= start_sample:
         raise RuntimeError("invalid trim range (end_sample <= start_sample)")
-
     os.makedirs(tmp_dir, exist_ok=True)
     in_fd, in_path = tempfile.mkstemp(prefix="siglus_in_", suffix=".ogg", dir=tmp_dir)
     out_fd, out_path = tempfile.mkstemp(
@@ -231,12 +222,10 @@ def _ffmpeg_trim_ogg_bytes(
     try:
         with open(in_path, "wb") as f:
             f.write(ogg_bytes)
-
         if end_sample == -1:
             af = f"atrim=start_sample={start_sample},asetpts=PTS-STARTPTS"
         else:
             af = f"atrim=start_sample={start_sample}:end_sample={end_sample},asetpts=PTS-STARTPTS"
-
         cmd = [
             ffmpeg_path,
             "-hide_banner",
@@ -258,7 +247,6 @@ def _ffmpeg_trim_ogg_bytes(
         if p.returncode != 0:
             err = (p.stderr or b"").decode("utf-8", "backslashreplace").strip()
             raise RuntimeError("ffmpeg trim failed: " + (err or "unknown error"))
-
         with open(out_path, "rb") as f:
             return f.read()
     finally:
@@ -286,21 +274,17 @@ def _normalize_playback_range(
         raise RuntimeError("invalid start position (start_sample < 0)")
     if repeat_sample < 0:
         raise RuntimeError("invalid repeat position (repeat_sample < 0)")
-
-    total_sample_cnt = sound._ogg_calc_smp_cnt(ogg_bytes)
+    total_sample_cnt = sound.ogg_calc_smp_cnt(ogg_bytes)
     if total_sample_cnt <= 0:
         raise RuntimeError("failed to determine Ogg sample count")
-
     if end_sample == -1 or end_sample > total_sample_cnt:
         end_sample = total_sample_cnt
-
     if start_sample > total_sample_cnt:
         raise RuntimeError("invalid start position (start_sample > total_sample_cnt)")
     if repeat_sample < start_sample:
         raise RuntimeError("invalid repeat position (repeat_sample < start_sample)")
     if repeat_sample >= end_sample:
         raise RuntimeError("invalid loop range (end_sample <= repeat_sample)")
-
     return start_sample, end_sample, repeat_sample
 
 
@@ -312,14 +296,12 @@ def _build_ffplay_audio_filter(
     loop_size = end_sample - repeat_sample
     if loop_size <= 0:
         raise RuntimeError("invalid loop size")
-
     loop_filter = (
         f"atrim=start_sample={repeat_sample}:end_sample={end_sample},"
         f"asetpts=PTS-STARTPTS,aloop=loop=-1:size={loop_size}"
     )
     if start_sample == repeat_sample:
         return loop_filter
-
     return (
         "asplit=2[intro_src][loop_src];"
         f"[intro_src]atrim=start_sample={start_sample}:end_sample={repeat_sample},"
@@ -334,7 +316,6 @@ def _prepare_playback_input(src_path: str):
     ext = ext.lower()
     if ext not in (".owp", ".ogg"):
         raise RuntimeError("unsupported file type (expected .owp or .ogg)")
-
     ogg = sound.decode_owp_to_ogg_bytes(src_path)
     tmp_dir = ""
     play_path = src_path
@@ -342,7 +323,6 @@ def _prepare_playback_input(src_path: str):
         tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
         play_path = os.path.join(tmp_dir, base_name + ".ogg")
         write_bytes(play_path, ogg)
-
     return base_name, ogg, play_path, tmp_dir
 
 
@@ -396,7 +376,6 @@ def _collect_playback_entries(inp: str):
             eprint("error: unsupported file type for --play (expected .owp or .ogg)")
             return [], 1
         return [_make_playback_entry(inp)], None
-
     files, rc = collect_batch_files(
         inp,
         True,
@@ -430,10 +409,8 @@ def _parse_player_command(command: str, has_playlist: bool):
     text = str(command or "").strip()
     if not text:
         return "noop", None
-
     parts = text.split()
     head = parts[0].lower()
-
     if head in ("h", "help", "?"):
         return "help", None
     if head in ("p", "pause", "toggle"):
@@ -757,10 +734,8 @@ def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
     bn = os.path.basename(src_path)
     base_name, ext = os.path.splitext(bn)
     ext = ext.lower()
-
     out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
     os.makedirs(out_dir, exist_ok=True)
-
     if ext == ".ogg":
         with open(src_path, "rb") as f:
             ogg = f.read()
@@ -768,7 +743,6 @@ def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
         out_path = os.path.join(out_dir, base_name + ".owp")
         write_bytes(out_path, owp)
         return 1
-
     raise RuntimeError("unsupported file type (expected .ogg)")
 
 
@@ -783,16 +757,12 @@ def _extract_one(
     bn = os.path.basename(src_path)
     base_name, ext = os.path.splitext(bn)
     ext = ext.lower()
-
     out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
     os.makedirs(out_dir, exist_ok=True)
-
     if ext == ".owp":
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
-
         if trim_table is not None:
             start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
-
             eprint(
                 f"trim {base_name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
             )
@@ -803,15 +773,12 @@ def _extract_one(
                 ffmpeg_path=ffmpeg_path,
                 tmp_dir=tmp_dir,
             )
-
         write_bytes(os.path.join(out_dir, base_name + ".ogg"), ogg)
         return 1
-
     if ext == ".nwa":
         wav = sound.decode_nwa_to_wav_bytes(src_path)
         write_bytes(os.path.join(out_dir, base_name + ".wav"), wav)
         return 1
-
     if ext == ".ovk":
         entries = sound.read_ovk_table(src_path)
         if not entries:
@@ -826,7 +793,6 @@ def _extract_one(
             write_bytes(os.path.join(out_dir, out_name), ogg)
             wrote += 1
         return wrote
-
     return 0
 
 
@@ -836,7 +802,6 @@ def main(argv=None) -> int:
     )
     if rc is not None:
         return rc
-
     if mode == "a":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
@@ -849,7 +814,6 @@ def main(argv=None) -> int:
         if missing_input_file(inp):
             return 1
         return _analyze_one(inp)
-
     if mode == "c":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
@@ -864,7 +828,6 @@ def main(argv=None) -> int:
         )
         if rc is not None:
             return rc
-
         tasks = []
         if src_is_dir:
             suffix_re = re.compile(r"^(?P<base>.+)_(?P<no>-?\d+)$")
@@ -881,7 +844,6 @@ def main(argv=None) -> int:
                 no = int(m.group("no"))
                 key = (rel_dir, base2)
                 groups.setdefault(key, []).append((no, src_path))
-
             for (rel_dir, base2), items in sorted(
                 groups.items(), key=lambda x: (x[0][0], x[0][1])
             ):
@@ -917,7 +879,6 @@ def main(argv=None) -> int:
             return 1, 1
 
         return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
-
     if mode == "play":
         if len(argv) not in (1, 2):
             eprint(
@@ -925,24 +886,20 @@ def main(argv=None) -> int:
             )
             _hint_help()
             return 2
-
         inp = argv[0]
         trim_path = _resolve_play_gameexe_path(inp, argv[1] if len(argv) == 2 else "")
         if not os.path.isfile(trim_path):
             eprint(f"Gameexe source not found: {trim_path}")
             return 1
-
         ffplay_path = shutil.which("ffplay") or ""
         gei_txt = _load_gameexe_ini_text(trim_path)
         trim_table = _parse_bgm_table(gei_txt)
         if not trim_table:
             eprint("error: no #BGM.* entries found in Gameexe source")
             return 1
-
         entries, rc = _collect_playback_entries(inp)
         if rc is not None:
             return rc
-
         entries, skipped = _filter_playback_entries(entries, trim_table)
         if skipped:
             for entry in skipped:
@@ -952,7 +909,6 @@ def main(argv=None) -> int:
         if not entries:
             eprint("error: no playable audio files matched #BGM.* entries")
             return 1
-
         try:
             return _run_interactive_player(
                 entries,
@@ -962,7 +918,6 @@ def main(argv=None) -> int:
         except Exception as exc:
             eprint(f"error: {exc}")
             return 1
-
     trim_path = ""
     if "--trim" in argv:
         i = argv.index("--trim")
@@ -972,7 +927,6 @@ def main(argv=None) -> int:
             return 2
         trim_path = argv[i + 1]
         del argv[i : i + 2]
-
     inp, out_root, src_is_dir, rc = prepare_batch_paths(
         argv,
         _hint_help,
@@ -981,12 +935,10 @@ def main(argv=None) -> int:
     )
     if rc is not None:
         return rc
-
     trim_table = None
     ffmpeg_path = ""
     tmp_dir = ""
     tmp_dir_owned = False
-
     if trim_path:
         ffmpeg_path = shutil.which("ffmpeg") or ""
         if not ffmpeg_path:
@@ -995,22 +947,18 @@ def main(argv=None) -> int:
         if not os.path.isfile(trim_path):
             eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
-
         gei_txt = _load_gameexe_ini_text(trim_path)
         trim_table = _parse_bgm_table(gei_txt)
         if not trim_table:
             eprint("error: no #BGM.* entries found in Gameexe.dat")
             return 1
-
         tmp_dir = os.path.join(out_root, ".tmp_ffmpeg")
         try:
             os.makedirs(tmp_dir, exist_ok=True)
         except Exception:
             tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
             tmp_dir_owned = True
-
     os.makedirs(out_root, exist_ok=True)
-
     files, rc = collect_batch_files(
         inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
     )

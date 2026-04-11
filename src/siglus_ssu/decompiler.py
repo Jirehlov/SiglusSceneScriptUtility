@@ -3,9 +3,8 @@ import functools
 import os
 import re
 from contextlib import suppress
-from .CA import _iszen
+from .CA import is_zen
 from ._const_manager import get_const_module
-
 from . import disam
 from .common import (
     augment_receiver_form_codes,
@@ -22,7 +21,6 @@ from .common import (
 )
 
 C = get_const_module()
-
 _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"
 
@@ -151,7 +149,7 @@ def _name_needs_macro(text):
     for ch in s:
         if ch in (_OPEN_NAME, _CLOSE_NAME, "\r", "\n", "\t"):
             return True
-        if not _iszen(ch):
+        if not is_zen(ch):
             return True
     return False
 
@@ -223,7 +221,6 @@ _SYMBOLIC_STR_KEYWORDS = frozenset(
         "default",
     }
 )
-
 _ELEMENT_INDEX_CACHE_KEY = None
 _ELEMENT_INDEX_CACHE = None
 _SYMBOLIC_STRING_BLOCKER_CACHE_KEY = None
@@ -1881,7 +1878,7 @@ class _Decompiler:
                 return base
             return name or str((info or {}).get("q", "") or "")
 
-        expr_state = disam._new_expression_state(
+        expr_state = disam.new_expression_state(
             fm_global=fm_global,
             fm_void=fm_void,
             fm_int=fm_int,

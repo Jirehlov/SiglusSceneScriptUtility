@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import argparse
 import re
 import struct
@@ -7,7 +6,6 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-
 import pefile
 
 try:
@@ -25,8 +23,6 @@ try:
     )
 except ImportError:
     Cs = None
-
-
 IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 LIST_MEMBER_NAMES = {"alloc", "array", "free", "free_all", "get_size", "resize"}
 ROOT_FORM_CODES = {1000, 1010, 1020}
@@ -121,31 +117,26 @@ def extract_compare_forms(pe: pefile.PE) -> dict[int, str]:
             continue
         if text[offset + 12 : offset + 14] != b"\x84\xc0":
             continue
-
         if text[offset + 14] == 0x74:
             code_pos = offset + 16
         elif text[offset + 14 : offset + 16] == b"\x0f\x84":
             code_pos = offset + 20
         else:
             continue
-
         if code_pos + 7 > len(text):
             continue
         if text[code_pos] != 0xB8 or text[code_pos + 5 : code_pos + 7] != b"\x5e\xc3":
             continue
-
         name = _normalize_ident(_read_wstr(pe, _u32(text, offset + 1)))
         code = _s32(text, code_pos + 1)
         if name is None or code < -16 or code > 10000:
             continue
-
         existing = forms.get(code)
         if existing is not None and existing != name:
             raise RuntimeError(
                 f"conflicting form names for code {code}: {existing!r} vs {name!r}"
             )
         forms[code] = name
-
     for code, name in FIXED_FORMS.items():
         forms.setdefault(code, name)
     return forms
@@ -157,7 +148,6 @@ def extract_static_forms(pe: pefile.PE) -> dict[int, str]:
     prev_base: int | None = None
     run: list[tuple[int, int, str, int]] = []
     best_run: list[tuple[int, int, str, int]] = []
-
     for offset in range(0, len(text) - 26):
         if (
             text[offset] != 0x68
@@ -165,19 +155,16 @@ def extract_static_forms(pe: pefile.PE) -> dict[int, str]:
             or text[offset + 10] != 0xE8
         ):
             continue
-
         base_addr = _u32(text, offset + 6)
         code_pos = offset + 15
         if text[code_pos : code_pos + 2] != b"\xc7\x05":
             continue
         if _u32(text, code_pos + 2) != base_addr + 0x18:
             continue
-
         name = _normalize_ident(_read_wstr(pe, _u32(text, offset + 1)))
         if name is None:
             continue
         code = _s32(text, code_pos + 6)
-
         item = (offset, base_addr, name, code)
         if prev_base is None or base_addr == prev_base + 0x1C:
             run.append(item)
@@ -186,10 +173,8 @@ def extract_static_forms(pe: pefile.PE) -> dict[int, str]:
                 best_run = run
             run = [item]
         prev_base = base_addr
-
     if len(run) > len(best_run):
         best_run = run
-
     for _, _, name, code in best_run:
         forms[code] = name
     return forms
@@ -218,11 +203,9 @@ def _scan_element_starts(pe: pefile.PE) -> list[ElementStart]:
             continue
         if _u32(text, offset + 36) != base_addr + 0x0C:
             continue
-
         name = _normalize_ident(_read_wstr(pe, _u32(text, offset + 31)))
         if name is None:
             continue
-
         start = ElementStart(
             raw_offset=offset,
             base_addr=base_addr,
@@ -281,15 +264,12 @@ def _parse_element_chunk(
     code: int | None = None
     arg_info = ""
     base = start.base_addr
-
     instructions = list(disasm.disasm(chunk, chunk_va))
-
     for index, insn in enumerate(instructions):
         zero_reg = _is_reg_zeroing(insn)
         if zero_reg is not None:
             regs[zero_reg] = 0
             continue
-
         if insn.mnemonic == "mov" and len(insn.operands) == 2:
             dst, src = insn.operands
             if dst.type == X86_OP_REG and src.type == X86_OP_IMM:
@@ -297,12 +277,10 @@ def _parse_element_chunk(
                 if reg_name is not None:
                     regs[reg_name] = src.imm & 0xFFFF
                 continue
-
             if dst.type == X86_OP_MEM:
                 addr = _absolute_mem_addr(dst)
                 if addr is None:
                     continue
-
                 if src.type == X86_OP_IMM:
                     if dst.size == 1:
                         if addr == base + 0x24:
@@ -312,13 +290,11 @@ def _parse_element_chunk(
                     elif dst.size == 2 and addr == base + 0x26:
                         code = src.imm & 0xFFFF
                     continue
-
                 if src.type == X86_OP_REG and dst.size == 2 and addr == base + 0x26:
                     reg_name = _tracked_reg_name(src.reg)
                     if reg_name is not None and regs[reg_name] is not None:
                         code = regs[reg_name]
                     continue
-
         if index + 2 < len(instructions):
             push_insn = instructions[index]
             mov_insn = instructions[index + 1]
@@ -338,7 +314,6 @@ def _parse_element_chunk(
                 addr = mov_insn.operands[1].imm & 0xFFFFFFFF
                 if addr == base + 0x28:
                     arg_info = _read_wstr(pe, str_va) or ""
-
     if owner is None or group is None or code is None:
         return None
     return ElementDef(
@@ -394,11 +369,9 @@ def infer_form_names(
     by_parent: dict[int, list[ElementDef]] = defaultdict(list)
     for element in elements:
         by_parent[element.parent_code].append(element)
-
     changed = True
     while changed:
         changed = False
-
         for element in elements:
             if element.form_code <= 1 or element.form_code in form_names:
                 continue
@@ -418,7 +391,6 @@ def infer_form_names(
                     changed |= _assign_form_name(
                         form_names, child.form_code, singular_name
                     )
-
         for parent_code, children in by_parent.items():
             parent_name = form_names.get(parent_code)
             if not parent_name or not parent_name.endswith("list"):
@@ -429,13 +401,11 @@ def infer_form_names(
                     changed |= _assign_form_name(
                         form_names, child.form_code, singular_name
                     )
-
         for element in elements:
             if element.parent_code in ROOT_FORM_CODES and element.form_code > 1:
                 changed |= _assign_form_name(
                     form_names, element.form_code, element.name
                 )
-
         for element in elements:
             if element.form_code <= 1:
                 continue
@@ -445,7 +415,6 @@ def infer_form_names(
                 changed |= _assign_form_name(
                     form_names, element.form_code, "joytrigger"
                 )
-
     unresolved = sorted(
         {
             code
@@ -529,7 +498,6 @@ def build_elmform(exe_path: Path, output_path: Path) -> tuple[int, int, list[int
             )
     elements = extract_elements(pe)
     form_names, unresolved = infer_form_names(form_names, elements)
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         render_output(form_names, elements),
@@ -548,12 +516,10 @@ def main() -> int:
         "output_path", help="Output directory or target elmform.py path"
     )
     args = parser.parse_args()
-
     exe_path = Path(args.exe_path).expanduser().resolve()
     output_path = resolve_output_path(args.output_path).resolve()
     if not exe_path.is_file():
         parser.error(f"exe not found: {exe_path}")
-
     form_count, element_count, unresolved = build_elmform(exe_path, output_path)
     print(f"wrote {output_path}")
     print(f"forms={form_count} elements={element_count}")
