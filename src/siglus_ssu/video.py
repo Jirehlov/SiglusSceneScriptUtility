@@ -405,33 +405,33 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
         os.makedirs(out_dir, exist_ok=True)
     with open(out_omv_path, "wb") as out:
         out.write(header)
-        for entry in table_a:
-            out.write(
-                TABLEA_STRUCT.pack(
-                    int(entry.page_no) & 4294967295,
-                    int(entry.is_eos) & 255,
-                    int(entry.is_packet_start) & 255,
-                    0,
-                    int(entry.page_bytes) & 4294967295,
-                    int(entry.x0) & 4294967295,
-                    int(entry.back_link),
-                    int(entry.aux0),
-                    int(entry.aux1),
-                )
+        out.writelines(
+            TABLEA_STRUCT.pack(
+                int(entry.page_no) & 4294967295,
+                int(entry.is_eos) & 255,
+                int(entry.is_packet_start) & 255,
+                0,
+                int(entry.page_bytes) & 4294967295,
+                int(entry.x0) & 4294967295,
+                int(entry.back_link),
+                int(entry.aux0),
+                int(entry.aux1),
             )
-        for entry in table_b:
-            out.write(
-                TABLEB_STRUCT.pack(
-                    int(entry.seq) & 4294967295,
-                    int(entry.page_no) & 4294967295,
-                    int(entry.frame_no) & 4294967295,
-                    int(entry.flags) & 4294967295,
-                    int(entry.last_key_seq) & 4294967295,
-                    int(entry.last_key_page) & 4294967295,
-                    int(entry.prev_time) & 4294967295,
-                    int(entry.time_ms) & 4294967295,
-                )
+            for entry in table_a
+        )
+        out.writelines(
+            TABLEB_STRUCT.pack(
+                int(entry.seq) & 4294967295,
+                int(entry.page_no) & 4294967295,
+                int(entry.frame_no) & 4294967295,
+                int(entry.flags) & 4294967295,
+                int(entry.last_key_seq) & 4294967295,
+                int(entry.last_key_page) & 4294967295,
+                int(entry.prev_time) & 4294967295,
+                int(entry.time_ms) & 4294967295,
             )
+            for entry in table_b
+        )
         with open(ogv_path, "rb") as file_obj:
             for page in _iter_ogg_pages(file_obj, 0):
                 if page.serial == theora_serial:

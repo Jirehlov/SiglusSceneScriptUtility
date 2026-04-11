@@ -179,7 +179,7 @@ def _drop_const_module():
     sys.modules.pop("siglus_ssu.const", None)
     pkg = sys.modules.get("siglus_ssu")
     if pkg is not None and hasattr(pkg, "const"):
-        delattr(pkg, "const")
+        del pkg.const
 
 
 def _consume_global_options(argv):

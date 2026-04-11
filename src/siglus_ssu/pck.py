@@ -780,7 +780,7 @@ def pck_word_count(input_pck: str, output_csv: str = "") -> int:
     print("==== Word Count ====")
     print(f"file: {input_pck}")
     print(f"csv: {csv_path}")
-    print("")
+    print()
     print("dat:")
     if dat_stats.get("rows"):
         for row in dat_stats.get("rows") or []:
@@ -789,7 +789,7 @@ def pck_word_count(input_pck: str, output_csv: str = "") -> int:
             )
     else:
         print("  (none)")
-    print("")
+    print()
     print("ss:")
     if ss_stats.get("rows"):
         for row in ss_stats.get("rows") or []:
@@ -798,7 +798,7 @@ def pck_word_count(input_pck: str, output_csv: str = "") -> int:
             )
     else:
         print("  (none)")
-    print("")
+    print()
     print("totals:")
     print(f"  dat_files={int(dat_stats.get('scene_files', 0) or 0):d}")
     print(f"  parsed_dat_files={int(dat_stats.get('parsed_scene_files', 0) or 0):d}")
@@ -836,7 +836,7 @@ def pck(blob: bytes, input_pck: str = "") -> int:
             print(
                 f"note: entries={meta.get('item_cnt', 0):d} (listing omitted; limit={MAX_SCENE_LIST:d})"
             )
-        print("")
+        print()
         print_sections(secs, len(blob))
         return 0
     if len(blob) < C.PACK_HDR_SIZE:
@@ -877,11 +877,11 @@ def pck(blob: bytes, input_pck: str = "") -> int:
         print(
             f"note: scene_data entries={meta.get('item_cnt', 0):d} (listing omitted; limit={MAX_SCENE_LIST:d})"
         )
-    print("")
+    print()
     print_sections(secs, len(blob))
     angou = _pck_angou_content(blob, input_pck=input_pck, hdr=h)
     if angou:
-        print("")
+        print()
         print(f"=== {ANGOU_DAT_NAME} ===")
         print(angou)
     return 0
@@ -1055,10 +1055,10 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
     if not allrows:
         print("Sections: identical by (name,size,sha1)")
         if (not os1) and (not os2):
-            print("")
+            print()
             print("Original sources: none")
     else:
-        print("")
+        print()
         print("Section differences:")
         if compare_payload:
             print(
@@ -1089,7 +1089,7 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
         if len(allrows) > 5000:
             print(f"... ({len(allrows) - 5000:d} rows omitted)")
         if compare_payload and rows:
-            print("")
+            print()
             print(
                 "scene_data payload: same=%d diff=%d unavailable=%d"
                 % (

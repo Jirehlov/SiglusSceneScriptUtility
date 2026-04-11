@@ -60,7 +60,7 @@ def analyze_angou_dat(path: str) -> int:
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {fmt_ts(st.st_mtime)}")
     print(f"sha1: {sha1(blob)}")
-    print("")
+    print()
     if is_exe:
         if exe_el:
             print(f"key.txt: {_fmt_key_txt(exe_el)}")
@@ -123,7 +123,7 @@ def analyze_file(path, readall=False):
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {fmt_ts(st.st_mtime)}")
     print(f"sha1: {sha1(blob)}")
-    print("")
+    print()
     if ftype not in SUPPORTED_TYPES:
         print(f"unsupported file type for -a mode: {ftype}")
         print("only .pck, .dat, .gan, .sav, .cgm and .tcr are supported.")
@@ -172,17 +172,17 @@ def compare_files(p1, p2, compare_payload=False):
     print(f"type2: {t2}  size2={len(b2):d} ({hx(len(b2))})")
     print(f"sha1_1: {sha1(b1)}")
     print(f"sha1_2: {sha1(b2)}")
-    print("")
+    print()
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print(f"unsupported file type for -a mode (type1={t1} type2={t2})")
         print("only .pck, .dat, .gan, .sav, .cgm and .tcr are supported.")
         return 1
     if t1 != t2:
         print("Different types; structural compare is skipped.")
-        print("")
+        print()
         print("--- Analyze file1 ---")
         analyze_file(p1)
-        print("")
+        print()
         print("--- Analyze file2 ---")
         analyze_file(p2)
         return 0

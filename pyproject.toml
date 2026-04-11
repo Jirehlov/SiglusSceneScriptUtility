@@ -29,6 +29,48 @@ dev = [
     "pillow>=12.1.1",
 ]
 
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+select = [
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "FURB105",
+    "FURB167",
+    "PIE808",
+    "RUF010",
+    "UP015",
+    "UP037",
+    "B009",
+    "B010",
+    "B043",
+    "C413",
+    "C420",
+    "FURB122",
+    "FURB142",
+    "FURB188",
+    "SIM905",
+]
+fixable = [
+    "FURB105",
+    "FURB167",
+    "PIE808",
+    "RUF010",
+    "UP015",
+    "UP037",
+    "B009",
+    "B010",
+    "B043",
+    "C413",
+    "C420",
+    "FURB122",
+    "FURB142",
+    "FURB188",
+    "SIM905",
+]
+
 [tool.maturin]
 python-source = "src"
 module-name = "siglus_ssu.native_accel"

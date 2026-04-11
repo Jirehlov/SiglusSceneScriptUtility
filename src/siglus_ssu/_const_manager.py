@@ -19,7 +19,7 @@ _COMMITS_API = (
 _CONST_SHA512_ALLOWED = {
     "363ddb5660089611b6116c035a14d721558a648c90d27ad81a56aad9d4267e6f4672e6ccbd42119c61cdd48de192a7c3626ed685e904c21b3f0ea57f6730c0d7",
     "127e60b5010cd5c09c9391ab1f15fd832d12b723282f0b4a422b8e6e1227baf712ee79f519eabe93f09171cbedd647ad54ad048d64b1a306c8fbb029034db333",
-    "72a46202d62bd02d95c351d197b7a6d8b81a2cd5b06164b65f8a4e171a4f7fc5ba5bdb3c202771148429fe0e69dcfba16250d8d28849dfdb18d8210fee82d5ec",
+    "4f1099d20542e8629517e81d88b4d846a92b2ce9d1141a318407fa92c3d6918be98a22cd06e0c727d97698ca2ad280519fd3f29d4cd4f29298bee972938799bc",
 }
 _CONST_MODULE_NAME = "siglus_ssu.const"
 
@@ -87,7 +87,7 @@ def _loaded_const_file(module) -> str | None:
 def _bind_const_module(module) -> None:
     pkg = sys.modules.get("siglus_ssu")
     if pkg is not None:
-        setattr(pkg, "const", module)
+        pkg.const = module
 
 
 def load_const_module(path: Path | None = None, profile: int | None = None) -> None:

@@ -302,7 +302,7 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     lines.append("")
     lines.append("---- str_list (xor utf16le) ----")
     for i, s in enumerate(str_list or []):
-        lines.append(f"[{i:d}] {repr(s)}")
+        lines.append(f"[{i:d}] {s!r}")
     lines.append("")
     lines.append("---- namae_list ----")
     for it in namae_defs:
@@ -756,12 +756,12 @@ def dat(path, blob: bytes) -> int:
         print(
             f"call_prop_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(cp) > len(pv) else '')}"
         )
-    print("")
+    print()
     print_sections(secs, len(blob))
     disam_stats = new_disam_stats()
     out_txt = _write_dat_disassembly(path, blob, stats=disam_stats)
     if out_txt:
-        print("")
+        print()
         print(f"wrote: {out_txt}")
         write_disam_totals(sys.stdout, disam_stats)
     return 0
@@ -815,7 +815,7 @@ def analyze_gameexe_dat(path):
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {fmt_ts(st.st_mtime)}")
     print(f"sha1: {sha1(blob)}")
-    print("")
+    print()
     if not blob or len(blob) < 8:
         print("invalid gameexe.dat: too small")
         return 1
@@ -848,7 +848,7 @@ def analyze_gameexe_dat(path):
     )
     if info.get("warning"):
         print(f"warning: {info.get('warning')}")
-    print("")
+    print()
     print("==== Structure ====")
     print("0x00000000: header (<ii>) 8 bytes")
     print(f"0x00000008: payload {payload_size:d} bytes")
@@ -969,7 +969,7 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
         out1 = _write_dat_disassembly(p1, b1, out_dir, stats=disam_stats)
         out2 = _write_dat_disassembly(p2, b2, out_dir, stats=disam_stats)
         if out1 or out2:
-            print("")
+            print()
         if out1:
             print(f"wrote: {out1}")
         else:

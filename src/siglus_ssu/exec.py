@@ -27,8 +27,7 @@ def main(argv=None):
         sys.stderr.write(f"Invalid scene name: {ss_name}\n")
         return 2
     label = str(zlabel).strip()
-    if label.startswith("#"):
-        label = label[1:]
+    label = label.removeprefix("#")
     if label.lower().startswith("z"):
         label = label[1:]
     label = label.strip()

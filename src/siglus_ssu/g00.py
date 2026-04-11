@@ -788,7 +788,7 @@ _LAYOUT_SIDECAR_SUFFIXES = (
 
 
 def _strip_json_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     out = []
     for line in text.splitlines():
         line = re.sub(r"(^|[^:])//.*$", r"\1", line)

@@ -110,7 +110,7 @@ def _get_section(pe: pefile.PE, name: str) -> pefile.SectionStructure:
 def extract_compare_forms(pe: pefile.PE) -> dict[int, str]:
     text = _get_section(pe, ".text").get_data()
     forms: dict[int, str] = {}
-    for offset in range(0, len(text) - 26):
+    for offset in range(len(text) - 26):
         if text[offset] != 0xBA:
             continue
         if text[offset + 5 : offset + 8] != b"\x8b\xce\xe8":
@@ -148,7 +148,7 @@ def extract_static_forms(pe: pefile.PE) -> dict[int, str]:
     prev_base: int | None = None
     run: list[tuple[int, int, str, int]] = []
     best_run: list[tuple[int, int, str, int]] = []
-    for offset in range(0, len(text) - 26):
+    for offset in range(len(text) - 26):
         if (
             text[offset] != 0x68
             or text[offset + 5] != 0xB9
@@ -183,7 +183,7 @@ def extract_static_forms(pe: pefile.PE) -> dict[int, str]:
 def _scan_element_starts(pe: pefile.PE) -> list[ElementStart]:
     text = _get_section(pe, ".text").get_data()
     starts_by_base: dict[int, ElementStart] = {}
-    for offset in range(0, len(text) - 45):
+    for offset in range(len(text) - 45):
         if text[offset : offset + 2] != b"\xc7\x05":
             continue
         base_addr = _u32(text, offset + 2)
@@ -382,9 +382,7 @@ def infer_form_names(
             list_name = (
                 element.name if element.name.endswith("list") else f"{element.name}list"
             )
-            singular_name = (
-                element.name[:-4] if element.name.endswith("list") else element.name
-            )
+            singular_name = element.name.removesuffix("list")
             changed |= _assign_form_name(form_names, element.form_code, list_name)
             for child in children:
                 if child.name == "array" and child.form_code > 1:

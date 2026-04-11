@@ -283,18 +283,16 @@ def _element_indexes():
     cache_key = _element_index_cache_key()
     if _ELEMENT_INDEX_CACHE is None or cache_key != _ELEMENT_INDEX_CACHE_KEY:
         try:
-            elm_exact = dict(getattr(disam, "_build_system_element_index")() or {})
+            elm_exact = dict(disam._build_system_element_index() or {})
         except Exception:
             elm_exact = {}
         try:
-            elm_array_exact = dict(getattr(disam, "_build_array_element_index")() or {})
+            elm_array_exact = dict(disam._build_array_element_index() or {})
         except Exception:
             elm_array_exact = {}
         receiver_forms = set()
-        for key in elm_exact.keys():
-            receiver_forms.add(int(key[0]))
-        for key in elm_array_exact.keys():
-            receiver_forms.add(int(key))
+        receiver_forms.update(int(key[0]) for key in elm_exact.keys())
+        receiver_forms.update(int(key) for key in elm_array_exact.keys())
         receiver_forms = augment_receiver_form_codes(receiver_forms)
         _ELEMENT_INDEX_CACHE = (elm_exact, elm_array_exact, frozenset(receiver_forms))
         _ELEMENT_INDEX_CACHE_KEY = cache_key
@@ -408,7 +406,7 @@ def _prefer_return_form(forms):
         ):
             if fm in vals:
                 return fm
-        return list(sorted(vals))[0]
+        return sorted(vals)[0]
     return None
 
 
@@ -449,7 +447,7 @@ def _prefer_property_form(forms):
         ):
             if fm in vals:
                 return fm
-        return list(sorted(vals))[0]
+        return sorted(vals)[0]
     return None
 
 

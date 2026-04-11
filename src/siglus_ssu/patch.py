@@ -216,7 +216,7 @@ def _scan_text_call_graph(text_sec, layout):
     text_va = layout["image_base"] + text_sec["virtual_address"]
     call_graph = {}
     bool_targets = {}
-    for rel_off in range(0, max(0, len(text_data) - 5)):
+    for rel_off in range(max(0, len(text_data) - 5)):
         if text_data[rel_off] != 0xE8:
             continue
         try:
@@ -301,7 +301,7 @@ def _find_loc_guard_call_site(data: bytearray, func_off: int):
         return None
     text_va = layout["image_base"] + text_sec["virtual_address"]
     text_data = text_sec["data"]
-    for rel_off in range(0, max(0, len(text_data) - 5)):
+    for rel_off in range(max(0, len(text_data) - 5)):
         if text_data[rel_off] != 0xE8:
             continue
         try:

@@ -130,7 +130,7 @@ def cgm(blob, path=None):
             print(f"error: {e}")
         return 1
     es = info.get("entries") or []
-    print("")
+    print()
     print("==== CGM Payload ====")
     print(f"entry_count: {len(es):d}")
     n = C.MAX_LIST_PREVIEW

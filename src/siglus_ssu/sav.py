@@ -828,7 +828,7 @@ def sav(blob, path=None):
         print(f"packed_size: {info['pack_size']}")
         print(f"org_size: {info['org_size']}")
         print(f"unpacked_sha1: {info['unpacked_sha1']}")
-        print("")
+        print()
         for name, cnt, r in info["rows"]:
             if cnt <= 0:
                 continue
@@ -952,10 +952,10 @@ def compare_sav(b1, b2):
         print("==== Compare .sav ====")
         print(f"kind1: {k1['kind']}")
         print(f"kind2: {k2['kind']}")
-        print("")
+        print()
         print("--- Analyze file1 ---")
         sav(b1)
-        print("")
+        print()
         print("--- Analyze file2 ---")
         sav(b2)
         return 0
@@ -970,7 +970,7 @@ def compare_sav(b1, b2):
         print(
             f"ver2: {b['major']}.{b['minor']}  scn2={b['scn_cnt']}  org2={b['org_size']}  sha1={b['unpacked_sha1']}"
         )
-        print("")
+        print()
         ma = {name: (cnt, r) for name, cnt, r in a["rows"]}
         mb = {name: (cnt, r) for name, cnt, r in b["rows"]}
         order = []
@@ -1013,7 +1013,7 @@ def compare_sav(b1, b2):
                 f"{r1:6d}/{cnt1:6d} -> {r2:6d}/{cnt2:6d}   {pct1 // 10:3d}.{pct1 % 10:d}% -> {pct2 // 10:3d}.{pct2 % 10:d}%   {dn(name, w)}"
             )
             changed += 1
-        print("")
+        print()
         ta1, tc1 = a["total_read"], a["total_cnt"]
         ta2, tc2 = b["total_read"], b["total_cnt"]
         p1 = (ta1 * 10000) // tc1 if tc1 else 0

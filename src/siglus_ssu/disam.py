@@ -29,7 +29,7 @@ def _int_or_none(value):
 
 
 def _read_flag_command_codes():
-    codes = getattr(C, "READ_FLAG_COMMAND_CODES")
+    codes = C.READ_FLAG_COMMAND_CODES
     return frozenset((int(a), int(b)) for a, b in (codes or ()))
 
 
@@ -1035,10 +1035,8 @@ def disassemble_scn_bytes(
     elm_exact = _build_system_element_index()
     elm_array_exact = _build_array_element_index()
     receiver_forms = set()
-    for key in elm_exact:
-        receiver_forms.add(int(key[0]))
-    for key in elm_array_exact:
-        receiver_forms.add(int(key))
+    receiver_forms.update(int(key[0]) for key in elm_exact)
+    receiver_forms.update(int(key) for key in elm_array_exact)
     receiver_forms = augment_receiver_form_codes(receiver_forms)
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))

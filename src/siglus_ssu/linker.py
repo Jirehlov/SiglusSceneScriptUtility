@@ -209,7 +209,7 @@ def _build_pack_bytes(
     original_source_header_size,
     original_source_chunks,
 ):
-    hdr = {k: 0 for k in C.PACK_HDR_FIELDS}
+    hdr = dict.fromkeys(C.PACK_HDR_FIELDS, 0)
     hdr["header_size"] = C.PACK_HDR_SIZE
     hdr["scn_data_exe_angou_mod"] = int(scn_data_exe_angou_mod)
     hdr["original_source_header_size"] = int(original_source_header_size)

@@ -248,7 +248,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         if s1.get(k) != s2.get(k):
             diffs.append(_hd(k))
     if diffs:
-        print("")
+        print()
         print("header diffs:")
         for k, a, b in diffs:
             print(f"  {k}: {a!r} -> {b!r}")
@@ -259,7 +259,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
     if r1 != r2:
         set1 = set(r1)
         set2 = set(r2)
-        print("")
+        print()
         print("row call_no diffs:")
         only1 = sorted(list(set1 - set2))[: C.MAX_LIST_PREVIEW]
         only2 = sorted(list(set2 - set1))[: C.MAX_LIST_PREVIEW]
@@ -278,7 +278,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         typechg = [cn for cn in common if map1.get(cn) != map2.get(cn)][
             : C.MAX_LIST_PREVIEW
         ]
-        print("")
+        print()
         print("column call_no diffs:")
         if only1:
             print(f"  only in file1 (preview): {', '.join([str(x) for x in only1])}")
@@ -300,7 +300,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         cc = s1["col_cnt"]
         total = rc * cc
         limit = min(total, 2_000_000)
-        print("")
+        print()
         print(f"cell diffs (scan {limit:d} / {total:d} cells):")
         dif_cnt = 0
         sblob1 = s1["str_blob"]
@@ -347,7 +347,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         if first is None and len(u1) != len(u2):
             first = lim
         if first is not None:
-            print("")
+            print()
             print("unpacked byte-level diff:")
             print(f"  first_diff_offset={first:d}")
     return 0
@@ -408,7 +408,7 @@ def _wtoi_prefix(s):
 
 
 def _read_official_csv(csv_path: str):
-    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
         rows = [row for row in csv.reader(f)]
     datano_i = None
     datatype_i = None

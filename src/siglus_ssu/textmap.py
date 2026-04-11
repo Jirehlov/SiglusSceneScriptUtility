@@ -518,7 +518,7 @@ def _write_map(csv_path: str, entries):
 
 
 def _read_map(csv_path: str):
-    with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+    with open(csv_path, encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
 
 

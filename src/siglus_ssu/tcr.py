@@ -98,7 +98,7 @@ def tcr(blob: bytes, path: str = None) -> int:
         for e in info.get("errors") or []:
             print(f"error: {e}")
         return 1
-    print("")
+    print()
     print("==== TCR Payload ====")
     for c in info.get("curves") or []:
         i = int(c.get("no") or 0)

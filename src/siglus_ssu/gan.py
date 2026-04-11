@@ -215,9 +215,9 @@ def gan(blob):
     if not g.get("ok"):
         for e in g.get("errors"):
             print(f"error: {e}")
-        print("")
+        print()
         print("(disassembly may be incomplete)")
-    print("")
+    print()
     if sets:
         print("==== GAN Sets ====")
         for i, s in enumerate(sets):
@@ -231,7 +231,7 @@ def gan(blob):
                 )
             if len(pats) > C.MAX_LIST_PREVIEW:
                 print(f"  ... ({len(pats) - C.MAX_LIST_PREVIEW:d} patterns omitted)")
-        print("")
+        print()
     print("==== GAN Disassembly ====")
     for ins in g.get("disasm") or []:
         ofs = ins.get("ofs", 0)

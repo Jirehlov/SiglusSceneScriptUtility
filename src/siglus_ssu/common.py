@@ -1004,7 +1004,7 @@ def read_exe_el_key(path: str) -> bytes:
     t = str(t or "").strip()
     if not t:
         return b""
-    m = re.findall(r"0x([0-9a-fA-F]{2})", t, flags=re.I)
+    m = re.findall(r"0x([0-9a-fA-F]{2})", t, flags=re.IGNORECASE)
     if len(m) >= 16:
         try:
             return bytes(int(x, 16) & 255 for x in m[:16])
@@ -1638,7 +1638,7 @@ def print_sections(secs, total):
     cov = sum(b - a for a, b in used)
     un = total - cov
     pct = (un / total * 100.0) if total else 0.0
-    print("")
+    print()
     print(f"coverage: {cov:d}/{total:d} bytes  unused: {un:d} ({pct:.2f}%)")
 
 

@@ -136,8 +136,8 @@ class AnalysisResult:
     label_definitions: dict[str, DefinitionRecord] = field(default_factory=dict)
     z_label_definitions: dict[str, DefinitionRecord] = field(default_factory=dict)
     document_symbols: list[DefinitionRecord] = field(default_factory=list)
-    occurrences: list["SymbolOccurrence"] | None = None
-    string_semantics: list["StringSemanticRange"] | None = None
+    occurrences: list[SymbolOccurrence] | None = None
+    string_semantics: list[StringSemanticRange] | None = None
 
 
 @dataclass(slots=True)
@@ -292,7 +292,7 @@ def _render_arg_list(arg_list: list[dict[str, Any]] | None) -> str:
             if form == C.FM_INT:
                 seg += f" = {int(arg.get('def_int', 0) or 0)}"
             elif form == C.FM_STR:
-                seg += f' = "{str(arg.get("def_str", "") or "")}"'
+                seg += f' = "{arg.get("def_str", "") or ""!s}"'
         parts.append(seg)
     return "(" + ", ".join(parts) + ")"
 
