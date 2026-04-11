@@ -999,6 +999,9 @@ siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
 
 # Create / re-encode audio files
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
+
+# Play one looped BGM using Gameexe.dat loop points
+siglus-ssu -s --play <input_file.(owp | ogg)> <path_to_Gameexe.dat>
 ```
 
 #### Parameters
@@ -1008,6 +1011,7 @@ siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
+| `--play` | **Play** mode. Plays one `.owp` or `.ogg` BGM using the `#BGM.*` loop-point table from `Gameexe.dat`. Playback starts at `start`, then loops the `repeat` → `end` region indefinitely through **ffplay**. Requires `ffplay` to be on the system `PATH`. |
 | `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
 
 #### Examples
@@ -1031,6 +1035,9 @@ siglus-ssu -s --a /path/to/z0001.ovk
 # Analyze an .owp file
 siglus-ssu -s --a /path/to/bgm01.owp
 
+# Play one .owp BGM from its start point and loop forever using Gameexe.dat
+siglus-ssu -s --play /path/to/bgm01.owp /path/to/Gameexe.dat
+
 # Re-encode .ogg files back to .owp
 siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 ```
@@ -1048,6 +1055,10 @@ When creating `.ovk` from a directory, files named `<basename>_<N>.ogg` (where `
 #### `.owp` Trim Details
 
 The `--trim` option reads the Gameexe.dat BGM table (entries formatted as `#BGM.N = "...", "filename", start, end, repeat`) and calls **ffmpeg** to trim each decoded `.ogg` to the samples between `repeat` and `end`. This is useful for extracting seamlessly-loopable background music.
+
+#### Loop Playback Details
+
+The `--play` option reads the same Gameexe.dat BGM table and matches entries by input basename. It accepts `.owp` and plain `.ogg` input, starts playback at `start`, and then loops the `repeat` → `end` sample region indefinitely through **ffplay**. If `end` is `-1` or extends past the decoded Ogg length, playback treats EOF as the loop end. This mode is intended for BGM loop preview and does not support `.nwa` or `.ovk`.
 
 Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output.
 
@@ -1873,9 +1884,9 @@ In G00 image mode, all operations except `--a` (pure analysis) currently require
 pip install pillow
 ```
 
-### ffmpeg Not Found (Sound Trim Mode)
+### ffmpeg / ffplay Not Found (Sound Trim / Play Mode)
 
-The `--trim` feature in sound mode requires `ffmpeg` to be installed and available on the system `PATH`. Install it from https://ffmpeg.org/ or via your system package manager.
+The `--trim` feature in sound mode requires `ffmpeg`, and the `--play` feature requires `ffplay`, both installed and available on the system `PATH`. Install them from https://ffmpeg.org/ or via your system package manager.
 
 ### Using the Pure Python Fallback
 

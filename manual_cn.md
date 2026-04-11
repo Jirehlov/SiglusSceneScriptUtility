@@ -994,6 +994,9 @@ siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
 
 # 创建/重新编码音频文件
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
+
+# 使用 Gameexe.dat 的循环点播放单个循环 BGM
+siglus-ssu -s --play <input_file.(owp | ogg)> <Gameexe.dat路径>
 ```
 
 #### 参数
@@ -1003,6 +1006,7 @@ siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 | `--x` | **提取**模式。解码 `.owp` → `.ogg`，`.nwa` → `.wav`，`.ovk` → 单独的 `.ogg` 文件。 |
 | `--a` | **分析**模式。打印单个音频文件的详细结构头部信息。 |
 | `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 文件。目录输入时会递归扫描 `.ogg`，并在输出端保留相对目录结构。 |
+| `--play` | **播放**模式。读取 `Gameexe.dat` 中的 `#BGM.*` 循环点表，播放单个 `.owp` 或 `.ogg` BGM。播放会从 `start` 开始，进入循环段后通过 **ffplay** 将 `repeat` → `end` 区间无限循环。需要 `ffplay` 在系统 PATH 中。 |
 | `--trim <Gameexe.dat>` | （仅提取模式）从 `Gameexe.dat` 读取 `#BGM.*` 循环点表，并用 **ffmpeg** 将每个 `.owp` 裁剪到其循环区域。需要 `ffmpeg` 在系统 PATH 中。该选项只影响 `.owp` 提取；`.nwa`/`.ovk` 不参与裁剪。 |
 
 #### 示例
@@ -1026,6 +1030,9 @@ siglus-ssu -s --a /path/to/z0001.ovk
 # 分析 .owp 文件
 siglus-ssu -s --a /path/to/bgm01.owp
 
+# 从起始点开始播放单个 .owp BGM，并按 Gameexe.dat 无限循环
+siglus-ssu -s --play /path/to/bgm01.owp /path/to/Gameexe.dat
+
 # 将 .ogg 文件重新编码为 .owp
 siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 ```
@@ -1043,6 +1050,10 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 #### `.owp` 裁剪细节
 
 `--trim` 会读取 Gameexe.dat 中的 BGM 表（条目格式为 `#BGM.N = "...", "filename", start, end, repeat`），并调用 **ffmpeg** 将每个解码得到的 `.ogg` 裁剪到 `repeat` 与 `end` 之间的采样区间。这对提取可无缝循环的背景音乐很有帮助。
+
+#### 循环播放细节
+
+`--play` 会读取同一份 Gameexe.dat BGM 表，并按输入文件的 basename 匹配条目。它支持 `.owp` 和普通 `.ogg` 输入，先从 `start` 播到 `repeat` 一次，再通过 **ffplay** 将 `repeat` → `end` 的采样区间无限循环。若 `end = -1`，或 `end` 超过了解码后 Ogg 的实际长度，则会自动将文件结尾视为循环终点。该模式用于预览 BGM 循环，不支持 `.nwa` 或 `.ovk`。
 
 目录输入的 `-s --x` 也会递归扫描子目录，并在输出端保留相对目录结构。
 
@@ -1867,9 +1878,9 @@ G00 图片模式中，除 `--a` 纯分析外，当前都需要 [Pillow](https://
 pip install pillow
 ```
 
-### 找不到 ffmpeg（Sound 裁剪模式）
+### 找不到 ffmpeg / ffplay（Sound 裁剪 / 播放模式）
 
-Sound 模式的 `--trim` 功能需要 `ffmpeg` 安装并在系统 PATH 中可用。请从 https://ffmpeg.org/ 或通过系统包管理器安装。
+Sound 模式的 `--trim` 功能需要 `ffmpeg`，`--play` 功能需要 `ffplay`，两者都必须已安装并在系统 PATH 中可用。请从 https://ffmpeg.org/ 或通过系统包管理器安装。
 
 ### 使用纯 Python 回退
 

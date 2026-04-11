@@ -16,7 +16,8 @@ from .common import (
     run_batch,
 )
 from . import sound
-from . import extract
+from . import GEI
+from . import pck
 
 
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) -> None:
@@ -181,26 +182,26 @@ def _parse_bgm_table(gameexe_ini_text: str):
 
 
 def _load_gameexe_ini_text(gameexe_dat_path: str) -> str:
-    tmp_dir = tempfile.mkdtemp(prefix="siglus_gei_")
-    try:
-        rc = extract.main(["--gei", gameexe_dat_path, tmp_dir])
-        if rc != 0:
-            raise RuntimeError("Failed to decode Gameexe.dat payload")
-        ini_path = os.path.join(tmp_dir, "Gameexe.ini")
-        if not os.path.isfile(ini_path):
-            try:
-                for fn in os.listdir(tmp_dir):
-                    if fn.lower() == "gameexe.ini":
-                        ini_path = os.path.join(tmp_dir, fn)
-                        break
-            except Exception:
-                pass
-        if not os.path.isfile(ini_path):
-            raise RuntimeError("Failed to decode Gameexe.dat payload")
-        with open(ini_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    os_dir = os.path.dirname(os.path.abspath(gameexe_dat_path))
+    cands = list(pck._iter_exe_el_candidates(os_dir))
+    if not cands:
+        cands = [b""]
+    last_err = None
+    for exe_el in cands:
+        try:
+            info, txt = GEI.read_gameexe_dat(gameexe_dat_path, exe_el=exe_el)
+            if info.get("mode") and not info.get("used_exe_el"):
+                raise RuntimeError(
+                    "Gameexe.dat is encrypted with exe angou; missing 暗号.dat/key.txt to derive key"
+                )
+            if not txt:
+                raise RuntimeError("Failed to decode Gameexe.dat payload")
+            return txt
+        except Exception as exc:
+            last_err = exc
+    if last_err is not None:
+        raise last_err
+    raise RuntimeError("Failed to decode Gameexe.dat payload")
 
 
 def _ffmpeg_trim_ogg_bytes(
@@ -268,6 +269,126 @@ def _ffmpeg_trim_ogg_bytes(
             pass
 
 
+def _resolve_bgm_entry(trim_table, base_name: str):
+    key = base_name.lower()
+    if key not in trim_table:
+        raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
+    start_pos, end_pos, rep_pos = trim_table[key]
+    return int(start_pos), int(end_pos), int(rep_pos)
+
+
+def _normalize_playback_range(
+    ogg_bytes: bytes,
+    start_sample: int,
+    end_sample: int,
+    repeat_sample: int,
+):
+    if start_sample < 0:
+        raise RuntimeError("invalid start position (start_sample < 0)")
+    if repeat_sample < 0:
+        raise RuntimeError("invalid repeat position (repeat_sample < 0)")
+
+    total_sample_cnt = sound._ogg_calc_smp_cnt(ogg_bytes)
+    if total_sample_cnt <= 0:
+        raise RuntimeError("failed to determine Ogg sample count")
+
+    if end_sample == -1 or end_sample > total_sample_cnt:
+        end_sample = total_sample_cnt
+
+    if start_sample > total_sample_cnt:
+        raise RuntimeError("invalid start position (start_sample > total_sample_cnt)")
+    if repeat_sample < start_sample:
+        raise RuntimeError("invalid repeat position (repeat_sample < start_sample)")
+    if repeat_sample >= end_sample:
+        raise RuntimeError("invalid loop range (end_sample <= repeat_sample)")
+
+    return start_sample, end_sample, repeat_sample
+
+
+def _build_ffplay_audio_filter(
+    start_sample: int,
+    end_sample: int,
+    repeat_sample: int,
+) -> str:
+    loop_size = end_sample - repeat_sample
+    if loop_size <= 0:
+        raise RuntimeError("invalid loop size")
+
+    loop_filter = (
+        f"atrim=start_sample={repeat_sample}:end_sample={end_sample},"
+        f"asetpts=PTS-STARTPTS,aloop=loop=-1:size={loop_size}"
+    )
+    if start_sample == repeat_sample:
+        return loop_filter
+
+    return (
+        "asplit=2[intro_src][loop_src];"
+        f"[intro_src]atrim=start_sample={start_sample}:end_sample={repeat_sample},"
+        "asetpts=PTS-STARTPTS[intro];"
+        f"[loop_src]{loop_filter}[loop];"
+        "[intro][loop]concat=n=2:v=0:a=1"
+    )
+
+
+def _prepare_playback_input(src_path: str):
+    base_name, ext = os.path.splitext(os.path.basename(src_path))
+    ext = ext.lower()
+    if ext not in (".owp", ".ogg"):
+        raise RuntimeError("unsupported file type (expected .owp or .ogg)")
+
+    ogg = sound.decode_owp_to_ogg_bytes(src_path)
+    tmp_dir = ""
+    play_path = src_path
+    if ext == ".owp":
+        tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
+        play_path = os.path.join(tmp_dir, base_name + ".ogg")
+        write_bytes(play_path, ogg)
+
+    return base_name, ogg, play_path, tmp_dir
+
+
+def _play_one(src_path: str, trim_table, ffplay_path: str) -> int:
+    if not ffplay_path:
+        raise RuntimeError("ffplay not found in PATH")
+
+    base_name, ogg, play_path, tmp_dir = _prepare_playback_input(src_path)
+    try:
+        start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
+        start_pos, end_pos, rep_pos = _normalize_playback_range(
+            ogg,
+            start_sample=start_pos,
+            end_sample=end_pos,
+            repeat_sample=rep_pos,
+        )
+        af = _build_ffplay_audio_filter(
+            start_sample=start_pos,
+            end_sample=end_pos,
+            repeat_sample=rep_pos,
+        )
+
+        eprint(
+            f"play {base_name}: intro {start_pos}..{rep_pos}, loop {rep_pos}..{end_pos}"
+        )
+        cmd = [
+            ffplay_path,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nodisp",
+            "-i",
+            play_path,
+            "-af",
+            af,
+        ]
+        p = subprocess.run(cmd)
+        if p.returncode != 0:
+            raise RuntimeError(f"ffplay failed with exit code {p.returncode}")
+        return 0
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
     bn = os.path.basename(src_path)
     base_name, ext = os.path.splitext(bn)
@@ -306,10 +427,7 @@ def _extract_one(
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
 
         if trim_table is not None:
-            key = base_name.lower()
-            if key not in trim_table:
-                raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
-            start_pos, end_pos, rep_pos = trim_table[key]
+            start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
 
             eprint(
                 f"trim {base_name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
@@ -349,7 +467,9 @@ def _extract_one(
 
 
 def main(argv=None) -> int:
-    mode, argv, rc = parse_main_argv(argv, _hint_help)
+    mode, argv, rc = parse_main_argv(
+        argv, _hint_help, flags=("--x", "--a", "--c", "--play")
+    )
     if rc is not None:
         return rc
 
@@ -433,6 +553,36 @@ def main(argv=None) -> int:
             return 1, 1
 
         return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
+
+    if mode == "play":
+        if len(argv) != 2:
+            eprint("error: expected <input_file> <Gameexe.dat> for --play")
+            _hint_help()
+            return 2
+
+        inp, trim_path = argv
+        if missing_input_file(inp):
+            return 1
+        if not os.path.isfile(trim_path):
+            eprint(f"Gameexe.dat not found: {trim_path}")
+            return 1
+
+        ffplay_path = shutil.which("ffplay") or ""
+        if not ffplay_path:
+            eprint("ffplay not found in PATH")
+            return 1
+
+        gei_txt = _load_gameexe_ini_text(trim_path)
+        trim_table = _parse_bgm_table(gei_txt)
+        if not trim_table:
+            eprint("error: no #BGM.* entries found in Gameexe.dat")
+            return 1
+
+        try:
+            return _play_one(inp, trim_table=trim_table, ffplay_path=ffplay_path)
+        except Exception as exc:
+            eprint(f"error: {exc}")
+            return 1
 
     trim_path = ""
     if "--trim" in argv:

@@ -1808,7 +1808,14 @@ def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
         eprint("error: choose exactly one of " + ", ".join(flags))
         hint_help()
         return None, argv
-    return found[0][2], [a for a in argv if a not in flags]
+    flag = found[0]
+    if flag.startswith("--"):
+        mode = flag[2:]
+    elif flag.startswith("-"):
+        mode = flag[1:]
+    else:
+        mode = flag
+    return mode, [a for a in argv if a not in flags]
 
 
 def missing_input_file(path: str) -> bool:
