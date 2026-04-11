@@ -8,6 +8,8 @@ import threading
 from contextlib import suppress
 from dataclasses import dataclass
 
+import psutil
+
 from .common import (
     collect_batch_files,
     eprint,
@@ -555,47 +557,22 @@ def _start_playback_process(plan: _PlaybackPlan, ffplay_path: str) -> _RunningPl
     return _RunningPlayback(plan=plan, process=process)
 
 
-def _call_windows_process_op(pid: int, name: str) -> None:
-    import ctypes
-
-    process_suspend_resume = 0x0800
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    ntdll = ctypes.WinDLL("ntdll")
-    func = getattr(ntdll, name)
-    func.argtypes = [ctypes.c_void_p]
-    func.restype = ctypes.c_long
-    handle = kernel32.OpenProcess(process_suspend_resume, False, int(pid))
-    if not handle:
-        err = ctypes.get_last_error()
-        raise OSError(err, f"OpenProcess failed for pid={pid}")
+def _control_process(process: subprocess.Popen, action: str) -> None:
+    if process.poll() is not None:
+        return
     try:
-        status = int(func(handle))
-        if status != 0:
-            raise RuntimeError(f"{name} failed: 0x{status & 0xFFFFFFFF:08X}")
-    finally:
-        kernel32.CloseHandle(handle)
+        proc = psutil.Process(int(process.pid))
+        getattr(proc, action)()
+    except psutil.NoSuchProcess:
+        return
 
 
 def _pause_process(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        _call_windows_process_op(process.pid, "NtSuspendProcess")
-        return
-    import signal
-
-    os.kill(process.pid, signal.SIGSTOP)
+    _control_process(process, "suspend")
 
 
 def _resume_process(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        _call_windows_process_op(process.pid, "NtResumeProcess")
-        return
-    import signal
-
-    os.kill(process.pid, signal.SIGCONT)
+    _control_process(process, "resume")
 
 
 def _stop_running_playback(current: _RunningPlayback | None) -> None:

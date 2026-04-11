@@ -11,7 +11,9 @@ requires-python = ">=3.12"
 authors = [
     { name = "Jirehlov" }
 ]
-dependencies = []
+dependencies = [
+    "psutil>=5.9",
+]
 
 [project.scripts]
 siglus-ssu = "siglus_ssu.__main__:main"

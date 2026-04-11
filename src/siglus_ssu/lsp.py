@@ -1836,23 +1836,31 @@ def _valid_rename_name(
 
 
 def path_to_uri(path: str) -> str:
-    from urllib.parse import quote
+    from urllib.parse import quote, urlsplit
 
-    abs_path = os.path.abspath(path)
-    if os.name == "nt":
-        drive, tail = os.path.splitdrive(abs_path)
-        path_part = "/" + drive.rstrip(":") + ":" + tail.replace("\\", "/")
-        return "file://" + quote(path_part)
-    return "file://" + quote(abs_path)
+    uri = Path(path).resolve().as_uri()
+    if os.name != "nt":
+        return uri
+    parsed = urlsplit(uri)
+    if parsed.netloc:
+        return uri
+    if not re.match(r"^/[A-Za-z]:", parsed.path):
+        return uri
+    drive = parsed.path[1:3]
+    tail = parsed.path[3:]
+    return "file:///" + quote(drive) + tail
 
 
 def uri_to_path(uri: str) -> str:
-    from urllib.parse import unquote, urlparse
+    from urllib.parse import unquote, urlsplit
 
-    parsed = urlparse(uri)
+    parsed = urlsplit(uri)
     if parsed.scheme != "file":
         return uri
     path = unquote(parsed.path)
+    host = str(parsed.netloc or "")
+    if host and host.casefold() != "localhost":
+        path = f"//{host}{path}"
     if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
         path = path[1:]
     return os.path.abspath(path)
