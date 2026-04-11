@@ -1,9 +1,12 @@
 import os
+import queue
 import shutil
 import re
 import subprocess
 import tempfile
+import threading
 from contextlib import suppress
+from dataclasses import dataclass
 
 from .common import (
     collect_batch_files,
@@ -14,6 +17,7 @@ from .common import (
     prepare_batch_paths,
     write_bytes,
     missing_input_file,
+    read_text_auto,
     run_batch,
 )
 from . import sound
@@ -175,15 +179,18 @@ def _parse_bgm_table(gameexe_ini_text: str):
     return table
 
 
-def _load_gameexe_ini_text(gameexe_dat_path: str) -> str:
-    os_dir = os.path.dirname(os.path.abspath(gameexe_dat_path))
+def _load_gameexe_ini_text(gameexe_path: str) -> str:
+    ext = os.path.splitext(gameexe_path)[1].lower()
+    if ext == ".ini":
+        return read_text_auto(gameexe_path)
+    os_dir = os.path.dirname(os.path.abspath(gameexe_path))
     cands = list(pck._iter_exe_el_candidates(os_dir))
     if not cands:
         cands = [b""]
     last_err = None
     for exe_el in cands:
         try:
-            info, txt = GEI.read_gameexe_dat(gameexe_dat_path, exe_el=exe_el)
+            info, txt = GEI.read_gameexe_dat(gameexe_path, exe_el=exe_el)
             if info.get("mode") and not info.get("used_exe_el"):
                 raise RuntimeError(
                     "Gameexe.dat is encrypted with exe angou; missing 暗号.dat/key.txt to derive key"
@@ -337,46 +344,436 @@ def _prepare_playback_input(src_path: str):
     return base_name, ogg, play_path, tmp_dir
 
 
-def _play_one(src_path: str, trim_table, ffplay_path: str) -> int:
+@dataclass(frozen=True)
+class _PlaybackEntry:
+    path: str
+    display_name: str
+    base_name: str
+
+
+@dataclass(frozen=True)
+class _PlaybackPlan:
+    entry: _PlaybackEntry
+    play_path: str
+    tmp_dir: str
+    start_sample: int
+    end_sample: int
+    repeat_sample: int
+    audio_filter: str
+
+
+@dataclass
+class _RunningPlayback:
+    plan: _PlaybackPlan
+    process: subprocess.Popen
+    paused: bool = False
+
+
+def _ensure_ffplay_available(ffplay_path: str) -> None:
     if not ffplay_path:
         raise RuntimeError("ffplay not found in PATH")
 
-    base_name, ogg, play_path, tmp_dir = _prepare_playback_input(src_path)
-    try:
-        start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
-        start_pos, end_pos, rep_pos = _normalize_playback_range(
-            ogg,
-            start_sample=start_pos,
-            end_sample=end_pos,
-            repeat_sample=rep_pos,
-        )
-        af = _build_ffplay_audio_filter(
-            start_sample=start_pos,
-            end_sample=end_pos,
-            repeat_sample=rep_pos,
-        )
 
-        eprint(
-            f"play {base_name}: intro {start_pos}..{rep_pos}, loop {rep_pos}..{end_pos}"
+def _make_playback_entry(path: str, root: str = "") -> _PlaybackEntry:
+    display_name = (
+        os.path.relpath(path, root)
+        if root and os.path.isdir(root)
+        else os.path.basename(path)
+    )
+    base_name = os.path.splitext(os.path.basename(path))[0]
+    return _PlaybackEntry(path=path, display_name=display_name, base_name=base_name)
+
+
+def _collect_playback_entries(inp: str):
+    src_is_dir = os.path.isdir(inp)
+    if not src_is_dir:
+        if missing_input_file(inp):
+            return [], 1
+        ext = os.path.splitext(inp)[1].lower()
+        if ext not in (".owp", ".ogg"):
+            eprint("error: unsupported file type for --play (expected .owp or .ogg)")
+            return [], 1
+        return [_make_playback_entry(inp)], None
+
+    files, rc = collect_batch_files(
+        inp,
+        True,
+        [".owp", ".ogg"],
+        "no supported audio files found",
+    )
+    if rc is not None:
+        return [], rc
+    return [_make_playback_entry(path, inp) for path in files], None
+
+
+def _filter_playback_entries(entries, trim_table):
+    playable = []
+    skipped = []
+    for entry in entries:
+        if entry.base_name.lower() in trim_table:
+            playable.append(entry)
+            continue
+        skipped.append(entry)
+    return playable, skipped
+
+
+def _format_playlist_help(has_playlist: bool) -> str:
+    parts = ["pause/resume(p)", "stop(q)", "help(h)"]
+    if has_playlist:
+        parts = parts[:1] + ["prev(b)", "next(n)", "list(l)", "play/g N"] + parts[1:]
+    return "commands: " + ", ".join(parts)
+
+
+def _parse_player_command(command: str, has_playlist: bool):
+    text = str(command or "").strip()
+    if not text:
+        return "noop", None
+
+    parts = text.split()
+    head = parts[0].lower()
+
+    if head in ("h", "help", "?"):
+        return "help", None
+    if head in ("p", "pause", "toggle"):
+        return "toggle_pause", None
+    if head in ("q", "quit", "exit", "stop", "s"):
+        return "stop", None
+    if not has_playlist:
+        raise ValueError(f"unknown command: {text}")
+    if head in ("n", "next"):
+        return "next", None
+    if head in ("b", "back", "prev", "previous"):
+        return "prev", None
+    if head in ("l", "list", "playlist"):
+        return "list", None
+    if head in ("play", "go", "g", "goto", "jump"):
+        if len(parts) != 2:
+            raise ValueError("play expects exactly one playlist index")
+        try:
+            index = int(parts[1])
+        except ValueError as exc:
+            raise ValueError("play expects an integer playlist index") from exc
+        if index <= 0:
+            raise ValueError("play index must be >= 1")
+        return "play", index - 1
+    raise ValueError(f"unknown command: {text}")
+
+
+def _print_playlist(entries, current_index: int, paused: bool) -> None:
+    total = len(entries)
+    eprint(f"playlist total={total}")
+    for index, entry in enumerate(entries):
+        marker = "  "
+        if index == current_index:
+            marker = "||" if paused else ">>"
+        eprint(f"{marker} [{index + 1}/{total}] {entry.display_name}")
+
+
+def _default_play_gameexe_path(inp: str) -> str:
+    src_path = os.path.abspath(inp)
+    audio_dir = src_path if os.path.isdir(src_path) else os.path.dirname(src_path)
+    root_dir = os.path.dirname(audio_dir)
+    exact = os.path.join(root_dir, "Gameexe.dat")
+    if os.path.isfile(exact):
+        return exact
+    wildcard_matches = []
+    try:
+        for name in os.listdir(root_dir):
+            path = os.path.join(root_dir, name)
+            if not os.path.isfile(path):
+                continue
+            if not name.lower().startswith("gameexe"):
+                continue
+            if "." not in name:
+                continue
+            wildcard_matches.append(path)
+    except OSError:
+        return exact
+    if wildcard_matches:
+        wildcard_matches.sort(
+            key=lambda path: (
+                os.path.basename(path).lower() != "gameexe.ini",
+                os.path.splitext(path)[1].lower() != ".ini",
+                os.path.splitext(path)[1].lower() != ".dat",
+                os.path.basename(path).lower(),
+            )
         )
-        cmd = [
+        return wildcard_matches[0]
+    return exact
+
+
+def _resolve_play_gameexe_path(inp: str, trim_path: str = "") -> str:
+    if trim_path:
+        return trim_path
+    return _default_play_gameexe_path(inp)
+
+
+def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
+    base_name, ogg, play_path, tmp_dir = _prepare_playback_input(entry.path)
+    start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
+    start_pos, end_pos, rep_pos = _normalize_playback_range(
+        ogg,
+        start_sample=start_pos,
+        end_sample=end_pos,
+        repeat_sample=rep_pos,
+    )
+    return _PlaybackPlan(
+        entry=entry,
+        play_path=play_path,
+        tmp_dir=tmp_dir,
+        start_sample=start_pos,
+        end_sample=end_pos,
+        repeat_sample=rep_pos,
+        audio_filter=_build_ffplay_audio_filter(
+            start_sample=start_pos,
+            end_sample=end_pos,
+            repeat_sample=rep_pos,
+        ),
+    )
+
+
+def _start_playback_process(plan: _PlaybackPlan, ffplay_path: str) -> _RunningPlayback:
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    process = subprocess.Popen(
+        [
             ffplay_path,
             "-hide_banner",
             "-loglevel",
             "error",
             "-nodisp",
+            "-autoexit",
             "-i",
-            play_path,
+            plan.play_path,
             "-af",
-            af,
-        ]
-        p = subprocess.run(cmd)
-        if p.returncode != 0:
-            raise RuntimeError(f"ffplay failed with exit code {p.returncode}")
+            plan.audio_filter,
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=creationflags,
+    )
+    return _RunningPlayback(plan=plan, process=process)
+
+
+def _call_windows_process_op(pid: int, name: str) -> None:
+    import ctypes
+
+    process_suspend_resume = 0x0800
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    ntdll = ctypes.WinDLL("ntdll")
+    func = getattr(ntdll, name)
+    func.argtypes = [ctypes.c_void_p]
+    func.restype = ctypes.c_long
+    handle = kernel32.OpenProcess(process_suspend_resume, False, int(pid))
+    if not handle:
+        err = ctypes.get_last_error()
+        raise OSError(err, f"OpenProcess failed for pid={pid}")
+    try:
+        status = int(func(handle))
+        if status != 0:
+            raise RuntimeError(f"{name} failed: 0x{status & 0xFFFFFFFF:08X}")
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _pause_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _call_windows_process_op(process.pid, "NtSuspendProcess")
+        return
+    import signal
+
+    os.kill(process.pid, signal.SIGSTOP)
+
+
+def _resume_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _call_windows_process_op(process.pid, "NtResumeProcess")
+        return
+    import signal
+
+    os.kill(process.pid, signal.SIGCONT)
+
+
+def _stop_running_playback(current: _RunningPlayback | None) -> None:
+    if current is None:
+        return
+    try:
+        if current.process.poll() is None:
+            with suppress(Exception):
+                current.process.terminate()
+            with suppress(subprocess.TimeoutExpired):
+                current.process.wait(timeout=1.0)
+            if current.process.poll() is None:
+                with suppress(Exception):
+                    current.process.kill()
+                with suppress(subprocess.TimeoutExpired):
+                    current.process.wait(timeout=1.0)
+    finally:
+        if current.plan.tmp_dir:
+            shutil.rmtree(current.plan.tmp_dir, ignore_errors=True)
+
+
+def _spawn_running_playback(
+    entry: _PlaybackEntry,
+    trim_table,
+    ffplay_path: str,
+) -> _RunningPlayback:
+    _ensure_ffplay_available(ffplay_path)
+    plan = _build_playback_plan(entry, trim_table)
+    return _start_playback_process(plan, ffplay_path)
+
+
+def _switch_playback(
+    entries,
+    current_index: int,
+    current: _RunningPlayback | None,
+    trim_table,
+    ffplay_path: str,
+):
+    running = _spawn_running_playback(entries[current_index], trim_table, ffplay_path)
+    old = current
+    current = running
+    _stop_running_playback(old)
+    plan = current.plan
+    eprint(
+        f"play [{current_index + 1}/{len(entries)}] {plan.entry.display_name}: intro {plan.start_sample}..{plan.repeat_sample}, loop {plan.repeat_sample}..{plan.end_sample}"
+    )
+    return current
+
+
+def _run_input_reader(command_queue, stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            text = input("player> ")
+        except EOFError:
+            command_queue.put(("stop", None))
+            return
+        except KeyboardInterrupt:
+            command_queue.put(("interrupt", None))
+            return
+        command_queue.put(("command", text))
+
+
+def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
+    has_playlist = len(entries) > 1
+    command_queue = queue.Queue()
+    stop_event = threading.Event()
+    current_index = 0
+    current = None
+    reader = threading.Thread(
+        target=_run_input_reader,
+        args=(command_queue, stop_event),
+        daemon=True,
+    )
+    reader.start()
+    eprint(_format_playlist_help(has_playlist))
+    try:
+        current = _switch_playback(
+            entries,
+            current_index,
+            current,
+            trim_table,
+            ffplay_path,
+        )
+        while True:
+            if current is not None and current.process.poll() is not None:
+                raise RuntimeError(
+                    f"ffplay exited unexpectedly with code {current.process.returncode}"
+                )
+            try:
+                kind, payload = command_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if kind == "interrupt":
+                eprint("playback stopped")
+                return 0
+            if kind == "stop":
+                eprint("playback stopped")
+                return 0
+            try:
+                action, value = _parse_player_command(payload, has_playlist)
+                if action == "noop":
+                    continue
+                if action == "help":
+                    eprint(_format_playlist_help(has_playlist))
+                    continue
+                if action == "list":
+                    _print_playlist(
+                        entries,
+                        current_index,
+                        current.paused if current else False,
+                    )
+                    continue
+                if action == "toggle_pause":
+                    if current is None:
+                        continue
+                    if current.paused:
+                        _resume_process(current.process)
+                        current.paused = False
+                        eprint(
+                            f"resumed [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
+                        )
+                        continue
+                    _pause_process(current.process)
+                    current.paused = True
+                    eprint(
+                        f"paused [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
+                    )
+                    continue
+                if action == "stop":
+                    eprint("playback stopped")
+                    return 0
+                if action == "prev":
+                    if current_index == 0:
+                        eprint("already at the first track")
+                        continue
+                    current = _switch_playback(
+                        entries,
+                        current_index - 1,
+                        current,
+                        trim_table,
+                        ffplay_path,
+                    )
+                    current_index -= 1
+                    continue
+                if action == "next":
+                    if current_index + 1 >= len(entries):
+                        eprint("already at the last track")
+                        continue
+                    current = _switch_playback(
+                        entries,
+                        current_index + 1,
+                        current,
+                        trim_table,
+                        ffplay_path,
+                    )
+                    current_index += 1
+                    continue
+                if action == "play":
+                    if value >= len(entries):
+                        eprint(f"playlist index out of range: {value + 1}")
+                        continue
+                    current = _switch_playback(
+                        entries,
+                        value,
+                        current,
+                        trim_table,
+                        ffplay_path,
+                    )
+                    current_index = value
+                    continue
+            except Exception as exc:
+                eprint(f"error: {exc}")
+    except KeyboardInterrupt:
+        eprint("playback stopped")
         return 0
     finally:
-        if tmp_dir:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+        stop_event.set()
+        _stop_running_playback(current)
 
 
 def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
@@ -545,31 +942,46 @@ def main(argv=None) -> int:
         return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
 
     if mode == "play":
-        if len(argv) != 2:
-            eprint("error: expected <input_file> <Gameexe.dat> for --play")
+        if len(argv) not in (1, 2):
+            eprint(
+                "error: expected <input_file|input_dir> [Gameexe.dat|Gameexe.ini] for --play"
+            )
             _hint_help()
             return 2
 
-        inp, trim_path = argv
-        if missing_input_file(inp):
-            return 1
+        inp = argv[0]
+        trim_path = _resolve_play_gameexe_path(inp, argv[1] if len(argv) == 2 else "")
         if not os.path.isfile(trim_path):
-            eprint(f"Gameexe.dat not found: {trim_path}")
+            eprint(f"Gameexe source not found: {trim_path}")
             return 1
 
         ffplay_path = shutil.which("ffplay") or ""
-        if not ffplay_path:
-            eprint("ffplay not found in PATH")
-            return 1
-
         gei_txt = _load_gameexe_ini_text(trim_path)
         trim_table = _parse_bgm_table(gei_txt)
         if not trim_table:
-            eprint("error: no #BGM.* entries found in Gameexe.dat")
+            eprint("error: no #BGM.* entries found in Gameexe source")
+            return 1
+
+        entries, rc = _collect_playback_entries(inp)
+        if rc is not None:
+            return rc
+
+        entries, skipped = _filter_playback_entries(entries, trim_table)
+        if skipped:
+            for entry in skipped:
+                eprint(
+                    f"skip {entry.display_name}: no #BGM.* entry for file name: {entry.base_name}"
+                )
+        if not entries:
+            eprint("error: no playable audio files matched #BGM.* entries")
             return 1
 
         try:
-            return _play_one(inp, trim_table=trim_table, ffplay_path=ffplay_path)
+            return _run_interactive_player(
+                entries,
+                trim_table=trim_table,
+                ffplay_path=ffplay_path,
+            )
         except Exception as exc:
             eprint(f"error: {exc}")
             return 1

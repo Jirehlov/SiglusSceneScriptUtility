@@ -1000,8 +1000,8 @@ siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
 # Create / re-encode audio files
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 
-# Play one looped BGM using Gameexe.dat loop points
-siglus-ssu -s --play <input_file.(owp | ogg)> <path_to_Gameexe.dat>
+# Play one looped BGM or directory playlist using Gameexe loop points
+siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [path_to_Gameexe.dat | Gameexe.ini]
 ```
 
 #### Parameters
@@ -1011,7 +1011,7 @@ siglus-ssu -s --play <input_file.(owp | ogg)> <path_to_Gameexe.dat>
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
-| `--play` | **Play** mode. Plays one `.owp` or `.ogg` BGM using the `#BGM.*` loop-point table from `Gameexe.dat`. Playback starts at `start`, then loops the `repeat` → `end` region indefinitely through **ffplay**. Requires `ffplay` to be on the system `PATH`. |
+| `--play` | **Play** mode. Plays one `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback starts at `start`, then loops the `repeat` → `end` region indefinitely through **ffplay**. Requires `ffplay` to be on the system `PATH`. |
 | `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
 
 #### Examples
@@ -1038,6 +1038,12 @@ siglus-ssu -s --a /path/to/bgm01.owp
 # Play one .owp BGM from its start point and loop forever using Gameexe.dat
 siglus-ssu -s --play /path/to/bgm01.owp /path/to/Gameexe.dat
 
+# Play one .ogg BGM using Gameexe.ini directly
+siglus-ssu -s --play /path/to/bgm01.ogg /path/to/Gameexe.ini
+
+# Play all matching BGM files in a directory; auto-detect Gameexe.dat/Gameexe.ini
+siglus-ssu -s --play /path/to/BGM/
+
 # Re-encode .ogg files back to .owp
 siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 ```
@@ -1058,7 +1064,11 @@ The `--trim` option reads the Gameexe.dat BGM table (entries formatted as `#BGM.
 
 #### Loop Playback Details
 
-The `--play` option reads the same Gameexe.dat BGM table and matches entries by input basename. It accepts `.owp` and plain `.ogg` input, starts playback at `start`, and then loops the `repeat` → `end` sample region indefinitely through **ffplay**. If `end` is `-1` or extends past the decoded Ogg length, playback treats EOF as the loop end. This mode is intended for BGM loop preview and does not support `.nwa` or `.ovk`.
+The `--play` option reads the Gameexe BGM table from either `Gameexe.dat` or `Gameexe.ini` and matches entries by input basename. The Gameexe path is optional; when omitted, the tool looks next to the audio folder's parent directory for `Gameexe.dat`, then falls back to the first nearby `Gameexe.*` file (preferring `Gameexe.ini`).
+
+It accepts `.owp` and plain `.ogg` input, starts playback at `start`, and then loops the `repeat` → `end` sample region indefinitely through **ffplay**. If `end` is `-1` or extends past the decoded Ogg length, playback treats EOF as the loop end.
+
+When the input is a directory, the player builds a playlist from `.owp`/`.ogg` files with matching `#BGM.*` entries, skips unmatched files with a diagnostic, and opens an interactive `player>` prompt. The prompt accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (list), and `play N` / `g N` to jump to a 1-based track index. This mode is intended for BGM loop preview and does not support `.nwa` or `.ovk`.
 
 Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output.
 
