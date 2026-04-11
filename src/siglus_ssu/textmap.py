@@ -412,10 +412,9 @@ def _collect_disam_string_kinds(bundle, source_name: str = ""):
 
 
 def _locate_tokens(source_text: str, tokens, iad):
-    lines = source_text.splitlines(keepends=True)
     line_spans = []
     pos = 0
-    for line in lines:
+    for line in source_text.splitlines(keepends=True):
         line_len = len(line)
         line_spans.append((pos, pos + line_len, line))
         pos += line_len
@@ -540,6 +539,12 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
     changes = []
     line_order_map = {}
     index_map = {}
+    line_spans = []
+    pos = 0
+    for line_text in text.splitlines(keepends=True):
+        line_len = len(line_text)
+        line_spans.append((pos, pos + line_len, line_text))
+        pos += line_len
     for entry in entries:
         line = _to_int(entry.get("line", 0), 0)
         order = _to_int(entry.get("order", 0), 0)
@@ -619,10 +624,8 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         if used_span is None:
             line_no = _to_int(entry.get("line", 0), 0)
             if line_no > 0:
-                lines = text.splitlines(keepends=True)
-                if line_no <= len(lines):
-                    line_text = lines[line_no - 1]
-                    line_start = sum(len(x) for x in lines[: line_no - 1])
+                if line_no <= len(line_spans):
+                    line_start, _line_end, line_text = line_spans[line_no - 1]
                     rel_start = max(0, _to_int(entry.get("start", 0), 0) - line_start)
                     pos = line_text.find(expected_q, rel_start)
                     if pos >= 0:
