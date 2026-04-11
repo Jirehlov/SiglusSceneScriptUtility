@@ -38,7 +38,7 @@ def main(argv=None):
     label = label.strip()
     try:
         label_i = int(label, 10)
-    except Exception:
+    except ValueError:
         label_i = None
     if label_i is None or label_i < 0:
         sys.stderr.write(f"Invalid zlabel: {zlabel}\n")
@@ -53,10 +53,7 @@ def main(argv=None):
     work_dir = os.path.join(
         engine_dir, "work_" + datetime.datetime.now().strftime("%Y%m%d")
     )
-    try:
-        os.makedirs(work_dir, exist_ok=True)
-    except Exception:
-        pass
+    os.makedirs(work_dir, exist_ok=True)
     cmd = [
         engine_path,
         f"/work_dir={work_dir}",
@@ -66,7 +63,7 @@ def main(argv=None):
     ]
     try:
         subprocess.Popen(cmd, cwd=engine_dir)
-    except Exception as e:
+    except (OSError, ValueError) as e:
         sys.stderr.write(f"Failed to launch engine: {e}\n")
         return 1
     return 0

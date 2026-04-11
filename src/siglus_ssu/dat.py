@@ -43,7 +43,7 @@ def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
     try:
         blob_ofs = int(blob_ofs)
         blob_end = int(blob_end)
-    except Exception:
+    except (TypeError, ValueError):
         return out
     if blob_ofs < 0 or blob_end <= blob_ofs or blob_ofs > len(dat):
         return out
@@ -52,7 +52,7 @@ def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
         try:
             o = int(ofs_u16)
             ln = int(ln_u16)
-        except Exception:
+        except (TypeError, ValueError):
             out.append("")
             continue
         if o < 0 or ln < 0:
@@ -71,7 +71,7 @@ def _decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
                 u16.append(w ^ key)
             raw = b"".join(struct.pack("<H", w & 0xFFFF) for w in u16)
             out.append(raw.decode("utf-16le", "surrogatepass"))
-        except Exception:
+        except (struct.error, UnicodeDecodeError, ValueError):
             out.append("")
     return out
 
@@ -121,24 +121,17 @@ def _ensure_decompile_hints(bundles, decompile_hints=None, stats=None):
 def _is_decompiler_excluded_dat(dat_path=None, scene_name=None):
     names = []
     if dat_path:
-        try:
-            names.append(os.path.basename(str(dat_path)))
-        except Exception:
-            pass
+        name = os.path.basename(str(dat_path))
+        if name:
+            names.append(name)
     if scene_name not in (None, ""):
-        try:
-            scene_text = str(scene_name)
-        except Exception:
-            scene_text = ""
+        scene_text = str(scene_name)
         if scene_text:
             names.append(scene_text)
             names.append(scene_text + ".dat")
     for name in names:
-        try:
-            if is_named_filename(name, ANGOU_DAT_NAME):
-                return True
-        except Exception:
-            continue
+        if is_named_filename(name, ANGOU_DAT_NAME):
+            return True
     return False
 
 
@@ -147,14 +140,11 @@ def _build_namae_defs(namae_list, str_list):
     for idx, raw in enumerate(namae_list or []):
         try:
             sid = int(raw)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         text = None
         if 0 <= sid < len(str_list or []):
-            try:
-                text = str(str_list[sid])
-            except Exception:
-                text = None
+            text = str(str_list[sid])
         out.append({"id": int(idx), "str_id": sid, "text": text})
     return out
 
@@ -164,7 +154,7 @@ def _build_read_flag_defs(read_flag_list):
     for idx, raw in enumerate(read_flag_list or []):
         try:
             out.append({"id": int(idx), "line": int(raw)})
-        except Exception:
+        except (TypeError, ValueError):
             continue
     return out
 

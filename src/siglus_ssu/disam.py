@@ -22,6 +22,13 @@ from .common import (
 C = get_const_module()
 
 
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _read_flag_command_codes():
     codes = getattr(C, "READ_FLAG_COMMAND_CODES")
     return frozenset((int(a), int(b)) for a, b in (codes or ()))
@@ -46,11 +53,8 @@ def _build_system_element_index():
                 return None
             if not t:
                 return None
-            try:
-                if t in fm:
-                    return int(fm[t])
-            except Exception:
-                pass
+            if t in fm:
+                return int(fm[t])
             return t
 
         def _pick_name(names):
@@ -149,7 +153,7 @@ def _build_system_element_index():
                 continue
             out[key] = None
     except Exception:
-        pass
+        return out
     return out
 
 
@@ -186,7 +190,7 @@ def _build_array_element_index():
             except Exception:
                 continue
     except Exception:
-        pass
+        return out
     return out
 
 
@@ -366,11 +370,9 @@ def _new_expression_state(
         **extra,
     ):
         _drop_stack_tail(stack_start)
-        try:
-            if ret_form is not None and int(ret_form) != int(fm_void):
-                _push_stack_value(ret_form, expr=expr, origin=origin, **extra)
-        except Exception:
-            pass
+        ret_form_i = _int_or_none(ret_form)
+        if ret_form_i is not None and ret_form_i != int(fm_void):
+            _push_stack_value(ret_form_i, expr=expr, origin=origin, **extra)
 
     def _copy_scalar(form):
         if not state.stack:
@@ -838,7 +840,7 @@ def _new_expression_state(
                 ):
                     return None
             except Exception:
-                pass
+                return None
             if len(items) - idx - 1 < int(argc):
                 return None
             return {"stack_start": None, "element_code": int(code), "info": info}
@@ -1017,22 +1019,20 @@ def disassemble_scn_bytes(
     cd_sel_block_start = C.CD_SEL_BLOCK_START
     cd_sel_block_end = C.CD_SEL_BLOCK_END
     labels_at = {}
-    try:
-        for i, ofs in enumerate(label_list or []):
-            if ofs is None:
-                continue
-            o = int(ofs)
-            labels_at.setdefault(o, []).append(f"L{i:d}")
-    except Exception:
-        pass
-    try:
-        for i, ofs in enumerate(z_label_list or []):
-            if ofs is None:
-                continue
-            o = int(ofs)
-            labels_at.setdefault(o, []).append(f"Z{i:d}")
-    except Exception:
-        pass
+    for i, ofs in enumerate(label_list or []):
+        if ofs is None:
+            continue
+        o = _int_or_none(ofs)
+        if o is None:
+            continue
+        labels_at.setdefault(o, []).append(f"L{i:d}")
+    for i, ofs in enumerate(z_label_list or []):
+        if ofs is None:
+            continue
+        o = _int_or_none(ofs)
+        if o is None:
+            continue
+        labels_at.setdefault(o, []).append(f"Z{i:d}")
     elm_exact = _build_system_element_index()
     elm_array_exact = _build_array_element_index()
     receiver_forms = set()
@@ -1380,11 +1380,9 @@ def disassemble_scn_bytes(
 
     def _collapse_command_expr(stack_start, ret_form, expr=None, origin="command"):
         _drop_stack_tail(stack_start)
-        try:
-            if ret_form is not None and int(ret_form) != fm_void:
-                _push_stack_value(ret_form, expr=expr, origin=origin)
-        except Exception:
-            pass
+        ret_form_i = _int_or_none(ret_form)
+        if ret_form_i is not None and ret_form_i != fm_void:
+            _push_stack_value(ret_form_i, expr=expr, origin=origin)
 
     def _copy_scalar(form):
         if not stack:
@@ -2013,7 +2011,7 @@ def disassemble_scn_bytes(
                 ):
                     return None
             except Exception:
-                pass
+                return None
             if len(items) - idx - 1 < argc:
                 return None
             return {
@@ -2195,15 +2193,15 @@ def disassemble_scn_bytes(
             )
             _push_stack_value(form, int(val), receiver=False)
             if elm_point_pending_idx is not None and int(form) == _form_code(C.FM_INT):
-                try:
-                    if (
-                        0 <= int(elm_point_pending_idx) < len(elm_points)
-                        and (elm_points[elm_point_pending_idx] or {}).get("first_int")
-                        is None
-                    ):
-                        elm_points[elm_point_pending_idx]["first_int"] = int(val)
-                except Exception:
-                    pass
+                pending_idx = _int_or_none(elm_point_pending_idx)
+                value_i = _int_or_none(val)
+                if (
+                    pending_idx is not None
+                    and value_i is not None
+                    and 0 <= pending_idx < len(elm_points)
+                    and (elm_points[pending_idx] or {}).get("first_int") is None
+                ):
+                    elm_points[pending_idx]["first_int"] = value_i
             continue
         if op == cd_pop:
             form = read_i32(i)
@@ -2560,10 +2558,9 @@ def disassemble_scn_bytes(
                 ),
             }
             if sid is not None:
-                try:
-                    text_fields["str_id"] = int(sid)
-                except Exception:
-                    pass
+                sid_i = _int_or_none(sid)
+                if sid_i is not None:
+                    text_fields["str_id"] = sid_i
             if rf_line is not None:
                 text_fields["read_flag_line"] = int(rf_line)
             _trace(
@@ -2589,16 +2586,14 @@ def disassemble_scn_bytes(
                 ),
             }
             if sid is not None:
-                try:
-                    sid_i = int(sid)
+                sid_i = _int_or_none(sid)
+                if sid_i is not None:
                     name_fields["str_id"] = sid_i
                     name_ids = _namae_ids_for_str(sid_i)
                     if name_ids:
                         name_fields["namae_ids"] = list(name_ids)
                         if len(name_ids) == 1:
                             name_fields["namae_id"] = int(name_ids[0])
-                except Exception:
-                    pass
             _trace(
                 opname,
                 ofs,
@@ -2729,10 +2724,7 @@ def disassemble_scn_bytes(
             except Exception:
                 tail["scene_no"] = scene_no
         if scene_name not in (None, ""):
-            try:
-                tail["scene_name"] = str(scene_name)
-            except Exception:
-                pass
+            tail["scene_name"] = str(scene_name)
         if namae_defs:
             tail["namae_defs"] = _clone_side_defs(namae_defs)
         if read_flag_defs:

@@ -11,23 +11,20 @@ def _form_name(f):
         return f
     try:
         fv = int(f)
-        for k, v in C._FORM_CODE.items():
-            if int(v) == fv:
-                return k
-    except Exception:
-        pass
+    except (TypeError, ValueError):
+        return f
+    for k, v in C._FORM_CODE.items():
+        if int(v) == fv:
+            return k
     return f
 
 
 def _form_code(f):
     if isinstance(f, int):
         return f
-    try:
-        code = C._FORM_CODE.get(_form_name(f))
-        if isinstance(code, int):
-            return code
-    except Exception:
-        pass
+    code = C._FORM_CODE.get(_form_name(f))
+    if isinstance(code, int):
+        return code
     return None
 
 
@@ -47,7 +44,7 @@ def _parse_arg_spec(arg_spec):
         list_id_s, args_str = seg.split(":", 1)
         try:
             list_id = int(list_id_s.strip())
-        except Exception:
+        except (TypeError, ValueError):
             continue
         al = []
         for tok in args_str.split(","):
@@ -64,7 +61,7 @@ def _parse_arg_spec(arg_spec):
             if len(parts) == 3:
                 try:
                     aid = int(parts[0])
-                except Exception:
+                except (TypeError, ValueError):
                     aid = len(al)
                 nm = parts[1]
                 fm = _form_name(parts[2])
@@ -226,10 +223,13 @@ class FormTable:
                 return
         bucket[nm] = e
         form["element_map_by_name"] = bucket
+        code = e.get("code", 0)
         try:
-            code_bucket[int(e.get("code", 0) or 0)] = e
-        except Exception:
-            pass
+            code = int(code or 0)
+        except (TypeError, ValueError):
+            code = None
+        if code is not None:
+            code_bucket[code] = e
         form["element_map_by_code"] = code_bucket
 
     def get(s, fc, name):
@@ -245,9 +245,10 @@ class FormTable:
         if not isinstance(form, dict):
             return None
         try:
-            return (form.get("element_map_by_code") or {}).get(int(code))
-        except Exception:
+            code = int(code)
+        except (TypeError, ValueError):
             return None
+        return (form.get("element_map_by_code") or {}).get(code)
 
     def find(s, name):
         for fc in (C.FM_CALL, C.FM_SCENE, C.FM_GLOBAL):
@@ -744,9 +745,12 @@ class MA:
             )
             unk = s.plad.get("unknown_list", [])
             try:
-                element_name = unk[int(name_atom.get("opt", 0))]
-            except Exception:
+                idx = int(name_atom.get("opt", 0))
+            except (TypeError, ValueError):
                 return 0
+            if idx < 0 or idx >= len(unk):
+                return 0
+            element_name = unk[idx]
             if any(ch in element_name for ch in ("@", "$")):
                 return 0
             str_list = s.plad.setdefault("str_list", [])
@@ -883,27 +887,27 @@ class MA:
         els = n.get("element") or [{}]
         e0 = els[0] if els else {}
         elm_chain = []
-        try:
-            for i, el in enumerate(els):
-                if isinstance(el, dict):
-                    el["_elm_pos"] = i
-                    el["_elm_chain"] = None
-                if isinstance(el, dict) and el.get("node_type") == C.NT_ELM_ELEMENT:
-                    nm = (
-                        u[(el.get("name") or {}).get("atom", {}).get("opt", 0)]
-                        if u
-                        else ""
-                    )
-                    elm_chain.append(nm)
-                elif isinstance(el, dict) and el.get("node_type") == C.NT_ELM_ARRAY:
-                    elm_chain.append("array")
-                else:
-                    elm_chain.append("")
-            for el in els:
-                if isinstance(el, dict):
-                    el["_elm_chain"] = elm_chain
-        except Exception:
-            pass
+        for i, el in enumerate(els):
+            if not isinstance(el, dict):
+                elm_chain.append("")
+                continue
+            el["_elm_pos"] = i
+            el["_elm_chain"] = None
+            if el.get("node_type") == C.NT_ELM_ELEMENT:
+                atom = (el.get("name") or {}).get("atom") or {}
+                try:
+                    opt = int(atom.get("opt", 0) or 0)
+                except (TypeError, ValueError):
+                    opt = -1
+                elm_chain.append(u[opt] if 0 <= opt < len(u) else "")
+                continue
+            if el.get("node_type") == C.NT_ELM_ARRAY:
+                elm_chain.append("array")
+                continue
+            elm_chain.append("")
+        for el in els:
+            if isinstance(el, dict):
+                el["_elm_chain"] = elm_chain
         name = u[(e0.get("name") or {}).get("atom", {}).get("opt", 0)] if u else ""
         info, pf = s.ft.find(name)
         if not info:

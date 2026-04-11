@@ -39,12 +39,15 @@ def absp(p):
 
 
 def _form_code(name):
+    forms = C._FORM_CODE
+    if not isinstance(forms, dict):
+        return None
+    key = str(name)
+    if key not in forms:
+        return None
     try:
-        forms = C._FORM_CODE
-        if not isinstance(forms, dict):
-            return None
-        return int(forms[str(name)])
-    except Exception:
+        return int(forms[key])
+    except (TypeError, ValueError):
         return None
 
 
@@ -53,7 +56,7 @@ def is_value(form):
         if isinstance(form, str):
             return form in (C.FM_VOID, C.FM_INT, C.FM_STR, C.FM_INTLIST, C.FM_STRLIST)
         code = int(form)
-    except Exception:
+    except (TypeError, ValueError):
         return False
     return any(
         isinstance(fc, int) and code == fc
@@ -80,7 +83,7 @@ def dereference(form):
         return form
     try:
         code = int(form)
-    except Exception:
+    except (TypeError, ValueError):
         return form
     if code == _form_code(C.FM_INTREF):
         return _form_code(C.FM_INT)
@@ -105,7 +108,7 @@ def _fc(x):
 def _to_int(v):
     try:
         return int(v)
-    except Exception:
+    except (TypeError, ValueError):
         if isinstance(v, str):
             fc = _form_code(v)
             return int(fc) if isinstance(fc, int) else 0
@@ -115,7 +118,7 @@ def _to_int(v):
 def get_elm_owner(code):
     try:
         return (int(code) >> 24) & 0xFF
-    except Exception:
+    except (TypeError, ValueError):
         return 0
 
 
@@ -211,7 +214,7 @@ def set_shuffle_seed(seed=1):
     global _MSR
     try:
         seed_i = int(seed) & 0xFFFFFFFF
-    except Exception:
+    except (TypeError, ValueError):
         seed_i = 1
     _MSR = _MSVCRand(seed_i)
     return seed_i
@@ -417,10 +420,7 @@ class BS:
         }
 
     def error(s, etype, atom):
-        try:
-            at = dict(atom or {})
-        except Exception:
-            at = {}
+        at = dict(atom) if isinstance(atom, dict) else {}
         for k in ("id", "line", "type", "opt", "subopt"):
             if k not in at:
                 at[k] = 0
@@ -612,14 +612,10 @@ class BS:
         sub = int(sub_v) if sub_v is not None else int(z_label.get("subopt", 0) or 0)
         if opt < 0 or opt >= len(s.out_scn["z_label_list"]):
             return True
-        if sub < 0 or sub >= len(s.out_scn["label_list"]):
-            pass
         ofs = s.out_scn["scn"].size()
-        try:
-            if 0 <= sub < len(s.out_scn["label_list"]):
-                s.out_scn["label_list"][sub] = ofs
-        except Exception:
-            pass
+        label_list = s.out_scn.get("label_list")
+        if isinstance(label_list, list) and 0 <= sub < len(label_list):
+            label_list[sub] = ofs
         s.out_scn["z_label_list"][opt] = ofs
         return True
 
@@ -1518,13 +1514,15 @@ def compile_one_pipeline(
         if code == "TNMSERR_MA_ELEMENT_UNKNOWN":
             unknown_name = None
             try:
-                if int(atom.get("type", -1)) == int(C.LA_T.get("UNKNOWN", -999)):
-                    u = (lad or {}).get("unknown_list") or []
-                    idx = int(atom.get("opt", -1))
-                    if 0 <= idx < len(u):
-                        unknown_name = str(u[idx])
-            except Exception:
-                unknown_name = None
+                atom_type = int(atom.get("type", -1))
+                idx = int(atom.get("opt", -1))
+            except (TypeError, ValueError):
+                atom_type = -1
+                idx = -1
+            if atom_type == int(C.LA_T.get("UNKNOWN", -999)):
+                u = (lad or {}).get("unknown_list") or []
+                if 0 <= idx < len(u):
+                    unknown_name = str(u[idx])
             qname = str(ma.last.get("qname") or unknown_name or "")
             if unknown_name:
                 raise RuntimeError(

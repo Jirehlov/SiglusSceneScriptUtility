@@ -50,10 +50,6 @@ def _const_search_paths(path: Path | None = None) -> tuple[Path, ...]:
     return tuple(out)
 
 
-def const_exists() -> bool:
-    return any(candidate.is_file() for candidate in _const_search_paths())
-
-
 def _validate_const_bytes(data: bytes) -> str:
     digest = hashlib.sha512(data).hexdigest()
     if digest not in _CONST_SHA512_ALLOWED:

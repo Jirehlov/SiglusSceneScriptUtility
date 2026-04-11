@@ -2,6 +2,7 @@ import bisect
 import functools
 import os
 import re
+from contextlib import suppress
 from .CA import _iszen
 from ._const_manager import get_const_module
 
@@ -29,7 +30,7 @@ _CLOSE_NAME = "\u3011"
 def _line_item(text, target_line=None):
     try:
         target = int(target_line) if target_line is not None else None
-    except Exception:
+    except (TypeError, ValueError):
         target = None
     return (str(text or ""), target)
 
@@ -50,12 +51,12 @@ def _line_target(line):
             return None
         try:
             return int(line[1])
-        except Exception:
+        except (TypeError, ValueError):
             return None
     if isinstance(line, list) and len(line) >= 2:
         try:
             return int(line[1])
-        except Exception:
+        except (TypeError, ValueError):
             return None
     return None
 
@@ -120,7 +121,7 @@ def _form_name(form):
         return s
     try:
         return str(_FORM_REV.get(int(form), "int"))
-    except Exception:
+    except (TypeError, ValueError):
         return "int"
 
 
@@ -248,7 +249,7 @@ def _decompiler_cache(bundle):
 def _int_or_none(value):
     try:
         return int(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -356,11 +357,9 @@ def _write_support_inc_lines(root, lines):
         merged = sorted(merged, key=_sort_key)
         write_text(out_path, "\n".join(merged).rstrip() + "\n", enc="utf-8")
         return out_path
-    try:
-        if os.path.isfile(out_path):
+    if os.path.isfile(out_path):
+        with suppress(OSError):
             os.remove(out_path)
-    except Exception:
-        pass
     return None
 
 
@@ -1175,10 +1174,9 @@ def build_decompile_hints(bundles, status=None):
                 one["arg_layout"] = _merge_arg_layout(
                     one.get("arg_layout"), ev.get("arg_layout")
                 )
-                try:
-                    one["call_forms"].add(int(ev.get("ret_form")))
-                except Exception:
-                    pass
+                ret_form = _int_or_none(ev.get("ret_form"))
+                if ret_form is not None:
+                    one["call_forms"].add(ret_form)
             for cmd_id, info in (dec.command_def_info or {}).items():
                 try:
                     idx = int(cmd_id)
@@ -1471,10 +1469,9 @@ class _Decompiler:
             except Exception:
                 continue
             hint = self.global_property_hints.setdefault(prop_id, {})
-            try:
-                hint.setdefault("form", int(it.get("form")))
-            except Exception:
-                pass
+            form = _int_or_none(it.get("form"))
+            if form is not None:
+                hint.setdefault("form", form)
         self.symbolic_string_blockers = self._build_symbolic_string_blockers()
         self._ensure_event_annotations()
         self.return_event_offsets, self.return_event_forms = (
@@ -1874,13 +1871,10 @@ class _Decompiler:
                     q = ""
                 name = q.rsplit(".", 1)[-1] if "." in q else q
             if not base and idx == 0 and len(items) > 1:
-                try:
-                    if int(parent_form) == int(fm_global) and int(
-                        info.get("ret", -1)
-                    ) == int(fm_call):
-                        return ""
-                except Exception:
-                    pass
+                parent_form_i = _int_or_none(parent_form)
+                ret_i = _int_or_none(info.get("ret", -1))
+                if parent_form_i == int(fm_global) and ret_i == int(fm_call):
+                    return ""
             if base and name:
                 return f"{base}.{name}"
             if base:
@@ -1971,30 +1965,25 @@ class _Decompiler:
             if op == "CD_PUSH":
                 _push_stack_value(ev.get("form"), val=ev.get("value"), receiver=False)
                 if expr_state.elm_point_pending_idx is not None:
-                    try:
-                        if (
-                            0 <= int(expr_state.elm_point_pending_idx) < len(elm_points)
-                            and (
-                                elm_points[int(expr_state.elm_point_pending_idx)] or {}
-                            ).get("first_int")
-                            is None
-                            and int(ev.get("form", -1)) == int(fm_int)
-                        ):
-                            elm_points[int(expr_state.elm_point_pending_idx)][
-                                "first_int"
-                            ] = int(ev.get("value"))
-                    except Exception:
-                        pass
+                    pending_idx = _int_or_none(expr_state.elm_point_pending_idx)
+                    form_i = _int_or_none(ev.get("form", -1))
+                    value_i = _int_or_none(ev.get("value"))
+                    if (
+                        pending_idx is not None
+                        and 0 <= pending_idx < len(elm_points)
+                        and (elm_points[pending_idx] or {}).get("first_int") is None
+                        and form_i == int(fm_int)
+                        and value_i is not None
+                    ):
+                        elm_points[pending_idx]["first_int"] = value_i
                 continue
             if op == "CD_POP":
-                try:
-                    if int(ev.get("form", -1)) in scalar_forms:
-                        vals = _peek_arg_expr_list([{"form": int(ev.get("form"))}])
-                        if vals:
-                            ev["_expr"] = vals[0]
-                        _pop_stack_top()
-                except Exception:
-                    pass
+                form_i = _int_or_none(ev.get("form", -1))
+                if form_i in scalar_forms:
+                    vals = _peek_arg_expr_list([{"form": form_i}])
+                    if vals:
+                        ev["_expr"] = vals[0]
+                    _pop_stack_top()
                 continue
             if op == "CD_COPY":
                 _copy_scalar(ev.get("form"))
@@ -2135,16 +2124,12 @@ class _Decompiler:
                     ev["_expr"] = rhs
                 _pop_stack_top()
                 if rhs:
-                    try:
-                        if (
-                            int(ev.get("form", -1)) == int(fm_int)
-                            and int(ev.get("opr", -1)) in unary_int_ops
-                        ):
-                            _push_stack_value(
-                                fm_int, expr=_format_unary_expr(ev.get("opr"), rhs)
-                            )
-                    except Exception:
-                        pass
+                    form_i = _int_or_none(ev.get("form", -1))
+                    opr_i = _int_or_none(ev.get("opr", -1))
+                    if form_i == int(fm_int) and opr_i in unary_int_ops:
+                        _push_stack_value(
+                            fm_int, expr=_format_unary_expr(ev.get("opr"), rhs)
+                        )
                 continue
             if op == "CD_OPERATE_2":
                 lhs_item = dict(stack[-2]) if len(stack) >= 2 else {}
@@ -2252,13 +2237,9 @@ class _Decompiler:
                     for arg_info in reversed(arg_layout):
                         _consume_arg_value(arg_info)
                     _consume_element()
-                    try:
-                        if ev.get("ret_form") is not None and int(
-                            ev.get("ret_form")
-                        ) != int(fm_void):
-                            _push_stack_value(ev.get("ret_form"), expr=ev.get("_expr"))
-                    except Exception:
-                        pass
+                    ret_form = _int_or_none(ev.get("ret_form"))
+                    if ret_form is not None and ret_form != int(fm_void):
+                        _push_stack_value(ret_form, expr=ev.get("_expr"))
                 continue
 
     def _build_local_command_index(self):
@@ -2449,10 +2430,9 @@ class _Decompiler:
             one["arg_layout"] = _merge_arg_layout(
                 one.get("arg_layout"), (info or {}).get("arg_layout")
             )
-            try:
-                one["ret_form"] = int((info or {}).get("ret_form"))
-            except Exception:
-                pass
+            ret_form = _int_or_none((info or {}).get("ret_form"))
+            if ret_form is not None:
+                one["ret_form"] = ret_form
             for form in (info or {}).get("ret_forms") or ():
                 try:
                     one["ret_forms"].add(int(form))
@@ -2482,10 +2462,9 @@ class _Decompiler:
                 except Exception:
                     continue
             if one.get("ret_form") is None:
-                try:
-                    one["ret_form"] = int((info or {}).get("ret_form"))
-                except Exception:
-                    pass
+                ret_form = _int_or_none((info or {}).get("ret_form"))
+                if ret_form is not None:
+                    one["ret_form"] = ret_form
         for ev in self.events:
             if str(ev.get("op") or "") != "CD_COMMAND":
                 continue
@@ -2517,10 +2496,9 @@ class _Decompiler:
             one["arg_layout"] = _merge_arg_layout(
                 one.get("arg_layout"), ev.get("arg_layout")
             )
-            try:
-                one["ret_forms"].add(int(ev.get("ret_form")))
-            except Exception:
-                pass
+            ret_form = _int_or_none(ev.get("ret_form"))
+            if ret_form is not None:
+                one["ret_forms"].add(ret_form)
         idx_list = (
             range(int(global_count))
             if global_count is not None
@@ -2760,11 +2738,12 @@ class _Decompiler:
                                     if not s.startswith("L"):
                                         kept.append(lab)
                                         continue
-                                    try:
-                                        if int(s[1:]) in moved_z_ids:
-                                            continue
-                                    except Exception:
-                                        pass
+                                    label_idx = _int_or_none(s[1:])
+                                    if (
+                                        label_idx is not None
+                                        and label_idx in moved_z_ids
+                                    ):
+                                        continue
                                     kept.append(lab)
                                 labels = kept
         out.extend(self._with_labels(labels, lines, line))
@@ -4039,12 +4018,8 @@ class _Decompiler:
 
     def _command_is_msg_block(self, ev):
         ec = ev.get("element_code")
-        try:
-            if ec is not None and int(ec) == int(C.ELM_GLOBAL_MSG_BLOCK):
-                return True
-        except Exception:
-            pass
-        return False
+        ec_i = _int_or_none(ec)
+        return ec_i is not None and ec_i == int(C.ELM_GLOBAL_MSG_BLOCK)
 
     def _pick_return_form(self, _cmd_id, forms, body_range):
         hint = None
@@ -4397,10 +4372,9 @@ class _Decompiler:
             texts.append(text)
             target = _line_target(one)
             if target is not None:
-                try:
-                    targets.append(int(target))
-                except Exception:
-                    pass
+                target_i = _int_or_none(target)
+                if target_i is not None:
+                    targets.append(target_i)
         if len(texts) != 1:
             if (
                 texts

@@ -27,7 +27,7 @@ def augment_receiver_form_codes(forms=None):
     for form in forms or ():
         try:
             out.add(int(form))
-        except Exception:
+        except (TypeError, ValueError):
             continue
     fm = C._FORM_CODE
     if not isinstance(fm, dict):
@@ -101,7 +101,7 @@ def unique_out_path(path):
             if not os.path.exists(p):
                 return p
         return path
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return path
 
 
@@ -285,7 +285,7 @@ def scan_text_comments(
 def split_element_code(code):
     try:
         code = int(code)
-    except Exception:
+    except (TypeError, ValueError):
         return (None, None)
     return ((code >> 24) & 0xFF, code & 0xFFFF)
 
@@ -345,7 +345,7 @@ def unary_result_form(form, opr, fm_int, unary_int_ops):
     try:
         if int(form) == int(fm_int) and int(opr) in unary_int_ops:
             return fm_int
-    except Exception:
+    except (TypeError, ValueError):
         return None
     return None
 
@@ -355,7 +355,7 @@ def binary_result_form(form_l, form_r, opr, fm_int, fm_str, string_cmp_ops):
         form_l = int(form_l)
         form_r = int(form_r)
         opr = int(opr)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if form_l == int(fm_int) and form_r == int(fm_int):
         return fm_int
@@ -375,7 +375,7 @@ def latest_stack_start(elm_points, stack_len):
     for ep in reversed(elm_points or []):
         try:
             sl = int((ep or {}).get("stack_len", 0) or 0)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if 0 <= sl <= int(stack_len):
             return sl
@@ -386,12 +386,12 @@ def trim_stack_points(elm_points, stack_start):
     out = []
     try:
         stack_start = int(stack_start)
-    except Exception:
+    except (TypeError, ValueError):
         return out
     for ep in elm_points or []:
         try:
             sl = int((ep or {}).get("stack_len", 0) or 0)
-        except Exception:
+        except (TypeError, ValueError):
             continue
         if sl < stack_start:
             out.append(ep)
@@ -401,7 +401,7 @@ def trim_stack_points(elm_points, stack_start):
 def normalize_stack_start(stack_start, stack_len):
     try:
         stack_start = int(stack_start)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if stack_start < 0:
         return 0
@@ -659,7 +659,7 @@ def siglus_engine_exe_element(exe_bytes: bytes, with_patch_points: bool = False)
 def read_siglus_engine_exe_el(path: str) -> bytes:
     try:
         b = read_bytes(path)
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return b""
     return siglus_engine_exe_element(b)
 
@@ -667,7 +667,7 @@ def read_siglus_engine_exe_el(path: str) -> bytes:
 def _safe_abspath(p: str) -> str:
     try:
         return os.path.abspath(str(p or ""))
-    except Exception:
+    except (OSError, TypeError, ValueError):
         return str(p or "")
 
 
@@ -684,18 +684,15 @@ def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
     if os.path.isfile(p0):
         out.append(p0)
     if recursive:
-        try:
-            for dirpath, _, filenames in os.walk(base_dir):
-                if dirpath == base_dir:
+        for dirpath, _, filenames in os.walk(base_dir):
+            if dirpath == base_dir:
+                continue
+            for fn in filenames:
+                if not is_named_filename(fn, target_name):
                     continue
-                for fn in filenames:
-                    if not is_named_filename(fn, target_name):
-                        continue
-                    p = os.path.join(dirpath, fn)
-                    if os.path.isfile(p):
-                        out.append(p)
-        except Exception:
-            pass
+                p = os.path.join(dirpath, fn)
+                if os.path.isfile(p):
+                    out.append(p)
     seen = set()
     uniq = []
     for p in out:

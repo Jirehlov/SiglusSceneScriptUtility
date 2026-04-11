@@ -1288,11 +1288,6 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     compiler.tile_copy(sp2, dp2_mv, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
     compiler.tile_copy(sp2, dp1_mv, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
     lz = bytes(lzb[:lzsz])
-    try:
-        if compiler.md5_digest(lz) != md5_code[:16]:
-            raise RuntimeError("source_angou: md5 mismatch")
-    except Exception:
-        pass
     if eg:
         _b = bytearray(lz)
         xor_cycle_inplace(_b, eg, int(sa.get("easy_index", 0)))

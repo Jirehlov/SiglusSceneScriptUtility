@@ -3,6 +3,7 @@ import shutil
 import re
 import subprocess
 import tempfile
+from contextlib import suppress
 
 from .common import (
     collect_batch_files,
@@ -23,22 +24,19 @@ from . import pck
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) -> None:
     if not tmp_dir:
         return
-    try:
-        if not os.path.isdir(tmp_dir):
-            return
-        if remove_owned:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            return
-        if os.path.basename(tmp_dir) != ".tmp_ffmpeg":
-            return
-        out_abs = os.path.abspath(out_root)
-        tmp_abs = os.path.abspath(tmp_dir)
-        if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
-            out_abs + os.sep
-        ):
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-    except Exception:
-        pass
+    if not os.path.isdir(tmp_dir):
+        return
+    if remove_owned:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
+    if os.path.basename(tmp_dir) != ".tmp_ffmpeg":
+        return
+    out_abs = os.path.abspath(out_root)
+    tmp_abs = os.path.abspath(tmp_dir)
+    if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
+        out_abs + os.sep
+    ):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def _analyze_one(path: str) -> int:
@@ -46,7 +44,7 @@ def _analyze_one(path: str) -> int:
     try:
         st = os.stat(path)
         size = st.st_size
-    except Exception:
+    except OSError:
         size = "?"
     print(_fmt_kv("path", path))
     print(_fmt_kv("type", ext.lstrip(".") or "unknown"))
@@ -73,11 +71,7 @@ def _analyze_one(path: str) -> int:
         last_sample_cnt = header.last_sample_cnt
         last_sample_pack_size = header.last_sample_pack_size
 
-        dur = None
-        try:
-            dur = sample_cnt / float(samples_per_sec) if samples_per_sec else None
-        except Exception:
-            dur = None
+        dur = sample_cnt / float(samples_per_sec) if samples_per_sec else None
 
         print(_fmt_kv("channels", channels))
         print(_fmt_kv("bits_per_sample", bits_per_sample))
@@ -175,7 +169,7 @@ def _parse_bgm_table(gameexe_ini_text: str):
             start = int(m.group("start"))
             end = int(m.group("end"))
             rep = int(m.group("rep"))
-        except Exception:
+        except (TypeError, ValueError):
             continue
         table[fn.lower()] = (start, end, rep)
     return table
@@ -259,14 +253,10 @@ def _ffmpeg_trim_ogg_bytes(
         with open(out_path, "rb") as f:
             return f.read()
     finally:
-        try:
+        with suppress(OSError):
             os.remove(in_path)
-        except Exception:
-            pass
-        try:
+        with suppress(OSError):
             os.remove(out_path)
-        except Exception:
-            pass
 
 
 def _resolve_bgm_entry(trim_table, base_name: str):

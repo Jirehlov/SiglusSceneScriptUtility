@@ -6,6 +6,7 @@ import json
 import re
 import time
 import shutil
+from contextlib import suppress
 from ._const_manager import get_const_module
 
 from .BS import (
@@ -619,10 +620,8 @@ def main(argv=None):
                     if (not a.no_angou) and os.path.isdir(bs_dir):
                         for fn in os.listdir(bs_dir):
                             if str(fn).lower().endswith(".lzss"):
-                                try:
+                                with suppress(OSError):
                                     os.remove(os.path.join(bs_dir, fn))
-                                except Exception:
-                                    pass
                     compile_list = ss
                 else:
                     old_ss = old.get("ss") or {}
@@ -646,10 +645,8 @@ def main(argv=None):
                             nm = os.path.splitext(os.path.basename(p))[0]
                             lp = os.path.join(bs_dir, nm + ".lzss")
                             if os.path.isfile(lp):
-                                try:
+                                with suppress(OSError):
                                     os.remove(lp)
-                                except Exception:
-                                    pass
 
             else:
                 for f in inc or []:
