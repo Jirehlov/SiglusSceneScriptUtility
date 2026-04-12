@@ -456,13 +456,7 @@ def run_extract(inp, out_dir):
 
 def _img_base_and_cut(p: Path):
     stem = p.stem
-    m = None
-    try:
-        import re as _re
-
-        m = _re.match(r"^(.*)_cut(\d{3})$", stem)
-    except Exception:
-        m = None
+    m = re.match(r"^(.*)_cut(\d{3})$", stem)
     if m:
         return m.group(1), int(m.group(2))
     return stem, None

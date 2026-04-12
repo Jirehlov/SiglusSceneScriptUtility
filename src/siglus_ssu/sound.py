@@ -35,7 +35,8 @@ def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
 
 
 def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
-    b = open(path, "rb").read()
+    with open(path, "rb") as f:
+        b = f.read()
     if len(b) >= 4 and b[:4] == b"OggS":
         return b
     out = bytes((x ^ key) for x in b)
@@ -436,101 +437,22 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
     return out.tobytes()
 
 
+_NWA_MOD_TABLE = {
+    3: (3, 0x04, 5, (6, 0x20, 11)),
+    4: (4, 0x08, 4, (7, 0x40, 10)),
+    5: (5, 0x10, 3, (8, 0x80, 9)),
+    6: (6, 0x20, 2, (8, 0x80, 9)),
+    7: (7, 0x40, 2, (8, 0x80, 9)),
+}
+_NWA_MOD_DEFAULT = (8, 0x80, 2, (8, 0x80, 9))
+
+
 def _apply_by_mod(mod: int, apply_delta, which: int):
-    if mod == 3:
-        if which == 1:
-            apply_delta(3, 0x04, 5)
-        elif which == 2:
-            apply_delta(3, 0x04, 6)
-        elif which == 3:
-            apply_delta(3, 0x04, 7)
-        elif which == 4:
-            apply_delta(3, 0x04, 8)
-        elif which == 5:
-            apply_delta(3, 0x04, 9)
-        elif which == 6:
-            apply_delta(3, 0x04, 10)
-        else:
-            apply_delta(6, 0x20, 11)
-        return
-    if mod == 4:
-        if which == 1:
-            apply_delta(4, 0x08, 4)
-        elif which == 2:
-            apply_delta(4, 0x08, 5)
-        elif which == 3:
-            apply_delta(4, 0x08, 6)
-        elif which == 4:
-            apply_delta(4, 0x08, 7)
-        elif which == 5:
-            apply_delta(4, 0x08, 8)
-        elif which == 6:
-            apply_delta(4, 0x08, 9)
-        else:
-            apply_delta(7, 0x40, 10)
-        return
-    if mod == 5:
-        if which == 1:
-            apply_delta(5, 0x10, 3)
-        elif which == 2:
-            apply_delta(5, 0x10, 4)
-        elif which == 3:
-            apply_delta(5, 0x10, 5)
-        elif which == 4:
-            apply_delta(5, 0x10, 6)
-        elif which == 5:
-            apply_delta(5, 0x10, 7)
-        elif which == 6:
-            apply_delta(5, 0x10, 8)
-        else:
-            apply_delta(8, 0x80, 9)
-        return
-    if mod == 6:
-        if which == 1:
-            apply_delta(6, 0x20, 2)
-        elif which == 2:
-            apply_delta(6, 0x20, 3)
-        elif which == 3:
-            apply_delta(6, 0x20, 4)
-        elif which == 4:
-            apply_delta(6, 0x20, 5)
-        elif which == 5:
-            apply_delta(6, 0x20, 6)
-        elif which == 6:
-            apply_delta(6, 0x20, 7)
-        else:
-            apply_delta(8, 0x80, 9)
-        return
-    if mod == 7:
-        if which == 1:
-            apply_delta(7, 0x40, 2)
-        elif which == 2:
-            apply_delta(7, 0x40, 3)
-        elif which == 3:
-            apply_delta(7, 0x40, 4)
-        elif which == 4:
-            apply_delta(7, 0x40, 5)
-        elif which == 5:
-            apply_delta(7, 0x40, 6)
-        elif which == 6:
-            apply_delta(7, 0x40, 7)
-        else:
-            apply_delta(8, 0x80, 9)
-        return
-    if which == 1:
-        apply_delta(8, 0x80, 2)
-    elif which == 2:
-        apply_delta(8, 0x80, 3)
-    elif which == 3:
-        apply_delta(8, 0x80, 4)
-    elif which == 4:
-        apply_delta(8, 0x80, 5)
-    elif which == 5:
-        apply_delta(8, 0x80, 6)
-    elif which == 6:
-        apply_delta(8, 0x80, 7)
+    nbits, sign_bit, base_shift, fallback = _NWA_MOD_TABLE.get(mod, _NWA_MOD_DEFAULT)
+    if 1 <= which <= 6:
+        apply_delta(nbits, sign_bit, base_shift + which - 1)
     else:
-        apply_delta(8, 0x80, 9)
+        apply_delta(*fallback)
 
 
 def parse_nwa_header(data: bytes) -> NWAHeader:
@@ -626,6 +548,7 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
 
 
 def decode_nwa_to_wav_bytes(path: str) -> bytes:
-    data = open(path, "rb").read()
+    with open(path, "rb") as f:
+        data = f.read()
     pcm, h = decode_nwa_to_pcm_bytes(data)
     return _build_wav(pcm, h.channels, h.bits_per_sample, h.samples_per_sec)

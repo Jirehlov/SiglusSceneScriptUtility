@@ -1006,7 +1006,7 @@ siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [Gameexe.dat路径 | G
 | `--x` | **提取**模式。解码 `.owp` → `.ogg`，`.nwa` → `.wav`，`.ovk` → 单独的 `.ogg` 文件。 |
 | `--a` | **分析**模式。打印单个音频文件的详细结构头部信息。 |
 | `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 文件。目录输入时会递归扫描 `.ogg`，并在输出端保留相对目录结构。 |
-| `--play` | **播放**模式。读取 `Gameexe.dat` 或 `Gameexe.ini` 中的 `#BGM.*` 循环点表，播放单个 `.owp` / `.ogg` BGM，或播放一个可交互的目录播放列表。Gameexe 路径为可选；省略时会自动探测附近的 `Gameexe.dat`/`Gameexe.ini`。播放会从 `start` 开始，进入循环段后通过 **ffplay** 将 `repeat` → `end` 区间无限循环。需要 `ffplay` 在系统 PATH 中。 |
+| `--play` | **播放**模式。读取 `Gameexe.dat` 或 `Gameexe.ini` 中的 `#BGM.*` 循环点表，播放单个 `.owp` / `.ogg` BGM，或播放一个可交互的目录播放列表。Gameexe 路径为可选；省略时会自动探测附近的 `Gameexe.dat`/`Gameexe.ini`。播放会从 `start` 开始，进入循环段后通过 **ffplay** 将 `repeat` → `end` 区间无限循环。需要 `ffplay` 在系统 PATH 中，且已安装 [psutil](https://pypi.org/project/psutil/)。 |
 | `--trim <Gameexe.dat>` | （仅提取模式）从 `Gameexe.dat` 读取 `#BGM.*` 循环点表，并用 **ffmpeg** 将每个 `.owp` 裁剪到其循环区域。需要 `ffmpeg` 在系统 PATH 中。该选项只影响 `.owp` 提取；`.nwa`/`.ovk` 不参与裁剪。 |
 
 #### 示例
@@ -1893,6 +1893,12 @@ pip install pillow
 ### 找不到 ffmpeg / ffplay（Sound 裁剪 / 播放模式）
 
 Sound 模式的 `--trim` 功能需要 `ffmpeg`，`--play` 功能需要 `ffplay`，两者都必须已安装并在系统 PATH 中可用。请从 https://ffmpeg.org/ 或通过系统包管理器安装。
+
+`--play` 另外还需要安装 [psutil](https://pypi.org/project/psutil/)：
+
+```bash
+pip install psutil
+```
 
 ### 使用纯 Python 回退
 

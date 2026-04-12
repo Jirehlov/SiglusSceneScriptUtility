@@ -7,7 +7,11 @@ import tempfile
 import threading
 from contextlib import suppress
 from dataclasses import dataclass
-import psutil
+
+try:
+    import psutil
+except Exception:
+    psutil = None
 from .common import (
     ANGOU_DAT_NAME,
     collect_batch_files,
@@ -886,6 +890,9 @@ def main(argv=None) -> int:
             )
             _hint_help()
             return 2
+        if psutil is None:
+            eprint("error: need psutil: pip install psutil")
+            return 1
         inp = argv[0]
         trim_path = _resolve_play_gameexe_path(inp, argv[1] if len(argv) == 2 else "")
         if not os.path.isfile(trim_path):

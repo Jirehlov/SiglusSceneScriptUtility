@@ -306,7 +306,8 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
         if not p or not os.path.isfile(p):
             continue
         try:
-            b = open(p, "rb").read()
+            with open(p, "rb") as f:
+                b = f.read()
         except Exception:
             continue
         if b.startswith(b"\xef\xbb\xbf"):

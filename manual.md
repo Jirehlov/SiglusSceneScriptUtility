@@ -1011,7 +1011,7 @@ siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [path_to_Gameexe.dat |
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
-| `--play` | **Play** mode. Plays one `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback starts at `start`, then loops the `repeat` → `end` region indefinitely through **ffplay**. Requires `ffplay` to be on the system `PATH`. |
+| `--play` | **Play** mode. Plays one `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback starts at `start`, then loops the `repeat` → `end` region indefinitely through **ffplay**. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
 | `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
 
 #### Examples
@@ -1899,6 +1899,12 @@ pip install pillow
 ### ffmpeg / ffplay Not Found (Sound Trim / Play Mode)
 
 The `--trim` feature in sound mode requires `ffmpeg`, and the `--play` feature requires `ffplay`, both installed and available on the system `PATH`. Install them from https://ffmpeg.org/ or via your system package manager.
+
+The `--play` feature also requires [psutil](https://pypi.org/project/psutil/):
+
+```bash
+pip install psutil
+```
 
 ### Using the Pure Python Fallback
 

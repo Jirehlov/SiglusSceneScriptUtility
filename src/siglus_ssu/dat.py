@@ -477,8 +477,8 @@ def _scn_payload_bounds(blob):
         return None
     try:
         h, _, _, _, _, _ = build_sections(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
-        so = int(h.get("scn_ofs", 0) or 0)
-        ss = int(h.get("scn_size", 0) or 0)
+        so = h.get("scn_ofs", 0)
+        ss = h.get("scn_size", 0)
     except Exception:
         return None
     if so < 0 or ss <= 0 or (so + ss) > len(blob):

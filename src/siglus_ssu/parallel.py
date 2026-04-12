@@ -1,11 +1,12 @@
+from __future__ import annotations
+
 import os
 from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Tuple, Dict
 from .common import format_scene_name
 
 
-def get_max_workers(max_workers: Optional[int] = None) -> int:
+def get_max_workers(max_workers: int | None = None) -> int:
     if max_workers is not None and max_workers > 0:
         return max_workers
     cpu_count = os.cpu_count() or 4
@@ -22,12 +23,12 @@ def _env_or(name, parse, default):
 def _compile_one_process(
     ss_path: str,
     tmp_path: str,
-    ia_data: Dict,
+    ia_data: dict,
     enc: str,
     utf8: bool,
     debug_outputs: bool,
     display_name: str,
-) -> Tuple[str, Optional[str]]:
+) -> tuple[str, str | None]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
     try:
@@ -82,9 +83,9 @@ def _compile_one_process(
 
 
 def parallel_compile(
-    ctx: Dict,
-    ss_files: List[str],
-    max_workers: Optional[int] = None,
+    ctx: dict,
+    ss_files: list[str],
+    max_workers: int | None = None,
 ) -> None:
     from concurrent.futures import ProcessPoolExecutor
 
@@ -131,8 +132,8 @@ def parallel_compile(
 
 
 def _lzss_compress_task(
-    args: Tuple[str, str, str, bytes, int],
-) -> Tuple[str, bytes, bytes, Optional[Exception]]:
+    args: tuple[str, str, str, bytes, int],
+) -> tuple[str, bytes, bytes, Exception | None]:
     nm, dat_path, lz_path, easy_code, lzss_level = args
     try:
         from .common import read_bytes, write_bytes
@@ -155,12 +156,12 @@ def _lzss_compress_task(
 
 
 def parallel_lzss_compress(
-    ctx: Dict,
-    scn_names: List[str],
+    ctx: dict,
+    scn_names: list[str],
     bs_dir: str,
     lzss_mode: bool,
-    max_workers: Optional[int] = None,
-) -> Tuple[List[str], List[bytes], List[bytes]]:
+    max_workers: int | None = None,
+) -> tuple[list[str], list[bytes], list[bytes]]:
     from .common import read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
@@ -215,8 +216,8 @@ def parallel_lzss_compress(
 
 
 def _source_encrypt_task(
-    args: Tuple[str, str, str, Dict, bool, int],
-) -> Tuple[str, int, bytes, Optional[Exception]]:
+    args: tuple[str, str, str, dict, bool, int],
+) -> tuple[str, int, bytes, Exception | None]:
     rel, src_path, cache_path, source_angou, skip, lzss_level = args
     try:
         from .common import read_bytes, write_cached_bytes
@@ -236,13 +237,13 @@ def _source_encrypt_task(
 
 
 def parallel_source_encrypt(
-    ctx: Dict,
-    rel_list: List[str],
+    ctx: dict,
+    rel_list: list[str],
     scn_path: str,
     tmp_path: str,
     skip: bool,
-    max_workers: Optional[int] = None,
-) -> Tuple[List[int], List[bytes]]:
+    max_workers: int | None = None,
+) -> tuple[list[int], list[bytes]]:
     source_angou = ctx.get("source_angou")
     if not source_angou:
         return ([], [])

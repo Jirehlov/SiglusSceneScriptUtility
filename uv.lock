@@ -149,23 +149,21 @@ wheels = [
 name = "siglus-ssu"
 version = "0.2.1"
 source = { editable = "." }
-dependencies = [
-    { name = "psutil" },
-]
 
 [package.dev-dependencies]
 dev = [
     { name = "maturin" },
     { name = "pillow" },
+    { name = "psutil" },
     { name = "ruff" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "psutil", specifier = ">=5.9" }]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "maturin", specifier = ">=1.12.4" },
     { name = "pillow", specifier = ">=12.1.1" },
+    { name = "psutil", specifier = ">=5.9" },
     { name = "ruff", specifier = ">=0.15.2" },
 ]
