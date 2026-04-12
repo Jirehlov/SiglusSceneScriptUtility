@@ -180,7 +180,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.2.1
+siglus-ssu init --ref v0.2.2
 ```
 
 ---
@@ -356,7 +356,7 @@ siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 
 ```
 # 分析单个文件
-siglus-ssu -a [--disam] [--readall] [--payload] <input_file>
+siglus-ssu -a [--disam] [--readall] <input_file>
 
 # 仅统计 .pck 中的台词计数并导出逐文件 CSV
 siglus-ssu -a --word <input_pck> [output_csv]
@@ -380,7 +380,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写在输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/*.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
 | `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`。 |
-| `--payload` | 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
+| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
 

@@ -1,4 +1,4 @@
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 const = None
 try:
     from ._const_manager import get_const_module

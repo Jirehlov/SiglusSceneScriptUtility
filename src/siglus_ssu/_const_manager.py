@@ -137,12 +137,15 @@ def get_const_module(path: Path | None = None, profile: int | None = None):
 
 
 def package_version() -> str:
+    from . import __version__ as _v
+
+    _v = str(_v or "").strip()
+    if _v:
+        return _v
     try:
         return str(dist_version("siglus-ssu") or "").strip()
     except PackageNotFoundError:
-        from . import __version__ as _v
-
-        return str(_v or "").strip()
+        return ""
 
 
 def _repo_root() -> Path | None:

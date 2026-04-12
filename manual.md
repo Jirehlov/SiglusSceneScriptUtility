@@ -181,7 +181,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Download const.py from a specific tagged release
-siglus-ssu init --ref v0.2.1
+siglus-ssu init --ref v0.2.2
 ```
 
 ---
@@ -357,7 +357,7 @@ Analyzes the internal structure of a supported binary file and prints a detailed
 
 ```
 # Analyze a single file
-siglus-ssu -a [--disam] [--readall] [--payload] <input_file>
+siglus-ssu -a [--disam] [--readall] <input_file>
 
 # Count dialogue units in a .pck only and write per-file CSV
 siglus-ssu -a --word <input_pck> [output_csv]
@@ -381,7 +381,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
 | `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`. |
-| `--payload` | For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
+| `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
 
