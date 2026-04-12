@@ -1,12 +1,11 @@
 import os
-import queue
 import shutil
 import re
 import subprocess
 import sys
 import tempfile
-import threading
 import time
+import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -514,6 +513,70 @@ def _format_playlist_help(has_playlist: bool) -> str:
     return "commands: " + ", ".join(parts)
 
 
+def _terminal_text_width(text: str) -> int:
+    total = 0
+    for ch in str(text or ""):
+        if unicodedata.category(ch).startswith("M"):
+            continue
+        total += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return total
+
+
+def _terminal_text_cells(text: str) -> list[tuple[str, int]]:
+    cells = []
+    current = ""
+    current_width = 0
+    for ch in str(text or ""):
+        if unicodedata.category(ch).startswith("M"):
+            if current:
+                current += ch
+            continue
+        if current:
+            cells.append((current, current_width))
+        current = ch
+        current_width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    if current:
+        cells.append((current, current_width))
+    return cells
+
+
+def _fit_terminal_text(text: str, width: int) -> str:
+    clean = str(text or "").replace("\r", " ").replace("\n", " ")
+    width = max(int(width), 1)
+    cells = _terminal_text_cells(clean)
+    if sum(cell_width for _, cell_width in cells) <= width:
+        return clean
+    if width <= 1:
+        return ">"
+    limit = width - 1
+    parts = []
+    used = 0
+    for part, part_width in cells:
+        if used + part_width > limit:
+            break
+        parts.append(part)
+        used += part_width
+    return "".join(parts) + ">"
+
+
+def _tail_terminal_text(text: str, width: int) -> str:
+    clean = str(text or "").replace("\r", " ").replace("\n", " ")
+    width = max(int(width), 0)
+    if width <= 0:
+        return ""
+    cells = _terminal_text_cells(clean)
+    if sum(cell_width for _, cell_width in cells) <= width:
+        return clean
+    parts = []
+    used = 0
+    for part, part_width in reversed(cells):
+        if used + part_width > width:
+            break
+        parts.append(part)
+        used += part_width
+    return "".join(reversed(parts))
+
+
 def _parse_player_command(command: str, has_playlist: bool):
     text = str(command or "").strip()
     if not text:
@@ -568,32 +631,6 @@ def _clamp_playlist_offset(total: int, offset: int, rows: int) -> int:
 
 def _center_playlist_offset(total: int, current_index: int, rows: int) -> int:
     return _clamp_playlist_offset(total, current_index - rows // 2, rows)
-
-
-def _print_playlist(
-    entries,
-    current_index: int,
-    paused: bool,
-    printer=eprint,
-    offset: int | None = None,
-    rows: int | None = None,
-) -> None:
-    total = len(entries)
-    if rows is None or rows <= 0:
-        start = 0
-        end = total
-        header = f"playlist total={total}"
-    else:
-        start = _clamp_playlist_offset(total, 0 if offset is None else offset, rows)
-        end = min(start + rows, total)
-        header = f"playlist {start + 1}-{end}/{total}"
-    printer(header)
-    for index in range(start, end):
-        entry = entries[index]
-        marker = "  "
-        if index == current_index:
-            marker = "||" if paused else ">>"
-        printer(f"{marker} [{index + 1}/{total}] {entry.display_name}")
 
 
 def _default_play_gameexe_path(inp: str) -> str:
@@ -760,27 +797,45 @@ class _PlayerScreen:
         self.enabled = bool(
             getattr(sys.stdin, "isatty", lambda: False)()
             and getattr(sys.stdout, "isatty", lambda: False)()
-            and getattr(sys.stderr, "isatty", lambda: False)()
         )
+        self.buffer = ""
         self.message = ""
         self.list_offset = 0
         self._last_frame = ""
-        self._last_top_frame = ""
+        self._last_size = None
+        self._stdin_fd = None
+        self._term_state = None
+        self._stream = sys.stdout
 
     def __enter__(self):
         if not self.enabled:
             return self
-        sys.stderr.write("\x1b[?1049h\x1b[2J\x1b[H")
-        sys.stderr.flush()
+        if os.name != "nt":
+            try:
+                import termios
+                import tty
+
+                self._stdin_fd = sys.stdin.fileno()
+                self._term_state = termios.tcgetattr(self._stdin_fd)
+                tty.setraw(self._stdin_fd)
+            except Exception:
+                raise RuntimeError("interactive --play requires raw terminal input")
+        self._stream.write("\x1b[?1049h\x1b[2J\x1b[H")
+        self._stream.flush()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
         if not self.enabled:
             return
+        if self._term_state is not None and self._stdin_fd is not None:
+            with suppress(Exception):
+                import termios
+
+                termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._term_state)
         self._last_frame = ""
-        self._last_top_frame = ""
-        sys.stderr.write("\x1b[?1049l")
-        sys.stderr.flush()
+        self._last_size = None
+        self._stream.write("\x1b[?1049l")
+        self._stream.flush()
 
     def set_message(self, message: str) -> None:
         self.message = str(message or "")
@@ -790,13 +845,10 @@ class _PlayerScreen:
         return max(int(size.columns), 40), max(int(size.lines), 12)
 
     def _fit(self, text: str, width: int) -> str:
-        clean = str(text or "").replace("\r", " ").replace("\n", " ")
-        width = max(int(width), 1)
-        if len(clean) <= width:
-            return clean.ljust(width)
-        if width <= 1:
-            return clean[:width]
-        return (clean[: width - 1] + ">").ljust(width)
+        return _fit_terminal_text(text, width)
+
+    def _compose_lines(self, lines) -> str:
+        return "\x1b[K\r\n".join(lines) + "\x1b[K"
 
     def _playlist_window(self, total: int, rows: int) -> tuple[int, int]:
         rows = max(rows, 1)
@@ -857,15 +909,101 @@ class _PlayerScreen:
             lines.append(self._fit(text, width))
         return header, lines
 
-    def _prompt_cursor(self, height: int) -> str:
-        return f"\x1b[{max(height, 1)};{len('player> ') + 1}H"
+    def _prompt_line(self, width: int) -> tuple[str, int]:
+        prefix = "player> "
+        prefix_width = _terminal_text_width(prefix)
+        visible = width - prefix_width
+        if visible <= 0:
+            line = _fit_terminal_text(prefix, width)
+            return line, max(min(_terminal_text_width(line), width), 1)
+        if _terminal_text_width(self.buffer) <= visible:
+            line = prefix + self.buffer
+            col = min(prefix_width + _terminal_text_width(self.buffer) + 1, width)
+            return line, max(col, 1)
+        line = prefix + _tail_terminal_text(self.buffer, visible)
+        return line, width
+
+    def _prompt_cursor(self, row: int, col: int) -> str:
+        return f"\x1b[{max(row, 1)};{max(col, 1)}H"
+
+    def _read_windows_char(self, timeout: float):
+        import msvcrt
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        while True:
+            if msvcrt.kbhit():
+                ch = msvcrt.getwch()
+                if ch in ("\x00", "\xe0"):
+                    with suppress(Exception):
+                        msvcrt.getwch()
+                    return None
+                return ch
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.01)
+
+    def _read_posix_char(self, timeout: float):
+        import select
+
+        if self._stdin_fd is None:
+            return None
+        ready, _, _ = select.select([self._stdin_fd], [], [], max(timeout, 0.0))
+        if not ready:
+            return None
+        data = os.read(self._stdin_fd, 1)
+        if not data:
+            return "\x04"
+        text = data.decode("utf-8", "ignore")
+        if text != "\x1b":
+            return text
+        deadline = time.monotonic() + 0.02
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([self._stdin_fd], [], [], 0.005)
+            if not ready:
+                break
+            chunk = os.read(self._stdin_fd, 1)
+            if not chunk:
+                break
+        return None
+
+    def _read_char(self, timeout: float):
+        if not self.enabled:
+            return None
+        if os.name == "nt":
+            return self._read_windows_char(timeout)
+        return self._read_posix_char(timeout)
+
+    def read_event(self, timeout: float):
+        ch = self._read_char(timeout)
+        if ch is None:
+            return None
+        if ch in ("\r", "\n"):
+            text = self.buffer
+            self.buffer = ""
+            return "command", text
+        if ch == "\x03":
+            return "interrupt", None
+        if ch == "\x04":
+            if not self.buffer:
+                return "stop", None
+            return None
+        if ch in ("\b", "\x08", "\x7f"):
+            if self.buffer:
+                self.buffer = self.buffer[:-1]
+            return "edit", None
+        if ch == "\t":
+            self.buffer += " "
+            return "edit", None
+        if ch >= " ":
+            self.buffer += ch
+            return "edit", None
+        return None
 
     def render(
         self,
         entries,
         current_index: int,
         current: _RunningPlayback | None,
-        input_active: bool = False,
     ) -> None:
         if not self.enabled:
             return
@@ -880,7 +1018,6 @@ class _PlayerScreen:
             resource_path = ""
         lines.append(self._fit(resource_path, width))
         if current is None:
-            lines.append(self._fit("track --", width))
             lines.append(self._fit("state stopped", width))
             lines.append(self._fit("[>.......] 00:00/00:00", width))
         else:
@@ -896,12 +1033,6 @@ class _PlayerScreen:
             else:
                 state_text = phase
             bar_width = max(min(width - 24, 60), 8)
-            lines.append(
-                self._fit(
-                    f"track {current_index + 1}/{len(entries)}  {plan.entry.display_name}",
-                    width,
-                )
-            )
             lines.append(
                 self._fit(
                     f"bgm {plan.bgm_name}  state {state_text}  start {_format_player_time(plan.start_sample / plan.sample_rate)}  loop {_format_player_time(plan.repeat_sample / plan.sample_rate)}  end {_format_player_time(end_sec)}",
@@ -929,24 +1060,22 @@ class _PlayerScreen:
         while len(lines) < height - footer_rows:
             lines.append("")
         lines.append(self._fit(self.message, width))
-        lines.append(self._fit("player> ", width))
+        prompt_line, prompt_col = self._prompt_line(width)
+        lines.append(self._fit(prompt_line, width))
         lines = lines[:height]
-        top_lines = lines[: max(height - footer_rows, 0)]
-        top_frame = "\x1b7\x1b[H" + "\r\n".join(top_lines) + "\x1b8"
-        if input_active:
-            if top_frame == self._last_top_frame:
-                return
-            sys.stderr.write(top_frame)
-            sys.stderr.flush()
-            self._last_top_frame = top_frame
-            return
-        frame = "\x1b[H" + "\r\n".join(lines) + "\x1b[J" + self._prompt_cursor(height)
+        size = (width, height)
+        frame = (
+            ("\x1b[2J\x1b[H" if size != self._last_size else "\x1b[H")
+            + self._compose_lines(lines)
+            + "\x1b[J"
+            + self._prompt_cursor(height, prompt_col)
+        )
         if frame == self._last_frame:
             return
-        sys.stderr.write(frame)
-        sys.stderr.flush()
+        self._stream.write(frame)
+        self._stream.flush()
         self._last_frame = frame
-        self._last_top_frame = top_frame
+        self._last_size = size
 
 
 def _handle_player_action(
@@ -1042,142 +1171,10 @@ def _handle_player_action(
     return current_index, current, None
 
 
-def _run_input_reader(
-    command_queue,
-    stop_event: threading.Event,
-    prompt_event: threading.Event,
-    prompt: str,
-    active_event: threading.Event | None = None,
-) -> None:
-    while not stop_event.is_set():
-        if not prompt_event.wait(0.1):
-            continue
-        if stop_event.is_set():
-            return
-        prompt_event.clear()
-        if active_event is not None:
-            active_event.set()
-        try:
-            text = input(prompt)
-        except EOFError:
-            command_queue.put(("stop", None))
-            return
-        except KeyboardInterrupt:
-            command_queue.put(("interrupt", None))
-            return
-        finally:
-            if active_event is not None:
-                active_event.clear()
-        command_queue.put(("command", text))
-
-
-def _run_interactive_player_fallback(entries, trim_table, ffplay_path: str) -> int:
-    has_playlist = len(entries) > 1
-    command_queue = queue.Queue()
-    stop_event = threading.Event()
-    prompt_event = threading.Event()
-    current_index = 0
-    current = None
-    list_offset = 0
-
-    def _fallback_view(action, items, index, paused):
-        nonlocal list_offset
-        rows = _get_playlist_page_size()
-        total = len(items)
-        if action == "list":
-            list_offset = _center_playlist_offset(total, index, rows)
-        elif action == "page_up":
-            list_offset = _clamp_playlist_offset(
-                total, list_offset - max(rows - 1, 1), rows
-            )
-        elif action == "page_down":
-            list_offset = _clamp_playlist_offset(
-                total, list_offset + max(rows - 1, 1), rows
-            )
-        elif action == "top":
-            list_offset = 0
-        elif action == "bottom":
-            list_offset = _clamp_playlist_offset(total, total, rows)
-        _print_playlist(
-            items,
-            index,
-            paused,
-            printer=eprint,
-            offset=list_offset,
-            rows=rows,
-        )
-
-    def _fallback_list(items, index, paused):
-        _fallback_view("list", items, index, paused)
-
-    threading.Thread(
-        target=_run_input_reader,
-        args=(command_queue, stop_event, prompt_event, "player> "),
-        daemon=True,
-    ).start()
-    eprint(_format_playlist_help(has_playlist))
-    try:
-        current = _switch_playback(
-            entries,
-            current_index,
-            current,
-            trim_table,
-            ffplay_path,
-            reporter=eprint,
-        )
-        prompt_event.set()
-        while True:
-            if current is not None and current.process.poll() is not None:
-                raise RuntimeError(
-                    f"ffplay exited unexpectedly with code {current.process.returncode}"
-                )
-            try:
-                kind, payload = command_queue.get(timeout=0.2)
-            except queue.Empty:
-                continue
-            if kind == "interrupt":
-                eprint("playback stopped")
-                return 0
-            if kind == "stop":
-                eprint("playback stopped")
-                return 0
-            try:
-                action, value = _parse_player_command(payload, has_playlist)
-                current_index, current, exit_code = _handle_player_action(
-                    action,
-                    value,
-                    entries,
-                    current_index,
-                    current,
-                    trim_table,
-                    ffplay_path,
-                    eprint,
-                    _fallback_list,
-                    _fallback_view,
-                )
-                if exit_code is not None:
-                    return exit_code
-            except Exception as exc:
-                eprint(f"error: {exc}")
-            finally:
-                prompt_event.set()
-    except KeyboardInterrupt:
-        eprint("playback stopped")
-        return 0
-    finally:
-        stop_event.set()
-        prompt_event.set()
-        _stop_running_playback(current)
-
-
 def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
     with _PlayerScreen() as screen:
         if not screen.enabled:
-            return _run_interactive_player_fallback(entries, trim_table, ffplay_path)
-        command_queue = queue.Queue()
-        stop_event = threading.Event()
-        prompt_event = threading.Event()
-        input_active = threading.Event()
+            raise RuntimeError("interactive --play requires a TTY terminal")
         current_index = 0
         current = None
         has_playlist = len(entries) > 1
@@ -1201,12 +1198,6 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
             if action_name == "bottom":
                 screen.scroll_to_bottom(len(items))
 
-        threading.Thread(
-            target=_run_input_reader,
-            args=(command_queue, stop_event, prompt_event, "", input_active),
-            daemon=True,
-        ).start()
-
         try:
             current = _switch_playback(
                 entries,
@@ -1216,22 +1207,17 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
                 ffplay_path,
                 reporter=screen.set_message,
             )
-            screen.render(entries, current_index, current)
-            prompt_event.set()
             while True:
                 if current is not None and current.process.poll() is not None:
                     raise RuntimeError(
                         f"ffplay exited unexpectedly with code {current.process.returncode}"
                     )
-                screen.render(
-                    entries,
-                    current_index,
-                    current,
-                    input_active=input_active.is_set(),
-                )
-                try:
-                    kind, payload = command_queue.get(timeout=0.1)
-                except queue.Empty:
+                screen.render(entries, current_index, current)
+                event = screen.read_event(0.1)
+                if event is None:
+                    continue
+                kind, payload = event
+                if kind == "edit":
                     continue
                 if kind == "interrupt":
                     screen.set_message("playback stopped")
@@ -1263,16 +1249,11 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
                         return exit_code
                 except Exception as exc:
                     screen.set_message(f"error: {exc}")
-                finally:
-                    screen.render(entries, current_index, current)
-                    prompt_event.set()
         except KeyboardInterrupt:
             screen.set_message("playback stopped")
             screen.render(entries, current_index, current)
             return 0
         finally:
-            stop_event.set()
-            prompt_event.set()
             _stop_running_playback(current)
 
 
