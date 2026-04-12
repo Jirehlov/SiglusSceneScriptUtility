@@ -3,8 +3,10 @@ import queue
 import shutil
 import re
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -150,9 +152,17 @@ def _analyze_one(path: str) -> int:
 
 
 _BGM_RE = re.compile(
-    r'^\s*#BGM\.\d+\s*=\s*"(?:[^"]*)"\s*,\s*"(?P<fn>[^"]+)"\s*,\s*(?P<start>-?\d+)\s*,\s*(?P<end>-?\d+)\s*,\s*(?P<rep>-?\d+)\s*$',
+    r'^\s*#BGM\.\d+\s*=\s*"(?P<name>[^"]*)"\s*,\s*"(?P<fn>[^"]+)"\s*,\s*(?P<start>-?\d+)\s*,\s*(?P<end>-?\d+)\s*,\s*(?P<rep>-?\d+)\s*$',
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class _BgmLoopEntry:
+    name: str
+    start_sample: int
+    end_sample: int
+    repeat_sample: int
 
 
 def _parse_bgm_table(gameexe_ini_text: str):
@@ -164,8 +174,9 @@ def _parse_bgm_table(gameexe_ini_text: str):
         m = _BGM_RE.match(line)
         if not m:
             continue
+        name = (m.group("name") or "").strip()
         fn = (m.group("fn") or "").strip()
-        if not fn:
+        if not name or not fn:
             continue
         try:
             start = int(m.group("start"))
@@ -173,7 +184,14 @@ def _parse_bgm_table(gameexe_ini_text: str):
             rep = int(m.group("rep"))
         except (TypeError, ValueError):
             continue
-        table[fn.lower()] = (start, end, rep)
+        table.setdefault(fn.lower(), []).append(
+            _BgmLoopEntry(
+                name=name,
+                start_sample=start,
+                end_sample=end,
+                repeat_sample=rep,
+            )
+        )
     return table
 
 
@@ -264,8 +282,13 @@ def _resolve_bgm_entry(trim_table, base_name: str):
     key = base_name.lower()
     if key not in trim_table:
         raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
-    start_pos, end_pos, rep_pos = trim_table[key]
-    return int(start_pos), int(end_pos), int(rep_pos)
+    candidates = list(trim_table[key] or [])
+    if not candidates:
+        raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
+    for candidate in candidates:
+        if candidate.name.lower() == key:
+            return candidate
+    return candidates[0]
 
 
 def _normalize_playback_range(
@@ -285,8 +308,8 @@ def _normalize_playback_range(
         end_sample = total_sample_cnt
     if start_sample > total_sample_cnt:
         raise RuntimeError("invalid start position (start_sample > total_sample_cnt)")
-    if repeat_sample < start_sample:
-        raise RuntimeError("invalid repeat position (repeat_sample < start_sample)")
+    if start_sample >= end_sample:
+        raise RuntimeError("invalid start position (end_sample <= start_sample)")
     if repeat_sample >= end_sample:
         raise RuntimeError("invalid loop range (end_sample <= repeat_sample)")
     return start_sample, end_sample, repeat_sample
@@ -306,9 +329,10 @@ def _build_ffplay_audio_filter(
     )
     if start_sample == repeat_sample:
         return loop_filter
+    intro_end_sample = repeat_sample if start_sample < repeat_sample else end_sample
     return (
         "asplit=2[intro_src][loop_src];"
-        f"[intro_src]atrim=start_sample={start_sample}:end_sample={repeat_sample},"
+        f"[intro_src]atrim=start_sample={start_sample}:end_sample={intro_end_sample},"
         "asetpts=PTS-STARTPTS[intro];"
         f"[loop_src]{loop_filter}[loop];"
         "[intro][loop]concat=n=2:v=0:a=1"
@@ -340,11 +364,13 @@ class _PlaybackEntry:
 @dataclass(frozen=True)
 class _PlaybackPlan:
     entry: _PlaybackEntry
+    bgm_name: str
     play_path: str
     tmp_dir: str
     start_sample: int
     end_sample: int
     repeat_sample: int
+    sample_rate: int
     audio_filter: str
 
 
@@ -352,7 +378,10 @@ class _PlaybackPlan:
 class _RunningPlayback:
     plan: _PlaybackPlan
     process: subprocess.Popen
+    started_at: float
     paused: bool = False
+    paused_at: float | None = None
+    paused_total: float = 0.0
 
 
 def _ensure_ffplay_available(ffplay_path: str) -> None:
@@ -368,6 +397,70 @@ def _make_playback_entry(path: str, root: str = "") -> _PlaybackEntry:
     )
     base_name = os.path.splitext(os.path.basename(path))[0]
     return _PlaybackEntry(path=path, display_name=display_name, base_name=base_name)
+
+
+def _get_ogg_sample_rate(ogg_bytes: bytes, total_sample_cnt: int = 0) -> int:
+    ident_info = getattr(sound, "_ogg_ident_info", None)
+    if callable(ident_info):
+        info = ident_info(ogg_bytes)
+        if info is not None:
+            _codec, sample_rate, _pre_skip = info
+            if sample_rate > 0:
+                return int(sample_rate)
+    if total_sample_cnt <= 0:
+        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg_bytes)
+    duration = sound.estimate_ogg_duration_seconds(ogg_bytes)
+    if duration and duration > 0 and total_sample_cnt > 0:
+        sample_rate = int(round(total_sample_cnt / duration))
+        if sample_rate > 0:
+            return sample_rate
+    return 44100
+
+
+def _format_player_time(seconds: float) -> str:
+    total_seconds = max(int(seconds), 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _get_playback_elapsed_seconds(
+    current: _RunningPlayback,
+    now: float | None = None,
+) -> float:
+    current_time = time.monotonic() if now is None else now
+    end_time = current_time
+    if current.paused and current.paused_at is not None:
+        end_time = current.paused_at
+    return max(end_time - current.started_at - current.paused_total, 0.0)
+
+
+def _get_playback_position_sample(
+    current: _RunningPlayback,
+    now: float | None = None,
+) -> tuple[int, str]:
+    plan = current.plan
+    sample_rate = max(int(plan.sample_rate), 1)
+    elapsed_samples = int(_get_playback_elapsed_seconds(current, now) * sample_rate)
+    first_pass_len = max(plan.end_sample - plan.start_sample, 1)
+    loop_len = max(plan.end_sample - plan.repeat_sample, 1)
+    if elapsed_samples < first_pass_len:
+        return min(plan.start_sample + elapsed_samples, plan.end_sample), "first"
+    loop_elapsed = max(elapsed_samples - first_pass_len, 0)
+    return plan.repeat_sample + (loop_elapsed % loop_len), "loop"
+
+
+def _build_progress_bar(progress: float, width: int) -> str:
+    width = max(int(width), 8)
+    progress = min(max(float(progress), 0.0), 1.0)
+    filled = int(progress * width)
+    if filled >= width:
+        return "=" * width
+    if filled <= 0:
+        return ">" + "." * (width - 1)
+    return "=" * filled + ">" + "." * (width - filled - 1)
 
 
 def _collect_playback_entries(inp: str):
@@ -405,7 +498,19 @@ def _filter_playback_entries(entries, trim_table):
 def _format_playlist_help(has_playlist: bool) -> str:
     parts = ["pause/resume(p)", "stop(q)", "help(h)"]
     if has_playlist:
-        parts = parts[:1] + ["prev(b)", "next(n)", "list(l)", "play/g N"] + parts[1:]
+        parts = (
+            parts[:1]
+            + [
+                "prev(b)",
+                "next(n)",
+                "list(l)",
+                "play N",
+                "page(u/d)",
+                "top(gg)",
+                "bottom(G)",
+            ]
+            + parts[1:]
+        )
     return "commands: " + ", ".join(parts)
 
 
@@ -414,7 +519,8 @@ def _parse_player_command(command: str, has_playlist: bool):
     if not text:
         return "noop", None
     parts = text.split()
-    head = parts[0].lower()
+    raw_head = parts[0]
+    head = raw_head.lower()
     if head in ("h", "help", "?"):
         return "help", None
     if head in ("p", "pause", "toggle"):
@@ -429,7 +535,15 @@ def _parse_player_command(command: str, has_playlist: bool):
         return "prev", None
     if head in ("l", "list", "playlist"):
         return "list", None
-    if head in ("play", "go", "g", "goto", "jump"):
+    if head == "u":
+        return "page_up", None
+    if head == "d":
+        return "page_down", None
+    if head == "gg":
+        return "top", None
+    if raw_head == "G":
+        return "bottom", None
+    if head in ("play", "go", "goto", "jump"):
         if len(parts) != 2:
             raise ValueError("play expects exactly one playlist index")
         try:
@@ -442,14 +556,44 @@ def _parse_player_command(command: str, has_playlist: bool):
     raise ValueError(f"unknown command: {text}")
 
 
-def _print_playlist(entries, current_index: int, paused: bool) -> None:
+def _get_playlist_page_size() -> int:
+    return max(int(shutil.get_terminal_size(fallback=(120, 30)).lines) - 8, 1)
+
+
+def _clamp_playlist_offset(total: int, offset: int, rows: int) -> int:
+    rows = max(int(rows), 1)
+    max_offset = max(int(total) - rows, 0)
+    return min(max(int(offset), 0), max_offset)
+
+
+def _center_playlist_offset(total: int, current_index: int, rows: int) -> int:
+    return _clamp_playlist_offset(total, current_index - rows // 2, rows)
+
+
+def _print_playlist(
+    entries,
+    current_index: int,
+    paused: bool,
+    printer=eprint,
+    offset: int | None = None,
+    rows: int | None = None,
+) -> None:
     total = len(entries)
-    eprint(f"playlist total={total}")
-    for index, entry in enumerate(entries):
+    if rows is None or rows <= 0:
+        start = 0
+        end = total
+        header = f"playlist total={total}"
+    else:
+        start = _clamp_playlist_offset(total, 0 if offset is None else offset, rows)
+        end = min(start + rows, total)
+        header = f"playlist {start + 1}-{end}/{total}"
+    printer(header)
+    for index in range(start, end):
+        entry = entries[index]
         marker = "  "
         if index == current_index:
             marker = "||" if paused else ">>"
-        eprint(f"{marker} [{index + 1}/{total}] {entry.display_name}")
+        printer(f"{marker} [{index + 1}/{total}] {entry.display_name}")
 
 
 def _default_play_gameexe_path(inp: str) -> str:
@@ -493,7 +637,12 @@ def _resolve_play_gameexe_path(inp: str, trim_path: str = "") -> str:
 
 def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
     base_name, ogg, play_path, tmp_dir = _prepare_playback_input(entry.path)
-    start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
+    total_sample_cnt = sound.ogg_calc_smp_cnt(ogg)
+    sample_rate = _get_ogg_sample_rate(ogg, total_sample_cnt)
+    bgm_entry = _resolve_bgm_entry(trim_table, base_name)
+    start_pos = bgm_entry.start_sample
+    end_pos = bgm_entry.end_sample
+    rep_pos = bgm_entry.repeat_sample
     start_pos, end_pos, rep_pos = _normalize_playback_range(
         ogg,
         start_sample=start_pos,
@@ -502,11 +651,13 @@ def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
     )
     return _PlaybackPlan(
         entry=entry,
+        bgm_name=bgm_entry.name,
         play_path=play_path,
         tmp_dir=tmp_dir,
         start_sample=start_pos,
         end_sample=end_pos,
         repeat_sample=rep_pos,
+        sample_rate=sample_rate,
         audio_filter=_build_ffplay_audio_filter(
             start_sample=start_pos,
             end_sample=end_pos,
@@ -535,7 +686,7 @@ def _start_playback_process(plan: _PlaybackPlan, ffplay_path: str) -> _RunningPl
         stderr=subprocess.DEVNULL,
         creationflags=creationflags,
     )
-    return _RunningPlayback(plan=plan, process=process)
+    return _RunningPlayback(plan=plan, process=process, started_at=time.monotonic())
 
 
 def _control_process(process: subprocess.Popen, action: str) -> None:
@@ -591,43 +742,379 @@ def _switch_playback(
     current: _RunningPlayback | None,
     trim_table,
     ffplay_path: str,
+    reporter=eprint,
 ):
     running = _spawn_running_playback(entries[current_index], trim_table, ffplay_path)
     old = current
     current = running
     _stop_running_playback(old)
     plan = current.plan
-    eprint(
-        f"play [{current_index + 1}/{len(entries)}] {plan.entry.display_name}: intro {plan.start_sample}..{plan.repeat_sample}, loop {plan.repeat_sample}..{plan.end_sample}"
+    reporter(
+        f"play [{current_index + 1}/{len(entries)}] {plan.entry.display_name} #{plan.bgm_name}: start {plan.start_sample}, loop {plan.repeat_sample}..{plan.end_sample}"
     )
     return current
 
 
-def _run_input_reader(command_queue, stop_event: threading.Event) -> None:
+class _PlayerScreen:
+    def __init__(self) -> None:
+        self.enabled = bool(
+            getattr(sys.stdin, "isatty", lambda: False)()
+            and getattr(sys.stdout, "isatty", lambda: False)()
+            and getattr(sys.stderr, "isatty", lambda: False)()
+        )
+        self.message = ""
+        self.list_offset = 0
+        self._last_frame = ""
+        self._last_top_frame = ""
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        sys.stderr.write("\x1b[?1049h\x1b[2J\x1b[H")
+        sys.stderr.flush()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if not self.enabled:
+            return
+        self._last_frame = ""
+        self._last_top_frame = ""
+        sys.stderr.write("\x1b[?1049l")
+        sys.stderr.flush()
+
+    def set_message(self, message: str) -> None:
+        self.message = str(message or "")
+
+    def _get_size(self) -> tuple[int, int]:
+        size = shutil.get_terminal_size(fallback=(120, 30))
+        return max(int(size.columns), 40), max(int(size.lines), 12)
+
+    def _fit(self, text: str, width: int) -> str:
+        clean = str(text or "").replace("\r", " ").replace("\n", " ")
+        width = max(int(width), 1)
+        if len(clean) <= width:
+            return clean.ljust(width)
+        if width <= 1:
+            return clean[:width]
+        return (clean[: width - 1] + ">").ljust(width)
+
+    def _playlist_window(self, total: int, rows: int) -> tuple[int, int]:
+        rows = max(rows, 1)
+        start = _clamp_playlist_offset(total, self.list_offset, rows)
+        end = min(start + rows, total)
+        return start, end
+
+    def _playlist_entry_rows(self) -> int:
+        return _get_playlist_page_size()
+
+    def focus_current(self, total: int, current_index: int) -> None:
+        self.list_offset = _center_playlist_offset(
+            total,
+            current_index,
+            self._playlist_entry_rows(),
+        )
+
+    def scroll_lines(self, total: int, delta: int) -> None:
+        self.list_offset = _clamp_playlist_offset(
+            total,
+            self.list_offset + delta,
+            self._playlist_entry_rows(),
+        )
+
+    def scroll_pages(self, total: int, delta: int) -> None:
+        step = max(self._playlist_entry_rows() - 1, 1)
+        self.scroll_lines(total, delta * step)
+
+    def scroll_to_top(self) -> None:
+        self.list_offset = 0
+
+    def scroll_to_bottom(self, total: int) -> None:
+        self.list_offset = _clamp_playlist_offset(
+            total,
+            total,
+            self._playlist_entry_rows(),
+        )
+
+    def _build_playlist_lines(
+        self,
+        entries,
+        current_index: int,
+        paused: bool,
+        rows: int,
+        width: int,
+    ) -> tuple[str, list[str]]:
+        total = len(entries)
+        if total <= 0 or rows <= 0:
+            return "playlist 0/0", []
+        start, end = self._playlist_window(total, rows)
+        header = f"playlist {start + 1}-{end}/{total}"
+        lines = []
+        for index in range(start, end):
+            marker = "  "
+            if index == current_index:
+                marker = "||" if paused else ">>"
+            text = f"{marker} {index + 1:>3}. {entries[index].display_name}"
+            lines.append(self._fit(text, width))
+        return header, lines
+
+    def _prompt_cursor(self, height: int) -> str:
+        return f"\x1b[{max(height, 1)};{len('player> ') + 1}H"
+
+    def render(
+        self,
+        entries,
+        current_index: int,
+        current: _RunningPlayback | None,
+        input_active: bool = False,
+    ) -> None:
+        if not self.enabled:
+            return
+        width, height = self._get_size()
+        lines = []
+        paused = bool(current and current.paused)
+        if current is not None:
+            resource_path = os.path.abspath(current.plan.entry.path)
+        elif entries:
+            resource_path = os.path.abspath(entries[current_index].path)
+        else:
+            resource_path = ""
+        lines.append(self._fit(resource_path, width))
+        if current is None:
+            lines.append(self._fit("track --", width))
+            lines.append(self._fit("state stopped", width))
+            lines.append(self._fit("[>.......] 00:00/00:00", width))
+        else:
+            plan = current.plan
+            position_sample, phase = _get_playback_position_sample(current)
+            position_sec = position_sample / float(max(plan.sample_rate, 1))
+            end_sec = plan.end_sample / float(max(plan.sample_rate, 1))
+            progress = position_sample / float(max(plan.end_sample, 1))
+            if current.paused:
+                state_text = "paused"
+            elif phase == "first":
+                state_text = "first-pass"
+            else:
+                state_text = phase
+            bar_width = max(min(width - 24, 60), 8)
+            lines.append(
+                self._fit(
+                    f"track {current_index + 1}/{len(entries)}  {plan.entry.display_name}",
+                    width,
+                )
+            )
+            lines.append(
+                self._fit(
+                    f"bgm {plan.bgm_name}  state {state_text}  start {_format_player_time(plan.start_sample / plan.sample_rate)}  loop {_format_player_time(plan.repeat_sample / plan.sample_rate)}  end {_format_player_time(end_sec)}",
+                    width,
+                )
+            )
+            lines.append(
+                self._fit(
+                    f"[{_build_progress_bar(progress, bar_width)}] {_format_player_time(position_sec)}/{_format_player_time(end_sec)}",
+                    width,
+                )
+            )
+        lines.append(self._fit(_format_playlist_help(len(entries) > 1), width))
+        footer_rows = 2
+        playlist_rows = max(height - len(lines) - footer_rows, 1)
+        playlist_header, playlist_lines = self._build_playlist_lines(
+            entries,
+            current_index,
+            paused,
+            playlist_rows - 1,
+            width,
+        )
+        lines.append(self._fit(playlist_header, width))
+        lines.extend(playlist_lines)
+        while len(lines) < height - footer_rows:
+            lines.append("")
+        lines.append(self._fit(self.message, width))
+        lines.append(self._fit("player> ", width))
+        lines = lines[:height]
+        top_lines = lines[: max(height - footer_rows, 0)]
+        top_frame = "\x1b7\x1b[H" + "\r\n".join(top_lines) + "\x1b8"
+        if input_active:
+            if top_frame == self._last_top_frame:
+                return
+            sys.stderr.write(top_frame)
+            sys.stderr.flush()
+            self._last_top_frame = top_frame
+            return
+        frame = "\x1b[H" + "\r\n".join(lines) + "\x1b[J" + self._prompt_cursor(height)
+        if frame == self._last_frame:
+            return
+        sys.stderr.write(frame)
+        sys.stderr.flush()
+        self._last_frame = frame
+        self._last_top_frame = top_frame
+
+
+def _handle_player_action(
+    action: str,
+    value,
+    entries,
+    current_index: int,
+    current: _RunningPlayback | None,
+    trim_table,
+    ffplay_path: str,
+    reporter,
+    list_handler,
+    view_handler,
+):
+    if action == "noop":
+        return current_index, current, None
+    if action == "help":
+        reporter(_format_playlist_help(len(entries) > 1))
+        return current_index, current, None
+    if action == "list":
+        list_handler(entries, current_index, current.paused if current else False)
+        return current_index, current, None
+    if action in ("page_up", "page_down", "top", "bottom"):
+        view_handler(
+            action, entries, current_index, current.paused if current else False
+        )
+        return current_index, current, None
+    if action == "toggle_pause":
+        if current is None:
+            return current_index, current, None
+        if current.paused:
+            _resume_process(current.process)
+            if current.paused_at is not None:
+                current.paused_total += max(time.monotonic() - current.paused_at, 0.0)
+            current.paused = False
+            current.paused_at = None
+            reporter(
+                f"resumed [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
+            )
+            return current_index, current, None
+        _pause_process(current.process)
+        current.paused = True
+        current.paused_at = time.monotonic()
+        reporter(
+            f"paused [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
+        )
+        return current_index, current, None
+    if action == "stop":
+        reporter("playback stopped")
+        return current_index, current, 0
+    if action == "prev":
+        if current_index == 0:
+            reporter("already at the first track")
+            return current_index, current, None
+        current_index -= 1
+        current = _switch_playback(
+            entries,
+            current_index,
+            current,
+            trim_table,
+            ffplay_path,
+            reporter=reporter,
+        )
+        return current_index, current, None
+    if action == "next":
+        if current_index + 1 >= len(entries):
+            reporter("already at the last track")
+            return current_index, current, None
+        current_index += 1
+        current = _switch_playback(
+            entries,
+            current_index,
+            current,
+            trim_table,
+            ffplay_path,
+            reporter=reporter,
+        )
+        return current_index, current, None
+    if action == "play":
+        if value >= len(entries):
+            reporter(f"playlist index out of range: {value + 1}")
+            return current_index, current, None
+        current_index = value
+        current = _switch_playback(
+            entries,
+            current_index,
+            current,
+            trim_table,
+            ffplay_path,
+            reporter=reporter,
+        )
+        return current_index, current, None
+    return current_index, current, None
+
+
+def _run_input_reader(
+    command_queue,
+    stop_event: threading.Event,
+    prompt_event: threading.Event,
+    prompt: str,
+    active_event: threading.Event | None = None,
+) -> None:
     while not stop_event.is_set():
+        if not prompt_event.wait(0.1):
+            continue
+        if stop_event.is_set():
+            return
+        prompt_event.clear()
+        if active_event is not None:
+            active_event.set()
         try:
-            text = input("player> ")
+            text = input(prompt)
         except EOFError:
             command_queue.put(("stop", None))
             return
         except KeyboardInterrupt:
             command_queue.put(("interrupt", None))
             return
+        finally:
+            if active_event is not None:
+                active_event.clear()
         command_queue.put(("command", text))
 
 
-def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
+def _run_interactive_player_fallback(entries, trim_table, ffplay_path: str) -> int:
     has_playlist = len(entries) > 1
     command_queue = queue.Queue()
     stop_event = threading.Event()
+    prompt_event = threading.Event()
     current_index = 0
     current = None
-    reader = threading.Thread(
+    list_offset = 0
+
+    def _fallback_view(action, items, index, paused):
+        nonlocal list_offset
+        rows = _get_playlist_page_size()
+        total = len(items)
+        if action == "list":
+            list_offset = _center_playlist_offset(total, index, rows)
+        elif action == "page_up":
+            list_offset = _clamp_playlist_offset(
+                total, list_offset - max(rows - 1, 1), rows
+            )
+        elif action == "page_down":
+            list_offset = _clamp_playlist_offset(
+                total, list_offset + max(rows - 1, 1), rows
+            )
+        elif action == "top":
+            list_offset = 0
+        elif action == "bottom":
+            list_offset = _clamp_playlist_offset(total, total, rows)
+        _print_playlist(
+            items,
+            index,
+            paused,
+            printer=eprint,
+            offset=list_offset,
+            rows=rows,
+        )
+
+    def _fallback_list(items, index, paused):
+        _fallback_view("list", items, index, paused)
+
+    threading.Thread(
         target=_run_input_reader,
-        args=(command_queue, stop_event),
+        args=(command_queue, stop_event, prompt_event, "player> "),
         daemon=True,
-    )
-    reader.start()
+    ).start()
     eprint(_format_playlist_help(has_playlist))
     try:
         current = _switch_playback(
@@ -636,7 +1123,9 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
             current,
             trim_table,
             ffplay_path,
+            reporter=eprint,
         )
+        prompt_event.set()
         while True:
             if current is not None and current.process.poll() is not None:
                 raise RuntimeError(
@@ -654,84 +1143,137 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
                 return 0
             try:
                 action, value = _parse_player_command(payload, has_playlist)
-                if action == "noop":
-                    continue
-                if action == "help":
-                    eprint(_format_playlist_help(has_playlist))
-                    continue
-                if action == "list":
-                    _print_playlist(
-                        entries,
-                        current_index,
-                        current.paused if current else False,
-                    )
-                    continue
-                if action == "toggle_pause":
-                    if current is None:
-                        continue
-                    if current.paused:
-                        _resume_process(current.process)
-                        current.paused = False
-                        eprint(
-                            f"resumed [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
-                        )
-                        continue
-                    _pause_process(current.process)
-                    current.paused = True
-                    eprint(
-                        f"paused [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
-                    )
-                    continue
-                if action == "stop":
-                    eprint("playback stopped")
-                    return 0
-                if action == "prev":
-                    if current_index == 0:
-                        eprint("already at the first track")
-                        continue
-                    current = _switch_playback(
-                        entries,
-                        current_index - 1,
-                        current,
-                        trim_table,
-                        ffplay_path,
-                    )
-                    current_index -= 1
-                    continue
-                if action == "next":
-                    if current_index + 1 >= len(entries):
-                        eprint("already at the last track")
-                        continue
-                    current = _switch_playback(
-                        entries,
-                        current_index + 1,
-                        current,
-                        trim_table,
-                        ffplay_path,
-                    )
-                    current_index += 1
-                    continue
-                if action == "play":
-                    if value >= len(entries):
-                        eprint(f"playlist index out of range: {value + 1}")
-                        continue
-                    current = _switch_playback(
-                        entries,
-                        value,
-                        current,
-                        trim_table,
-                        ffplay_path,
-                    )
-                    current_index = value
-                    continue
+                current_index, current, exit_code = _handle_player_action(
+                    action,
+                    value,
+                    entries,
+                    current_index,
+                    current,
+                    trim_table,
+                    ffplay_path,
+                    eprint,
+                    _fallback_list,
+                    _fallback_view,
+                )
+                if exit_code is not None:
+                    return exit_code
             except Exception as exc:
                 eprint(f"error: {exc}")
+            finally:
+                prompt_event.set()
     except KeyboardInterrupt:
         eprint("playback stopped")
         return 0
     finally:
         stop_event.set()
+        prompt_event.set()
         _stop_running_playback(current)
+
+
+def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
+    with _PlayerScreen() as screen:
+        if not screen.enabled:
+            return _run_interactive_player_fallback(entries, trim_table, ffplay_path)
+        command_queue = queue.Queue()
+        stop_event = threading.Event()
+        prompt_event = threading.Event()
+        input_active = threading.Event()
+        current_index = 0
+        current = None
+        has_playlist = len(entries) > 1
+        screen.focus_current(len(entries), current_index)
+        screen.set_message(_format_playlist_help(has_playlist))
+
+        def _screen_list(items, index, paused):
+            screen.focus_current(len(items), index)
+            screen.set_message(f"playlist {index + 1}/{len(items)} visible")
+
+        def _screen_view(action_name, items, index, paused):
+            if action_name == "page_up":
+                screen.scroll_pages(len(items), -1)
+                return
+            if action_name == "page_down":
+                screen.scroll_pages(len(items), 1)
+                return
+            if action_name == "top":
+                screen.scroll_to_top()
+                return
+            if action_name == "bottom":
+                screen.scroll_to_bottom(len(items))
+
+        threading.Thread(
+            target=_run_input_reader,
+            args=(command_queue, stop_event, prompt_event, "", input_active),
+            daemon=True,
+        ).start()
+
+        try:
+            current = _switch_playback(
+                entries,
+                current_index,
+                current,
+                trim_table,
+                ffplay_path,
+                reporter=screen.set_message,
+            )
+            screen.render(entries, current_index, current)
+            prompt_event.set()
+            while True:
+                if current is not None and current.process.poll() is not None:
+                    raise RuntimeError(
+                        f"ffplay exited unexpectedly with code {current.process.returncode}"
+                    )
+                screen.render(
+                    entries,
+                    current_index,
+                    current,
+                    input_active=input_active.is_set(),
+                )
+                try:
+                    kind, payload = command_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                if kind == "interrupt":
+                    screen.set_message("playback stopped")
+                    screen.render(entries, current_index, current)
+                    return 0
+                if kind == "stop":
+                    screen.set_message("playback stopped")
+                    screen.render(entries, current_index, current)
+                    return 0
+                try:
+                    old_index = current_index
+                    action, value = _parse_player_command(payload, has_playlist)
+                    current_index, current, exit_code = _handle_player_action(
+                        action,
+                        value,
+                        entries,
+                        current_index,
+                        current,
+                        trim_table,
+                        ffplay_path,
+                        screen.set_message,
+                        _screen_list,
+                        _screen_view,
+                    )
+                    if current_index != old_index:
+                        screen.focus_current(len(entries), current_index)
+                    if exit_code is not None:
+                        screen.render(entries, current_index, current)
+                        return exit_code
+                except Exception as exc:
+                    screen.set_message(f"error: {exc}")
+                finally:
+                    screen.render(entries, current_index, current)
+                    prompt_event.set()
+        except KeyboardInterrupt:
+            screen.set_message("playback stopped")
+            screen.render(entries, current_index, current)
+            return 0
+        finally:
+            stop_event.set()
+            prompt_event.set()
+            _stop_running_playback(current)
 
 
 def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
@@ -766,9 +1308,11 @@ def _extract_one(
     if ext == ".owp":
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
         if trim_table is not None:
-            start_pos, end_pos, rep_pos = _resolve_bgm_entry(trim_table, base_name)
+            bgm_entry = _resolve_bgm_entry(trim_table, base_name)
+            end_pos = bgm_entry.end_sample
+            rep_pos = bgm_entry.repeat_sample
             eprint(
-                f"trim {base_name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
+                f"trim {base_name} #{bgm_entry.name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
             )
             ogg = _ffmpeg_trim_ogg_bytes(
                 ogg,

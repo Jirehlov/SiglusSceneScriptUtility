@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.3] - 2026-04-12
+
+- Changed `-s --play` to use a full-screen terminal UI with a live progress bar, a scrollable playlist view, full-path header display, and cleaner in-place redraws instead of interleaved `player>` prompt printing.
+
+
 ## [v0.2.2] - 2026-04-12
 
 - Changed compile mode to remove `--parallel`, keep parallel compilation as the default, add `siglus-ssu -c --serial` to force serial compilation, and remove the unused internal `stop_after` stage cutoff hook from the compiler pipeline.
