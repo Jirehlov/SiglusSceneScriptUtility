@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.4] - 2026-04-18
+
+- Added `-s --play` support for legacy `.nwa` BGM files.
+
+
+
 ## [v0.2.3] - 2026-04-12
 
 - Changed `-s --play` to use a full-screen terminal UI with a live progress bar, a scrollable playlist view, full-path header display, and cleaner in-place redraws instead of interleaved `player>` prompt printing.

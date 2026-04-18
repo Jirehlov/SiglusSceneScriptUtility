@@ -998,7 +998,7 @@ siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 
 # 使用 Gameexe 循环点播放单个循环 BGM 或目录播放列表
-siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [Gameexe.dat路径 | Gameexe.ini]
+siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat路径 | Gameexe.ini]
 ```
 
 #### 参数
@@ -1008,7 +1008,7 @@ siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [Gameexe.dat路径 | G
 | `--x` | **提取**模式。解码 `.owp` → `.ogg`，`.nwa` → `.wav`，`.ovk` → 单独的 `.ogg` 文件。 |
 | `--a` | **分析**模式。打印单个音频文件的详细结构头部信息。 |
 | `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 文件。目录输入时会递归扫描 `.ogg`，并在输出端保留相对目录结构。 |
-| `--play` | **播放**模式。读取 `Gameexe.dat` 或 `Gameexe.ini` 中的 `#BGM.*` 循环点表，播放单个 `.owp` / `.ogg` BGM，或播放一个可交互的目录播放列表。Gameexe 路径为可选；省略时会自动探测附近的 `Gameexe.dat`/`Gameexe.ini`。播放界面为整屏终端 UI，带实时进度条和播放列表视图。需要 `ffplay` 在系统 PATH 中，且已安装 [psutil](https://pypi.org/project/psutil/)。 |
+| `--play` | **播放**模式。读取 `Gameexe.dat` 或 `Gameexe.ini` 中的 `#BGM.*` 循环点表，播放单个 `.nwa` / `.owp` / `.ogg` BGM，或播放一个可交互的目录播放列表。Gameexe 路径为可选；省略时会自动探测附近的 `Gameexe.dat`/`Gameexe.ini`。播放界面为整屏终端 UI，带实时进度条和播放列表视图。需要 `ffplay` 在系统 PATH 中，且已安装 [psutil](https://pypi.org/project/psutil/)。 |
 | `--trim <Gameexe.dat>` | （仅提取模式）从 `Gameexe.dat` 读取 `#BGM.*` 循环点表，并用 **ffmpeg** 将每个 `.owp` 裁剪到其循环区域。需要 `ffmpeg` 在系统 PATH 中。该选项只影响 `.owp` 提取；`.nwa`/`.ovk` 不参与裁剪。 |
 
 #### 示例
@@ -1065,11 +1065,11 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 
 如果同一个物理文件在 `#BGM.*` 表中出现了多次，播放器会保留该文件对应的全部候选条目，而不是简单让后面的记录覆盖前面的记录。它会优先选择 `#BGM` 名称与当前文件 basename 完全一致的那一条，找不到时才回退到该文件的第一条记录。
 
-它支持 `.owp` 和普通 `.ogg` 输入。首轮播放会从 `start` 播到 `end`；之后通过 **ffplay** 将 `repeat` → `end` 的采样区间无限循环。这也支持 `start` 晚于 `repeat` 的 Gameexe 写法：也就是首轮从文件较后位置开始播放，而循环段仍然回到更早的采样点。若 `end = -1`，或 `end` 超过了解码后 Ogg 的实际长度，则会自动将文件结尾视为循环终点。
+它支持 `.nwa`、`.owp` 和普通 `.ogg` 输入。`.nwa` 会先解码成临时 `.wav` 再交给播放器。首轮播放会从 `start` 播到 `end`；之后通过 **ffplay** 将 `repeat` → `end` 的采样区间无限循环。这也支持 `start` 晚于 `repeat` 的 Gameexe 写法：也就是首轮从文件较后位置开始播放，而循环段仍然回到更早的采样点。若 `end = -1`，或 `end` 超过了解码后音频的实际长度，则会自动将文件结尾视为循环终点。
 
-当输入是目录时，播放器会从其中的 `.owp`/`.ogg` 文件里筛出能匹配 `#BGM.*` 条目的文件组成播放列表；不匹配的文件会输出跳过提示。随后会进入整屏终端 UI：顶部显示当前文件的完整路径，状态栏会显示当前处于首轮播放、循环段还是暂停状态，底部命令行仍可直接输入命令。
+当输入是目录时，播放器会从其中的 `.nwa`/`.owp`/`.ogg` 文件里筛出能匹配 `#BGM.*` 条目的文件组成播放列表；不匹配的文件会输出跳过提示。随后会进入整屏终端 UI：顶部显示当前文件的完整路径，状态栏会显示当前处于首轮播放、循环段还是暂停状态，底部命令行仍可直接输入命令。
 
-播放器支持 `p`（暂停/继续）、`q`（停止）、`h`（帮助），以及播放列表模式下的 `b`（上一首）、`n`（下一首）、`l`（将列表重新定位到当前曲目附近）、`play N`（跳转到从 1 开始的曲目编号）、`u` / `d`（列表上/下翻一页）、`gg` / `G`（跳到列表顶部/底部）。该模式用于预览 BGM 循环，不支持 `.nwa` 或 `.ovk`。
+播放器支持 `p`（暂停/继续）、`q`（停止）、`h`（帮助），以及播放列表模式下的 `b`（上一首）、`n`（下一首）、`l`（将列表重新定位到当前曲目附近）、`play N`（跳转到从 1 开始的曲目编号）、`u` / `d`（列表上/下翻一页）、`gg` / `G`（跳到列表顶部/底部）。该模式用于预览 BGM 循环，不支持 `.ovk`。
 
 目录输入的 `-s --x` 也会递归扫描子目录，并在输出端保留相对目录结构。
 

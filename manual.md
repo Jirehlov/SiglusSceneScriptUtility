@@ -1003,7 +1003,7 @@ siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
 
 # Play one looped BGM or directory playlist using Gameexe loop points
-siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [path_to_Gameexe.dat | Gameexe.ini]
+siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [path_to_Gameexe.dat | Gameexe.ini]
 ```
 
 #### Parameters
@@ -1013,7 +1013,7 @@ siglus-ssu -s --play <input_file.(owp | ogg) | input_dir> [path_to_Gameexe.dat |
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
-| `--play` | **Play** mode. Plays one `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback runs in a full-screen terminal UI with a live progress bar and playlist view. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
+| `--play` | **Play** mode. Plays one `.nwa` / `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback runs in a full-screen terminal UI with a live progress bar and playlist view. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
 | `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
 
 #### Examples
@@ -1070,11 +1070,11 @@ The `--play` option reads the Gameexe BGM table from either `Gameexe.dat` or `Ga
 
 If multiple `#BGM.*` rows point at the same physical file, the player keeps every candidate instead of letting the last row overwrite the others. It first prefers the row whose `#BGM` name matches the current basename exactly, then falls back to the first row for that file.
 
-It accepts `.owp` and plain `.ogg` input. On the first pass it plays from `start` to `end`; after that it loops the `repeat` → `end` sample region indefinitely through **ffplay**. This also supports Gameexe layouts where `start` is later than `repeat`, meaning the intro begins deeper in the file while the loop still restarts from an earlier sample. If `end` is `-1` or extends past the decoded Ogg length, playback treats EOF as the loop end.
+It accepts `.nwa`, `.owp`, and plain `.ogg` input. `.nwa` files are decoded to temporary `.wav` data before playback. On the first pass it plays from `start` to `end`; after that it loops the `repeat` → `end` sample region indefinitely through **ffplay**. This also supports Gameexe layouts where `start` is later than `repeat`, meaning the intro begins deeper in the file while the loop still restarts from an earlier sample. If `end` is `-1` or extends past the decoded audio length, playback treats EOF as the loop end.
 
-When the input is a directory, the player builds a playlist from `.owp`/`.ogg` files with matching `#BGM.*` entries, skips unmatched files with a diagnostic, and opens a full-screen terminal UI. The header shows the current file's full path, the status line reports whether playback is in the first pass, loop section, or paused state, and the bottom line still accepts typed commands.
+When the input is a directory, the player builds a playlist from `.nwa`/`.owp`/`.ogg` files with matching `#BGM.*` entries, skips unmatched files with a diagnostic, and opens a full-screen terminal UI. The header shows the current file's full path, the status line reports whether playback is in the first pass, loop section, or paused state, and the bottom line still accepts typed commands.
 
-The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.nwa` or `.ovk`.
+The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.ovk`.
 
 Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output.
 

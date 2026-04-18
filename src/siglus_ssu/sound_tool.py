@@ -291,7 +291,7 @@ def _resolve_bgm_entry(trim_table, base_name: str):
 
 
 def _normalize_playback_range(
-    ogg_bytes: bytes,
+    total_sample_cnt: int,
     start_sample: int,
     end_sample: int,
     repeat_sample: int,
@@ -300,9 +300,8 @@ def _normalize_playback_range(
         raise RuntimeError("invalid start position (start_sample < 0)")
     if repeat_sample < 0:
         raise RuntimeError("invalid repeat position (repeat_sample < 0)")
-    total_sample_cnt = sound.ogg_calc_smp_cnt(ogg_bytes)
     if total_sample_cnt <= 0:
-        raise RuntimeError("failed to determine Ogg sample count")
+        raise RuntimeError("failed to determine audio sample count")
     if end_sample == -1 or end_sample > total_sample_cnt:
         end_sample = total_sample_cnt
     if start_sample > total_sample_cnt:
@@ -318,13 +317,17 @@ def _build_ffplay_audio_filter(
     start_sample: int,
     end_sample: int,
     repeat_sample: int,
+    channel_layout: str = "",
 ) -> str:
+    layout_filter = (
+        f",aformat=channel_layouts={channel_layout}" if channel_layout else ""
+    )
     loop_size = end_sample - repeat_sample
     if loop_size <= 0:
         raise RuntimeError("invalid loop size")
     loop_filter = (
         f"atrim=start_sample={repeat_sample}:end_sample={end_sample},"
-        f"asetpts=PTS-STARTPTS,aloop=loop=-1:size={loop_size}"
+        f"asetpts=PTS-STARTPTS,aloop=loop=-1:size={loop_size}{layout_filter}"
     )
     if start_sample == repeat_sample:
         return loop_filter
@@ -332,25 +335,83 @@ def _build_ffplay_audio_filter(
     return (
         "asplit=2[intro_src][loop_src];"
         f"[intro_src]atrim=start_sample={start_sample}:end_sample={intro_end_sample},"
-        "asetpts=PTS-STARTPTS[intro];"
+        f"asetpts=PTS-STARTPTS{layout_filter}[intro];"
         f"[loop_src]{loop_filter}[loop];"
         "[intro][loop]concat=n=2:v=0:a=1"
     )
 
 
-def _prepare_playback_input(src_path: str):
+def _channel_layout_for_channels(channels: int) -> str:
+    if channels == 1:
+        return "mono"
+    if channels == 2:
+        return "stereo"
+    return ""
+
+
+@dataclass(frozen=True)
+class _PreparedPlaybackInput:
+    base_name: str
+    play_path: str
+    tmp_dir: str
+    total_sample_cnt: int
+    sample_rate: int
+    channel_layout: str
+
+
+def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
     base_name, ext = os.path.splitext(os.path.basename(src_path))
     ext = ext.lower()
-    if ext not in (".owp", ".ogg"):
-        raise RuntimeError("unsupported file type (expected .owp or .ogg)")
-    ogg = sound.decode_owp_to_ogg_bytes(src_path)
-    tmp_dir = ""
-    play_path = src_path
-    if ext == ".owp":
+    if ext in (".owp", ".ogg"):
+        ogg = sound.decode_owp_to_ogg_bytes(src_path)
+        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg)
+        if total_sample_cnt <= 0:
+            raise RuntimeError("failed to determine audio sample count")
+        tmp_dir = ""
+        play_path = src_path
+        if ext == ".owp":
+            tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
+            play_path = os.path.join(tmp_dir, base_name + ".ogg")
+            write_bytes(play_path, ogg)
+        return _PreparedPlaybackInput(
+            base_name=base_name,
+            play_path=play_path,
+            tmp_dir=tmp_dir,
+            total_sample_cnt=total_sample_cnt,
+            sample_rate=_get_ogg_sample_rate(ogg, total_sample_cnt),
+            channel_layout="",
+        )
+    if ext == ".nwa":
+        with open(src_path, "rb") as f:
+            data = f.read()
+        pcm, header = sound.decode_nwa_to_pcm_bytes(data)
+        bytes_per_sample = header.bits_per_sample // 8
+        bytes_per_frame = header.channels * bytes_per_sample
+        total_sample_cnt = len(pcm) // bytes_per_frame if bytes_per_frame > 0 else 0
+        if total_sample_cnt <= 0:
+            raise RuntimeError("failed to determine audio sample count")
+        if header.samples_per_sec <= 0:
+            raise RuntimeError("failed to determine audio sample rate")
         tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
-        play_path = os.path.join(tmp_dir, base_name + ".ogg")
-        write_bytes(play_path, ogg)
-    return base_name, ogg, play_path, tmp_dir
+        play_path = os.path.join(tmp_dir, base_name + ".wav")
+        write_bytes(
+            play_path,
+            sound._build_wav(
+                pcm,
+                header.channels,
+                header.bits_per_sample,
+                header.samples_per_sec,
+            ),
+        )
+        return _PreparedPlaybackInput(
+            base_name=base_name,
+            play_path=play_path,
+            tmp_dir=tmp_dir,
+            total_sample_cnt=total_sample_cnt,
+            sample_rate=int(header.samples_per_sec),
+            channel_layout=_channel_layout_for_channels(int(header.channels)),
+        )
+    raise RuntimeError("unsupported file type (expected .nwa, .owp, or .ogg)")
 
 
 @dataclass(frozen=True)
@@ -468,14 +529,16 @@ def _collect_playback_entries(inp: str):
         if missing_input_file(inp):
             return [], 1
         ext = os.path.splitext(inp)[1].lower()
-        if ext not in (".owp", ".ogg"):
-            eprint("error: unsupported file type for --play (expected .owp or .ogg)")
+        if ext not in (".nwa", ".owp", ".ogg"):
+            eprint(
+                "error: unsupported file type for --play (expected .nwa, .owp, or .ogg)"
+            )
             return [], 1
         return [_make_playback_entry(inp)], None
     files, rc = collect_batch_files(
         inp,
         True,
-        [".owp", ".ogg"],
+        [".nwa", ".owp", ".ogg"],
         "no supported audio files found",
     )
     if rc is not None:
@@ -673,15 +736,13 @@ def _resolve_play_gameexe_path(inp: str, trim_path: str = "") -> str:
 
 
 def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
-    base_name, ogg, play_path, tmp_dir = _prepare_playback_input(entry.path)
-    total_sample_cnt = sound.ogg_calc_smp_cnt(ogg)
-    sample_rate = _get_ogg_sample_rate(ogg, total_sample_cnt)
-    bgm_entry = _resolve_bgm_entry(trim_table, base_name)
+    prepared = _prepare_playback_input(entry.path)
+    bgm_entry = _resolve_bgm_entry(trim_table, prepared.base_name)
     start_pos = bgm_entry.start_sample
     end_pos = bgm_entry.end_sample
     rep_pos = bgm_entry.repeat_sample
     start_pos, end_pos, rep_pos = _normalize_playback_range(
-        ogg,
+        prepared.total_sample_cnt,
         start_sample=start_pos,
         end_sample=end_pos,
         repeat_sample=rep_pos,
@@ -689,16 +750,17 @@ def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
     return _PlaybackPlan(
         entry=entry,
         bgm_name=bgm_entry.name,
-        play_path=play_path,
-        tmp_dir=tmp_dir,
+        play_path=prepared.play_path,
+        tmp_dir=prepared.tmp_dir,
         start_sample=start_pos,
         end_sample=end_pos,
         repeat_sample=rep_pos,
-        sample_rate=sample_rate,
+        sample_rate=prepared.sample_rate,
         audio_filter=_build_ffplay_audio_filter(
             start_sample=start_pos,
             end_sample=end_pos,
             repeat_sample=rep_pos,
+            channel_layout=prepared.channel_layout,
         ),
     )
 

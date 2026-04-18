@@ -129,7 +129,7 @@ def _usage(out=None):
         f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>]\n"
         f"  {p} -s --a <input_file.(nwa|ovk|owp)>\n"
         f"  {p} -s --c <input_ogg|input_dir> <output_dir>\n"
-        f"  {p} -s --play <input_file.(owp|ogg)|input_dir> [path_to_Gameexe.dat|Gameexe.ini]\n"
+        f"  {p} -s --play <input_file.(nwa|owp|ogg)|input_dir> [path_to_Gameexe.dat|Gameexe.ini]\n"
         "\n"
         "DB mode:\n"
         f"  {p} -d --x <input_dir|input_file> <output_dir>\n"
