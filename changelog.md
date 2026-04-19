@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.2.4] - 2026-04-18
+## [v0.2.4] - 2026-04-19
 
 - Added `-s --play` support for legacy `.nwa` BGM files.
 - Changed the compile summary heading from `Stage Timings` to `Compiling Stats`, and added `inc_files`, `scene_files`, `compiled_scene_files`, full-compile macro totals/unused counts for `#replace`, `#define`, `#define_s`, `#macro`, plus `read_flags`, `read_flags_scenes`, and `top5_read_flags_scenes`.
