@@ -206,7 +206,7 @@ siglus-ssu -lsp [--serial]
 
 - Official entrypoint: `siglus-ssu -lsp`
 - By default, workspace-wide symbol and link scans run in parallel; use `--serial` to force serial scanning when needed
-- Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, and speaker names
+- Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, speaker names, and macro declarations with used/unused distinction
 - The language service reuses the same `-c` compiler pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`) wherever they apply; semantic classification comes from that compiler-aligned analysis, while the LSP layer recovers source ranges and packages the results as semantic tokens, locations, and edits
 - The current project scope is directory-based, matching the present `-c` model for `.inc` / `.ss` joint analysis and global `.inc #command` linking
 - The service itself is editor-agnostic and can be consumed by VS Code, Neovim, Emacs, Sublime Text, Kate, Helix, or any other client that can launch an external stdio LSP server
@@ -239,7 +239,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 |---|---|
 | `<input_dir>` | Directory containing `.ss` source files, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. |
 | `<output_pck \| output_dir>` | Output path. If the path ends with `.pck`, the file is written there. If the argument already exists and is a directory, or ends with a path separator, a `Scene.pck` is created inside it. Other non-existent paths that do not end with `.pck` are currently also interpreted as an output file path. |
-| `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Also prints per-stage timing statistics. |
+| `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. |
 | `--charset ENC` | Force source file encoding. Accepted values: `jis`, `cp932`, `sjis`, `shift_jis` (all equivalent to CP932/Shift-JIS), or `utf8`, `utf-8`. If omitted, the encoding is auto-detected. |
 | `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan `input_dir` for existing `.dat` files, copy them, and pack them directly into a `.pck` file. Useful for packing already-compiled scripts. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--test-shuffle`. |
@@ -252,6 +252,21 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. |
 | `--test-shuffle [seed0]` | Brute-force scan all possible 32-bit MSVC `rand()` seeds to find the one that reproduces the string table order in `<test_dir>`. Optionally start the scan at `seed0`. |
 | `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage, writing a fixed filename `Gameexe.dat` into the output directory. |
+
+#### Compiling Stats
+
+The compiler prints an `=== Compiling Stats ===` summary before exit for compile runs.
+
+That summary includes:
+
+- Per-stage elapsed time totals for the stages that ran (`GEI`, `IA`, `CA`, `LA`, `SA`, `MA`, `BS`, or `Compiling`)
+- `inc_files`: number of `.inc` files participating in the build
+- `scene_files`: total number of `.ss` files in the input directory
+- `compiled_scene_files`: number of `.ss` files actually compiled in this run; under incremental compilation, this is the incremental subset only
+- During full compilation only: `#replace`, `#define`, `#define_s`, and `#macro` totals together with their unused counts
+- During full compilation only: `read_flags`, `read_flags_scenes`, and `top5_read_flags_scenes` (the five scene names with the highest `read_flags`, printed together with their counts)
+
+When `--tmp` causes an incremental build, unchanged `.dat` outputs are reused. In that case the project-wide macro and read-flag counters are intentionally reported as `n/a (incremental compile)` instead of mixing fresh counts with cached outputs.
 
 #### Examples
 
@@ -441,6 +456,9 @@ header:
 counts:
   inc_prop=...  inc_cmd=...
   scn_name=...  scn_data_index=...  scn_data_cnt=...
+read_flags: ...
+read_flags_scenes: ...
+top5_read_flags_scenes: scene_a(...), scene_b(...), ...
 ...
 ```
 

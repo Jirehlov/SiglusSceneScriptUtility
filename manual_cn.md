@@ -205,7 +205,7 @@ siglus-ssu -lsp [--serial]
 
 - 官方启动入口：`siglus-ssu -lsp`
 - 默认会并行执行工作区级别的符号扫描与链接扫描；如需强制串行，可传入 `--serial`
-- 当前能力：语义 token、诊断、自动补全、悬停说明、跳转到定义、查找引用、准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；当前语义 token 分类包含台词文本、system element（系统指令）和角色名
+- 当前能力：语义 token、诊断、自动补全、悬停说明、跳转到定义、查找引用、准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；当前语义 token 分类包含台词文本、system element（系统指令）、角色名，以及带“已使用 / 未使用”区分的宏声明
 - 语言服务会在适用处直接复用与 `-c` 相同的编译流水线阶段（`CA`、`LA`、`SA`、`MA`、`BS`）；语义分类来自这条与编译器对齐的分析结果，而 LSP 层负责恢复源文本范围，并把结果封装成 semantic token、location 与 edit
 - 当前项目作用域是目录级的，这与现行 `-c` 对 `.inc` / `.ss` 联合分析以及全局 `.inc #command` 链接的模型保持一致
 - 服务本身与编辑器无关，可供 VS Code、Neovim、Emacs、Sublime Text、Kate、Helix 等任何支持外部 stdio LSP 的客户端接入
@@ -238,7 +238,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 |---|---|
 | `<input_dir>` | 包含 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。 |
 | `<output_pck \| output_dir>` | 输出路径。若以 `.pck` 结尾，则写入该文件；若参数本身已存在且是目录，或以路径分隔符结尾，则在其中创建 `Scene.pck`。其余不存在且不以 `.pck` 结尾的路径，当前实现也会按“输出文件路径”解释。 |
-| `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等），并打印各阶段耗时统计。 |
+| `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。 |
 | `--charset ENC` | 强制指定源文件编码。接受值：`jis`、`cp932`、`sjis`、`shift_jis`（均等价于 Shift-JIS）或 `utf8`、`utf-8`。省略时自动检测。 |
 | `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 中现有的 `.dat` 文件并将它们直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--test-shuffle` 同用。 |
@@ -251,6 +251,21 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。 |
 | `--test-shuffle [seed0]` | 穷举搜索所有可能的 32 位 MSVC `rand()` 种子，以找到能精确重建 `<test_dir>` 中字符串表混淆顺序的种子。可选从 `seed0` 开始扫描。 |
 | `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段，并在输出目录写出固定文件名 `Gameexe.dat`。 |
+
+#### 编译统计
+
+编译器会在编译结束前打印一段 `=== Compiling Stats ===` 汇总。
+
+其中包含：
+
+- 本次实际运行过的阶段耗时总计（如 `GEI`、`IA`、`CA`、`LA`、`SA`、`MA`、`BS`、`Compiling`）
+- `inc_files`：参与编译的 `.inc` 文件数量
+- `scene_files`：输入目录中的 `.ss` 文件总数
+- `compiled_scene_files`：本次实际参与编译的 `.ss` 文件数量；在增量编译时，这里就是增量子集
+- 仅在全量编译时统计：`#replace`、`#define`、`#define_s`、`#macro` 的总数与未使用数
+- 仅在全量编译时统计：`read_flags`、`read_flags_scenes` 与 `top5_read_flags_scenes`（`read_flags` 数量最多的 5 个场景名，并同时打印各自数量）
+
+当 `--tmp` 触发增量编译时，未变更的 `.dat` 会被直接复用，因此这些项目级宏统计与 `read_flags` 统计会明确显示为 `n/a (incremental compile)`，而不会把新统计与缓存产物混在一起。
 
 #### 示例
 
@@ -440,6 +455,9 @@ header:
 counts:
   inc_prop=...  inc_cmd=...
   scn_name=...  scn_data_index=...  scn_data_cnt=...
+read_flags: ...
+read_flags_scenes: ...
+top5_read_flags_scenes: scene_a(...), scene_b(...), ...
 ...
 ```
 

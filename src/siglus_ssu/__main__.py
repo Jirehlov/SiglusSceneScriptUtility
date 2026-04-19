@@ -64,7 +64,7 @@ def _usage(out=None):
         f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] <input_dir> <output_pck|output_dir>\n"
         f"  {p} -c --test-shuffle [seed0] <input_dir> <output_pck|output_dir> <test_dir>\n"
         f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
-        "    --debug         Keep temp files (also prints stage timings)\n"
+        "    --debug         Keep temp files for inspection\n"
         "    --charset ENC   Force source charset (jis/cp932 or utf8)\n"
         "    --no-os         Skip OS stage (do not pack source files)\n"
         "    --dat-repack    Repack existing .dat files in input_dir (skip .ss compilation)\n"

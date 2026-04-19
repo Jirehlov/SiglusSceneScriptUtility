@@ -37,6 +37,7 @@ from .common import (
 
 C = get_const_module()
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
+MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 
 
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
@@ -326,6 +327,114 @@ def _init_stats(ctx):
         return
     stats = ctx.setdefault("stats", {})
     stats.setdefault("stage_time", {})
+    stats.setdefault("inc_files", 0)
+    stats.setdefault("scene_files", 0)
+    stats.setdefault("compiled_scene_files", 0)
+    stats.setdefault("full_compile_stats", False)
+    stats.setdefault("macro_counts", None)
+    stats.setdefault("read_flags", None)
+    stats.setdefault("read_flags_scenes", None)
+    stats.setdefault("top5_read_flags_scenes", None)
+
+
+def _macro_decl_kind(rep):
+    kind = str((rep or {}).get("decl_type") or "")
+    if kind in MACRO_STAT_KINDS:
+        return kind
+    tp = str((rep or {}).get("type") or "")
+    if tp in ("replace", "define", "macro"):
+        return tp
+    return ""
+
+
+def _empty_macro_counts():
+    return {kind: {"total": 0, "unused": 0} for kind in MACRO_STAT_KINDS}
+
+
+def _set_compile_file_stats(
+    ctx,
+    *,
+    inc_files,
+    scene_files,
+    compiled_scene_files,
+    full_compile_stats,
+):
+    if not isinstance(ctx, dict):
+        return
+    stats = ctx.setdefault("stats", {})
+    stats["inc_files"] = int(inc_files or 0)
+    stats["scene_files"] = int(scene_files or 0)
+    stats["compiled_scene_files"] = int(compiled_scene_files or 0)
+    stats["full_compile_stats"] = bool(full_compile_stats)
+
+
+def _set_macro_stats(ctx, macro_counts):
+    if not isinstance(ctx, dict):
+        return
+    ctx.setdefault("stats", {})["macro_counts"] = macro_counts
+
+
+def _set_read_flag_stats(
+    ctx, read_flags, read_flags_scenes, top5_read_flags_scenes=None
+):
+    if not isinstance(ctx, dict):
+        return
+    stats = ctx.setdefault("stats", {})
+    stats["read_flags"] = read_flags
+    stats["read_flags_scenes"] = read_flags_scenes
+    stats["top5_read_flags_scenes"] = top5_read_flags_scenes
+
+
+def _collect_macro_stats(ctx, compile_stats):
+    if not isinstance(ctx, dict):
+        return None
+    iad = ctx.get("ia_data")
+    if not isinstance(iad, dict):
+        return None
+    macro_counts = _empty_macro_counts()
+    compile_stats = compile_stats if isinstance(compile_stats, dict) else {}
+    is_parallel = bool(compile_stats.get("parallel"))
+    usage_delta = (
+        compile_stats.get("global_macro_usage_delta")
+        if isinstance(compile_stats.get("global_macro_usage_delta"), dict)
+        else {}
+    )
+    for rep in list(iad.get("macro_defs") or []):
+        kind = _macro_decl_kind(rep)
+        name = str((rep or {}).get("name") or "")
+        if not kind:
+            continue
+        bucket = macro_counts[kind]
+        bucket["total"] += 1
+        used = int((rep or {}).get("used_count", 0) or 0)
+        if is_parallel and name:
+            used += int(usage_delta.get((kind, name), 0) or 0)
+        if used <= 0:
+            bucket["unused"] += 1
+    scene_counts = compile_stats.get("scene_macro_counts") or {}
+    for kind in MACRO_STAT_KINDS:
+        bucket = macro_counts[kind]
+        other = scene_counts.get(kind) or {}
+        bucket["total"] += int(other.get("total", 0) or 0)
+        bucket["unused"] += int(other.get("unused", 0) or 0)
+    return macro_counts
+
+
+def _collect_read_flag_stats(bs_dir, scene_paths):
+    total = 0
+    scene_total = 0
+    scene_counts = []
+    for scene_path in scene_paths or []:
+        nm = os.path.splitext(os.path.basename(scene_path))[0]
+        dat_path = os.path.join(bs_dir, nm + ".dat")
+        _blob, header = _read_scn_dat_header_bytes(dat_path)
+        cnt = int((header or {}).get("read_flag_cnt", 0) or 0)
+        total += cnt
+        if cnt > 0:
+            scene_total += 1
+            scene_counts.append((nm, cnt))
+    scene_counts.sort(key=lambda item: (-item[1], item[0].casefold(), item[0]))
+    return total, scene_total, scene_counts[:5]
 
 
 def _record_angou(ctx, content):
@@ -340,10 +449,42 @@ def _print_summary(ctx):
         return
     timings = stats.get("stage_time") or {}
     angou = stats.get("angou_content", "")
-    if timings:
-        print("=== Stage Timings ===")
+    has_compile_stats = (
+        bool(timings)
+        or int(stats.get("inc_files", 0) or 0) > 0
+        or int(stats.get("scene_files", 0) or 0) > 0
+        or int(stats.get("compiled_scene_files", 0) or 0) > 0
+    )
+    if has_compile_stats:
+        print("=== Compiling Stats ===")
         for k in sorted(timings.keys()):
             print(f"{k}: {timings[k]:.3f}s")
+        print(f"inc_files: {int(stats.get('inc_files', 0) or 0)}")
+        print(f"scene_files: {int(stats.get('scene_files', 0) or 0)}")
+        print(f"compiled_scene_files: {int(stats.get('compiled_scene_files', 0) or 0)}")
+        macro_counts = stats.get("macro_counts")
+        if isinstance(macro_counts, dict):
+            for kind in MACRO_STAT_KINDS:
+                bucket = macro_counts.get(kind) or {}
+                print(
+                    f"#{kind}: total={int(bucket.get('total', 0) or 0)} unused={int(bucket.get('unused', 0) or 0)}"
+                )
+            print(f"read_flags: {int(stats.get('read_flags', 0) or 0)}")
+            print(f"read_flags_scenes: {int(stats.get('read_flags_scenes', 0) or 0)}")
+            top5 = stats.get("top5_read_flags_scenes")
+            if isinstance(top5, list) and top5:
+                print(
+                    "top5_read_flags_scenes: "
+                    + ", ".join(f"{name}({int(count or 0)})" for name, count in top5)
+                )
+            else:
+                print("top5_read_flags_scenes: none")
+        elif not bool(stats.get("full_compile_stats")):
+            for kind in MACRO_STAT_KINDS:
+                print(f"#{kind}: n/a (incremental compile)")
+            print("read_flags: n/a (incremental compile)")
+            print("read_flags_scenes: n/a (incremental compile)")
+            print("top5_read_flags_scenes: n/a (incremental compile)")
     if angou is not None:
         print("=== \u6697\u53f7.dat ===")
         print(angou)
@@ -569,6 +710,11 @@ def main(argv=None):
         angou_content = None
     _record_angou(ctx, angou_content)
     ok = False
+    compile_stats = {
+        "parallel": False,
+        "scene_macro_counts": _empty_macro_counts(),
+        "global_macro_usage_delta": {},
+    }
     try:
         t = time.time()
         write_gameexe_dat(ctx)
@@ -689,6 +835,19 @@ def main(argv=None):
                 compile_list = []
             if test_shuffle:
                 compile_list = ss
+            full_compile_stats = (
+                (not getattr(a, "dat_repack", False))
+                and (not test_shuffle)
+                and bool(ss)
+                and len(compile_list) == len(ss)
+            )
+            _set_compile_file_stats(
+                ctx,
+                inc_files=len(inc or []),
+                scene_files=len(ss or []),
+                compiled_scene_files=len(compile_list or []),
+                full_compile_stats=full_compile_stats,
+            )
             if compile_list:
                 if test_shuffle:
                     bs_dir = os.path.join(tmp, "bs")
@@ -788,12 +947,29 @@ def main(argv=None):
                         )
                         sys.stderr.flush()
                 else:
-                    compile_all(
+                    compile_stats = compile_all(
                         ctx,
                         compile_list,
                         max_workers=a.max_workers,
                         parallel=(not force_serial_compile),
                     )
+            if full_compile_stats:
+                _set_macro_stats(ctx, _collect_macro_stats(ctx, compile_stats))
+                bs_dir = os.path.join(tmp, "bs")
+                (
+                    read_flags,
+                    read_flag_scenes,
+                    top5_read_flags_scenes,
+                ) = _collect_read_flag_stats(bs_dir, ss)
+                _set_read_flag_stats(
+                    ctx,
+                    read_flags,
+                    read_flag_scenes,
+                    top5_read_flags_scenes,
+                )
+            else:
+                _set_macro_stats(ctx, None)
+                _set_read_flag_stats(ctx, None, None, None)
             link_pack(ctx)
         ok = True
     except Exception as e:

@@ -28,69 +28,55 @@ def _compile_one_process(
     utf8: bool,
     debug_outputs: bool,
     display_name: str,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, dict, dict]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
     try:
-        from .CA import CharacterAnalizer
-        from .common import read_text_auto, write_bytes, write_text
-        from .LA import la_analize
-        from .SA import SA
-        from .MA import MA
-        from .BS import BS, copy_ia_data
+        from .common import write_bytes
+        from .BS import compile_one_pipeline
 
-        scn = read_text_auto(ss_path, force_charset=(enc or ""))
-        iad = copy_ia_data(ia_data)
-        pcad = {}
-        ca = CharacterAnalizer()
-        if not ca.analize_file(scn, iad, pcad):
-            return (display_name, f"CA error at {display_name}:{ca.get_error_line()}")
-        if debug_outputs:
-            write_text(
-                os.path.join(tmp_path, "ca", nm + ".txt"),
-                pcad.get("scn_text", ""),
-                enc=("utf-8" if utf8 else "cp932"),
-            )
-        lad, err = la_analize(pcad)
-        if err:
-            return (display_name, f"LA error at {display_name}:{err.get('line', 0)}")
-        sa = SA(iad, lad)
-        ok, sad = sa.analize()
-        if not ok:
-            line = (sa.last.get("atom") or {}).get("line", 0)
-            return (
-                display_name,
-                f"{sa.last.get('type') or 'SA_ERROR'} at {display_name}:{line}",
-            )
-        ma = MA(iad, lad, sad)
-        ok, mad = ma.analize()
-        if not ok:
-            line = (ma.last.get("atom") or {}).get("line", 0)
-            code = ma.last.get("type") or "MA_ERROR"
-            return (display_name, f"{code} at {display_name}:{line}")
-        bs = BS()
-        bsd = {}
-        if not bs.compile(iad, lad, mad, bsd):
-            return (
-                display_name,
-                f"{bs.get_error_code()} at {display_name}:{bs.get_error_line()}",
-            )
+        worker_ctx = {
+            "tmp_path": tmp_path,
+            "utf8": bool(utf8),
+            "charset_force": enc,
+            "debug_outputs": bool(debug_outputs),
+        }
+        res = compile_one_pipeline(
+            worker_ctx,
+            ss_path,
+            ia_data=ia_data,
+            debug_outputs=bool(debug_outputs),
+            tmp_path=tmp_path,
+            log=False,
+            record_time=False,
+        )
         out_path = os.path.join(tmp_path, "bs", nm + ".dat")
-        write_bytes(out_path, bsd["out_scn"])
-        return (display_name, None)
+        write_bytes(out_path, res["out_scn"])
+        return (
+            display_name,
+            None,
+            res.get("scene_macro_counts") or {},
+            res.get("global_macro_usage_delta") or {},
+        )
     except Exception as e:
-        return (display_name, str(e))
+        return (display_name, str(e), {}, {})
 
 
 def parallel_compile(
     ctx: dict,
     ss_files: list[str],
     max_workers: int | None = None,
-) -> None:
+) -> dict:
+    from .BS import empty_macro_stat_counts, merge_macro_stat_counts
+
     from concurrent.futures import ProcessPoolExecutor
 
     if not ss_files:
-        return
+        return {
+            "parallel": True,
+            "scene_macro_counts": empty_macro_stat_counts(),
+            "global_macro_usage_delta": {},
+        }
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
@@ -101,6 +87,8 @@ def parallel_compile(
     errors = []
     completed = 0
     total = len(ss_files)
+    scene_macro_counts = empty_macro_stat_counts()
+    global_macro_usage_delta = {}
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [
@@ -117,18 +105,28 @@ def parallel_compile(
             for ss_path in ss_files
         ]
         for future in as_completed(futures):
-            display_name, error = future.result()
+            display_name, error, macro_counts, usage_delta = future.result()
             completed += 1
             if error:
                 errors.append((display_name, error))
                 print(f"  [{completed}/{total}] FAIL: {display_name}")
             else:
+                merge_macro_stat_counts(scene_macro_counts, macro_counts or {})
+                for key, value in (usage_delta or {}).items():
+                    global_macro_usage_delta[key] = int(
+                        global_macro_usage_delta.get(key, 0) or 0
+                    ) + int(value or 0)
                 print(f"  [{completed}/{total}] OK: {display_name}")
     if errors:
         for display_name, err in errors:
             print(f"  ERROR in {display_name}: {err}")
         raise RuntimeError(str(errors[0][1]))
     print(f"[PARALLEL] Compilation complete: {total} files")
+    return {
+        "parallel": True,
+        "scene_macro_counts": scene_macro_counts,
+        "global_macro_usage_delta": global_macro_usage_delta,
+    }
 
 
 def _lzss_compress_task(

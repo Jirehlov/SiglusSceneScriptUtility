@@ -26,6 +26,7 @@ from .common import (
     read_bytes,
     write_bytes,
     parse_i32_header,
+    parse_i32_header_checked,
     parse_code,
     list_named_paths,
     is_named_filename,
@@ -40,6 +41,7 @@ from .common import (
     decode_angou_first_line,
     read_angou_first_line,
     angou_to_exe_el,
+    looks_like_siglus_dat,
     looks_like_siglus_pck,
     new_disam_stats,
     write_disam_totals,
@@ -543,7 +545,12 @@ def _resolve_pck_scene_exe_el(blob: bytes, input_pck: str = "", hdr=None):
         return b""
 
 
-def iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
+def iter_pck_scene_dat_items(
+    blob: bytes,
+    input_pck: str = "",
+    hdr=None,
+    require_exe: bool = False,
+):
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         return
     if not looks_like_siglus_pck(blob):
@@ -564,7 +571,12 @@ def iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
         if not nm:
             continue
         rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
-        out_dat = _decode_scene_blob(scn_blob, hdr, exe_el, require_exe=False)
+        out_dat = _decode_scene_blob(
+            scn_blob,
+            hdr,
+            exe_el,
+            require_exe=require_exe,
+        )
         yield {
             "scene_no": scn_no,
             "scene_name": nm,
@@ -572,6 +584,52 @@ def iter_pck_scene_dat_items(blob: bytes, input_pck: str = "", hdr=None):
             "blob": out_dat,
             "pack_context": dict(pack_context or {}),
         }
+
+
+def _collect_pck_read_flag_stats(blob: bytes, input_pck: str = "", hdr=None):
+    stats = {
+        "read_flags": 0,
+        "read_flags_scenes": 0,
+        "top5_read_flags_scenes": [],
+        "available_scene_files": 0,
+        "unavailable_scene_files": 0,
+    }
+    scene_counts = []
+    for item in (
+        iter_pck_scene_dat_items(
+            blob,
+            input_pck=input_pck,
+            hdr=hdr,
+            require_exe=True,
+        )
+        or []
+    ):
+        nm = str(item.get("scene_name") or "")
+        scn_blob = item.get("blob")
+        if not isinstance(scn_blob, (bytes, bytearray)):
+            stats["unavailable_scene_files"] += 1
+            continue
+        scn_blob = bytes(scn_blob)
+        if not looks_like_siglus_dat(scn_blob):
+            stats["unavailable_scene_files"] += 1
+            continue
+        scn_hdr = parse_i32_header_checked(
+            scn_blob,
+            C.SCN_HDR_FIELDS,
+            C.SCN_HDR_SIZE,
+        )
+        if not scn_hdr:
+            stats["unavailable_scene_files"] += 1
+            continue
+        stats["available_scene_files"] += 1
+        cnt = int((scn_hdr or {}).get("read_flag_cnt", 0) or 0)
+        stats["read_flags"] += cnt
+        if cnt > 0:
+            stats["read_flags_scenes"] += 1
+            scene_counts.append((nm, cnt))
+    scene_counts.sort(key=lambda item: (-item[1], item[0].casefold(), item[0]))
+    stats["top5_read_flags_scenes"] = scene_counts[:5]
+    return stats
 
 
 def _pck_word_csv_name(input_pck: str) -> str:
@@ -872,6 +930,43 @@ def pck(blob: bytes, input_pck: str = "") -> int:
         pv = ic[: C.MAX_LIST_PREVIEW]
         print(
             f"inc_cmd_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(ic) > len(pv) else '')}"
+        )
+    read_flag_stats = _collect_pck_read_flag_stats(
+        blob,
+        input_pck=input_pck,
+        hdr=h,
+    )
+    read_flags = int((read_flag_stats or {}).get("read_flags", 0) or 0)
+    read_flags_scenes = int((read_flag_stats or {}).get("read_flags_scenes", 0) or 0)
+    top5_read_flags_scenes = list(
+        (read_flag_stats or {}).get("top5_read_flags_scenes") or []
+    )
+    available_scene_files = int(
+        (read_flag_stats or {}).get("available_scene_files", 0) or 0
+    )
+    unavailable_scene_files = int(
+        (read_flag_stats or {}).get("unavailable_scene_files", 0) or 0
+    )
+    if unavailable_scene_files > 0 and available_scene_files <= 0:
+        print("read_flags: n/a (unavailable)")
+        print("read_flags_scenes: n/a (unavailable)")
+        print("top5_read_flags_scenes: n/a (unavailable)")
+    else:
+        print(f"read_flags: {read_flags:d}")
+        print(f"read_flags_scenes: {read_flags_scenes:d}")
+        if top5_read_flags_scenes:
+            print(
+                "top5_read_flags_scenes: "
+                + ", ".join(
+                    f"{name}({int(count or 0)})"
+                    for name, count in top5_read_flags_scenes
+                )
+            )
+        else:
+            print("top5_read_flags_scenes: none")
+    if unavailable_scene_files > 0:
+        print(
+            f"note: read_flag stats skipped for {unavailable_scene_files:d} unavailable scene_data item(s)"
         )
     if meta.get("item_cnt", 0) > MAX_SCENE_LIST:
         print(

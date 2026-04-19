@@ -27,6 +27,14 @@ class IncAnalyzer:
             self.el = line
             self.es = s
 
+    def _mark_named_usage(self, name):
+        macro_map = (self.iad or {}).get("macro_map")
+        if not isinstance(macro_map, dict):
+            return
+        rep = macro_map.get(str(name or ""))
+        if isinstance(rep, dict) and "used_count" in rep:
+            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
+
     def cc(self):
         result = scan_text_comments(
             self.t,
@@ -380,6 +388,7 @@ class IncAnalyzer:
                 if d >= 16:
                     self.err(line, "if depth overflow")
                     return None, i, line, 0
+                self._mark_named_usage(w)
                 ifs[d] = 1 if w in self.iad["name_set"] else 2
                 continue
             if t.startswith("#elseifdef", i):
@@ -393,6 +402,7 @@ class IncAnalyzer:
                     if not ok2:
                         self.err(line, "Missing word after #elseifdef.")
                         return None, i, line, 0
+                    self._mark_named_usage(w)
                     ifs[d] = next_elseif_ifdef_state(ifs[d], w in self.iad["name_set"])
                     continue
                 self.err(line, "#elseifdef does not have a matching #if.")
@@ -497,11 +507,15 @@ class IncAnalyzer:
             self.iad["name_set"].add(nm)
             rep = {
                 "type": ("replace" if tp == "replace" else "define"),
+                "decl_type": tp,
                 "name": nm,
                 "after": after,
                 "args": [],
+                "used_count": 0,
             }
             add_replace_tree(self.iad["replace_tree"], nm, rep)
+            self.iad.setdefault("macro_defs", []).append(rep)
+            self.iad.setdefault("macro_map", {})[nm] = rep
             return rep, i, line, 1
         if tp == "macro":
             nm, i, line = self._name_until(i, line, set(" \t\n("))
@@ -523,8 +537,17 @@ class IncAnalyzer:
                 self.err(line, nm + " is declared twice.")
                 return None, i, line, 0
             self.iad["name_set"].add(nm)
-            rep = {"type": "macro", "name": nm, "after": after, "args": args}
+            rep = {
+                "type": "macro",
+                "decl_type": "macro",
+                "name": nm,
+                "after": after,
+                "args": args,
+                "used_count": 0,
+            }
             add_replace_tree(self.iad["replace_tree"], nm, rep)
+            self.iad.setdefault("macro_defs", []).append(rep)
+            self.iad.setdefault("macro_map", {})[nm] = rep
             return rep, i, line, 1
         if tp == "property":
             txt, i, line, name_line = self._prop_cmd_text(i, line)

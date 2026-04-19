@@ -84,6 +84,14 @@ class CharacterAnalizer:
     def get_error_str(self):
         return self.error_str
 
+    def _mark_named_usage(self, name):
+        macro_map = (self.iad or {}).get("macro_map")
+        if not isinstance(macro_map, dict):
+            return
+        rep = macro_map.get(str(name or ""))
+        if isinstance(rep, dict) and "used_count" in rep:
+            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
+
     def _check_str(self, t, i, s):
         return (i + len(s), 1) if t.startswith(s, i) else (i, 0)
 
@@ -132,6 +140,7 @@ class CharacterAnalizer:
         t = in_text + ("\0" * 256)
         out = []
         inc = []
+        inc_line_map = []
         self.m_line = 1
         st = 0
         ifs = [0] * 16
@@ -140,6 +149,7 @@ class CharacterAnalizer:
         i = 0
         while t[i] != "\0":
             c = t[i]
+            source_line = self.m_line
             if c == "\n":
                 if st in (1, 2, 3):
                     return self.error(
@@ -201,6 +211,7 @@ class CharacterAnalizer:
                             d += 1
                             if d >= 16:
                                 return self.error(self.m_line, "if depth overflow")
+                            self._mark_named_usage(w)
                             ifs[d] = 1 if w in self.iad["name_set"] else 2
                             continue
                         return self.error(self.m_line, "Missing word after #ifdef.")
@@ -212,6 +223,7 @@ class CharacterAnalizer:
                                 ifs[d] = next_elseif_ifdef_state(
                                     ifs[d], w in self.iad["name_set"]
                                 )
+                                self._mark_named_usage(w)
                                 continue
                             return self.error(
                                 self.m_line, "Missing word after #elseifdef."
@@ -253,10 +265,18 @@ class CharacterAnalizer:
                         )
             if c == "\n":
                 if incs:
+                    if not inc_line_map:
+                        inc_line_map.append(source_line)
                     inc.append(c)
+                    inc_line_map.append(source_line + 1)
                 out.append(c)
             elif ifs[d] in (0, 1):
-                (inc if incs else out).append(c)
+                if incs:
+                    if not inc_line_map:
+                        inc_line_map.append(source_line)
+                    inc.append(c)
+                else:
+                    out.append(c)
             i += 1
         if st in (1, 2, 3):
             return self.error(self.m_line, "Unclosed single quote.")
@@ -266,7 +286,7 @@ class CharacterAnalizer:
             return self.error(self.m_line, "Unclosed #inc_start.")
         if d > 0:
             return self.error(self.m_line, "Unclosed #ifdef.")
-        return "".join(out), "".join(inc)
+        return "".join(out), "".join(inc), inc_line_map
 
     def _std_replace(self, text, pos, default_rt, added_rt):
         r1 = search_replace_tree(default_rt, text, pos) if default_rt else None
@@ -278,6 +298,8 @@ class CharacterAnalizer:
         if not r1 and not r2:
             return text, pos + 1, 1
         rep = (r1 if r1["name"] > r2["name"] else r2) if (r1 and r2) else (r1 or r2)
+        if isinstance(rep, dict) and "used_count" in rep:
+            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
         tp, nm, after = rep["type"], rep["name"], rep.get("after", "")
         nl = len(nm)
         if tp == "replace":
@@ -446,7 +468,9 @@ class CharacterAnalizer:
         r = self.analize_file_2(t1)
         if not isinstance(r, tuple):
             return 0
-        scn, inc = r
+        scn, inc, inc_line_map = r
+        pcad["inc_text"] = inc
+        pcad["inc_line_map"] = inc_line_map
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         from .IA import IncAnalyzer
 

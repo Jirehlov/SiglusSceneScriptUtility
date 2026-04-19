@@ -117,6 +117,8 @@ def build_empty_ia_data(replace_tree, defined_names=None):
     return {
         "replace_tree": replace_tree,
         "name_set": set(defined_names or []),
+        "macro_defs": [],
+        "macro_map": {},
         "property_list": [],
         "command_list": [],
         "property_cnt": 0,

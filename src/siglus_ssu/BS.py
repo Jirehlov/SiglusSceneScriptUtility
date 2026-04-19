@@ -136,6 +136,8 @@ def copy_ia_data(base):
         "form_table": copy.deepcopy(base.get("form_table")),
         "replace_tree": _copy_replace_tree(base.get("replace_tree")),
         "name_set": set(base.get("name_set") or []),
+        "macro_defs": list(base.get("macro_defs") or []),
+        "macro_map": dict(base.get("macro_map") or {}),
         "property_list": [copy.deepcopy(p) for p in base.get("property_list") or []],
         "command_list": [copy.deepcopy(c) for c in base.get("command_list") or []],
         "property_cnt": int(base.get("property_cnt", 0) or 0),
@@ -143,6 +145,65 @@ def copy_ia_data(base):
         "inc_property_cnt": int(base.get("inc_property_cnt", 0) or 0),
         "inc_command_cnt": int(base.get("inc_command_cnt", 0) or 0),
     }
+
+
+_MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
+
+
+def empty_macro_stat_counts():
+    return {kind: {"total": 0, "unused": 0} for kind in _MACRO_STAT_KINDS}
+
+
+def merge_macro_stat_counts(dst, src):
+    if not isinstance(dst, dict) or not isinstance(src, dict):
+        return dst
+    for kind in _MACRO_STAT_KINDS:
+        bucket = dst.setdefault(kind, {"total": 0, "unused": 0})
+        other = src.get(kind) or {}
+        bucket["total"] = int(bucket.get("total", 0) or 0) + int(
+            other.get("total", 0) or 0
+        )
+        bucket["unused"] = int(bucket.get("unused", 0) or 0) + int(
+            other.get("unused", 0) or 0
+        )
+    return dst
+
+
+def _macro_decl_kind(rep):
+    kind = str((rep or {}).get("decl_type") or "")
+    if kind in _MACRO_STAT_KINDS:
+        return kind
+    tp = str((rep or {}).get("type") or "")
+    if tp in ("replace", "define", "macro"):
+        return tp
+    return ""
+
+
+def summarize_scene_macro_stats(iad, base=None, baseline_usage=None):
+    counts = empty_macro_stat_counts()
+    usage_delta = {}
+    macro_defs = list((iad or {}).get("macro_defs") or [])
+    base_defs = list((base or {}).get("macro_defs") or [])
+    base_count = len(base_defs)
+    baseline_usage = baseline_usage if isinstance(baseline_usage, dict) else {}
+    for rep in macro_defs[base_count:]:
+        kind = _macro_decl_kind(rep)
+        if not kind:
+            continue
+        bucket = counts[kind]
+        bucket["total"] += 1
+        if int((rep or {}).get("used_count", 0) or 0) <= 0:
+            bucket["unused"] += 1
+    for rep in base_defs:
+        kind = _macro_decl_kind(rep)
+        name = str((rep or {}).get("name") or "")
+        if (not kind) or (not name):
+            continue
+        used_before = int(baseline_usage.get((kind, name), 0) or 0)
+        used_after = int((rep or {}).get("used_count", 0) or 0)
+        if used_after > used_before:
+            usage_delta[(kind, name)] = used_after - used_before
+    return counts, usage_delta
 
 
 def build_ia_data(ctx):
@@ -1452,6 +1513,13 @@ def compile_one_pipeline(
         base = build_ia_data(ctx)
         if isinstance(ctx, dict):
             ctx["ia_data"] = base
+    baseline_usage = {}
+    for rep in list(base.get("macro_defs") or []):
+        kind = _macro_decl_kind(rep)
+        name = str((rep or {}).get("name") or "")
+        if (not kind) or (not name):
+            continue
+        baseline_usage[(kind, name)] = int((rep or {}).get("used_count", 0) or 0)
     iad = copy_ia_data(base)
     pcad = {}
     ca = CharacterAnalizer()
@@ -1529,7 +1597,16 @@ def compile_one_pipeline(
         raise RuntimeError(fmt_err(bs.get_error_code(), bs.get_error_line()))
     if record_time:
         record_stage_time(ctx, "BS", time.time() - t)
-    return {"nm": nm, "fname": fname, "out_scn": bsd.get("out_scn", b"")}
+    scene_macro_counts, global_macro_usage_delta = summarize_scene_macro_stats(
+        iad, base=base, baseline_usage=baseline_usage
+    )
+    return {
+        "nm": nm,
+        "fname": fname,
+        "out_scn": bsd.get("out_scn", b""),
+        "scene_macro_counts": scene_macro_counts,
+        "global_macro_usage_delta": global_macro_usage_delta,
+    }
 
 
 def compile_one(ctx, ss_path):
@@ -1544,6 +1621,7 @@ def compile_one(ctx, ss_path):
     )
     tmp = ctx.get("tmp_path") or "."
     write_bytes(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"])
+    return res
 
 
 def compile_all(ctx, only=None, max_workers=None, parallel=True):
@@ -1551,16 +1629,30 @@ def compile_all(ctx, only=None, max_workers=None, parallel=True):
         ctx["ia_data"] = build_ia_data(ctx)
     ss_files = list(find_ss(ctx, only))
     if not ss_files:
-        return
+        return {
+            "parallel": False,
+            "scene_macro_counts": empty_macro_stat_counts(),
+            "global_macro_usage_delta": {},
+        }
     if parallel and len(ss_files) > 1:
         from .parallel import parallel_compile
 
         start = time.time()
-        parallel_compile(ctx, ss_files, max_workers)
+        result = parallel_compile(ctx, ss_files, max_workers)
         set_stage_time(ctx, "Compiling", time.time() - start)
-        return
+        result.setdefault("parallel", True)
+        result.setdefault("scene_macro_counts", empty_macro_stat_counts())
+        result.setdefault("global_macro_usage_delta", {})
+        return result
+    scene_macro_counts = empty_macro_stat_counts()
     for p in ss_files:
-        compile_one(ctx, p)
+        res = compile_one(ctx, p)
+        merge_macro_stat_counts(scene_macro_counts, res.get("scene_macro_counts") or {})
+    return {
+        "parallel": False,
+        "scene_macro_counts": scene_macro_counts,
+        "global_macro_usage_delta": {},
+    }
 
 
 BS.get_error_line = get_error_line

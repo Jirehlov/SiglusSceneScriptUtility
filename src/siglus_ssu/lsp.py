@@ -106,6 +106,7 @@ class DefinitionRecord:
     path: str
     line: int
     kind: str
+    directive: str = ""
     detail: str = ""
     scope: str = ""
     signature: str = ""
@@ -132,6 +133,7 @@ class AnalysisResult:
     diagnostics: list[SourceDiagnostic] = field(default_factory=list)
     lad: dict[str, Any] | None = None
     sad: dict[str, Any] | None = None
+    replace_tree: dict[str, Any] | None = None
     local_definitions: dict[str, list[DefinitionRecord]] = field(default_factory=dict)
     label_definitions: dict[str, DefinitionRecord] = field(default_factory=dict)
     z_label_definitions: dict[str, DefinitionRecord] = field(default_factory=dict)
@@ -183,11 +185,11 @@ SEMANTIC_TOKEN_TYPES = [
     "element",
     "speakerName",
 ]
-SEMANTIC_TOKEN_MODIFIERS = ["declaration"]
+SEMANTIC_TOKEN_MODIFIERS = ["declaration", "unused"]
 SEMANTIC_TOKEN_TYPE_INDEX = {
     name: index for index, name in enumerate(SEMANTIC_TOKEN_TYPES)
 }
-SEMANTIC_TOKEN_MODIFIER_BITS = {"declaration": 1 << 0}
+SEMANTIC_TOKEN_MODIFIER_BITS = {"declaration": 1 << 0, "unused": 1 << 1}
 
 
 def _normalize_source_text(text: str) -> str:
@@ -298,13 +300,23 @@ def _render_arg_list(arg_list: list[dict[str, Any]] | None) -> str:
 
 
 def _extract_inc_symbol_lines(
-    path: str, text: str, source_text: str
+    path: str,
+    text: str,
+    source_text: str,
+    line_map: list[int] | None = None,
 ) -> list[DefinitionRecord]:
     cleaned = str(text or "").replace("\r", "")
     line_count = max(1, len(str(source_text or "").replace("\r", "").splitlines()))
     out: list[DefinitionRecord] = []
     lines = cleaned.split("\n")
     for no, raw in enumerate(lines, start=1):
+        mapped_line = min(no, line_count)
+        if isinstance(line_map, list) and 0 <= (no - 1) < len(line_map):
+            try:
+                mapped_line = int(line_map[no - 1] or mapped_line)
+            except (TypeError, ValueError):
+                mapped_line = min(no, line_count)
+        mapped_line = max(1, min(mapped_line, line_count))
         line = raw.lstrip(" \t")
         if not line.startswith("#"):
             continue
@@ -318,8 +330,9 @@ def _extract_inc_symbol_lines(
                         DefinitionRecord(
                             name=name,
                             path=path,
-                            line=min(no, line_count),
+                            line=mapped_line,
                             kind="macro",
+                            directive="#macro",
                         )
                     )
             continue
@@ -331,8 +344,9 @@ def _extract_inc_symbol_lines(
                     DefinitionRecord(
                         name=name,
                         path=path,
-                        line=min(no, line_count),
+                        line=mapped_line,
                         kind="define",
+                        directive="#define_s",
                     )
                 )
             continue
@@ -345,8 +359,9 @@ def _extract_inc_symbol_lines(
                         DefinitionRecord(
                             name=name,
                             path=path,
-                            line=min(no, line_count),
+                            line=mapped_line,
                             kind="define",
+                            directive="#define",
                         )
                     )
             continue
@@ -359,8 +374,9 @@ def _extract_inc_symbol_lines(
                         DefinitionRecord(
                             name=name,
                             path=path,
-                            line=min(no, line_count),
+                            line=mapped_line,
                             kind="replace",
+                            directive="#replace",
                         )
                     )
     return out
@@ -718,6 +734,7 @@ def _analyze_ss_document(
             )
         )
         return result
+    result.replace_tree = iad.get("replace_tree") if isinstance(iad, dict) else None
     lad, err = la_analize(pcad)
     if err:
         result.diagnostics.append(
@@ -772,6 +789,15 @@ def _analyze_ss_document(
         )
         return result
     local_defs, label_defs, z_label_defs, doc_symbols = _collect_scene_symbols(lad, sad)
+    for item in _extract_inc_symbol_lines(
+        abs_path,
+        pcad.get("inc_text", ""),
+        text,
+        pcad.get("inc_line_map"),
+    ):
+        item.scope = "scene-local"
+        _append_definition(local_defs, item)
+        doc_symbols.append(item)
     for bucket in local_defs.values():
         for item in bucket:
             item.path = abs_path
@@ -1107,6 +1133,17 @@ def _macro_symbol_id(kind: str, name: str) -> str:
     return "macro:" + str(kind).casefold() + ":" + str(name).casefold()
 
 
+def _local_macro_symbol_id(kind: str, path: str, name: str) -> str:
+    return (
+        "macrolocal:"
+        + str(kind).casefold()
+        + ":"
+        + os.path.abspath(path).casefold()
+        + ":"
+        + str(name).casefold()
+    )
+
+
 def _is_plain_identifier(name: str) -> bool:
     text = str(name)
     if not text or not _is_ident_start(text[0]):
@@ -1125,11 +1162,15 @@ def _definition_symbol_id(record: DefinitionRecord) -> str:
     if record.kind == "property":
         return _global_property_symbol_id(record.name)
     if record.kind in ("macro", "define", "replace"):
+        if str(record.scope).casefold() == "scene-local" and str(record.path):
+            return _local_macro_symbol_id(record.kind, record.path, record.name)
         return _macro_symbol_id(record.kind, record.name)
     return ""
 
 
 def _definition_renamable(record: DefinitionRecord) -> bool:
+    if str(record.scope).casefold() == "scene-local":
+        return False
     if record.kind in ("command", "property"):
         return bool(str(record.name))
     if record.kind == "macro":
@@ -1220,11 +1261,13 @@ def _append_definition_location(
 
 
 def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
-    replace_tree = (
-        result.project.iad.get("replace_tree")
-        if isinstance(result.project.iad, dict)
-        else None
-    )
+    replace_tree = result.replace_tree
+    if not isinstance(replace_tree, dict):
+        replace_tree = (
+            result.project.iad.get("replace_tree")
+            if isinstance(result.project.iad, dict)
+            else None
+        )
     ident_tokens = [
         token
         for token in _scan_source_tokens(result.text, replace_tree=replace_tree)
@@ -1443,12 +1486,52 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                     renamable=renamable,
                 )
             )
+    scene_local_macro_defs = [
+        record
+        for records in result.local_definitions.values()
+        for record in records
+        if str(record.scope).casefold() == "scene-local"
+        and record.kind in ("macro", "define", "replace")
+    ]
+    scene_local_macro_defs.sort(
+        key=lambda record: (
+            int(record.line or 0),
+            str(record.name).casefold(),
+            str(record.kind),
+        )
+    )
+    for record in scene_local_macro_defs:
+        span = _macro_definition_span_in_text(result.text, record)
+        if span is None:
+            continue
+        line, start_char, end_char, name = span
+        rng = (line, start_char, end_char)
+        if rng in seen_ranges:
+            continue
+        seen_ranges.add(rng)
+        out.append(
+            SymbolOccurrence(
+                symbol_id=_definition_symbol_id(record),
+                path=result.path,
+                line=line,
+                start_char=start_char,
+                end_char=end_char,
+                kind="macro",
+                semantic_type="macro",
+                name=name,
+                definition=True,
+                renamable=_definition_renamable(record),
+            )
+        )
+    local_macro_defs = _unique_macro_definitions(result.local_definitions)
     macro_defs = _unique_macro_definitions(result.project.definitions)
     for token in ident_tokens:
         rng = (token.line, token.start_char, token.end_char)
         if rng in seen_ranges:
             continue
-        record = macro_defs.get(token.text.casefold())
+        record = local_macro_defs.get(token.text.casefold())
+        if record is None:
+            record = macro_defs.get(token.text.casefold())
         if record is None and not token.text.startswith("@"):
             continue
         seen_ranges.add(rng)
@@ -1500,6 +1583,42 @@ def _directive_name_span(
     return start, end, line_text[start:end]
 
 
+def _macro_definition_span_in_text(
+    text: str,
+    record: DefinitionRecord,
+) -> tuple[int, int, int, str] | None:
+    line_index = max(0, int(record.line or 1) - 1)
+    lines = text.split("\n")
+    if line_index >= len(lines):
+        return None
+    directive = str(record.directive or "")
+    if not directive:
+        if record.kind == "macro":
+            directive = "#macro"
+        elif record.kind == "replace":
+            directive = "#replace"
+        elif record.kind == "define":
+            directive = "#define"
+    for candidate, stop_chars, trim_spaces in (
+        ("#macro", set(" \t("), False),
+        ("#define_s", set("\t"), True),
+        ("#define", set(" \t"), False),
+        ("#replace", set(" \t"), False),
+    ):
+        if directive and candidate != directive:
+            continue
+        span = _directive_name_span(
+            lines[line_index], candidate, stop_chars, trim_spaces
+        )
+        if span is None:
+            continue
+        start_char, end_char, name = span
+        if name.casefold() != record.name.casefold():
+            continue
+        return line_index, start_char, end_char, name
+    return None
+
+
 def _collect_inc_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     out: list[SymbolOccurrence] = []
     used_ranges: set[tuple[int, int, int]] = set()
@@ -1545,8 +1664,13 @@ def _collect_inc_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             )
             used_ranges.add((line_no, start_char, end_char))
             break
+    replace_tree = (
+        result.project.iad.get("replace_tree")
+        if isinstance(result.project.iad, dict)
+        else None
+    )
     macro_defs = _unique_macro_definitions(result.project.definitions)
-    for token in _scan_source_tokens(result.text):
+    for token in _scan_source_tokens(result.text, replace_tree=replace_tree):
         if token.kind != "ident":
             continue
         rng = (token.line, token.start_char, token.end_char)
@@ -1705,8 +1829,14 @@ def occurrence_at_position(
     return None
 
 
-def semantic_tokens_for_result(result: AnalysisResult) -> list[int]:
+def semantic_tokens_for_result(
+    result: AnalysisResult,
+    unused_macro_symbol_ids: set[str] | None = None,
+) -> list[int]:
     encoded: dict[tuple[int, int, int], tuple[int, int]] = {}
+    unused_macro_symbol_ids = (
+        unused_macro_symbol_ids if isinstance(unused_macro_symbol_ids, set) else set()
+    )
     if result.string_semantics is None:
         result.string_semantics = (
             _collect_ss_string_semantics(result)
@@ -1730,6 +1860,12 @@ def semantic_tokens_for_result(result: AnalysisResult) -> list[int]:
         modifiers = (
             SEMANTIC_TOKEN_MODIFIER_BITS["declaration"] if occurrence.definition else 0
         )
+        if (
+            occurrence.definition
+            and occurrence.kind == "macro"
+            and occurrence.symbol_id in unused_macro_symbol_ids
+        ):
+            modifiers |= SEMANTIC_TOKEN_MODIFIER_BITS["unused"]
         add_token(
             occurrence.line,
             occurrence.start_char,
@@ -2154,6 +2290,19 @@ def definition_locations_for_occurrence(
                         current_path=result.path,
                         current_text=result.text,
                     )
+        return locations
+    if occurrence.symbol_id.startswith("macrolocal:"):
+        for rec in result.local_definitions.get(key, []):
+            if _definition_symbol_id(rec) != occurrence.symbol_id:
+                continue
+            _append_definition_location(
+                locations,
+                seen,
+                rec,
+                result.path,
+                current_path=result.path,
+                current_text=result.text,
+            )
         return locations
     return locations
 
@@ -2754,6 +2903,7 @@ class SSLanguageServer:
                 diagnostics=[*base.diagnostics, *extras],
                 lad=base.lad,
                 sad=base.sad,
+                replace_tree=base.replace_tree,
                 local_definitions=base.local_definitions,
                 label_definitions=base.label_definitions,
                 z_label_definitions=base.z_label_definitions,
@@ -3162,7 +3312,28 @@ class SSLanguageServer:
             self.respond(msg_id, result={"data": []})
             return
         result = self.analyze_base(doc)
-        self.respond(msg_id, result={"data": semantic_tokens_for_result(result)})
+        unused_macro_symbol_ids = set()
+        directory = os.path.dirname(doc.path) or "."
+        entry = self.occurrence_index_for_directory(directory)
+        for symbol_id, occurrences in entry.occurrences.items():
+            if not str(symbol_id).startswith("macro:") and not str(
+                symbol_id
+            ).startswith("macrolocal:"):
+                continue
+            if not any(item.definition for item in occurrences):
+                continue
+            if any(not item.definition for item in occurrences):
+                continue
+            unused_macro_symbol_ids.add(symbol_id)
+        self.respond(
+            msg_id,
+            result={
+                "data": semantic_tokens_for_result(
+                    result,
+                    unused_macro_symbol_ids=unused_macro_symbol_ids,
+                )
+            },
+        )
 
     def handle_document_symbol(self, msg_id: Any, params: dict[str, Any]) -> None:
         td = (params or {}).get("textDocument") or {}
