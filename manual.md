@@ -396,7 +396,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. |
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
 | `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
-| `--readall` | For `read.sav` files only: set all read-flag bits to `1` (marking every scene as read). Overwrites the input file in-place. |
+| `--readall` | For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same, but still treats text changes and other scene-bytecode changes as different. It is more expensive than a plain structural comparison, but helps distinguish scene-content changes from container-only differences. |
 | `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
@@ -428,6 +428,9 @@ siglus-ssu -a --disam /path/to/script.dat
 
 # Set all read flags in read.sav to 1
 siglus-ssu -a --readall /path/to/savedata/read.sav
+
+# Unlock engine-managed collection flags in global.sav
+siglus-ssu -a --readall /path/to/savedata/global.sav
 
 # Derive the exe_el key from 暗号.dat
 siglus-ssu -a /path/to/暗号.dat --angou
@@ -1150,11 +1153,12 @@ siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
 
 ### `-p` / `--patch` — Patch `SiglusEngine.exe`
 
-Applies binary patches to `SiglusEngine.exe`. Supports three patch operations:
+Applies binary patches to `SiglusEngine.exe`. Supports four patch operations:
 
 - **`--altkey`**: Replace the embedded `exe_el` decryption key with a different one.
-- **`--lang`**: Apply a language preset (`chs` or `eng`) or a custom JSON-specified mapping to redirect the engine to a different `.pck` file, save directory, and character encoding.
-- **`--loc`**: Toggle the built-in Japan-only region check (`0` = disable/force pass, `1` = enable/restore original check).
+- **`--lang`**: Apply a language preset (`chs` or `eng`) or a custom JSON-specified mapping to redirect the engine to a different `.pck` file, save directory, and language slots.
+- **`--info`**: Print a read-only preview of the patchable `ALTKEY`, `LANG`, and `LOC` slots in the target executable.
+- **`--loc`**: Toggle the built-in region check (`0` = disable/force pass, `1` = re-enable only a function-stub patch made by this tool).
 
 #### Syntax
 
@@ -1164,6 +1168,9 @@ siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
 
 # Apply a language patch
 siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace]
+
+# Preview patchable info without writing a file
+siglus-ssu -p --info <input_exe>
 
 # Toggle region detection
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
@@ -1180,39 +1187,67 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--lang chs` | Apply the built-in Simplified Chinese preset. |
 | `--lang eng` | Apply the built-in English preset. |
 | `--lang <json>` | Apply a custom JSON-specified patch (see below). Here `<json>` is an **inline JSON string**, not a path to a JSON file. |
-| `--loc 0` | Disable region detection by forcing the Japan-only check to return success. |
-| `--loc 1` | Enable region detection by restoring the original Japan-only check. |
+| `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit. Does not write a file and rejects `-o` / `--inplace`. |
+| `--loc 0` | Disable region detection by replacing the matched top-level check routine with a 3-byte always-pass stub. |
+| `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. Ambiguous, unsupported, or branch-patched builds are refused. |
 
 #### Language Patch Presets
 
 **`--lang chs`** makes these changes:
-- Sets `lfCharSet` to `0x86` (GBK/GB2312 Chinese).
-- Replaces `Scene.pck` → `Scene.chs`, `savedata` → `savechs`, `japanese` → `chinese`, `Gameexe.dat` → `Gameexe.chs`.
+- Sets `charset1` to `0x00` and `charset2` to `0x86`.
+- Replaces standalone slots: `japanese` → `chinese`, `ja` → `zh`, `Scene.pck` → `Scene.chs`, `savedata` → `savechs`.
+- Replaces all fixed-length `Gameexe.dat` hits with `Gameexe.chs`, including user-facing prompt text.
 
 **`--lang eng`** makes these changes:
-- Sets `lfCharSet` to `0x00` (ANSI/Latin).
-- Replaces `Scene.pck` → `Scene.eng`, `savedata` → `saveeng`, `japanese` → `english`, `Gameexe.dat` → `Gameexe.eng`.
+- Sets `charset1` to `0x00` and `charset2` to `0x00`.
+- Replaces standalone slots: `japanese` → `english`, `ja` → `en`, `Scene.pck` → `Scene.eng`, `savedata` → `saveeng`.
+- Replaces all fixed-length `Gameexe.dat` hits with `Gameexe.eng`, including user-facing prompt text.
+
+Built-in `chs` / `eng` only auto-write charset slots when the current layout matches the known-safe pattern `charset1=0x00` and `charset2=0x00` / `0x80` / `0x86`. If the build uses a different layout, the preset refuses to patch those slots and you should use custom JSON with explicit `charset1` / `charset2`.
+
+If some expected locale/code/path slots are absent in the target build, the built-in preset still writes the matches it can find and prints a warning that the result may be only partially patched.
+
+#### Charset Slots
+
+`--info` reports two charset slots, `charset1` and `charset2`, because the engine uses two independent `lfCharSet` compare sites when building font lists in currently supported builds.
+
+- `charset1` is the first matched compare site (lower file offset).
+- `charset2` is the second matched compare site (higher file offset).
+
+In the old Tona3/Siglus source, the relevant filtering rules are:
+
+- `0x00` (`ANSI_CHARSET`): keeps `ANSI` and `SHIFTJIS` font entries, and prefers the `SHIFTJIS` entry when the same face name appears in both charsets.
+- `0x80` (`SHIFTJIS_CHARSET`): keeps only `SHIFTJIS` font entries.
+- `0x86` (`GB2312_CHARSET`): keeps only `GB2312` font entries.
+
+Current supported builds commonly use one slot for the runtime text font list and the other slot for the font-selection dialog list. The built-in presets rely on the currently known-safe slot order; if your build differs, use custom JSON to control the two slots explicitly.
 
 #### Custom JSON `--lang` Configuration
 
 ```json
 {
-  "charset": 0,
+  "charset1": 0,
+  "charset2": 0,
   "suffix": "ENG",
   "replace": {
     "Scene.pck": "Scene.eng",
     "savedata": "saveeng"
   },
+  "standalone_only": ["Scene.pck"],
   "skip_standalone": ["savedata"]
 }
 ```
 
 | JSON Field | Description |
 |---|---|
-| `charset` | Target `lfCharSet` value. Accepts `0` / `"eng"` (ANSI), `128` / `"jp"` (Shift-JIS), `134` / `"chs"` (GBK), or any integer. |
+| `charset1` | Value for the first charset slot. Accepts `0` / `"eng"` (ANSI), `128` / `"jp"` (Shift-JIS), `134` / `"chs"` (GBK), or any integer. |
+| `charset2` | Value for the second charset slot. Accepts `0` / `"eng"` (ANSI), `128` / `"jp"` (Shift-JIS), `134` / `"chs"` (GBK), or any integer. |
 | `suffix` | Suffix used for the default output filename (e.g., `"ENG"` → `SiglusEngine_ENG.exe`). |
 | `replace` | Object mapping old string → new string (UTF-16LE in-place replacement). The new string must not be longer than the old. |
+| `standalone_only` | List of old strings to replace only when they appear as standalone UTF-16LE slots surrounded by NUL bytes. |
 | `skip_standalone` | List of old strings to skip when they appear surrounded by NUL bytes (i.e., when they appear isolated in memory rather than as part of a path). |
+
+Use at most one of `standalone_only` or `skip_standalone` for the same source string.
 
 #### Examples
 
@@ -1233,7 +1268,10 @@ siglus-ssu -p --lang eng /path/to/SiglusEngine.exe
 siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
 
 # Apply a custom JSON language patch
-siglus-ssu -p --lang '{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+siglus-ssu -p --lang '{"charset1":0,"charset2":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+
+# Preview current patchable info
+siglus-ssu -p --info /path/to/SiglusEngine.exe
 
 # Disable region detection
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
@@ -1260,6 +1298,22 @@ Applied changes: N bytes
 Written: /path/to/SiglusEngine_ENG.exe
 ```
 
+`--info` prints a read-only preview instead of patching:
+
+```
+Input : /path/to/SiglusEngine.exe
+SHA256: abc123...
+ALTKEY: 0xAA, 0xBB, ...
+LANG charset1: 0x201AC8=0x00 (eng/ansi)
+LANG charset2: 0x2BE0E3=0x80 (jp/shift-jis)
+LANG Locale : japanese @ 0x677C94
+LANG Code   : ja @ 0x64FC6C
+LANG Scene  : Scene.pck @ 0x66D208
+LANG Save   : savedata @ 0x66D814
+LANG Gameexe: Gameexe.dat x4 (last @ 0x677C30)
+LOC   : enabled (original function, func=0x22BF20)
+```
+
 For `--loc`, the summary also prints the previous and new switch states:
 
 ```
@@ -1273,6 +1327,8 @@ Applied changes: 3 bytes
  - region detection: enabled -> disabled (3 bytes)
 Written: /path/to/SiglusEngine_LOC0.exe
 ```
+
+`--loc` uses a conservative matcher that looks for the top-level guarded wrapper around the region check helpers. If the build is ambiguous or unsupported, it refuses to patch instead of guessing.
 
 
 

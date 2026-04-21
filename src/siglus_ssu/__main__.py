@@ -49,7 +49,7 @@ def _usage(out=None):
         "  -g, --g00       Extract/analyze .g00 images\n"
         "  -s, --sound     Decode/extract/play .ovk/.owp/.nwa sounds\n"
         "  -v, --video     Extract/analyze .omv videos\n"
-        "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/loc)\n"
+        "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
         "\n"
         "Init mode:\n"
         f"  {p} init [--force|-f] [--ref <git-ref>]\n"
@@ -92,7 +92,7 @@ def _usage(out=None):
         f"  {p} -a <path_to_\u6697\u53f7.dat|SiglusEngine.exe|dir> --angou\n"
         f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n"
         "    --disam        Write .dat disassembly to __DATDIR__\n"
-        "    --readall      For read.sav only: set all read flags to 1 (overwrite input)\n"
+        "    --readall      For read.sav/global.sav: unlock read or engine-managed collection flags in-place\n"
         "    --word         Count dialogue units for each .dat/.ss inside a .pck and write CSV only\n"
         "    --payload      Compare normalized decoded/decompressed scn_bytes semantics for .pck/.dat comparisons (ignores string-pool ids when text matches); expensive\n"
         "    --angou        Parse as \u6697\u53f7.dat and print derived exe_el key\n"
@@ -148,19 +148,23 @@ def _usage(out=None):
         "Patch mode:\n"
         f"  {p} -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]\n"
         f"  {p} -p --lang (chs|eng|<json>) <input_exe> [-o output_exe] [--inplace]\n"
+        f"  {p} -p --info <input_exe>\n"
         f"  {p} -p --loc (0|1) <input_exe> [-o output_exe] [--inplace]\n"
         "    <input_key> can be either:\n"
         "      - 16 bytes formatted like: 0xA9, 0x86, ...\n"
         "      - path to \u6697\u53f7.dat / key.txt / SiglusEngine*.exe / directory (auto-derive)\n"
         "    --loc 0       Disable region detection (force pass)\n"
         "    --loc 1       Enable region detection (restore original check)\n"
+        "    built-in chs/eng require a known charset slot layout; use custom json for explicit charset1/charset2\n"
         "    <json> (custom) fields:\n"
-        "      - charset: 0/128/134 or 'eng'/'jp'/'chs'\n"
+        "      - charset1: first charset slot, 0/128/134 or 'eng'/'jp'/'chs'\n"
+        "      - charset2: second charset slot, 0/128/134 or 'eng'/'jp'/'chs'\n"
         "      - suffix: output suffix for default naming\n"
         "      - replace: object mapping old->new\n"
+        "      - standalone_only: list of old strings to patch only when surrounded by NULs\n"
         "      - skip_standalone: list of old strings to skip when surrounded by NULs\n"
         "      example:\n"
-        '        \'{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}\'\n'
+        '        \'{"charset1":0,"charset2":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"},"standalone_only":["Scene.pck"]}\'\n'
     )
     out.write(text)
 

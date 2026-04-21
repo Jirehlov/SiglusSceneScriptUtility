@@ -395,7 +395,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `<input_file>` | 要分析的文件路径。支持扩展名：`.pck`、`.dat`、`.gan`、`.sav`、`.cgm`、`.tcr`。 |
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写在输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/*.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
-| `--readall` | 仅用于 `read.sav` 文件：将所有已读标志位设为 `1`（标记所有场景为已读）。直接覆盖输入文件。 |
+| `--readall` | 对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同；但文本变化和其他场景字节码变化仍会视为不同。它比普通结构比较更耗时，但能更好地区分场景内容变化与容器层面的差异。 |
 | `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
@@ -427,6 +427,9 @@ siglus-ssu -a --disam /path/to/script.dat
 
 # 将 read.sav 中的所有已读标志设为 1
 siglus-ssu -a --readall /path/to/savedata/read.sav
+
+# 解锁 global.sav 中由引擎管理的收集标志
+siglus-ssu -a --readall /path/to/savedata/global.sav
 
 # 从 暗号.dat 推导 exe_el 密钥
 siglus-ssu -a /path/to/暗号.dat --angou
@@ -1145,11 +1148,12 @@ siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
 
 ### `-p` / `--patch` — 修改 `SiglusEngine.exe`
 
-对 `SiglusEngine.exe` 进行二进制补丁。支持三种操作：
+对 `SiglusEngine.exe` 进行二进制补丁。支持四种操作：
 
 - **`--altkey`**：用另一个密钥替换内嵌的 `exe_el` 解密密钥。
-- **`--lang`**：应用语言预设（`chs` 或 `eng`）或自定义 JSON 映射，使引擎加载不同的 `.pck` 文件、存档目录和字符编码。
-- **`--loc`**：切换内置的仅限日本地区检测（`0` = 关闭/强制通过，`1` = 开启/恢复原始检测）。
+- **`--lang`**：应用语言预设（`chs` 或 `eng`）或自定义 JSON 映射，修改引擎使用的语言槽位、`.pck` 文件和存档目录。
+- **`--info`**：只读预览目标 exe 里可被 `-p` 修改的 `ALTKEY`、`LANG` 和 `LOC` 信息。
+- **`--loc`**：切换内置地域检测（`0` = 关闭/强制通过，`1` = 仅恢复本工具写入的函数桩补丁）。
 
 #### 语法
 
@@ -1159,6 +1163,9 @@ siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
 
 # 应用语言补丁
 siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace]
+
+# 只读预览可修改信息
+siglus-ssu -p --info <input_exe>
 
 # 切换地域检测
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
@@ -1175,39 +1182,67 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--lang chs` | 应用内置简体中文预设。 |
 | `--lang eng` | 应用内置英文预设。 |
 | `--lang <json>` | 应用自定义 JSON 规格的补丁（见下文）。这里的 `<json>` 是**内联 JSON 字符串**，不是 JSON 文件路径。 |
-| `--loc 0` | 关闭地域检测，强制让 Japan-only 检查返回成功。 |
-| `--loc 1` | 开启地域检测，恢复原始 Japan-only 检查。 |
+| `--info` | 打印可修改的 `ALTKEY`、`LANG`、`LOC` 信息后退出。不写文件，并拒绝 `-o` / `--inplace`。 |
+| `--loc 0` | 关闭地域检测，把匹配到的顶层检测函数改成 3 字节的强制通过桩。 |
+| `--loc 1` | 仅对之前由本工具写入函数桩的 exe 恢复地域检测。若 build 含糊、分支已被别的方法改动或不受支持，则拒绝修改。 |
 
 #### 语言补丁预设
 
 **`--lang chs`** 执行以下修改：
-- 将 `lfCharSet` 设为 `0x86`（GBK/GB2312 中文）。
-- 替换：`Scene.pck` → `Scene.chs`，`savedata` → `savechs`，`japanese` → `chinese`，`Gameexe.dat` → `Gameexe.chs`。
+- 将 `charset1` 设为 `0x00`，将 `charset2` 设为 `0x86`。
+- 替换 standalone 槽位：`japanese` → `chinese`，`ja` → `zh`，`Scene.pck` → `Scene.chs`，`savedata` → `savechs`。
+- 将所有定长 `Gameexe.dat` 命中改为 `Gameexe.chs`，包括用户可见的提示文本。
 
 **`--lang eng`** 执行以下修改：
-- 将 `lfCharSet` 设为 `0x00`（ANSI/Latin）。
-- 替换：`Scene.pck` → `Scene.eng`，`savedata` → `saveeng`，`japanese` → `english`，`Gameexe.dat` → `Gameexe.eng`。
+- 将 `charset1` 设为 `0x00`，将 `charset2` 设为 `0x00`。
+- 替换 standalone 槽位：`japanese` → `english`，`ja` → `en`，`Scene.pck` → `Scene.eng`，`savedata` → `saveeng`。
+- 将所有定长 `Gameexe.dat` 命中改为 `Gameexe.eng`，包括用户可见的提示文本。
+
+内置 `chs` / `eng` 只有在当前布局符合已知安全模式 `charset1=0x00` 且 `charset2=0x00` / `0x80` / `0x86` 时才会自动写入 charset 槽位。若目标 build 使用了不同布局，预设会拒绝修改这些槽位，此时请改用显式指定 `charset1` / `charset2` 的自定义 JSON。
+
+如果目标 build 缺少某些预期的 locale/code/path 槽位，内置预设仍会把能找到的命中写进去，但会打印警告，提示结果可能只是部分完成的 patch。
+
+#### Charset 槽位
+
+`--info` 会显示两个 charset 槽位：`charset1` 和 `charset2`。在当前支持的 build 里，引擎会在构建字体列表时使用两个独立的 `lfCharSet` 比较位点。
+
+- `charset1` 是第一个匹配到的比较位点，也就是文件偏移更小的那个。
+- `charset2` 是第二个匹配到的比较位点，也就是文件偏移更大的那个。
+
+结合旧版 Tona3 / Siglus 源码，这几个常见值的筛选规则如下：
+
+- `0x00`（`ANSI_CHARSET`）：保留 `ANSI` 和 `SHIFTJIS` 字体项；如果同一个字体名同时存在这两种项，则优先保留 `SHIFTJIS` 那项。
+- `0x80`（`SHIFTJIS_CHARSET`）：只保留 `SHIFTJIS` 字体项。
+- `0x86`（`GB2312_CHARSET`）：只保留 `GB2312` 字体项。
+
+当前支持的常见 build 里，一个槽位通常对应运行时正文使用的字体列表，另一个槽位通常对应字体设置窗口使用的列表。内置预设依赖当前已知安全的槽位顺序；如果你的 build 不同，请使用自定义 JSON 显式控制两个槽位。
 
 #### 自定义 JSON `--lang` 配置
 
 ```json
 {
-  "charset": 0,
+  "charset1": 0,
+  "charset2": 0,
   "suffix": "ENG",
   "replace": {
     "Scene.pck": "Scene.eng",
     "savedata": "saveeng"
   },
+  "standalone_only": ["Scene.pck"],
   "skip_standalone": ["savedata"]
 }
 ```
 
 | JSON 字段 | 说明 |
 |---|---|
-| `charset` | 目标 `lfCharSet` 值。接受 `0`/`"eng"`（ANSI）、`128`/`"jp"`（Shift-JIS）、`134`/`"chs"`（GBK），或任意整数。 |
+| `charset1` | 第一个 charset 槽位的值。接受 `0`/`"eng"`（ANSI）、`128`/`"jp"`（Shift-JIS）、`134`/`"chs"`（GBK），或任意整数。 |
+| `charset2` | 第二个 charset 槽位的值。接受 `0`/`"eng"`（ANSI）、`128`/`"jp"`（Shift-JIS）、`134`/`"chs"`（GBK），或任意整数。 |
 | `suffix` | 默认输出文件名的后缀（如 `"ENG"` → `SiglusEngine_ENG.exe`）。 |
 | `replace` | 旧字符串 → 新字符串的映射对象（UTF-16LE 原地替换）。新字符串不得比旧字符串长。 |
+| `standalone_only` | 只在旧字符串作为被 NUL 包围的 standalone UTF-16LE 槽位时才执行替换。 |
 | `skip_standalone` | 当旧字符串以 NUL 字节为邻（即在内存中孤立出现而非路径的一部分）时跳过替换的字符串列表。 |
+
+同一个源字符串只能出现在 `standalone_only` 或 `skip_standalone` 其中之一，不能同时出现在两者中。
 
 #### 示例
 
@@ -1228,7 +1263,10 @@ siglus-ssu -p --lang eng /path/to/SiglusEngine.exe
 siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
 
 # 应用自定义 JSON 语言补丁
-siglus-ssu -p --lang '{"charset":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+siglus-ssu -p --lang '{"charset1":0,"charset2":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
+
+# 只读预览当前可修改信息
+siglus-ssu -p --info /path/to/SiglusEngine.exe
 
 # 关闭地域检测
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
@@ -1255,6 +1293,22 @@ Applied changes: N bytes
 Written: /path/to/SiglusEngine_ENG.exe
 ```
 
+`--info` 会输出只读预览，而不会写文件：
+
+```
+Input : /path/to/SiglusEngine.exe
+SHA256: abc123...
+ALTKEY: 0xAA, 0xBB, ...
+LANG charset1: 0x201AC8=0x00 (eng/ansi)
+LANG charset2: 0x2BE0E3=0x80 (jp/shift-jis)
+LANG Locale : japanese @ 0x677C94
+LANG Code   : ja @ 0x64FC6C
+LANG Scene  : Scene.pck @ 0x66D208
+LANG Save   : savedata @ 0x66D814
+LANG Gameexe: Gameexe.dat x4 (last @ 0x677C30)
+LOC   : enabled (original function, func=0x22BF20)
+```
+
 使用 `--loc` 时，还会额外打印修改前后的开关状态：
 
 ```
@@ -1268,6 +1322,8 @@ Applied changes: 3 bytes
  - region detection: enabled -> disabled (3 bytes)
 Written: /path/to/SiglusEngine_LOC0.exe
 ```
+
+`--loc` 采用偏保守的匹配方式：会去找地域检测 helper 外围的顶层受保护 wrapper。若 build 含糊或不受支持，则会直接拒绝修改，而不是猜测后强行 patch。
 
 
 <a id="siglusss-language-spec"></a>

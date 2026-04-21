@@ -360,6 +360,14 @@ def _unpack_tnm_data(enc):
     return bytes(lzss_unpack(bytes(b)))
 
 
+def _pack_tnm_data(raw):
+    if not raw:
+        return b""
+    b = bytearray(lzss_pack(raw))
+    xor_cycle_inplace(b, C.TPC, 0)
+    return bytes(b)
+
+
 class _SaveStreamReader:
     __slots__ = ("buf", "pos", "size_t_size")
 
@@ -422,7 +430,7 @@ class _SaveStreamReader:
         return (int(self.i32()), int(self.i32()))
 
 
-def _read_fixed_array_header(r, item_size=None):
+def _read_fixed_array_header(r, item_size=None, meta=None):
     start = r.tell()
     if start + 8 > len(r.buf):
         raise ValueError("eof")
@@ -434,37 +442,63 @@ def _read_fixed_array_header(r, item_size=None):
         need = start + 8 + cnt * int(item_size)
         if need > jump:
             raise ValueError("bad fixed array")
+    if meta is not None:
+        meta["header_offset"] = int(start)
+        meta["data_offset"] = int(start + 8)
+        meta["jump_offset"] = int(jump)
+        meta["count"] = int(cnt)
     r.seek(start + 8)
     return jump, cnt
 
 
-def _read_fixed_int_list(r):
-    jump, cnt = _read_fixed_array_header(r, item_size=4)
+def _read_fixed_int_list(r, meta=None):
+    jump, cnt = _read_fixed_array_header(r, item_size=4, meta=meta)
     data = r._read(cnt * 4)
+    if meta is not None:
+        meta["data_end"] = int(r.tell())
     out = list(struct.unpack_from(f"<{cnt:d}i", data, 0)) if cnt else []
     r.seek(jump)
     return out
 
 
-def _read_fixed_str_list(r):
-    jump, cnt = _read_fixed_array_header(r)
+def _read_fixed_str_list(r, meta=None):
+    jump, cnt = _read_fixed_array_header(r, meta=meta)
     out = []
     for _ in range(cnt):
         out.append(r.str_u16())
+    if meta is not None:
+        meta["data_end"] = int(r.tell())
     r.seek(jump)
     return out
 
 
-def _parse_global_payload(raw, major, minor, *, size_t_size=4):
+def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False):
     r = _SaveStreamReader(raw, size_t_size=size_t_size)
     out = {}
+    layout = {"size_t_size": int(size_t_size)} if with_layout else None
+    if layout is not None:
+        layout["global_real_time_offset"] = int(r.tell())
     out["global_real_time"] = (
         int(r.i64()) if (major > 1 or (major == 1 and minor >= 2)) else 0
     )
-    out["G"] = _read_fixed_int_list(r)
-    out["Z"] = _read_fixed_int_list(r)
-    out["M"] = _read_fixed_str_list(r)
-    out["global_namae"] = _read_fixed_str_list(r)
+    meta = {} if with_layout else None
+    out["G"] = _read_fixed_int_list(r, meta=meta)
+    if layout is not None:
+        layout["G"] = meta
+    meta = {} if with_layout else None
+    out["Z"] = _read_fixed_int_list(r, meta=meta)
+    if layout is not None:
+        layout["Z"] = meta
+    meta = {} if with_layout else None
+    out["M"] = _read_fixed_str_list(r, meta=meta)
+    if layout is not None:
+        layout["M"] = meta
+    meta = {} if with_layout else None
+    out["global_namae"] = _read_fixed_str_list(r, meta=meta)
+    if layout is not None:
+        layout["global_namae"] = meta
+    if layout is not None:
+        layout["dummy_check_id_offset"] = int(r.tell())
     out["dummy_check_id"] = int(r.u32())
     p = r.tell()
     if p + 12 <= len(raw):
@@ -473,7 +507,10 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4):
         c = struct.unpack_from("<i", raw, p + 8)[0]
         if a == 0 and (p + 12) <= b <= len(raw) and 0 <= c <= 200000:
             r.seek(p + 4)
-    out["cg_table"] = _read_fixed_int_list(r)
+    meta = {} if with_layout else None
+    out["cg_table"] = _read_fixed_int_list(r, meta=meta)
+    if layout is not None:
+        layout["cg_table"] = meta
     p = r.tell()
     has_bgm = False
     if p + 8 <= len(raw):
@@ -482,19 +519,37 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4):
         if (p + 8) <= j <= len(raw) and n >= 0 and (p + 8 + n * 4) <= j:
             has_bgm = True
     if has_bgm:
-        out["bgm_table"] = _read_fixed_int_list(r)
+        meta = {} if with_layout else None
+        out["bgm_table"] = _read_fixed_int_list(r, meta=meta)
+        if layout is not None:
+            layout["bgm_table"] = meta
     else:
         out["bgm_table"] = []
+        if layout is not None:
+            layout["bgm_table"] = None
+    if layout is not None:
+        layout["chrkoe_count_offset"] = int(r.tell())
     cnt = int(r.sizet())
+    if layout is not None:
+        layout["chrkoe_count"] = int(cnt)
+        layout["chrkoe_look_flag_offsets"] = []
     chrkoe = []
     for _ in range(cnt):
         name = r.str_u16()
+        look_pos = r.tell()
         look = bool(r.bool1())
         chrkoe.append({"name_str": name, "look_flag": look})
+        if layout is not None:
+            layout["chrkoe_look_flag_offsets"].append(int(look_pos))
     out["chrkoe"] = chrkoe
     tail = raw[r.tell() :]
+    if layout is not None:
+        layout["tail_offset"] = int(r.tell())
+        layout["tail_size"] = int(len(tail))
     if tail and any(x != 0 for x in tail):
         out["_tail_hex"] = tail.hex()
+    if with_layout:
+        return out, layout
     return out
 
 
@@ -586,6 +641,19 @@ def _try_parse_global_payload(raw, major, minor):
         except Exception as e:
             last_err = str(e)
     return None, None, last_err or "eof"
+
+
+def _try_parse_global_payload_with_layout(raw, major, minor):
+    last_err = None
+    for sz in (4, 8):
+        try:
+            d, layout = _parse_global_payload(
+                raw, major, minor, size_t_size=sz, with_layout=True
+            )
+            return d, {"size_t_size": sz}, layout, None
+        except Exception as e:
+            last_err = str(e)
+    return None, None, None, last_err or "eof"
 
 
 def _try_parse_config_payload(raw, major, minor):
@@ -766,12 +834,66 @@ def looks_like_sav(blob):
     return _detect_kind(blob) is not None
 
 
+def _set_fixed_int_list_all(buf, meta, value):
+    if not meta:
+        return 0
+    cnt = int(meta.get("count") or 0)
+    if cnt <= 0:
+        return 0
+    data_offset = int(meta["data_offset"])
+    struct.pack_into(f"<{cnt:d}i", buf, data_offset, *([int(value)] * cnt))
+    return cnt
+
+
+def _parse_global_for_patch(blob):
+    k = _try_parse_global_or_config(blob)
+    if k is None or k["kind"] != "global":
+        raise ValueError("not global.sav")
+    enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
+    raw = _unpack_tnm_data(enc)
+    payload, variant, layout, err = _try_parse_global_payload_with_layout(
+        raw, k["major"], k["minor"]
+    )
+    if payload is None or layout is None:
+        raise ValueError(f"global.sav: {err or 'parse failed'}")
+    return {
+        **k,
+        "raw": raw,
+        "payload": payload,
+        "payload_variant": variant,
+        "payload_layout": layout,
+    }
+
+
+def _readall_global(blob):
+    info = _parse_global_for_patch(blob)
+    raw = bytearray(info["raw"])
+    layout = info["payload_layout"]
+    _set_fixed_int_list_all(raw, layout.get("cg_table"), 1)
+    _set_fixed_int_list_all(raw, layout.get("bgm_table"), 1)
+    for off in layout.get("chrkoe_look_flag_offsets") or []:
+        raw[int(off)] = 1
+    enc = _pack_tnm_data(bytes(raw))
+    tail = blob[12 + int(info["data_size"]) :]
+    out = bytearray()
+    out.extend(
+        struct.pack("<3i", int(info["major"]), int(info["minor"]), int(len(enc)))
+    )
+    out.extend(enc)
+    if tail:
+        out.extend(tail)
+    return bytes(out)
+
+
 def readall(blob):
-    if (not blob) or len(blob) < 24:
-        raise ValueError("read.sav: too small")
+    kind = _detect_kind(blob)
+    if kind is None:
+        raise ValueError("not a supported .sav")
+    if kind["kind"] == "global":
+        return _readall_global(blob)
+    if kind["kind"] != "read":
+        raise ValueError("--readall supports read.sav and global.sav only")
     major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
-    if int(major) != 1:
-        raise ValueError("not read.sav")
     if int(data_size) <= 0 or int(data_size) > (len(blob) - 16):
         raise ValueError("read.sav: bad data_size")
     enc = bytearray(blob[16 : 16 + int(data_size)])
@@ -802,9 +924,7 @@ def readall(blob):
         if int(cnt) > 0:
             mv[q : q + int(cnt)] = b"\x01" * int(cnt)
         q += int(cnt)
-    packed = lzss_pack(bytes(u))
-    enc2 = bytearray(packed)
-    xor_cycle_inplace(enc2, C.TPC, 0)
+    enc2 = _pack_tnm_data(bytes(u))
     tail = blob[16 + int(data_size) :]
     out = bytearray()
     out.extend(struct.pack("<4i", int(major), int(minor), len(enc2), int(scn_cnt)))

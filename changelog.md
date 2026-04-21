@@ -3,6 +3,13 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Added `siglus-ssu -a --readall <global.sav>` support. It now unlocks engine-managed global collection fields in-place, including `cg_table`, `bgm_table`, and `chrkoe.look_flag`, while leaving unrelated generic global flag arrays untouched.
+- Added `siglus-ssu -p --info <input_exe>` to print a read-only preview of patchable `ALTKEY`, `LANG`, and `LOC` slots without writing a file.
+- Changed built-in `-p --lang chs` / `eng` presets to use explicit `charset1` / `charset2` pairs, rewrite standalone locale/code/path slots more conservatively, rewrite all fixed-length `Gameexe.dat` hits so user-facing prompt text stays in sync, and refuse unknown charset-slot layouts instead of guessing.
+
+
 ## [v0.2.4] - 2026-04-19
 
 - Added `-s --play` support for legacy `.nwa` BGM files.
