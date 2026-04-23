@@ -32,6 +32,7 @@
    - [-s / --sound — 处理音频文件](#-s----sound--处理音频文件)
    - [-v / --video — 处理 `.omv` 视频文件](#-v----video--处理-omv-视频文件)
    - [-p / --patch — 修改 `SiglusEngine.exe`](#-p----patch--修改-siglusengineexe)
+   - [-t / --tutorial — 生成静态剧情图](#-t----tutorial--生成静态剧情图)
 5. [SiglusSceneScript语言规范（简称 SiglusSS语言；以 -c 编译器为定义）](#siglusss-language-spec)
 6. [提示与故障排除](#提示与故障排除)
 
