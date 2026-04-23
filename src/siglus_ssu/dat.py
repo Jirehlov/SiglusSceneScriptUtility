@@ -157,7 +157,14 @@ def _build_read_flag_defs(read_flag_list):
 
 
 def dat_disassembly_bundle(
-    blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
+    blob,
+    dat_path=None,
+    *,
+    pack_context=None,
+    scene_no=None,
+    scene_name=None,
+    emit_text=True,
+    trace_profile=None,
 ):
     try:
         decompiler_excluded = is_decompiler_excluded_dat(dat_path, scene_name)
@@ -205,6 +212,8 @@ def dat_disassembly_bundle(
             namae_defs=namae_defs,
             read_flag_defs=read_flag_defs,
             with_trace=True,
+            emit_text=emit_text,
+            trace_profile=trace_profile,
         )
         if isinstance(dis_res, tuple) and len(dis_res) >= 2:
             dis, trace = dis_res[0], dis_res[1]

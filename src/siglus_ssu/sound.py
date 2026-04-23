@@ -222,36 +222,28 @@ def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
         return out
 
 
+def extract_ogg_bytes_from_ovk_record(ovk_path: str, entry: OVKEntry) -> bytes:
+    with open(ovk_path, "rb") as f:
+        f.seek(entry.offset)
+        chunk = f.read(entry.size)
+        if len(chunk) != entry.size:
+            raise EOFError("Unexpected EOF while reading ovk chunk")
+    chunk = _xor_decrypt_ogg_auto(chunk)
+    if len(chunk) < 4 or chunk[:4] != b"OggS":
+        raise ValueError("OVK entry is not OggS after decryption attempt")
+    return chunk
+
+
 def extract_ogg_bytes_from_ovk_entry(ovk_path: str, entry_no: int) -> bytes:
-    entries = read_ovk_table(ovk_path)
-    for e in entries:
-        if e.entry_no == entry_no:
-            with open(ovk_path, "rb") as f:
-                f.seek(e.offset)
-                chunk = f.read(e.size)
-                if len(chunk) != e.size:
-                    raise EOFError("Unexpected EOF while reading ovk chunk")
-            chunk = _xor_decrypt_ogg_auto(chunk)
-            if len(chunk) < 4 or chunk[:4] != b"OggS":
-                raise ValueError("OVK entry is not OggS after decryption attempt")
-            return chunk
+    for entry in read_ovk_table(ovk_path):
+        if entry.entry_no == entry_no:
+            return extract_ogg_bytes_from_ovk_record(ovk_path, entry)
     raise KeyError(f"Entry not found: entry_no={entry_no}")
 
 
 def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
-    entries = read_ovk_table(ovk_path)
-    with open(ovk_path, "rb") as f:
-        for e in entries:
-            f.seek(e.offset)
-            chunk = f.read(e.size)
-            if len(chunk) != e.size:
-                raise EOFError("Unexpected EOF while reading ovk chunk")
-            chunk = _xor_decrypt_ogg_auto(chunk)
-            if len(chunk) < 4 or chunk[:4] != b"OggS":
-                raise ValueError(
-                    f"OVK entry is not OggS after decryption attempt (entry_no={e.entry_no})"
-                )
-            yield e.entry_no, chunk
+    for entry in read_ovk_table(ovk_path):
+        yield entry.entry_no, extract_ogg_bytes_from_ovk_record(ovk_path, entry)
 
 
 NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")

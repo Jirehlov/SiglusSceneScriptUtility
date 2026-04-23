@@ -134,6 +134,8 @@ def _iter_scene_bundles(scene_root: str):
                     pack_context=pack_context,
                     scene_no=scene_no,
                     scene_name=scene_name,
+                    emit_text=False,
+                    trace_profile="koe",
                 )
             except Exception:
                 bundle = None
@@ -147,7 +149,9 @@ def _iter_scene_bundles(scene_root: str):
         except Exception:
             continue
         try:
-            bundle = dat.dat_disassembly_bundle(blob, dat_path)
+            bundle = dat.dat_disassembly_bundle(
+                blob, dat_path, emit_text=False, trace_profile="koe"
+            )
         except Exception:
             bundle = None
         if isinstance(bundle, dict):
@@ -425,6 +429,7 @@ def _rank_ovk_path(voice_dir: str, zname: str, path: str):
 def _index_ovk(voice_dir: str):
     scene_map = {}
     entries = {}
+    ovk_entry_map = {}
     ovk_files = 0
     z_files = 0
     entry_count = 0
@@ -458,6 +463,7 @@ def _index_ovk(voice_dir: str):
         except Exception:
             table_failed += 1
             continue
+        ovk_entry_map[full] = {int(e.entry_no): e for e in table}
         for e in table:
             entry_count += 1
             koe_no = scene_no * 100000 + int(e.entry_no)
@@ -468,7 +474,15 @@ def _index_ovk(voice_dir: str):
                     "callsites": set(),
                     "chara_no": -1,
                 }
-    return scene_map, entries, ovk_files, z_files, entry_count, table_failed
+    return (
+        scene_map,
+        entries,
+        ovk_entry_map,
+        ovk_files,
+        z_files,
+        entry_count,
+        table_failed,
+    )
 
 
 def _select_ovk(scene_map: dict, voice_dir: str, scene_no: int, chara_no: int):
@@ -543,9 +557,15 @@ def main(argv=None):
         scene_root = ""
         voice_dir, out_dir = pos
     os.makedirs(out_dir, exist_ok=True)
-    scene_map, entries, ovk_files, z_files, entry_count, table_failed = _index_ovk(
-        voice_dir
-    )
+    (
+        scene_map,
+        entries,
+        ovk_entry_map,
+        ovk_files,
+        z_files,
+        entry_count,
+        table_failed,
+    ) = _index_ovk(voice_dir)
     if single_koe_no is None:
         call_refs, scene_files = _scan_calls(scene_root)
         if scene_files <= 0:
@@ -629,11 +649,12 @@ def main(argv=None):
                 ovk_path = _select_ovk(
                     scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
                 )
+                entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
+                if entry is None:
+                    raise KeyError(f"Entry not found: entry_no={entry_no}")
                 ogg = b""
                 if should_extract or ((not is_unref) and (not duration_done)):
-                    ogg = sound.extract_ogg_bytes_from_ovk_entry(
-                        ovk_path, int(entry_no)
-                    )
+                    ogg = sound.extract_ogg_bytes_from_ovk_record(ovk_path, entry)
                 if should_extract:
                     os.makedirs(dest_dir, exist_ok=True)
                     write_bytes(out_path, ogg)
@@ -680,11 +701,12 @@ def main(argv=None):
                 entry_no = koe_no % 100000
                 try:
                     ovk_path = _select_ovk(scene_map, voice_dir, scene_no, -1)
+                    entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
+                    if entry is None:
+                        raise KeyError(f"Entry not found: entry_no={entry_no}")
                     ogg = b""
                     if should_extract or (not duration_done):
-                        ogg = sound.extract_ogg_bytes_from_ovk_entry(
-                            ovk_path, int(entry_no)
-                        )
+                        ogg = sound.extract_ogg_bytes_from_ovk_record(ovk_path, entry)
                     if should_extract:
                         os.makedirs(out_dir, exist_ok=True)
                         write_bytes(out_path, ogg)

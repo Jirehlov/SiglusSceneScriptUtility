@@ -1,3 +1,4 @@
+from functools import lru_cache
 from types import SimpleNamespace
 from ._const_manager import get_const_module
 from .common import (
@@ -19,6 +20,33 @@ from .common import (
 )
 
 C = get_const_module()
+_DISAM_OP_NAMES = (
+    "CD_NONE",
+    "CD_NL",
+    "CD_PUSH",
+    "CD_POP",
+    "CD_COPY",
+    "CD_PROPERTY",
+    "CD_COPY_ELM",
+    "CD_DEC_PROP",
+    "CD_ELM_POINT",
+    "CD_ARG",
+    "CD_GOTO",
+    "CD_GOTO_TRUE",
+    "CD_GOTO_FALSE",
+    "CD_GOSUB",
+    "CD_GOSUBSTR",
+    "CD_RETURN",
+    "CD_EOF",
+    "CD_ASSIGN",
+    "CD_OPERATE_1",
+    "CD_OPERATE_2",
+    "CD_COMMAND",
+    "CD_TEXT",
+    "CD_NAME",
+    "CD_SEL_BLOCK_START",
+    "CD_SEL_BLOCK_END",
+)
 
 
 def _int_or_none(value):
@@ -191,6 +219,34 @@ def _build_array_element_index():
     except Exception:
         return out
     return out
+
+
+@lru_cache(maxsize=1)
+def _shared_disassembly_tables():
+    form_rev = invert_form_code_map()
+    op_names = {int(getattr(C, nm)): nm for nm in _DISAM_OP_NAMES}
+    read_flag_command_codes = _read_flag_command_codes()
+    elm_exact = _build_system_element_index()
+    elm_array_exact = _build_array_element_index()
+    receiver_forms = set()
+    receiver_forms.update(int(key[0]) for key in elm_exact)
+    receiver_forms.update(int(key) for key in elm_array_exact)
+    receiver_forms = frozenset(augment_receiver_form_codes(receiver_forms))
+    unary_int_ops, string_cmp_ops, unary_text, binary_text = (
+        build_operator_render_tables()
+    )
+    return (
+        form_rev,
+        op_names,
+        read_flag_command_codes,
+        elm_exact,
+        elm_array_exact,
+        receiver_forms,
+        unary_int_ops,
+        string_cmp_ops,
+        unary_text,
+        binary_text,
+    )
 
 
 def new_expression_state(
@@ -660,8 +716,8 @@ def new_expression_state(
 
     def _snapshot_state():
         return (
-            [dict(it) if isinstance(it, dict) else it for it in state.stack],
-            [dict(it) if isinstance(it, dict) else it for it in state.elm_points],
+            list(state.stack),
+            list(state.elm_points),
             state.elm_point_pending_idx,
         )
 
@@ -934,6 +990,8 @@ def disassemble_scn_bytes(
     namae_defs=None,
     read_flag_defs=None,
     with_trace=False,
+    emit_text=True,
+    trace_profile=None,
 ):
     z_label_list = z_label_list or []
     pack_context = dict(pack_context or {})
@@ -960,38 +1018,38 @@ def disassemble_scn_bytes(
                     scene_name = str(scene_names[sn_i] or "")
         except Exception:
             scene_name = ""
-    form_rev = invert_form_code_map()
-    op_names = {}
-    for nm in (
-        "CD_NONE",
-        "CD_NL",
-        "CD_PUSH",
-        "CD_POP",
-        "CD_COPY",
-        "CD_PROPERTY",
-        "CD_COPY_ELM",
-        "CD_DEC_PROP",
-        "CD_ELM_POINT",
-        "CD_ARG",
-        "CD_GOTO",
-        "CD_GOTO_TRUE",
-        "CD_GOTO_FALSE",
-        "CD_GOSUB",
-        "CD_GOSUBSTR",
-        "CD_RETURN",
-        "CD_EOF",
-        "CD_ASSIGN",
-        "CD_OPERATE_1",
-        "CD_OPERATE_2",
-        "CD_COMMAND",
-        "CD_TEXT",
-        "CD_NAME",
-        "CD_SEL_BLOCK_START",
-        "CD_SEL_BLOCK_END",
-    ):
-        op_names[int(getattr(C, nm))] = nm
-    read_flag_command_codes = _read_flag_command_codes()
-    _form_code = C.resolve_form_code
+    (
+        form_rev,
+        op_names,
+        read_flag_command_codes,
+        elm_exact,
+        elm_array_exact,
+        receiver_forms,
+        unary_int_ops,
+        string_cmp_ops,
+        unary_text,
+        binary_text,
+    ) = _shared_disassembly_tables()
+    _form_codes = C._FORM_CODE if isinstance(C._FORM_CODE, dict) else {}
+
+    def _form_code(value):
+        if isinstance(value, int):
+            return int(value)
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return int(text, 0)
+        except Exception:
+            pass
+        got = _form_codes.get(text)
+        if got is None:
+            return None
+        try:
+            return int(got)
+        except Exception:
+            return None
+
     cd_none = C.CD_NONE
     cd_nl = C.CD_NL
     cd_push = C.CD_PUSH
@@ -1032,12 +1090,6 @@ def disassemble_scn_bytes(
         if o is None:
             continue
         labels_at.setdefault(o, []).append(f"Z{i:d}")
-    elm_exact = _build_system_element_index()
-    elm_array_exact = _build_array_element_index()
-    receiver_forms = set()
-    receiver_forms.update(int(key[0]) for key in elm_exact)
-    receiver_forms.update(int(key) for key in elm_array_exact)
-    receiver_forms = augment_receiver_form_codes(receiver_forms)
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))
     except Exception:
@@ -1163,9 +1215,6 @@ def disassemble_scn_bytes(
     fm_intlist = _form_code(C.FM_INTLIST)
     fm_strlist = _form_code(C.FM_STRLIST)
     scalar_forms = {int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)}
-    unary_int_ops, string_cmp_ops, unary_text, binary_text = (
-        build_operator_render_tables()
-    )
 
     def fmt_form(f):
         try:
@@ -1777,8 +1826,8 @@ def disassemble_scn_bytes(
 
     def _snapshot_state():
         return (
-            [dict(it) if isinstance(it, dict) else it for it in stack],
-            [dict(it) if isinstance(it, dict) else it for it in elm_points],
+            list(stack),
+            list(elm_points),
             elm_point_pending_idx,
         )
 
@@ -2110,18 +2159,26 @@ def disassemble_scn_bytes(
             out_args.append(one)
         return out_args
 
+    render_text = bool(emit_text)
+    koe_trace = trace_profile == "koe"
     out = []
     trace = [] if with_trace else None
+
+    def _emit(make_line):
+        if not render_text:
+            return
+        out.append(make_line() if callable(make_line) else make_line)
 
     def _trace(opname, ofs, **fields):
         if trace is None:
             return
         one = {
             "op": str(opname or ""),
-            "ofs": int(ofs),
             "line": (int(cur_line) if cur_line is not None else None),
-            "labels": list(labels_at.get(int(ofs), []) or []),
         }
+        if not koe_trace:
+            one["ofs"] = int(ofs)
+            one["labels"] = list(labels_at.get(int(ofs), []) or [])
         for key, value in fields.items():
             one[key] = value
         trace.append(one)
@@ -2139,55 +2196,59 @@ def disassemble_scn_bytes(
             call_decl_forms = []
             call_slot_next = 0
         if ofs in labels_at:
-            out.append(f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
+            _emit(lambda: f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
         op = read_u8(i)
         if op is None:
             break
         i += 1
         opname = op_names.get(op, f"OP_{op:02X}")
         if op == cd_none:
-            out.append(f"{ofs:08X}: {opname}")
+            _emit(lambda: f"{ofs:08X}: {opname}")
             _trace(opname, ofs)
             continue
         if op == cd_nl:
             ln = read_i32(i)
             if ln is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
             cur_line = int(ln)
-            out.append(f"{ofs:08X}: {opname} {cur_line:d}")
-            nl_fields = {"value": int(cur_line)}
-            rf_ids = _read_flag_ids_for_line(cur_line)
-            if rf_ids:
-                nl_fields["read_flag_ids"] = rf_ids
+            _emit(lambda: f"{ofs:08X}: {opname} {cur_line:d}")
+            nl_fields = {}
+            if not koe_trace:
+                nl_fields["value"] = int(cur_line)
+                rf_ids = _read_flag_ids_for_line(cur_line)
+                if rf_ids:
+                    nl_fields["read_flag_ids"] = rf_ids
             _trace(opname, ofs, **nl_fields)
             continue
         if op == cd_push:
             form = read_i32(i)
             val = read_i32(i + 4)
             if form is None or val is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 8
-            s = ""
-            if int(form) == _form_code(C.FM_STR) and 0 <= int(val) < len(
-                str_list or []
-            ):
-                s = f' ; "{_escape_preview(str_list[int(val)])}"'
-            out.append(f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
-            _trace(
-                opname,
-                ofs,
-                form=int(form),
-                value=int(val),
-                text=(
-                    str(str_list[int(val)])
-                    if int(form) == _form_code(C.FM_STR)
-                    and 0 <= int(val) < len(str_list or [])
-                    else None
-                ),
-            )
+            if render_text:
+                s = ""
+                if int(form) == _form_code(C.FM_STR) and 0 <= int(val) < len(
+                    str_list or []
+                ):
+                    s = f' ; "{_escape_preview(str_list[int(val)])}"'
+                _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
+            push_fields = {}
+            if not koe_trace:
+                push_fields = {
+                    "form": int(form),
+                    "value": int(val),
+                    "text": (
+                        str(str_list[int(val)])
+                        if int(form) == _form_code(C.FM_STR)
+                        and 0 <= int(val) < len(str_list or [])
+                        else None
+                    ),
+                }
+            _trace(opname, ofs, **push_fields)
             _push_stack_value(form, int(val), receiver=False)
             if elm_point_pending_idx is not None and int(form) == _form_code(C.FM_INT):
                 pending_idx = _int_or_none(elm_point_pending_idx)
@@ -2203,26 +2264,26 @@ def disassemble_scn_bytes(
         if op == cd_pop:
             form = read_i32(i)
             if form is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
-            out.append(f"{ofs:08X}: {opname} {fmt_form(form)}")
+            _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(form)}")
             try:
                 form_i = int(form)
             except Exception:
                 form_i = None
-            _trace(opname, ofs, form=form_i)
+            _trace(opname, ofs, **({} if koe_trace else {"form": form_i}))
             if form_i in scalar_forms:
                 _pop_stack_top()
             continue
         if op == cd_copy:
             v = read_i32(i)
             if v is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
-            out.append(f"{ofs:08X}: {opname} {fmt_form(v)}")
-            _trace(opname, ofs, form=int(v))
+            _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(v)}")
+            _trace(opname, ofs, **({} if koe_trace else {"form": int(v)}))
             _copy_scalar(v)
             continue
         if op in (
@@ -2237,20 +2298,25 @@ def disassemble_scn_bytes(
             if op == cd_property:
                 prop_res = _resolve_property_expr()
                 if prop_res is not None:
-                    rendered = _render_property_expr_items(
-                        stack[prop_res.get("stack_start", 0) :]
-                    )
-                    if isinstance(rendered, dict):
-                        prop_expr = rendered.get("expr")
+                    if render_text:
+                        rendered = _render_property_expr_items(
+                            stack[prop_res.get("stack_start", 0) :]
+                        )
+                        if isinstance(rendered, dict):
+                            prop_expr = rendered.get("expr")
                     _collapse_value_expr(
                         prop_res.get("stack_start"),
                         prop_res.get("ret_form"),
-                        expr=prop_expr,
+                        expr=(prop_expr if render_text else None),
                     )
                 else:
                     stack_start = latest_stack_start(elm_points, len(stack))
                     if stack_start is not None:
-                        rendered = _render_property_expr_items(stack[stack_start:])
+                        rendered = (
+                            _render_property_expr_items(stack[stack_start:])
+                            if render_text
+                            else None
+                        )
                         prop_expr = (
                             rendered.get("expr") if isinstance(rendered, dict) else None
                         )
@@ -2265,7 +2331,11 @@ def disassemble_scn_bytes(
                             except Exception:
                                 form_i = None
                             out_form = _receiver_value_form(form_i)
-                        _collapse_value_expr(stack_start, out_form, expr=prop_expr)
+                        _collapse_value_expr(
+                            stack_start,
+                            out_form,
+                            expr=(prop_expr if render_text else None),
+                        )
                     else:
                         _pop_stack_top()
             elif op == cd_copy_elm:
@@ -2278,37 +2348,25 @@ def disassemble_scn_bytes(
                     {"ofs": ofs, "stack_len": len(stack), "first_int": None}
                 )
                 elm_point_pending_idx = len(elm_points) - 1
-            expr_s = f" ; expr={prop_expr}" if prop_expr else ""
-            out.append(f"{ofs:08X}: {opname}{expr_s}")
+            if render_text:
+                expr_s = f" ; expr={prop_expr}" if prop_expr else ""
+                _emit(lambda: f"{ofs:08X}: {opname}{expr_s}")
             _trace(opname, ofs)
             continue
         if op == cd_dec_prop:
             a = read_i32(i)
             b = read_i32(i + 4)
             if a is None or b is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 8
-            size_s = ""
-            size_expr_s = ""
             size_val = None
             try:
                 form_i = int(a)
             except Exception:
                 form_i = None
             if form_i in (fm_intlist, fm_strlist):
-                size_expr = None
-                try:
-                    size_exprs = _peek_arg_expr_list([{"form": _form_code(C.FM_INT)}])
-                    if size_exprs:
-                        size_expr = size_exprs[0]
-                except Exception:
-                    size_expr = None
                 size_val = _stack_int_value(stack[-1]) if stack else None
-                if size_val is not None:
-                    size_s = f" size={int(size_val):d}"
-                if size_expr:
-                    size_expr_s = f" ; expr={size_expr}"
                 _pop_stack_top()
             name = ""
             try:
@@ -2317,17 +2375,40 @@ def disassemble_scn_bytes(
                     name = str(call_prop_names[bi] or "")
             except Exception:
                 name = ""
-            name_s = f" name={name}" if name else ""
-            out.append(
-                f"{ofs:08X}: {opname} {fmt_form(a)}, {int(b):d}{size_s}{name_s}{size_expr_s}"
-            )
+            if render_text:
+                size_s = f" size={int(size_val):d}" if size_val is not None else ""
+                size_expr_s = ""
+                if form_i in (fm_intlist, fm_strlist):
+                    size_expr = None
+                    try:
+                        size_exprs = _peek_arg_expr_list(
+                            [{"form": _form_code(C.FM_INT)}]
+                        )
+                        if size_exprs:
+                            size_expr = size_exprs[0]
+                    except Exception:
+                        size_expr = None
+                    if size_expr:
+                        size_expr_s = f" ; expr={size_expr}"
+                name_s = f" name={name}" if name else ""
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} {fmt_form(a)}, {int(b):d}{size_s}{name_s}{size_expr_s}"
+                    )
+                )
             _trace(
                 opname,
                 ofs,
-                form=int(a),
-                prop_id=int(b),
-                size=(int(size_val) if size_val is not None else None),
-                name=(name or ""),
+                **(
+                    {}
+                    if koe_trace
+                    else {
+                        "form": int(a),
+                        "prop_id": int(b),
+                        "size": (int(size_val) if size_val is not None else None),
+                        "name": (name or ""),
+                    }
+                ),
             )
             q = name if name else f"$slot_{call_slot_next:d}"
             call_slot_info[call_slot_next] = {
@@ -2349,29 +2430,36 @@ def disassemble_scn_bytes(
         ):
             lid = read_i32(i)
             if lid is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
-            dest = ""
-            try:
-                li = int(lid)
-                if 0 <= li < len(label_list or []):
-                    dest = f" -> {int(label_list[li]):08X}"
-            except Exception:
+            if render_text:
                 dest = ""
-            cond_expr = (
-                _peek_branch_expr() if op in (cd_goto_true, cd_goto_false) else None
-            )
-            cond_s = f" ; cond={cond_expr}" if cond_expr else ""
-            out.append(f"{ofs:08X}: {opname} L{int(lid):d}{dest}{cond_s}")
+                try:
+                    li = int(lid)
+                    if 0 <= li < len(label_list or []):
+                        dest = f" -> {int(label_list[li]):08X}"
+                except Exception:
+                    dest = ""
+                cond_expr = (
+                    _peek_branch_expr() if op in (cd_goto_true, cd_goto_false) else None
+                )
+                cond_s = f" ; cond={cond_expr}" if cond_expr else ""
+                _emit(lambda: f"{ofs:08X}: {opname} L{int(lid):d}{dest}{cond_s}")
             _trace(
                 opname,
                 ofs,
-                label_id=int(lid),
-                target_ofs=(
-                    int(label_list[int(lid)])
-                    if 0 <= int(lid) < len(label_list or [])
-                    else None
+                **(
+                    {}
+                    if koe_trace
+                    else {
+                        "label_id": int(lid),
+                        "target_ofs": (
+                            int(label_list[int(lid)])
+                            if 0 <= int(lid) < len(label_list or [])
+                            else None
+                        ),
+                    }
                 ),
             )
             if op in (cd_goto_true, cd_goto_false):
@@ -2380,41 +2468,45 @@ def disassemble_scn_bytes(
         if op in (cd_gosub, cd_gosubstr):
             lid = read_i32(i)
             if lid is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             p_next, arg_forms = _read_arg_layout(i + 4)
             if p_next is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i = p_next
-            dest = ""
-            try:
-                li = int(lid)
-                if 0 <= li < len(label_list or []):
-                    dest = f" -> {int(label_list[li]):08X}"
-            except Exception:
+            if render_text:
                 dest = ""
-            gosub_exprs = _peek_arg_expr_list(arg_forms)
-            gosub_kw = "gosub" if op == cd_gosub else "gosubstr"
-            gosub_ss = (
-                f" ; expr={gosub_kw} L{int(lid):d}({', '.join(gosub_exprs)})"
-                if gosub_exprs
-                else f" ; expr={gosub_kw} L{int(lid):d}"
-            )
-            out.append(
-                f"{ofs:08X}: {opname} L{int(lid):d} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{dest}{gosub_ss}"
-            )
-            _trace(
-                opname,
-                ofs,
-                label_id=int(lid),
-                target_ofs=(
-                    int(label_list[int(lid)])
-                    if 0 <= int(lid) < len(label_list or [])
-                    else None
-                ),
-                arg_layout=_clone_arg_layout(arg_forms),
-            )
+                try:
+                    li = int(lid)
+                    if 0 <= li < len(label_list or []):
+                        dest = f" -> {int(label_list[li]):08X}"
+                except Exception:
+                    dest = ""
+                gosub_exprs = _peek_arg_expr_list(arg_forms)
+                gosub_kw = "gosub" if op == cd_gosub else "gosubstr"
+                gosub_ss = (
+                    f" ; expr={gosub_kw} L{int(lid):d}({', '.join(gosub_exprs)})"
+                    if gosub_exprs
+                    else f" ; expr={gosub_kw} L{int(lid):d}"
+                )
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} L{int(lid):d} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{dest}{gosub_ss}"
+                    )
+                )
+            gosub_fields = {}
+            if not koe_trace:
+                gosub_fields = {
+                    "label_id": int(lid),
+                    "target_ofs": (
+                        int(label_list[int(lid)])
+                        if 0 <= int(lid) < len(label_list or [])
+                        else None
+                    ),
+                    "arg_layout": _clone_arg_layout(arg_forms),
+                }
+            _trace(opname, ofs, **gosub_fields)
             for arg_info in reversed(list(arg_forms or [])):
                 _consume_arg_value(arg_info)
             _push_stack_value(fm_int if op == cd_gosub else fm_str, receiver=False)
@@ -2422,21 +2514,24 @@ def disassemble_scn_bytes(
         if op == cd_return:
             p_next, arg_forms = _read_arg_layout(i)
             if p_next is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i = p_next
-            ret_exprs = _peek_arg_expr_list(arg_forms)
-            if ret_exprs:
-                ret_s = f" ; expr=return ({ret_exprs[0]})"
-            else:
-                ret_s = " ; expr=return"
-            out.append(
-                f"{ofs:08X}: {opname} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{ret_s}"
-            )
+            if render_text:
+                ret_exprs = _peek_arg_expr_list(arg_forms)
+                if ret_exprs:
+                    ret_s = f" ; expr=return ({ret_exprs[0]})"
+                else:
+                    ret_s = " ; expr=return"
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} argc={len(arg_forms or []):d} forms=[{', '.join(_format_arg_layout(arg_forms))}]{ret_s}"
+                    )
+                )
             _trace(
                 opname,
                 ofs,
-                arg_layout=_clone_arg_layout(arg_forms),
+                **({} if koe_trace else {"arg_layout": _clone_arg_layout(arg_forms)}),
             )
             for arg_info in reversed(list(arg_forms or [])):
                 _consume_arg_value(arg_info)
@@ -2449,20 +2544,29 @@ def disassemble_scn_bytes(
             b = read_i32(i + 4)
             c = read_i32(i + 8)
             if a is None or b is None or c is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 12
-            assign_expr = _peek_assign_expr(b)
-            assign_s = f" ; expr={assign_expr}" if assign_expr else ""
-            out.append(
-                f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}{assign_s}"
-            )
+            if render_text:
+                assign_expr = _peek_assign_expr(b)
+                assign_s = f" ; expr={assign_expr}" if assign_expr else ""
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}{assign_s}"
+                    )
+                )
             _trace(
                 opname,
                 ofs,
-                left_form=int(a),
-                right_form=int(b),
-                arg_list_id=int(c),
+                **(
+                    {}
+                    if koe_trace
+                    else {
+                        "left_form": int(a),
+                        "right_form": int(b),
+                        "arg_list_id": int(c),
+                    }
+                ),
             )
             stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is not None:
@@ -2474,16 +2578,17 @@ def disassemble_scn_bytes(
             form = read_i32(i)
             opr = read_u8(i + 4)
             if form is None or opr is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 5
-            out.append(f"{ofs:08X}: {opname} {fmt_form(form)} op={int(opr):d}")
-            rhs_expr = _peek_arg_expr_list([{"form": int(form)}])
+            _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(form)} op={int(opr):d}")
+            rhs_expr = (
+                _peek_arg_expr_list([{"form": int(form)}]) if render_text else None
+            )
             _trace(
                 opname,
                 ofs,
-                form=int(form),
-                opr=int(opr),
+                **({} if koe_trace else {"form": int(form), "opr": int(opr)}),
             )
             _pop_stack_top()
             res_form = _unary_result_form(form, opr, fm_int, unary_int_ops)
@@ -2493,7 +2598,7 @@ def disassemble_scn_bytes(
                     receiver=False,
                     expr=(
                         _format_unary_expr(opr, rhs_expr[0])
-                        if rhs_expr and rhs_expr[0]
+                        if render_text and rhs_expr and rhs_expr[0]
                         else None
                     ),
                 )
@@ -2503,48 +2608,63 @@ def disassemble_scn_bytes(
             fr = read_i32(i + 4)
             opr = read_u8(i + 8)
             if fl is None or fr is None or opr is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 9
-            out.append(
-                f"{ofs:08X}: {opname} {fmt_form(fl)}, {fmt_form(fr)} op={int(opr):d}"
+            _emit(
+                lambda: (
+                    f"{ofs:08X}: {opname} {fmt_form(fl)}, {fmt_form(fr)} op={int(opr):d}"
+                )
             )
-            pair_expr = _peek_arg_expr_list([{"form": int(fl)}, {"form": int(fr)}])
+            pair_expr = (
+                _peek_arg_expr_list([{"form": int(fl)}, {"form": int(fr)}])
+                if render_text
+                else None
+            )
             _trace(
                 opname,
                 ofs,
-                left_form=int(fl),
-                right_form=int(fr),
-                opr=int(opr),
+                **(
+                    {}
+                    if koe_trace
+                    else {
+                        "left_form": int(fl),
+                        "right_form": int(fr),
+                        "opr": int(opr),
+                    }
+                ),
             )
             _pop_stack_top()
             _pop_stack_top()
             res_form = _binary_result_form(fl, fr, opr, fm_int, fm_str, string_cmp_ops)
             if res_form is not None:
-                lhs = pair_expr[0] if len(pair_expr) >= 1 else None
-                rhs = pair_expr[1] if len(pair_expr) >= 2 else None
+                lhs = pair_expr[0] if pair_expr and len(pair_expr) >= 1 else None
+                rhs = pair_expr[1] if pair_expr and len(pair_expr) >= 2 else None
                 _push_stack_value(
                     res_form,
                     receiver=False,
-                    expr=(_format_binary_expr(opr, lhs, rhs) if lhs and rhs else None),
+                    expr=(
+                        _format_binary_expr(opr, lhs, rhs)
+                        if render_text and lhs and rhs
+                        else None
+                    ),
                 )
             continue
         if op == cd_text:
             rf = read_i32(i)
             if rf is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
-            txt = ""
             sid = None
             if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
                 sid = stack[-1].get("val")
+            if render_text:
+                txt = ""
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     txt = f' ; "{_escape_preview(str_list[int(sid)])}"'
-            out.append(f"{ofs:08X}: {opname} read_flag={int(rf):d}{txt}")
-            rf_line = _read_flag_line(rf)
+                _emit(lambda: f"{ofs:08X}: {opname} read_flag={int(rf):d}{txt}")
             text_fields = {
-                "read_flag": int(rf),
                 "text": (
                     str(str_list[int(sid)])
                     if stack
@@ -2554,12 +2674,16 @@ def disassemble_scn_bytes(
                     else None
                 ),
             }
-            if sid is not None:
+            if not koe_trace:
+                text_fields["read_flag"] = int(rf)
+            if sid is not None and not koe_trace:
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     text_fields["str_id"] = sid_i
-            if rf_line is not None:
-                text_fields["read_flag_line"] = int(rf_line)
+            if not koe_trace:
+                rf_line = _read_flag_line(rf)
+                if rf_line is not None:
+                    text_fields["read_flag_line"] = int(rf_line)
             _trace(
                 opname,
                 ofs,
@@ -2568,13 +2692,14 @@ def disassemble_scn_bytes(
             _pop_stack_top()
             continue
         if op == cd_name:
-            nm = ""
             sid = None
             if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
                 sid = stack[-1].get("val")
+            if render_text:
+                nm = ""
                 if sid is not None and 0 <= int(sid) < len(str_list or []):
                     nm = f' "{_escape_preview(str_list[int(sid)])}"'
-            out.append(f"{ofs:08X}: {opname}{nm}")
+                _emit(lambda: f"{ofs:08X}: {opname}{nm}")
             name_fields = {
                 "text": (
                     str(str_list[int(sid)])
@@ -2582,7 +2707,7 @@ def disassemble_scn_bytes(
                     else None
                 ),
             }
-            if sid is not None:
+            if sid is not None and not koe_trace:
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     name_fields["str_id"] = sid_i
@@ -2601,22 +2726,22 @@ def disassemble_scn_bytes(
         if op == cd_command:
             arg_list_id = read_i32(i)
             if arg_list_id is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             p_next, arg_forms = _read_arg_layout(i + 4)
             if p_next is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             named_cnt = read_i32(p_next)
             if named_cnt is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i = p_next + 4
             named_ids = []
             for _k in range(max(0, int(named_cnt))):
                 ni = read_i32(i)
                 if ni is None:
-                    out.append(f"{ofs:08X}: {opname} <truncated>")
+                    _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                     i = len(scn)
                     break
                 i += 4
@@ -2625,11 +2750,10 @@ def disassemble_scn_bytes(
                 break
             ret_form = read_i32(i)
             if ret_form is None:
-                out.append(f"{ofs:08X}: {opname} <truncated>")
+                _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
             element_code = None
-            ename = ""
             qname = ""
             info = {}
             resolved_cmd = _resolve_command_expr(len(arg_forms or []), ret_form)
@@ -2654,63 +2778,86 @@ def disassemble_scn_bytes(
             ):
                 read_flag = read_i32(i)
                 if read_flag is None:
-                    out.append(f"{ofs:08X}: {opname} <truncated>")
+                    _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                     break
                 i += 4
-            cmd_expr = _peek_command_expr(
-                cmd_stack_start,
-                arg_forms,
-                info_hint=(
-                    resolved_cmd.get("info") if isinstance(resolved_cmd, dict) else None
-                ),
-                named_ids=named_ids,
+            cmd_expr = (
+                _peek_command_expr(
+                    cmd_stack_start,
+                    arg_forms,
+                    info_hint=(
+                        resolved_cmd.get("info")
+                        if isinstance(resolved_cmd, dict)
+                        else None
+                    ),
+                    named_ids=named_ids,
+                )
+                if render_text
+                else None
             )
             arg_values = _peek_arg_value_list(arg_forms)
             named_values = _command_named_values(info, arg_values, named_ids)
-            rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""
-            ec_s = (f" ec={hx(element_code)}") if element_code is not None else ""
-            expr_s = f" ; expr={cmd_expr}" if cmd_expr else ""
-            line = (
-                f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} "
-                f"argc={len(arg_forms or []):d} args=[{', '.join(_format_arg_layout(arg_forms))}] "
-                f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
-            )
-            out.append(line)
-            _trace(
-                opname,
-                ofs,
-                arg_list_id=int(arg_list_id),
-                arg_layout=_clone_arg_layout(arg_forms),
-                named_ids=list(named_ids),
-                ret_form=int(ret_form),
-                read_flag=(int(read_flag) if read_flag is not None else None),
-                read_flag_line=(
-                    int(_read_flag_line(read_flag))
-                    if _read_flag_line(read_flag) is not None
-                    else None
-                ),
-                element_code=(int(element_code) if element_code is not None else None),
-                _call_name=(qname or None),
-                _call_base_name=(str(info.get("name") or "") or None),
-                _arg_values=list(arg_values or []),
-                _named_values=(
+            if render_text:
+                ename = (" " + qname) if qname else ""
+                rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""
+                ec_s = (f" ec={hx(element_code)}") if element_code is not None else ""
+                expr_s = f" ; expr={cmd_expr}" if cmd_expr else ""
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} "
+                        f"argc={len(arg_forms or []):d} args=[{', '.join(_format_arg_layout(arg_forms))}] "
+                        f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
+                    )
+                )
+            cmd_fields = {
+                "_call_name": (qname or None),
+                "_call_base_name": (str(info.get("name") or "") or None),
+                "_arg_values": list(arg_values or []),
+                "_named_values": (
                     dict(named_values) if isinstance(named_values, dict) else {}
                 ),
-            )
+            }
+            if not koe_trace:
+                cmd_fields.update(
+                    {
+                        "arg_list_id": int(arg_list_id),
+                        "arg_layout": _clone_arg_layout(arg_forms),
+                        "named_ids": list(named_ids),
+                        "ret_form": int(ret_form),
+                        "read_flag": (
+                            int(read_flag) if read_flag is not None else None
+                        ),
+                        "read_flag_line": (
+                            int(_read_flag_line(read_flag))
+                            if _read_flag_line(read_flag) is not None
+                            else None
+                        ),
+                        "element_code": (
+                            int(element_code) if element_code is not None else None
+                        ),
+                    }
+                )
+            _trace(opname, ofs, **cmd_fields)
             if cmd_stack_start is not None:
-                _collapse_command_expr(cmd_stack_start, ret_form, expr=cmd_expr)
+                _collapse_command_expr(
+                    cmd_stack_start,
+                    ret_form,
+                    expr=(cmd_expr if render_text else None),
+                )
             else:
                 for arg_info in reversed(list(arg_forms or [])):
                     _consume_arg_value(arg_info)
                 _consume_element()
                 if int(ret_form) != fm_void:
-                    _push_stack_value(ret_form, expr=cmd_expr)
+                    _push_stack_value(
+                        ret_form, expr=(cmd_expr if render_text else None)
+                    )
             continue
         if op == cd_eof:
-            out.append(f"{ofs:08X}: {opname}")
+            _emit(lambda: f"{ofs:08X}: {opname}")
             _trace(opname, ofs)
             break
-        out.append(f"{ofs:08X}: {opname}")
+        _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)
         break
     if trace is not None and trace:
