@@ -29,6 +29,15 @@ _TEXT_QUOTE_PAIRS = (
 )
 
 
+def _progress(msg: str):
+    eprint(str(msg or ""))
+
+
+def _progress_koe(count: int, koe_no: int):
+    if count == 1 or count % 100 == 0:
+        _progress(f"koe: processing {count}: KOE({int(koe_no):09d})")
+
+
 def _try_int(value):
     try:
         return int(value)
@@ -406,6 +415,9 @@ def _scan_calls(scene_root: str):
     refs = []
     scene_files = 0
     for bundle in _iter_scene_bundles(scene_root):
+        _progress(
+            f"koe: scanning scene {scene_files + 1}: {_bundle_relpath(bundle, scene_root)}"
+        )
         scene_files += 1
         refs.extend(_scan_bundle_calls(bundle, scene_root))
     return refs, scene_files
@@ -442,8 +454,9 @@ def _index_ovk(voice_dir: str):
     elif os.path.isfile(voice_dir) and voice_dir.lower().endswith(".ovk"):
         ovk_paths.append(voice_dir)
         voice_dir = os.path.dirname(voice_dir) or "."
-    for full in ovk_paths:
+    for ovk_idx, full in enumerate(ovk_paths, 1):
         fn = os.path.basename(full)
+        _progress(f"koe: indexing ovk {ovk_idx}/{len(ovk_paths)}: {fn}")
         ovk_files += 1
         m = _Z_OVK_RE.match(fn)
         if not m:
@@ -617,6 +630,7 @@ def main(argv=None):
     total_duration_sec = 0.0
     duration_counted = 0
     duration_failed = 0
+    processed_koe = 0
     if single_koe_no is None:
         for koe_no in sorted(entries.keys()):
             e = entries[koe_no]
@@ -643,6 +657,8 @@ def main(argv=None):
                 continue
             if not should_extract and (is_unref or duration_done):
                 continue
+            processed_koe += 1
+            _progress_koe(processed_koe, koe_no)
             scene_no = koe_no // 100000
             entry_no = koe_no % 100000
             try:
@@ -679,6 +695,8 @@ def main(argv=None):
     else:
         if single_found:
             koe_no = int(single_koe_no)
+            processed_koe += 1
+            _progress_koe(processed_koe, koe_no)
             out_path = os.path.join(out_dir, f"KOE({koe_no:09d}).ogg")
             should_extract = not stats_only
             duration_done = False
