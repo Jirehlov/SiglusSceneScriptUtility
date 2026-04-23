@@ -112,7 +112,7 @@ siglus-ssu init
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p) [参数]
+siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t) [参数]
 ```
 
 ### 全局选项
@@ -1325,6 +1325,70 @@ Written: /path/to/SiglusEngine_LOC0.exe
 
 `--loc` 采用偏保守的匹配方式：会去找地域检测 helper 外围的顶层受保护 wrapper。若 build 含糊或不受支持，则会直接拒绝修改，而不是猜测后强行 patch。
 
+
+### `-t` / `--tutorial` — 生成静态剧情图
+
+从 `Scene.pck` 内的已编译场景数据生成静态剧情图 JSON。这个输出的目标是便于整体阅览，而不是试图模拟完整虚拟机执行。它会保留狭义台词，优先保证信息正确，不会为了“连得更全”而冒险猜测动态运行时才能确定的边。
+
+命令还会在 JSON 旁边写出一个独立的 `tutorial_viewer.html`，随后尝试用系统默认浏览器打开。自动打开只是尽力而为，失败不会影响 JSON 生成。
+
+#### 语法
+
+```bash
+siglus-ssu -t <input_pck> [output_json]
+```
+
+#### 参数
+
+| 参数 | 说明 |
+|---|---|
+| `<input_pck>` | 要分析的 `Scene.pck`。 |
+| `[output_json]` | 可选的输出 JSON 路径。不提供时，默认写到输入 `.pck` 同目录，文件名为 `<输入名>.tutorial.json`。 |
+
+#### 输出内容
+
+该命令会生成：
+
+- 一个剧情图 JSON
+- 同目录下的 `tutorial_viewer.html`
+
+JSON 内包含图级元数据、节点 payload 台词，以及边的静态关系信息。viewer 可以直接打开该 JSON，也能在 `-t` 自动打开时通过 URL 参数自动加载，并按连通图逐个查看。
+
+#### 这个图表示什么
+
+- 节点 payload 使用狭义台词定义，也就是与 `-m` 提取结果中的 1 类字符串相对应的内容。
+- 说话人归属采用保守策略。若源码没有足够静态依据可靠识别说话人，就只保留文本本身，不强行补名字。
+- 整张图允许存在多个互不连通的分量。
+
+#### 静态边策略
+
+本模式明确以正确性优先：
+
+- 会纳入：无需运行虚拟机、仅靠反汇编即可确认的直接静态控制流边，以及能静态解析目标的场景跳转边。
+- 不会纳入：动态拼接目标、运行时分派、以及会把 helper / scheduler 场景误提升成剧情直边的模糊情况。
+
+因此它是一个保守的下近似：可能缺少一部分真实但只能动态恢复的后续边，但应尽量避免输出误导性的假边。
+
+#### Viewer 特性
+
+生成的 viewer 支持：
+
+- 拖拽加载 JSON
+- 多个不连通图之间切换
+- 力导布局与沿边移动的方向粒子
+- 节点详情、场景名与自然行号显示
+- 按台词 / 选项、节点编号、场景名、`场景 @ 行号` 搜索
+- 英语 / 简体中文界面切换，以及亮色 / 夜间主题切换
+
+#### 示例
+
+```bash
+# 在 Scene.pck 同目录生成 Scene.tutorial.json，并尝试自动打开 viewer
+siglus-ssu -t /path/to/Scene.pck
+
+# 输出到自定义 JSON 路径
+siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
+```
 
 <a id="siglusss-language-spec"></a>
 ## SiglusSceneScript语言规范（简称 SiglusSS语言；以 `-c` 编译器为定义）

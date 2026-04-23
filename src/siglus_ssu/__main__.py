@@ -29,7 +29,7 @@ def _usage(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
@@ -50,6 +50,7 @@ def _usage(out=None):
         "  -s, --sound     Decode/extract/play .ovk/.owp/.nwa sounds\n"
         "  -v, --video     Extract/analyze .omv videos\n"
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
+        "  -t, --tutorial  Generate static tutorial graph JSON from a .pck\n"
         "\n"
         "Init mode:\n"
         f"  {p} init [--force|-f] [--ref <git-ref>]\n"
@@ -165,6 +166,10 @@ def _usage(out=None):
         "      - skip_standalone: list of old strings to skip when surrounded by NULs\n"
         "      example:\n"
         '        \'{"charset1":0,"charset2":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"},"standalone_only":["Scene.pck"]}\'\n'
+        "\n"
+        "Tutorial mode:\n"
+        f"  {p} -t <input_pck> [output_json]\n"
+        "    output_json    Defaults to <input_name>.tutorial.json next to input_pck\n"
     )
     out.write(text)
 
@@ -175,7 +180,7 @@ def _usage_short(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     out.write(text)
@@ -259,6 +264,8 @@ MODE_MODULES = {
     "--video": "video_tool",
     "-p": "patch",
     "--patch": "patch",
+    "-t": "tutorial",
+    "--tutorial": "tutorial",
 }
 
 

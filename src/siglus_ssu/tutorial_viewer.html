@@ -1,0 +1,2872 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Siglus Tutorial Graph</title>
+<style>
+:root {
+    --bg: #f8fbfd;
+    --bg-soft: #eef6fb;
+    --bg-elev: #ffffff;
+    --bg-chip: #f4fafe;
+    --border: #dce8f2;
+    --border-soft: rgba(37, 99, 173, 0.1);
+    --text: #2e2e2e;
+    --text-soft: #587087;
+    --text-dim: #7b91a5;
+    --accent: #2563ad;
+    --accent-soft: #e9f5fc;
+    --accent-strong: #1b4c7a;
+    --warn: #bf8a35;
+    --node: #e5f2fb;
+    --node-stroke: #8ebad8;
+    --node-active: #cfe8fa;
+    --edge: rgba(72, 116, 158, 0.58);
+    --edge-active: rgba(37, 99, 173, 0.9);
+    --shadow: 0 2px 10px rgba(70, 120, 160, 0.05);
+    --shadow-strong: 0 8px 24px rgba(80, 120, 180, 0.12);
+}
+html.theme-dark {
+    --bg: #0d141b;
+    --bg-soft: #111b24;
+    --bg-elev: #18232e;
+    --bg-chip: #15212d;
+    --border: #243647;
+    --border-soft: rgba(129, 190, 255, 0.14);
+    --text: #e6edf5;
+    --text-soft: #a4b8cb;
+    --text-dim: #7d93aa;
+    --accent: #81beff;
+    --accent-soft: #16273a;
+    --accent-strong: #cde7ff;
+    --warn: #e1b261;
+    --node: #1d3244;
+    --node-stroke: #7ab1e2;
+    --node-active: #284b69;
+    --edge: rgba(157, 195, 234, 0.42);
+    --edge-active: rgba(129, 190, 255, 0.92);
+    --shadow: 0 2px 10px rgba(0, 0, 0, 0.24);
+    --shadow-strong: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+* {
+    box-sizing: border-box;
+}
+.app {
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(248, 251, 253, 0.78);
+    backdrop-filter: blur(5px);
+    pointer-events: auto;
+}
+.loading-card {
+    width: min(360px, calc(100vw - 48px));
+    padding: 24px 24px 20px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 16px 42px rgba(80, 120, 180, 0.18);
+}
+.loading-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 16px;
+}
+.loading-spinner {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: 3px solid rgba(37, 99, 173, 0.16);
+    border-top-color: var(--accent);
+    animation: loading-spin 0.8s linear infinite;
+    flex: 0 0 auto;
+}
+.loading-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #24405d;
+}
+.loading-detail {
+    min-height: 18px;
+    margin-bottom: 14px;
+    color: var(--text-soft);
+    font-size: 13px;
+    line-height: 1.5;
+    word-break: break-word;
+}
+.loading-bar {
+    width: 100%;
+    height: 10px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e7f0f7;
+    border: 1px solid #d7e5f0;
+}
+.loading-bar-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #2c7fd0 0%, #62b6ec 100%);
+    transition: width 0.16s ease;
+}
+.loading-bar-fill.is-indeterminate {
+    width: 36%;
+    animation: loading-slide 1.05s ease-in-out infinite;
+}
+.loading-progress {
+    margin-top: 10px;
+    color: var(--text-dim);
+    font-size: 12px;
+    text-align: right;
+}
+@keyframes loading-spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+@keyframes loading-slide {
+    0% {
+        transform: translateX(-120%);
+    }
+    100% {
+        transform: translateX(320%);
+    }
+}
+.tool-btn {
+    border: none;
+    background: var(--accent-soft);
+    color: var(--accent);
+    min-width: 84px;
+    padding: 12px 20px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow: var(--shadow);
+    transition: background 0.18s, color 0.18s, box-shadow 0.18s, transform 0.18s;
+}
+.tool-btn.is-toggle-active {
+    background: var(--accent);
+    color: #ffffff;
+}
+.tool-btn.is-toggle-active:hover {
+    background: #2e76c3;
+    color: #ffffff;
+}
+.tool-btn:hover {
+    background: #d9eefa;
+    color: var(--accent-strong);
+    box-shadow: 0 4px 16px rgba(70, 120, 160, 0.09);
+}
+.tool-btn:active {
+    background: #c8e4f5;
+    color: #1973b8;
+    transform: scale(0.97);
+}
+.control-select {
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+    padding: 0 14px;
+    border: 2px solid #e0e6ed;
+    border-radius: 9px;
+    outline: none;
+    background: var(--bg-elev);
+    color: #242b37;
+    font: inherit;
+    transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.control-select:focus {
+    background: #eaf4fb;
+    border-color: var(--accent);
+    box-shadow: var(--shadow);
+}
+.control-input {
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+    padding: 0 14px;
+    border: 2px solid #e0e6ed;
+    border-radius: 9px;
+    outline: none;
+    background: var(--bg-elev);
+    color: #242b37;
+    font: inherit;
+    transition: border-color 0.18s, background 0.18s, box-shadow 0.18s;
+}
+.control-input:focus {
+    background: #eaf4fb;
+    border-color: var(--accent);
+    box-shadow: var(--shadow);
+}
+.file-input {
+    display: none;
+}
+.drawer-trigger {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 26px;
+    z-index: 3;
+    cursor: pointer;
+}
+.drawer {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 4;
+    width: 388px;
+    overflow: auto;
+    padding: 22px 20px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-soft);
+    box-shadow: var(--shadow-strong);
+    transition: transform 0.22s ease, box-shadow 0.22s ease;
+}
+.drawer:not(.is-pinned):not(.is-open) {
+    transform: translateX(calc(-100% + 14px));
+    box-shadow: none;
+}
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.mini-btn {
+    min-width: 0;
+    padding: 8px 12px;
+    font-size: 12px;
+}
+.card {
+    margin-bottom: 14px;
+    padding: 16px 16px 15px;
+    border-radius: 15px;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+}
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+.card-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--accent);
+}
+.card-kicker {
+    color: var(--text-dim);
+    font-size: 11px;
+}
+.stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+}
+.stat {
+    padding: 12px 12px;
+    border-radius: 12px;
+    background: #f8fbfd;
+    border: 1px solid #e6eef5;
+}
+.stat-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+}
+.stat-value {
+    font-size: 20px;
+    font-weight: 700;
+}
+.kv {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 8px 12px;
+    font-size: 12px;
+    line-height: 1.55;
+}
+.kv dt {
+    margin: 0;
+    color: var(--text-dim);
+}
+.kv dd {
+    margin: 0;
+    color: var(--text);
+    word-break: break-word;
+}
+.section-list,
+.control-list,
+.payload-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.search-results {
+    margin-top: 12px;
+    max-height: 256px;
+    overflow: auto;
+}
+.search-result-row {
+    width: 100%;
+    display: block;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #e6eef5;
+    background: #f8fbfd;
+    color: #242b37;
+    cursor: pointer;
+    text-align: left;
+    box-shadow: var(--shadow);
+}
+.search-result-row:hover {
+    border-color: rgba(37, 99, 173, 0.2);
+    background: #eff7fd;
+}
+.search-result-title {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: #242b37;
+    word-break: break-word;
+}
+.search-result-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-soft);
+    word-break: break-word;
+}
+.tool-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+.pin-btn {
+    min-width: 0;
+    padding: 8px 14px;
+    font-size: 12px;
+}
+.payload-item {
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #e6eef5;
+    background: #f8fbfd;
+    color: #242b37;
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.stage.is-drop-target::after {
+    content: attr(data-drop-text);
+    position: absolute;
+    inset: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 20px;
+    border: 2px dashed rgba(37, 99, 173, 0.4);
+    background: rgba(233, 245, 252, 0.82);
+    color: #2563ad;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    pointer-events: none;
+}
+.link-row {
+    width: 100%;
+    display: block;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid #e6eef5;
+    background: #f8fbfd;
+    color: #242b37;
+    cursor: pointer;
+    text-align: left;
+    box-shadow: var(--shadow);
+}
+.link-row:hover {
+    border-color: rgba(37, 99, 173, 0.2);
+    background: #eff7fd;
+}
+.link-row-main {
+    min-width: 0;
+}
+.link-row-text {
+    font-size: 12px;
+    line-height: 1.55;
+    color: #242b37;
+    word-break: break-word;
+}
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(37, 99, 173, 0.12);
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    white-space: nowrap;
+}
+.pill.start {
+    border-color: rgba(191, 138, 53, 0.18);
+    background: #fbf1df;
+    color: var(--warn);
+}
+.stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: var(--bg);
+}
+.stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(146, 177, 205, 0.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(146, 177, 205, 0.18) 1px, transparent 1px);
+    background-size: 36px 36px;
+    pointer-events: none;
+}
+.stage-overlay {
+    position: absolute;
+    inset: 16px 18px auto 18px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 18px;
+    pointer-events: none;
+}
+.stage-chips {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.stage-chip {
+    pointer-events: auto;
+    padding: 8px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(37, 99, 173, 0.12);
+    background: rgba(255, 255, 255, 0.94);
+    color: var(--text-soft);
+    font-size: 12px;
+    box-shadow: var(--shadow);
+}
+.stage-chip strong {
+    color: var(--accent-strong);
+}
+#graphCanvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+.empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-soft);
+    font-size: 15px;
+}
+html.theme-dark .loading-overlay {
+    background: rgba(8, 12, 17, 0.8);
+}
+html.theme-dark .loading-card {
+    background: rgba(24, 35, 46, 0.96);
+    box-shadow: 0 16px 42px rgba(0, 0, 0, 0.42);
+}
+html.theme-dark .loading-title {
+    color: var(--text);
+}
+html.theme-dark .loading-bar {
+    background: #10202e;
+    border-color: #1f3446;
+}
+html.theme-dark .tool-btn:hover {
+    background: #22384f;
+    color: var(--accent-strong);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.24);
+}
+html.theme-dark .tool-btn:active {
+    background: #2b4a67;
+    color: var(--accent-strong);
+}
+html.theme-dark .control-select,
+html.theme-dark .control-input {
+    border-color: #2a3c4e;
+    background: var(--bg-elev);
+    color: var(--text);
+}
+html.theme-dark .control-select:focus,
+html.theme-dark .control-input:focus {
+    background: #1d2c3b;
+}
+html.theme-dark .stat,
+html.theme-dark .payload-item,
+html.theme-dark .link-row,
+html.theme-dark .search-result-row {
+    background: #111c26;
+    border-color: #22313f;
+    color: var(--text);
+}
+html.theme-dark .link-row:hover,
+html.theme-dark .search-result-row:hover {
+    background: #152433;
+    border-color: #335271;
+}
+html.theme-dark .link-row-text,
+html.theme-dark .search-result-title {
+    color: var(--text);
+}
+html.theme-dark .stage-chip {
+    background: rgba(24, 35, 46, 0.94);
+    border-color: rgba(129, 190, 255, 0.16);
+}
+html.theme-dark .stage.is-drop-target::after {
+    border-color: rgba(129, 190, 255, 0.4);
+    background: rgba(18, 33, 47, 0.92);
+    color: var(--accent);
+}
+html.theme-dark .stage::before {
+    background-image:
+        linear-gradient(rgba(95, 129, 162, 0.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(95, 129, 162, 0.18) 1px, transparent 1px);
+}
+.hidden {
+    display: none !important;
+}
+@media (max-width: 980px) {
+    .drawer {
+        width: min(86vw, 360px);
+    }
+    .stage-overlay {
+        right: 12px;
+        left: 12px;
+        gap: 12px;
+        flex-direction: column;
+    }
+    .tool-grid {
+        grid-template-columns: 1fr;
+    }
+}
+</style>
+</head>
+<body>
+<div class="app">
+    <input id="fileInput" class="file-input" type="file" accept=".json,application/json">
+    <div id="loadingOverlay" class="loading-overlay hidden" aria-live="polite" aria-busy="true">
+        <div class="loading-card">
+            <div class="loading-head">
+                <div class="loading-spinner"></div>
+                <div id="loadingTitle" class="loading-title">Loading graph</div>
+            </div>
+            <div id="loadingDetail" class="loading-detail"></div>
+            <div class="loading-bar">
+                <div id="loadingBarFill" class="loading-bar-fill is-indeterminate"></div>
+            </div>
+            <div id="loadingProgress" class="loading-progress">Preparing...</div>
+        </div>
+    </div>
+    <div id="drawerTrigger" class="drawer-trigger"></div>
+    <aside id="drawer" class="drawer is-pinned">
+        <section class="card">
+            <div class="card-header">
+                <div id="controlsTitle" class="card-title">Controls</div>
+                <div class="header-actions">
+                    <button id="langBtn" class="tool-btn mini-btn" type="button">ZH</button>
+                    <button id="themeBtn" class="tool-btn mini-btn" type="button">Dark</button>
+                    <button id="pinBtn" class="tool-btn pin-btn mini-btn" type="button">Unpin</button>
+                </div>
+            </div>
+            <div class="control-list">
+                <select id="graphSelect" class="control-select hidden">
+                    <option value="">Current graph</option>
+                </select>
+            </div>
+            <div class="tool-grid">
+                <button id="fitBtn" class="tool-btn" type="button">Fit</button>
+                <button id="layoutBtn" class="tool-btn" type="button">Relayout</button>
+                <button id="resetBtn" class="tool-btn" type="button">Reset</button>
+                <button id="openBtn" class="tool-btn" type="button">Open JSON</button>
+            </div>
+        </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="searchTitle" class="card-title">Search</div>
+                    <div id="searchStatus" class="card-kicker">Idle</div>
+                </div>
+                <div class="control-list">
+                    <select id="searchMode" class="control-select">
+                        <option value="content">Dialogue / options</option>
+                        <option value="node">Node number</option>
+                        <option value="scene">Scene name</option>
+                        <option value="sceneLine">Scene @ line</option>
+                    </select>
+                    <input id="searchInput" class="control-input" type="search" placeholder="Search payload lines or option labels">
+                </div>
+                <div class="tool-grid">
+                    <button id="searchBtn" class="tool-btn" type="button">Find</button>
+                    <button id="clearSearchBtn" class="tool-btn" type="button">Clear</button>
+                </div>
+                <div id="searchResults" class="section-list search-results"></div>
+            </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="overviewTitle" class="card-title">Graph Overview</div>
+                    <div id="graphMode" class="card-kicker">static</div>
+                </div>
+                <div class="stats">
+                    <div class="stat">
+                        <div id="statScenesLabel" class="stat-label">Scenes</div>
+                        <div id="statGraphs" class="stat-value">-</div>
+                    </div>
+                    <div class="stat">
+                        <div id="statNodesLabel" class="stat-label">Nodes</div>
+                        <div id="statNodes" class="stat-value">-</div>
+                    </div>
+                    <div class="stat">
+                        <div id="statEdgesLabel" class="stat-label">Edges</div>
+                        <div id="statEdges" class="stat-value">-</div>
+                    </div>
+                </div>
+            </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="selectionTitle" class="card-title">Selection</div>
+                    <div id="selectionBadge" class="pill">None</div>
+                </div>
+                <div id="selectionMeta" class="section-list">
+                    <div class="pill">Click a node to inspect its relations.</div>
+                </div>
+            </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="outgoingTitle" class="card-title">Outgoing Relations</div>
+                    <div id="outgoingBadge" class="card-kicker">0</div>
+                </div>
+                <div id="outgoingList" class="section-list"></div>
+            </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="incomingTitle" class="card-title">Incoming Relations</div>
+                    <div id="incomingBadge" class="card-kicker">0</div>
+                </div>
+                <div id="incomingList" class="section-list"></div>
+            </section>
+            <section class="card">
+                <div class="card-header">
+                    <div id="payloadTitle" class="card-title">Payload</div>
+                    <div id="payloadBadge" class="card-kicker">0</div>
+                </div>
+                <div id="payloadList" class="payload-list">
+                    <div class="pill">Payload is shown only for the selected node.</div>
+                </div>
+            </section>
+    </aside>
+    <main class="stage" id="graphStage" data-drop-text="Drop JSON to open">
+        <canvas id="graphCanvas"></canvas>
+        <div class="stage-overlay">
+            <div class="stage-chips">
+                <div class="stage-chip"><strong id="chipGraph">-</strong></div>
+                <div class="stage-chip"><span id="chipNodesLabel">Nodes</span> <strong id="chipNodes">-</strong></div>
+                <div class="stage-chip"><span id="chipEdgesLabel">Edges</span> <strong id="chipEdges">-</strong></div>
+            </div>
+        </div>
+        <div id="emptyState" class="empty hidden"></div>
+    </main>
+</div>
+<script>
+(() => {
+    const canvas = document.getElementById("graphCanvas");
+    const ctx = canvas.getContext("2d");
+    const stage = document.getElementById("graphStage");
+    const loadingOverlay = document.getElementById("loadingOverlay");
+    const loadingTitle = document.getElementById("loadingTitle");
+    const loadingDetail = document.getElementById("loadingDetail");
+    const loadingBarFill = document.getElementById("loadingBarFill");
+    const loadingProgress = document.getElementById("loadingProgress");
+    const emptyState = document.getElementById("emptyState");
+    const drawer = document.getElementById("drawer");
+    const drawerTrigger = document.getElementById("drawerTrigger");
+    const pinBtn = document.getElementById("pinBtn");
+    const langBtn = document.getElementById("langBtn");
+    const themeBtn = document.getElementById("themeBtn");
+    const openBtn = document.getElementById("openBtn");
+    const fileInput = document.getElementById("fileInput");
+    const graphSelect = document.getElementById("graphSelect");
+    const fitBtn = document.getElementById("fitBtn");
+    const layoutBtn = document.getElementById("layoutBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const searchMode = document.getElementById("searchMode");
+    const searchInput = document.getElementById("searchInput");
+    const searchBtn = document.getElementById("searchBtn");
+    const clearSearchBtn = document.getElementById("clearSearchBtn");
+    const searchStatus = document.getElementById("searchStatus");
+    const searchResults = document.getElementById("searchResults");
+    const controlsTitle = document.getElementById("controlsTitle");
+    const searchTitle = document.getElementById("searchTitle");
+    const overviewTitle = document.getElementById("overviewTitle");
+    const statScenesLabel = document.getElementById("statScenesLabel");
+    const statNodesLabel = document.getElementById("statNodesLabel");
+    const statEdgesLabel = document.getElementById("statEdgesLabel");
+    const selectionTitle = document.getElementById("selectionTitle");
+    const outgoingTitle = document.getElementById("outgoingTitle");
+    const incomingTitle = document.getElementById("incomingTitle");
+    const payloadTitle = document.getElementById("payloadTitle");
+    const graphMode = document.getElementById("graphMode");
+    const statGraphs = document.getElementById("statGraphs");
+    const statNodes = document.getElementById("statNodes");
+    const statEdges = document.getElementById("statEdges");
+    const selectionBadge = document.getElementById("selectionBadge");
+    const selectionMeta = document.getElementById("selectionMeta");
+    const payloadBadge = document.getElementById("payloadBadge");
+    const payloadList = document.getElementById("payloadList");
+    const outgoingBadge = document.getElementById("outgoingBadge");
+    const incomingBadge = document.getElementById("incomingBadge");
+    const outgoingList = document.getElementById("outgoingList");
+    const incomingList = document.getElementById("incomingList");
+    const chipGraph = document.getElementById("chipGraph");
+    const chipNodesLabel = document.getElementById("chipNodesLabel");
+    const chipNodes = document.getElementById("chipNodes");
+    const chipEdgesLabel = document.getElementById("chipEdgesLabel");
+    const chipEdges = document.getElementById("chipEdges");
+
+    const state = {
+        raw: null,
+        nodes: [],
+        edges: [],
+        graphs: [],
+        graphMap: new Map(),
+        nodeMap: new Map(),
+        outgoingMap: new Map(),
+        incomingMap: new Map(),
+        visibleNodes: [],
+        visibleEdges: [],
+        visibleNodeMap: new Map(),
+        graphId: "",
+        selectedNode: null,
+        dragNode: null,
+        panMode: false,
+        mouseDown: false,
+        lastX: 0,
+        lastY: 0,
+        panX: 0,
+        panY: 0,
+        zoom: 1,
+        drawerPinned: true,
+        drawerHover: false,
+        minZoom: 0.01,
+        maxZoom: 6,
+        physicsAlpha: 0,
+        physicsFrame: 0,
+        physicsClock: 0,
+        edgeAnimationFrame: 0,
+        edgeAnimationClock: 0,
+        dragClock: 0,
+        dragDepth: 0,
+        visibleAverageDegree: 0,
+        loading: false,
+        lang: "en",
+        darkMode: false,
+    };
+
+    const UI_TEXT = {
+        en: {
+            loadingGraph: "Loading graph",
+            preparing: "Preparing...",
+            working: "Working...",
+            controls: "Controls",
+            pin: "Pin",
+            unpin: "Unpin",
+            langToggleEnglish: "EN",
+            langToggleChinese: "\u4e2d\u6587",
+            themeDark: "Dark",
+            themeLight: "Light",
+            currentGraph: "Current graph",
+            fit: "Fit",
+            relayout: "Relayout",
+            reset: "Reset",
+            openJson: "Open JSON",
+            search: "Search",
+            idle: "Idle",
+            searchContent: "Dialogue / options",
+            searchNode: "Node number",
+            searchScene: "Scene name",
+            searchSceneLine: "Scene @ line",
+            searchContentPlaceholder: "Search payload lines or option labels",
+            searchNodePlaceholder: "Search node number, for example 128",
+            searchScenePlaceholder: "Search scene name",
+            searchSceneLinePlaceholder: "Search scene @ line, for example 010_Prologue @ L122",
+            find: "Find",
+            clear: "Clear",
+            graphOverview: "Graph Overview",
+            scenes: "Scenes",
+            nodes: "Nodes",
+            edges: "Edges",
+            selection: "Selection",
+            none: "None",
+            selectionHint: "Click a node to inspect its relations.",
+            outgoingRelations: "Outgoing Relations",
+            incomingRelations: "Incoming Relations",
+            payload: "Payload",
+            payloadHint: "Payload is shown only for the selected node.",
+            noPayload: "This node has no payload.",
+            noVisibleRelations: "No visible relations.",
+            dropJson: "Drop JSON to open",
+            failedReadJson: "Failed to read JSON: {message}",
+            failedAutoLoadJson: "Failed to auto-load JSON: {message}",
+            invalidTutorialJson: "The selected file does not look like a valid tutorial graph JSON.",
+            roleBranch: "Branch",
+            roleMerge: "Merge",
+            roleJunction: "Junction",
+            roleTerminal: "Terminal",
+            roleDialogue: "Dialogue",
+            toPrefix: "To ",
+            fromPrefix: "From ",
+            nodeLabel: "Node",
+            sceneLabel: "Scene",
+            roleLabel: "Role",
+            lineCountLabel: "Lines",
+            graphModeInteractive: "interactive",
+            graphModeGraph: "graph {index}",
+            graphDisplay: "Graph {index} ({nodes} nodes, {edges} edges)",
+            searchNoGraph: "No graph",
+            searchEnterQuery: "Enter query",
+            searchNoMatch: "No match",
+            searchReady: "Ready",
+            searchMatches: "{count} matches",
+            searchSingleMatch: "1 match",
+            searchResultsHint: "Results will appear here.",
+            searchMatched: "Matched {node}",
+            viewerTitleSuffix: "Viewer",
+        },
+        zhHans: {
+            loadingGraph: "\u52a0\u8f7d\u5267\u60c5\u56fe",
+            preparing: "\u51c6\u5907\u4e2d...",
+            working: "\u5904\u7406\u4e2d...",
+            controls: "\u63a7\u5236",
+            pin: "\u56fa\u5b9a",
+            unpin: "\u53d6\u6d88\u56fa\u5b9a",
+            langToggleEnglish: "EN",
+            langToggleChinese: "\u4e2d\u6587",
+            themeDark: "\u591c\u95f4",
+            themeLight: "\u65e5\u95f4",
+            currentGraph: "\u5f53\u524d\u56fe",
+            fit: "\u9002\u914d",
+            relayout: "\u91cd\u6392",
+            reset: "\u91cd\u7f6e",
+            openJson: "\u6253\u5f00 JSON",
+            search: "\u641c\u7d22",
+            idle: "\u7a7a\u95f2",
+            searchContent: "\u53f0\u8bcd / \u9009\u9879",
+            searchNode: "\u8282\u70b9\u7f16\u53f7",
+            searchScene: "\u573a\u666f\u540d",
+            searchSceneLine: "\u573a\u666f @ \u884c\u53f7",
+            searchContentPlaceholder: "\u641c\u7d22\u53f0\u8bcd\u6216\u9009\u9879\u5185\u5bb9",
+            searchNodePlaceholder: "\u641c\u7d22\u8282\u70b9\u7f16\u53f7\uff0c\u4f8b\u5982 128",
+            searchScenePlaceholder: "\u641c\u7d22\u573a\u666f\u540d",
+            searchSceneLinePlaceholder: "\u641c\u7d22\u573a\u666f @ \u884c\u53f7\uff0c\u4f8b\u5982 010_\u30d7\u30ed\u30ed\u30fc\u30b00701 @ L122",
+            find: "\u67e5\u627e",
+            clear: "\u6e05\u7a7a",
+            graphOverview: "\u56fe\u6982\u89c8",
+            scenes: "\u573a\u666f",
+            nodes: "\u8282\u70b9",
+            edges: "\u8fb9",
+            selection: "\u5df2\u9009\u4e2d",
+            none: "\u65e0",
+            selectionHint: "\u70b9\u51fb\u4e00\u4e2a\u8282\u70b9\u67e5\u770b\u5173\u7cfb\u3002",
+            outgoingRelations: "\u51fa\u8fb9",
+            incomingRelations: "\u5165\u8fb9",
+            payload: "\u5185\u5bb9",
+            payloadHint: "\u53ea\u5728\u9009\u4e2d\u8282\u70b9\u65f6\u663e\u793a\u5185\u5bb9\u3002",
+            noPayload: "\u8fd9\u4e2a\u8282\u70b9\u6ca1\u6709 payload\u3002",
+            noVisibleRelations: "\u6ca1\u6709\u53ef\u89c1\u5173\u7cfb\u3002",
+            dropJson: "\u62d6\u5165 JSON \u6253\u5f00",
+            failedReadJson: "\u8bfb\u53d6 JSON \u5931\u8d25\uff1a{message}",
+            failedAutoLoadJson: "\u81ea\u52a8\u52a0\u8f7d JSON \u5931\u8d25\uff1a{message}",
+            invalidTutorialJson: "\u6240\u9009\u6587\u4ef6\u4e0d\u50cf\u662f\u6709\u6548\u7684 tutorial \u5267\u60c5\u56fe JSON\u3002",
+            roleBranch: "\u5206\u652f",
+            roleMerge: "\u5408\u6d41",
+            roleJunction: "\u67a2\u7ebd",
+            roleTerminal: "\u7ec8\u70b9",
+            roleDialogue: "\u5267\u60c5",
+            toPrefix: "\u81f3 ",
+            fromPrefix: "\u81ea ",
+            nodeLabel: "\u8282\u70b9",
+            sceneLabel: "\u573a\u666f",
+            roleLabel: "\u7c7b\u578b",
+            lineCountLabel: "\u53f0\u8bcd\u884c",
+            graphModeInteractive: "\u4ea4\u4e92",
+            graphModeGraph: "\u56fe {index}",
+            graphDisplay: "\u56fe {index} ({nodes} \u8282\u70b9\uff0c{edges} \u8fb9)",
+            searchNoGraph: "\u65e0\u56fe",
+            searchEnterQuery: "\u8bf7\u8f93\u5165\u67e5\u8be2",
+            searchNoMatch: "\u672a\u627e\u5230",
+            searchReady: "\u5c31\u7eea",
+            searchMatches: "\u627e\u5230 {count} \u6761",
+            searchSingleMatch: "\u627e\u5230 1 \u6761",
+            searchResultsHint: "\u7ed3\u679c\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002",
+            searchMatched: "\u5df2\u5b9a\u4f4d {node}",
+            viewerTitleSuffix: "\u67e5\u770b\u5668",
+        },
+    };
+
+    function t(key, vars) {
+        const lang = UI_TEXT[state.lang] ? state.lang : "en";
+        const fallback = UI_TEXT.en[key];
+        let text = UI_TEXT[lang][key];
+        if (text === undefined) {
+            text = fallback !== undefined ? fallback : key;
+        }
+        let out = String(text);
+        for (const [name, value] of Object.entries(vars || {})) {
+            out = out.replaceAll(`{${name}}`, String(value));
+        }
+        return out;
+    }
+
+    function roleOf(node) {
+        const incoming = Number(node?.incoming || 0);
+        const outgoing = Number(node?.outgoing || 0);
+        if (incoming > 1 && outgoing > 1) {
+            return "junction";
+        }
+        if (outgoing > 1) {
+            return "branch";
+        }
+        if (incoming > 1) {
+            return "merge";
+        }
+        if (outgoing === 0) {
+            return "terminal";
+        }
+        return "dialogue";
+    }
+
+    function roleLabel(role) {
+        if (role === "branch") {
+            return t("roleBranch");
+        }
+        if (role === "merge") {
+            return t("roleMerge");
+        }
+        if (role === "junction") {
+            return t("roleJunction");
+        }
+        if (role === "terminal") {
+            return t("roleTerminal");
+        }
+        return t("roleDialogue");
+    }
+
+    function roleSymbol(role) {
+        if (role === "branch") {
+            return "B";
+        }
+        if (role === "merge") {
+            return "M";
+        }
+        if (role === "junction") {
+            return "J";
+        }
+        if (role === "terminal") {
+            return "T";
+        }
+        return "D";
+    }
+
+    function payloadLines(node) {
+        return Array.isArray(node?.payload) ? node.payload.map((line) => String(line || "")).filter(Boolean) : [];
+    }
+
+    function lineLabel(node) {
+        const startLine = Math.max(0, Number(node?.start_line || 0));
+        const endLine = Math.max(0, Number(node?.end_line || 0));
+        if (startLine > 0 && endLine > 0) {
+            const finalLine = Math.max(startLine, endLine);
+            return startLine === finalLine ? `L${startLine}` : `L${startLine}-${finalLine}`;
+        }
+        if (startLine > 0) {
+            return `L${startLine}`;
+        }
+        if (endLine > 0) {
+            return `L${endLine}`;
+        }
+        return "";
+    }
+
+    function nodeNumberLabel(node) {
+        const nodeNo = Math.max(0, Number(node?.node_no || 0));
+        if (nodeNo > 0) {
+            return `N${nodeNo}`;
+        }
+        return String(node?.id || "-");
+    }
+
+    function nodeTitle(node) {
+        const scene = node?.scene_name ? String(node.scene_name) : "";
+        const line = lineLabel(node);
+        if (scene && line) {
+            return `${scene} @ ${line}`;
+        }
+        return String(node?.title || node?.scene_name || node?.id || "Untitled node");
+    }
+
+    function sceneLabel(node) {
+        if (!node) {
+            return "-";
+        }
+        const titled = nodeTitle(node);
+        if (titled) {
+            return titled;
+        }
+        if (node.scene_name) {
+            return String(node.scene_name);
+        }
+        if (node.scene_no !== undefined && node.scene_no !== null) {
+            return `scene ${node.scene_no}`;
+        }
+        if (node.scene_id) {
+            return String(node.scene_id);
+        }
+        return String(node.id || "-");
+    }
+
+    function normalizeSearch(value) {
+        return String(value || "").trim().toLowerCase();
+    }
+
+    function compactSearch(value) {
+        return normalizeSearch(value).replace(/\s+/g, "");
+    }
+
+    function fuzzySubsequenceScore(query, target) {
+        const q = compactSearch(query);
+        const tvalue = compactSearch(target);
+        if (!q || !tvalue) {
+            return Number.POSITIVE_INFINITY;
+        }
+        if (tvalue.includes(q)) {
+            return 0;
+        }
+        let qIndex = 0;
+        let first = -1;
+        let last = -1;
+        for (let index = 0; index < tvalue.length && qIndex < q.length; index += 1) {
+            if (tvalue[index] !== q[qIndex]) {
+                continue;
+            }
+            if (first < 0) {
+                first = index;
+            }
+            last = index;
+            qIndex += 1;
+        }
+        if (qIndex !== q.length || first < 0 || last < first) {
+            return Number.POSITIVE_INFINITY;
+        }
+        return (last - first + 1) - q.length;
+    }
+
+    function fuzzyContentScore(query, segments) {
+        let best = Number.POSITIVE_INFINITY;
+        for (const segment of segments) {
+            const text = String(segment || "");
+            const normalized = normalizeSearch(text);
+            const compact = compactSearch(text);
+            if (!normalized || !compact) {
+                continue;
+            }
+            if (normalized.includes(normalizeSearch(query)) || compact.includes(compactSearch(query))) {
+                return 0;
+            }
+            const score = fuzzySubsequenceScore(query, text);
+            if (score < best) {
+                best = score;
+            }
+        }
+        return best;
+    }
+
+    function applyLanguage() {
+        controlsTitle.textContent = t("controls");
+        overviewTitle.textContent = t("graphOverview");
+        selectionTitle.textContent = t("selection");
+        outgoingTitle.textContent = t("outgoingRelations");
+        incomingTitle.textContent = t("incomingRelations");
+        payloadTitle.textContent = t("payload");
+        searchTitle.textContent = t("search");
+        fitBtn.textContent = t("fit");
+        layoutBtn.textContent = t("relayout");
+        resetBtn.textContent = t("reset");
+        openBtn.textContent = t("openJson");
+        searchBtn.textContent = t("find");
+        clearSearchBtn.textContent = t("clear");
+        statScenesLabel.textContent = t("scenes");
+        statNodesLabel.textContent = t("nodes");
+        statEdgesLabel.textContent = t("edges");
+        chipNodesLabel.textContent = t("nodes");
+        chipEdgesLabel.textContent = t("edges");
+        stage.dataset.dropText = t("dropJson");
+        loadingTitle.textContent = t("loadingGraph");
+        if (!state.loading) {
+            loadingProgress.textContent = t("preparing");
+        }
+        pinBtn.textContent = state.drawerPinned ? t("unpin") : t("pin");
+        langBtn.textContent = state.lang === "en" ? t("langToggleChinese") : t("langToggleEnglish");
+        themeBtn.textContent = state.darkMode ? t("themeLight") : t("themeDark");
+        themeBtn.classList.toggle("is-toggle-active", state.darkMode);
+        graphMode.textContent = state.graphMap.get(state.graphId) ? t("graphModeGraph", { index: state.graphMap.get(state.graphId).index }) : t("graphModeInteractive");
+        searchMode.options[0].textContent = t("searchContent");
+        searchMode.options[1].textContent = t("searchNode");
+        searchMode.options[2].textContent = t("searchScene");
+        searchMode.options[3].textContent = t("searchSceneLine");
+        updateSearchPlaceholder();
+        updateGraphSelect();
+        updateMeta();
+        updateSelection(state.selectedNode);
+        if (state.raw) {
+            document.title = `${state.raw?.source?.name || "tutorial graph"} - ${t("viewerTitleSuffix")}`;
+        }
+        if (!state.nodes.length) {
+            setSearchStatus(t("idle"));
+            renderSearchResults([]);
+            return;
+        }
+        setSearchStatus(state.visibleNodes.length ? t("searchReady") : t("searchNoGraph"));
+    }
+
+    function applyTheme() {
+        document.documentElement.classList.toggle("theme-dark", !!state.darkMode);
+        themeBtn.classList.toggle("is-toggle-active", !!state.darkMode);
+        themeBtn.textContent = state.darkMode ? t("themeLight") : t("themeDark");
+        draw();
+    }
+
+    function graphKey(node) {
+        return String(node?.component_id || node?.scene_id || "graph:0");
+    }
+
+    function updateSearchPlaceholder() {
+        const mode = String(searchMode?.value || "content");
+        if (mode === "node") {
+            searchInput.placeholder = t("searchNodePlaceholder");
+            return;
+        }
+        if (mode === "scene") {
+            searchInput.placeholder = t("searchScenePlaceholder");
+            return;
+        }
+        if (mode === "sceneLine") {
+            searchInput.placeholder = t("searchSceneLinePlaceholder");
+            return;
+        }
+        searchInput.placeholder = t("searchContentPlaceholder");
+    }
+
+    function setSearchStatus(text) {
+        searchStatus.textContent = String(text || t("idle"));
+    }
+
+    function nodeSearchText(node, mode) {
+        if (!node) {
+            return "";
+        }
+        if (mode === "node") {
+            return `${nodeNumberLabel(node)}\n${String(node.id || "")}`.toLowerCase();
+        }
+        if (mode === "scene") {
+            return String(node.scene_name || "").toLowerCase();
+        }
+        if (mode === "sceneLine") {
+            const title = nodeTitle(node).toLowerCase();
+            return `${title}\n${title.replace(/\s+/g, "")}`;
+        }
+        const parts = [...payloadLines(node)];
+        const outgoing = state.outgoingMap.get(node.id) || [];
+        const incoming = state.incomingMap.get(node.id) || [];
+        for (const edge of outgoing) {
+            if (state.visibleNodeMap.has(edge.target) && edge.label) {
+                parts.push(String(edge.label));
+            }
+        }
+        for (const edge of incoming) {
+            if (state.visibleNodeMap.has(edge.source) && edge.label) {
+                parts.push(String(edge.label));
+            }
+        }
+        return parts.join("\n").toLowerCase();
+    }
+
+    function nodeSearchSegments(node) {
+        const parts = [...payloadLines(node)];
+        const outgoing = state.outgoingMap.get(node.id) || [];
+        const incoming = state.incomingMap.get(node.id) || [];
+        for (const edge of outgoing) {
+            if (state.visibleNodeMap.has(edge.target) && edge.label) {
+                parts.push(String(edge.label));
+            }
+        }
+        for (const edge of incoming) {
+            if (state.visibleNodeMap.has(edge.source) && edge.label) {
+                parts.push(String(edge.label));
+            }
+        }
+        return parts.filter(Boolean);
+    }
+
+    function bestContentPreview(query, segments) {
+        const normalizedQuery = normalizeSearch(query);
+        const compactQuery = compactSearch(query);
+        let bestText = "";
+        let bestScore = Number.POSITIVE_INFINITY;
+        for (const segment of segments) {
+            const text = String(segment || "").trim();
+            if (!text) {
+                continue;
+            }
+            const normalized = normalizeSearch(text);
+            const compact = compactSearch(text);
+            if (normalized.includes(normalizedQuery) || compact.includes(compactQuery)) {
+                return text;
+            }
+            const score = fuzzySubsequenceScore(query, text);
+            if (score < bestScore) {
+                bestScore = score;
+                bestText = text;
+            }
+        }
+        return bestText;
+    }
+
+    function collectSearchMatches(query, mode) {
+        const normalized = normalizeSearch(query);
+        if (!normalized) {
+            return [];
+        }
+        const candidates = state.visibleNodes.slice();
+        const matches = [];
+        for (const node of candidates) {
+            let score = Number.POSITIVE_INFINITY;
+            let preview = "";
+            if (mode === "content") {
+                const segments = nodeSearchSegments(node);
+                score = fuzzyContentScore(query, segments);
+                preview = bestContentPreview(query, segments);
+            } else if (mode === "node") {
+                const text = nodeSearchText(node, mode);
+                const compact = normalized.replace(/[\s#]/g, "");
+                const numeric = compact.startsWith("n") ? compact.slice(1) : compact;
+                if (String(Number(node.node_no || 0)) === numeric) {
+                    score = -1;
+                } else {
+                    score = fuzzySubsequenceScore(query, text);
+                }
+                preview = node.id ? String(node.id) : "";
+            } else {
+                const text = nodeSearchText(node, mode);
+                if (text.includes(normalized) || compactSearch(text).includes(compactSearch(query))) {
+                    score = 0;
+                } else {
+                    score = fuzzySubsequenceScore(query, text);
+                }
+                preview = mode === "sceneLine" ? node.scene_name || "" : nodeTitle(node);
+            }
+            if (!Number.isFinite(score)) {
+                continue;
+            }
+            matches.push({ node, score, preview });
+        }
+        matches.sort((a, b) => (
+            a.score - b.score
+            || Number(a.node.node_no || 0) - Number(b.node.node_no || 0)
+            || nodeTitle(a.node).localeCompare(nodeTitle(b.node), "ja")
+        ));
+        return matches.slice(0, 80);
+    }
+
+    function renderSearchResults(matches) {
+        searchResults.replaceChildren();
+        if (!matches.length) {
+            const pill = document.createElement("div");
+            pill.className = "pill";
+            pill.textContent = t("searchResultsHint");
+            searchResults.appendChild(pill);
+            return;
+        }
+        for (const match of matches) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "search-result-row";
+            const title = document.createElement("div");
+            title.className = "search-result-title";
+            title.textContent = `${nodeNumberLabel(match.node)} | ${nodeTitle(match.node)}`;
+            button.appendChild(title);
+            if (match.preview) {
+                const subtitle = document.createElement("div");
+                subtitle.className = "search-result-subtitle";
+                subtitle.textContent = match.preview;
+                button.appendChild(subtitle);
+            }
+            button.addEventListener("click", () => {
+                centerOnNode(match.node);
+                updateSelection(match.node);
+                setSearchStatus(t("searchMatched", { node: nodeNumberLabel(match.node) }));
+            });
+            searchResults.appendChild(button);
+        }
+    }
+
+    function clearSearchResults() {
+        renderSearchResults([]);
+    }
+
+    function runSearch() {
+        if (!state.visibleNodes.length) {
+            setSearchStatus(t("searchNoGraph"));
+            renderSearchResults([]);
+            return;
+        }
+        const mode = String(searchMode.value || "content");
+        const query = String(searchInput.value || "");
+        const normalized = normalizeSearch(query);
+        if (!normalized) {
+            setSearchStatus(t("searchEnterQuery"));
+            renderSearchResults([]);
+            return;
+        }
+        const matches = collectSearchMatches(query, mode);
+        if (!matches.length) {
+            setSearchStatus(t("searchNoMatch"));
+            renderSearchResults([]);
+            return;
+        }
+        renderSearchResults(matches);
+        if (matches.length === 1) {
+            centerOnNode(matches[0].node);
+            updateSelection(matches[0].node);
+            setSearchStatus(t("searchSingleMatch"));
+            return;
+        }
+        setSearchStatus(t("searchMatches", { count: matches.length }));
+    }
+
+    function waitForPaint() {
+        return new Promise((resolve) => {
+            window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(resolve);
+            });
+        });
+    }
+
+    function formatBytes(value) {
+        const size = Math.max(0, Number(value) || 0);
+        if (!size) {
+            return "0 B";
+        }
+        const units = ["B", "KB", "MB", "GB"];
+        let index = 0;
+        let current = size;
+        while (current >= 1024 && index < units.length - 1) {
+            current /= 1024;
+            index += 1;
+        }
+        return `${current >= 10 || index === 0 ? current.toFixed(0) : current.toFixed(1)} ${units[index]}`;
+    }
+
+    function hashText(value) {
+        let hash = 2166136261;
+        const text = String(value || "");
+        for (let index = 0; index < text.length; index += 1) {
+            hash ^= text.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        return hash >>> 0;
+    }
+
+    function setLoading(active, title, detail, loaded, total) {
+        state.loading = !!active;
+        loadingOverlay.classList.toggle("hidden", !state.loading);
+        loadingTitle.textContent = String(title || t("loadingGraph"));
+        loadingDetail.textContent = String(detail || "");
+        const knownTotal = Math.max(0, Number(total) || 0);
+        const knownLoaded = Math.max(0, Number(loaded) || 0);
+        if (state.loading && knownTotal > 0) {
+            const percent = Math.max(0, Math.min(100, (knownLoaded / knownTotal) * 100));
+            loadingBarFill.classList.remove("is-indeterminate");
+            loadingBarFill.style.width = `${percent.toFixed(1)}%`;
+            loadingProgress.textContent = `${formatBytes(knownLoaded)} / ${formatBytes(knownTotal)} (${Math.round(percent)}%)`;
+            syncEdgeAnimationLoop();
+            return;
+        }
+        loadingBarFill.classList.add("is-indeterminate");
+        loadingBarFill.style.width = "";
+        loadingProgress.textContent = state.loading ? t("working") : "";
+        syncEdgeAnimationLoop();
+    }
+
+    function clearLoading() {
+        setLoading(false, "", "", 0, 0);
+    }
+
+    function syncEdgeAnimationLoop() {
+        const shouldRun = !state.loading && state.visibleEdges.length > 0;
+        if (!shouldRun) {
+            if (state.edgeAnimationFrame) {
+                window.cancelAnimationFrame(state.edgeAnimationFrame);
+            }
+            state.edgeAnimationFrame = 0;
+            state.edgeAnimationClock = 0;
+            return;
+        }
+        if (!state.edgeAnimationFrame) {
+            state.edgeAnimationClock = 0;
+            state.edgeAnimationFrame = window.requestAnimationFrame(runEdgeAnimationFrame);
+        }
+    }
+
+    function readJsonFile(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    setLoading(true, t("loadingGraph"), String(file?.name || ""), Number(file?.size || 0), Number(file?.size || 0));
+                    resolve(JSON.parse(String(reader.result || "{}")));
+                } catch (error) {
+                    reject(error);
+                }
+            };
+            reader.onerror = () => reject(reader.error || new Error("Read failed"));
+            reader.onprogress = (event) => {
+                const total = event.lengthComputable ? Number(event.total || 0) : Number(file?.size || 0);
+                setLoading(true, t("loadingGraph"), String(file?.name || ""), Number(event.loaded || 0), total);
+            };
+            reader.readAsText(file, "utf-8");
+        });
+    }
+
+    function dragHasFiles(event) {
+        return Array.from(event.dataTransfer?.types || []).includes("Files");
+    }
+
+    async function openGraphFile(file) {
+        if (!file) {
+            return;
+        }
+        emptyState.classList.add("hidden");
+        setLoading(true, t("loadingGraph"), String(file.name || ""), 0, Number(file.size || 0));
+        await waitForPaint();
+        try {
+            const data = await readJsonFile(file);
+            setLoading(true, t("working"), String(file.name || ""), 0, 0);
+            await waitForPaint();
+            loadData(data);
+        } catch (error) {
+            emptyState.classList.remove("hidden");
+            emptyState.textContent = t("failedReadJson", { message: error instanceof Error ? error.message : String(error) });
+        } finally {
+            clearLoading();
+            state.dragDepth = 0;
+            stage.classList.remove("is-drop-target");
+        }
+    }
+
+    async function readJsonResponse(response, label) {
+        const total = Math.max(0, Number(response.headers.get("Content-Length")) || 0);
+        if (!response.body || !response.body.getReader) {
+            setLoading(true, t("loadingGraph"), label, 0, total);
+            const text = await response.text();
+            setLoading(true, t("loadingGraph"), label, total, total);
+            return JSON.parse(text);
+        }
+        const reader = response.body.getReader();
+        const chunks = [];
+        const decoder = new TextDecoder("utf-8");
+        let loaded = 0;
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            if (value) {
+                chunks.push(value);
+                loaded += value.byteLength;
+                setLoading(true, t("loadingGraph"), label, loaded, total);
+            }
+        }
+        setLoading(true, t("loadingGraph"), label, loaded, total || loaded);
+        let text = "";
+        for (let index = 0; index < chunks.length; index += 1) {
+            text += decoder.decode(chunks[index], { stream: index + 1 < chunks.length });
+        }
+        text += decoder.decode();
+        return JSON.parse(text);
+    }
+
+    async function openGraphUrl(urlValue) {
+        if (!urlValue) {
+            return false;
+        }
+        let label = "";
+        try {
+            label = new URL(urlValue, window.location.href).pathname.split("/").pop() || urlValue;
+        } catch (error) {
+            label = urlValue;
+        }
+        emptyState.classList.add("hidden");
+        setLoading(true, t("loadingGraph"), label, 0, 0);
+        await waitForPaint();
+        try {
+            const response = await fetch(urlValue, { cache: "no-store" });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            const data = await readJsonResponse(response, label);
+            setLoading(true, t("working"), label, 0, 0);
+            await waitForPaint();
+            loadData(data);
+            return true;
+        } catch (error) {
+            emptyState.classList.remove("hidden");
+            emptyState.textContent = t("failedAutoLoadJson", { message: error instanceof Error ? error.message : String(error) });
+            return false;
+        } finally {
+            clearLoading();
+        }
+    }
+
+    function autoLoadUrl() {
+        try {
+            const current = new URL(window.location.href);
+            const value = current.searchParams.get("json");
+            if (!value) {
+                return "";
+            }
+            return new URL(value, current).toString();
+        } catch (error) {
+            return "";
+        }
+    }
+
+    function resizeCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        const dpr = Math.max(window.devicePixelRatio || 1, 1);
+        canvas.width = Math.floor(rect.width * dpr);
+        canvas.height = Math.floor(rect.height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        draw();
+    }
+
+    function worldToScreen(x, y) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: rect.width / 2 + (x + state.panX) * state.zoom,
+            y: rect.height / 2 + (y + state.panY) * state.zoom,
+        };
+    }
+
+    function screenToWorld(x, y) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (x - rect.width / 2) / state.zoom - state.panX,
+            y: (y - rect.height / 2) / state.zoom - state.panY,
+        };
+    }
+
+    function nodeSize(node) {
+        const size = node.role === "branch" || node.role === "junction" ? 32 : 28;
+        return { width: size, height: size };
+    }
+
+    function nodeRadius(node) {
+        const { width, height } = nodeSize(node);
+        return Math.max(width, height) * 0.72;
+    }
+
+    function drawRoundedRect(x, y, w, h, r, fill, stroke, lineWidth) {
+        const rr = Math.min(r, h / 2, w / 2);
+        ctx.beginPath();
+        ctx.moveTo(x + rr, y);
+        ctx.arcTo(x + w, y, x + w, y + h, rr);
+        ctx.arcTo(x + w, y + h, x, y + h, rr);
+        ctx.arcTo(x, y + h, x, y, rr);
+        ctx.arcTo(x, y, x + w, y, rr);
+        ctx.closePath();
+        ctx.fillStyle = fill;
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = lineWidth;
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    function drawArrow(x1, y1, x2, y2, color) {
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        const head = 8;
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - Math.cos(angle - Math.PI / 7) * head, y2 - Math.sin(angle - Math.PI / 7) * head);
+        ctx.lineTo(x2 - Math.cos(angle + Math.PI / 7) * head, y2 - Math.sin(angle + Math.PI / 7) * head);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+
+    function edgeCurve(edge) {
+        const source = state.visibleNodeMap.get(edge.source);
+        const target = state.visibleNodeMap.get(edge.target);
+        if (!source || !target) {
+            return null;
+        }
+        const a = worldToScreen(source.x, source.y);
+        const b = worldToScreen(target.x, target.y);
+        const selected = state.selectedNode && (state.selectedNode.id === source.id || state.selectedNode.id === target.id);
+        const label = String(edge.label || "");
+        const color = selected ? "rgba(37, 99, 173, 0.9)" : edge.cross_scene ? "rgba(54, 178, 156, 0.7)" : "rgba(72, 116, 158, 0.58)";
+        const mx = (a.x + b.x) / 2;
+        const my = (a.y + b.y) / 2;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const baseBend = Math.min(36, Math.max(-36, (Number(source.scene_no || 0) - Number(target.scene_no || 0)) * 0.15));
+        const parallelCount = Math.max(1, Number(edge.parallelCount || 1));
+        const parallelIndex = Number(edge.parallelIndex || 0);
+        const parallelShift = parallelCount > 1 ? (parallelIndex - (parallelCount - 1) / 2) * 24 : 0;
+        const bend = baseBend + parallelShift;
+        const nx = -dy || 1;
+        const ny = dx || 0;
+        const nlen = Math.hypot(nx, ny) || 1;
+        const cx = mx + (nx / nlen) * bend;
+        const cy = my + (ny / nlen) * bend;
+        return {
+            a,
+            b,
+            cx,
+            cy,
+            selected,
+            label,
+            color,
+        };
+    }
+
+    function quadraticPoint(a, c, b, t) {
+        const omt = 1 - t;
+        return {
+            x: omt * omt * a.x + 2 * omt * t * c.x + t * t * b.x,
+            y: omt * omt * a.y + 2 * omt * t * c.y + t * t * b.y,
+        };
+    }
+
+    function quadraticTangent(a, c, b, t) {
+        return {
+            x: 2 * (1 - t) * (c.x - a.x) + 2 * t * (b.x - c.x),
+            y: 2 * (1 - t) * (c.y - a.y) + 2 * t * (b.y - c.y),
+        };
+    }
+
+    function particleStride() {
+        const edgeCount = Math.max(0, Number(state.visibleEdges.length || 0));
+        if (state.zoom < 0.06) {
+            return 6;
+        }
+        if (edgeCount > 4200) {
+            return 5;
+        }
+        if (edgeCount > 2600) {
+            return 4;
+        }
+        if (edgeCount > 1500) {
+            return 3;
+        }
+        if (edgeCount > 700) {
+            return 2;
+        }
+        return 1;
+    }
+
+    function drawEdgeParticle(edge, geometry, edgeIndex, timestamp) {
+        if (!timestamp || state.loading || state.zoom < 0.045) {
+            return;
+        }
+        const selected = !!geometry.selected;
+        const stride = particleStride();
+        if (!selected && stride > 1 && (edgeIndex % stride) !== 0) {
+            return;
+        }
+        const phase = ((timestamp / 1000) * 0.34 + Number(edge.motionOffset || 0)) % 1;
+        const t = 0.12 + phase * 0.76;
+        const head = quadraticPoint(geometry.a, { x: geometry.cx, y: geometry.cy }, geometry.b, t);
+        const tail = quadraticPoint(geometry.a, { x: geometry.cx, y: geometry.cy }, geometry.b, Math.max(0.06, t - 0.065));
+        const tangent = quadraticTangent(geometry.a, { x: geometry.cx, y: geometry.cy }, geometry.b, t);
+        const tangentLength = Math.hypot(tangent.x, tangent.y) || 1;
+        const ux = tangent.x / tangentLength;
+        const uy = tangent.y / tangentLength;
+        const trailLength = selected ? 13 : 10;
+        const trailStartX = head.x - ux * trailLength;
+        const trailStartY = head.y - uy * trailLength;
+        const glow = selected ? "rgba(37, 99, 173, 0.98)" : edge.cross_scene ? "rgba(54, 178, 156, 0.9)" : "rgba(37, 99, 173, 0.82)";
+        const halo = selected ? "rgba(37, 99, 173, 0.14)" : edge.cross_scene ? "rgba(54, 178, 156, 0.12)" : "rgba(37, 99, 173, 0.1)";
+        ctx.beginPath();
+        ctx.moveTo(trailStartX, trailStartY);
+        ctx.lineTo(tail.x, tail.y);
+        ctx.lineTo(head.x, head.y);
+        ctx.strokeStyle = glow;
+        ctx.lineWidth = selected ? 2.8 : 2.1;
+        ctx.lineCap = "round";
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, selected ? 3.8 : 3.1, 0, Math.PI * 2);
+        ctx.fillStyle = glow;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, selected ? 7.4 : 6.2, 0, Math.PI * 2);
+        ctx.fillStyle = halo;
+        ctx.fill();
+    }
+
+    function drawEdge(edge, edgeIndex, timestamp) {
+        const geometry = edgeCurve(edge);
+        if (!geometry) {
+            return;
+        }
+        ctx.beginPath();
+        ctx.moveTo(geometry.a.x, geometry.a.y);
+        ctx.quadraticCurveTo(geometry.cx, geometry.cy, geometry.b.x, geometry.b.y);
+        ctx.strokeStyle = geometry.color;
+        ctx.lineWidth = geometry.selected ? 3.8 : edge.cross_scene ? 2.8 : 2.4;
+        ctx.stroke();
+        drawArrow((geometry.cx + geometry.b.x) / 2, (geometry.cy + geometry.b.y) / 2, geometry.b.x, geometry.b.y, geometry.color);
+        drawEdgeParticle(edge, geometry, edgeIndex, timestamp);
+        if (geometry.label && state.zoom >= 0.34) {
+            const lx = (geometry.a.x + 2 * geometry.cx + geometry.b.x) / 4;
+            const ly = (geometry.a.y + 2 * geometry.cy + geometry.b.y) / 4;
+            ctx.font = '600 11px "Segoe UI"';
+            const pad = 8;
+            const width = Math.min(260, ctx.measureText(geometry.label).width + pad * 2);
+            drawRoundedRect(
+                lx - width / 2,
+                ly - 11,
+                width,
+                22,
+                11,
+                geometry.selected ? "rgba(255, 255, 255, 0.98)" : "rgba(248, 251, 253, 0.95)",
+                geometry.selected ? "rgba(37, 99, 173, 0.34)" : "rgba(37, 99, 173, 0.16)",
+                1,
+            );
+            ctx.fillStyle = geometry.selected ? "#1b4c7a" : "#2563ad";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(geometry.label, lx, ly);
+        }
+    }
+
+    function drawNode(node) {
+        const p = worldToScreen(node.x, node.y);
+        const { width, height } = nodeSize(node);
+        const active = state.selectedNode && state.selectedNode.id === node.id;
+        drawRoundedRect(
+            p.x - width / 2,
+            p.y - height / 2,
+            width,
+            height,
+            11,
+            node.role === "terminal"
+                ? active ? "#fbefd6" : "#f8f1e3"
+                : node.role === "merge"
+                    ? active ? "#ddf8f2" : "#e9f8f5"
+                    : active ? "#d7ebfa" : "#e8f3fb",
+            node.role === "terminal"
+                ? "#c79845"
+                : node.role === "merge"
+                    ? "#4cb89d"
+                    : node.role === "branch" || node.role === "junction" ? "#3f84c6" : "#8ebad8",
+            active ? 2.1 : 1.5,
+        );
+        ctx.fillStyle = node.role === "terminal" ? "#bf8a35" : node.role === "merge" ? "#257961" : "#2563ad";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.font = '700 12px "Segoe UI"';
+        ctx.fillText(roleSymbol(node.role), p.x, p.y);
+    }
+
+    function draw(timestamp = performance.now()) {
+        const rect = canvas.getBoundingClientRect();
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        for (let index = 0; index < state.visibleEdges.length; index += 1) {
+            drawEdge(state.visibleEdges[index], index, timestamp);
+        }
+        for (const node of state.visibleNodes) {
+            drawNode(node);
+        }
+    }
+
+    function findNodeAt(clientX, clientY) {
+        const rect = canvas.getBoundingClientRect();
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        for (let i = state.visibleNodes.length - 1; i >= 0; i -= 1) {
+            const node = state.visibleNodes[i];
+            const p = worldToScreen(node.x, node.y);
+            const { width, height } = nodeSize(node);
+            if (
+                x >= p.x - width / 2 &&
+                x <= p.x + width / 2 &&
+                y >= p.y - height / 2 &&
+                y <= p.y + height / 2
+            ) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    function centerOnNode(node) {
+        if (!node) {
+            return;
+        }
+        state.panX = -node.x;
+        state.panY = -node.y;
+        draw();
+    }
+
+    function fitGraph() {
+        if (!state.visibleNodes.length) {
+            return;
+        }
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const node of state.visibleNodes) {
+            const pad = nodeRadius(node) + 90;
+            minX = Math.min(minX, node.x - pad);
+            maxX = Math.max(maxX, node.x + pad);
+            minY = Math.min(minY, node.y - pad);
+            maxY = Math.max(maxY, node.y + pad);
+        }
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.max(80, maxX - minX);
+        const height = Math.max(80, maxY - minY);
+        const zx = Math.max(state.minZoom, (rect.width - 32) / width);
+        const zy = Math.max(state.minZoom, (rect.height - 32) / height);
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, Math.min(zx, zy)));
+        state.panX = -(minX + maxX) / 2;
+        state.panY = -(minY + maxY) / 2;
+        draw();
+    }
+
+    function resetView() {
+        state.panX = 0;
+        state.panY = 0;
+        state.zoom = 1;
+        draw();
+    }
+
+    function syncDrawer() {
+        const open = state.drawerPinned || state.drawerHover;
+        drawer.classList.toggle("is-pinned", state.drawerPinned);
+        drawer.classList.toggle("is-open", open);
+        drawerTrigger.classList.toggle("hidden", state.drawerPinned);
+        pinBtn.textContent = state.drawerPinned ? t("unpin") : t("pin");
+    }
+
+    function openFilePicker() {
+        if (state.loading) {
+            return;
+        }
+        fileInput.click();
+    }
+
+    function openStageFilePickerIfEmpty() {
+        if (state.loading || state.nodes.length > 0) {
+            return;
+        }
+        fileInput.click();
+    }
+
+    function buildBuckets(cellSize) {
+        const buckets = new Map();
+        for (const node of state.visibleNodes) {
+            const cellX = Math.floor(node.x / cellSize);
+            const cellY = Math.floor(node.y / cellSize);
+            const key = `${cellX}:${cellY}`;
+            if (!buckets.has(key)) {
+                buckets.set(key, []);
+            }
+            buckets.get(key).push(node);
+        }
+        return buckets;
+    }
+
+    function buildNeighborMap() {
+        const neighbors = new Map(state.visibleNodes.map((node) => [node.id, new Set()]));
+        for (const edge of state.visibleEdges) {
+            neighbors.get(edge.source)?.add(edge.target);
+            neighbors.get(edge.target)?.add(edge.source);
+        }
+        return neighbors;
+    }
+
+    function layoutScore(nodeId, neighbors) {
+        const node = state.visibleNodeMap.get(nodeId);
+        const linked = neighbors.get(nodeId)?.size || 0;
+        return (
+            linked * 8
+            + Number(node?.outgoing || 0) * 4
+            + Number(node?.incoming || 0) * 3
+            + (node?.role === "branch" || node?.role === "junction" ? 6 : 0)
+        );
+    }
+
+    function applyPairForces(pairScale) {
+        const cellSize = 220;
+        const repel = 23500 * pairScale;
+        const collisionStrength = 0.34 * pairScale;
+        const buckets = buildBuckets(cellSize);
+        for (const [key, bucket] of buckets.entries()) {
+            const split = key.split(":");
+            const cellX = Number(split[0]);
+            const cellY = Number(split[1]);
+            const neighbors = [
+                [cellX, cellY],
+                [cellX + 1, cellY],
+                [cellX, cellY + 1],
+                [cellX + 1, cellY + 1],
+                [cellX + 1, cellY - 1],
+            ];
+            for (const [nextX, nextY] of neighbors) {
+                const other = buckets.get(`${nextX}:${nextY}`);
+                if (!other) {
+                    continue;
+                }
+                if (nextX === cellX && nextY === cellY) {
+                    for (let i = 0; i < bucket.length; i += 1) {
+                        const a = bucket[i];
+                        for (let j = i + 1; j < bucket.length; j += 1) {
+                            const b = bucket[j];
+                            const lockA = state.dragNode && state.dragNode.id === a.id;
+                            const lockB = state.dragNode && state.dragNode.id === b.id;
+                            let dx = a.x - b.x;
+                            let dy = a.y - b.y;
+                            const dist2 = dx * dx + dy * dy + 0.01;
+                            const dist = Math.sqrt(dist2);
+                            dx /= dist;
+                            dy /= dist;
+                            const force = repel / dist2;
+                            if (!lockA) {
+                                a.vx += dx * force;
+                                a.vy += dy * force;
+                            }
+                            if (!lockB) {
+                                b.vx -= dx * force;
+                                b.vy -= dy * force;
+                            }
+                            const minDist = nodeRadius(a) + nodeRadius(b) + 28;
+                            if (dist < minDist) {
+                                const overlap = minDist - dist;
+                                const push = overlap * collisionStrength;
+                                if (!lockA && !lockB) {
+                                    a.x += dx * push * 0.5;
+                                    a.y += dy * push * 0.5;
+                                    b.x -= dx * push * 0.5;
+                                    b.y -= dy * push * 0.5;
+                                } else if (lockA && !lockB) {
+                                    b.x -= dx * push;
+                                    b.y -= dy * push;
+                                } else if (!lockA && lockB) {
+                                    a.x += dx * push;
+                                    a.y += dy * push;
+                                }
+                                if (!lockA) {
+                                    a.vx += dx * push * 0.12;
+                                    a.vy += dy * push * 0.12;
+                                }
+                                if (!lockB) {
+                                    b.vx -= dx * push * 0.12;
+                                    b.vy -= dy * push * 0.12;
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+                for (const a of bucket) {
+                    for (const b of other) {
+                        const lockA = state.dragNode && state.dragNode.id === a.id;
+                        const lockB = state.dragNode && state.dragNode.id === b.id;
+                        let dx = a.x - b.x;
+                        let dy = a.y - b.y;
+                        const dist2 = dx * dx + dy * dy + 0.01;
+                        const dist = Math.sqrt(dist2);
+                        dx /= dist;
+                        dy /= dist;
+                        const force = repel / dist2;
+                        if (!lockA) {
+                            a.vx += dx * force;
+                            a.vy += dy * force;
+                        }
+                        if (!lockB) {
+                            b.vx -= dx * force;
+                            b.vy -= dy * force;
+                        }
+                        const minDist = nodeRadius(a) + nodeRadius(b) + 28;
+                        if (dist < minDist) {
+                            const overlap = minDist - dist;
+                            const push = overlap * collisionStrength;
+                            if (!lockA && !lockB) {
+                                a.x += dx * push * 0.5;
+                                a.y += dy * push * 0.5;
+                                b.x -= dx * push * 0.5;
+                                b.y -= dy * push * 0.5;
+                            } else if (lockA && !lockB) {
+                                b.x -= dx * push;
+                                b.y -= dy * push;
+                            } else if (!lockA && lockB) {
+                                a.x += dx * push;
+                                a.y += dy * push;
+                            }
+                            if (!lockA) {
+                                a.vx += dx * push * 0.12;
+                                a.vy += dy * push * 0.12;
+                            }
+                            if (!lockB) {
+                                b.vx -= dx * push * 0.12;
+                                b.vy -= dy * push * 0.12;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    function applyEdgeForces(edgeScale) {
+        const spring = 0.0075 * edgeScale;
+        for (const edge of state.visibleEdges) {
+            const source = state.visibleNodeMap.get(edge.source);
+            const target = state.visibleNodeMap.get(edge.target);
+            if (!source || !target) {
+                continue;
+            }
+            const dx = target.x - source.x;
+            const dy = target.y - source.y;
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            const sourceDegree = Math.max(1, Number(source.visibleDegree || 0));
+            const targetDegree = Math.max(1, Number(target.visibleDegree || 0));
+            const degreeFactor = Math.sqrt((sourceDegree + targetDegree) / 2);
+            const densityFactor = Math.max(0.48, Math.min(1, 2.4 / Math.sqrt(Math.max(1, state.visibleAverageDegree || 1))));
+            const desired = 132 + Math.min(78, degreeFactor * 12) + (edge.label ? 26 : 0);
+            const rawForce = ((dist - desired) * spring * densityFactor) / degreeFactor;
+            const force = Math.max(-3.8, Math.min(3.8, rawForce));
+            const ux = dx / dist;
+            const uy = dy / dist;
+            if (!state.dragNode || state.dragNode.id !== source.id) {
+                source.vx += ux * force;
+                source.vy += uy * force;
+            }
+            if (!state.dragNode || state.dragNode.id !== target.id) {
+                target.vx -= ux * force;
+                target.vy -= uy * force;
+            }
+        }
+    }
+
+    function applyCentering(centerScale) {
+        if (!state.visibleNodes.length) {
+            return;
+        }
+        let sumX = 0;
+        let sumY = 0;
+        for (const node of state.visibleNodes) {
+            sumX += node.x;
+            sumY += node.y;
+        }
+        const avgX = sumX / state.visibleNodes.length;
+        const avgY = sumY / state.visibleNodes.length;
+        for (const node of state.visibleNodes) {
+            if (state.dragNode && state.dragNode.id === node.id) {
+                continue;
+            }
+            node.vx -= (node.x - avgX) * centerScale;
+            node.vy -= (node.y - avgY) * centerScale;
+        }
+    }
+
+    function integrateNodes(dt, damping) {
+        let maxMotion = 0;
+        for (const node of state.visibleNodes) {
+            if (state.dragNode && state.dragNode.id === node.id) {
+                node.vx = 0;
+                node.vy = 0;
+                continue;
+            }
+            node.vx *= damping;
+            node.vy *= damping;
+            const speed = Math.hypot(node.vx, node.vy);
+            const maxSpeed = 10;
+            if (speed > maxSpeed) {
+                const scale = maxSpeed / speed;
+                node.vx *= scale;
+                node.vy *= scale;
+            }
+            if (Math.abs(node.vx) < 0.0035) {
+                node.vx = 0;
+            }
+            if (Math.abs(node.vy) < 0.0035) {
+                node.vy = 0;
+            }
+            const stepX = Math.max(-22, Math.min(22, node.vx * dt));
+            const stepY = Math.max(-22, Math.min(22, node.vy * dt));
+            const nextX = node.x + stepX;
+            const nextY = node.y + stepY;
+            maxMotion = Math.max(maxMotion, Math.abs(nextX - node.x), Math.abs(nextY - node.y));
+            node.x = nextX;
+            node.y = nextY;
+        }
+        return maxMotion;
+    }
+
+    function seedVisibleNodes() {
+        const neighbors = buildNeighborMap();
+        const remaining = new Set(state.visibleNodes.map((node) => node.id));
+        let componentIndex = 0;
+        while (remaining.size) {
+            const rootId = [...remaining].sort((a, b) => (
+                layoutScore(b, neighbors) - layoutScore(a, neighbors)
+                || String(a).localeCompare(String(b), "ja")
+            ))[0];
+            const queue = [rootId];
+            const depthById = new Map([[rootId, 0]]);
+            const levels = [];
+            remaining.delete(rootId);
+            while (queue.length) {
+                const currentId = queue.shift();
+                const depth = depthById.get(currentId) || 0;
+                if (!levels[depth]) {
+                    levels[depth] = [];
+                }
+                levels[depth].push(currentId);
+                const ordered = [...(neighbors.get(currentId) || [])].sort((a, b) => (
+                    layoutScore(b, neighbors) - layoutScore(a, neighbors)
+                    || String(a).localeCompare(String(b), "ja")
+                ));
+                for (const nextId of ordered) {
+                    if (!remaining.has(nextId)) {
+                        continue;
+                    }
+                    remaining.delete(nextId);
+                    depthById.set(nextId, depth + 1);
+                    queue.push(nextId);
+                }
+            }
+            const spreadRadius = Math.max(460, (levels.length + 1) * 180);
+            const offsetX = componentIndex === 0 ? 0 : (componentIndex % 2 === 0 ? 1 : -1) * spreadRadius * 1.35;
+            const offsetY = componentIndex === 0 ? 0 : (Math.floor(componentIndex / 2) - 0.5) * 280;
+            for (const [depth, ids] of levels.entries()) {
+                const ringRadius = depth === 0 ? 0 : 160 + depth * 150;
+                const angleOffset = componentIndex * 0.75 + depth * 0.48;
+                for (const [index, nodeId] of ids.entries()) {
+                    const node = state.visibleNodeMap.get(nodeId);
+                    if (!node) {
+                        continue;
+                    }
+                    const angle = ids.length === 1
+                        ? angleOffset
+                        : angleOffset + (Math.PI * 2 * index) / ids.length;
+                    const eccentricityX = 1 + ((index + depth) % 3) * 0.1;
+                    const eccentricityY = 0.9 + ((index + componentIndex) % 4) * 0.08;
+                    node.x = offsetX + Math.cos(angle) * ringRadius * eccentricityX;
+                    node.y = offsetY + Math.sin(angle) * ringRadius * eccentricityY;
+                    node.vx = 0;
+                    node.vy = 0;
+                }
+            }
+            componentIndex += 1;
+        }
+        for (const node of state.visibleNodes) {
+            node.vx = 0;
+            node.vy = 0;
+        }
+    }
+
+    function layoutVisible(iterations = 260) {
+        for (let step = 0; step < iterations; step += 1) {
+            applyPairForces(1);
+            applyEdgeForces(1);
+            applyCentering(0.0011);
+            integrateNodes(1, 0.84);
+        }
+        draw();
+    }
+
+    function stepPhysics(dt) {
+        if (!state.visibleNodes.length) {
+            return 0;
+        }
+        const alpha = Math.max(0, state.physicsAlpha);
+        const forceScale = state.dragNode ? Math.max(alpha, 0.34) : alpha;
+        if (forceScale > 0) {
+            applyPairForces(forceScale);
+            applyEdgeForces(forceScale);
+            applyCentering(0.00032 * forceScale);
+        }
+        const maxMotion = integrateNodes(dt, 0.84);
+        state.physicsAlpha = Math.max(0, alpha * 0.94 - 0.008);
+        return maxMotion;
+    }
+
+    function runPhysicsFrame(timestamp) {
+        if (!state.visibleNodes.length) {
+            state.physicsFrame = 0;
+            state.physicsClock = 0;
+            syncEdgeAnimationLoop();
+            return;
+        }
+        const dt = state.physicsClock ? Math.min(2.2, Math.max(0.72, (timestamp - state.physicsClock) / 16.6667)) : 1;
+        state.physicsClock = timestamp;
+        const maxMotion = stepPhysics(dt);
+        draw();
+        const keepRunning = !!state.dragNode || state.physicsAlpha > 0.01 || maxMotion > 0.025;
+        if (keepRunning) {
+            state.physicsFrame = window.requestAnimationFrame(runPhysicsFrame);
+            return;
+        }
+        state.physicsFrame = 0;
+        state.physicsClock = 0;
+        for (const node of state.visibleNodes) {
+            node.vx = 0;
+            node.vy = 0;
+        }
+        syncEdgeAnimationLoop();
+    }
+
+    function kickPhysics(amount) {
+        state.physicsAlpha = Math.max(state.physicsAlpha, amount);
+        if (!state.physicsFrame) {
+            state.physicsClock = 0;
+            state.physicsFrame = window.requestAnimationFrame(runPhysicsFrame);
+        }
+        syncEdgeAnimationLoop();
+    }
+
+    function runEdgeAnimationFrame(timestamp) {
+        if (!state.visibleEdges.length || state.loading) {
+            state.edgeAnimationFrame = 0;
+            state.edgeAnimationClock = 0;
+            return;
+        }
+        if (!document.hidden && !state.physicsFrame) {
+            if (!state.edgeAnimationClock || (timestamp - state.edgeAnimationClock) >= 41) {
+                state.edgeAnimationClock = timestamp;
+                draw(timestamp);
+            }
+        } else {
+            state.edgeAnimationClock = timestamp;
+        }
+        state.edgeAnimationFrame = window.requestAnimationFrame(runEdgeAnimationFrame);
+    }
+
+    function renderLinkList(host, edges, mode) {
+        host.replaceChildren();
+        if (!edges.length) {
+            const pill = document.createElement("div");
+            pill.className = "pill";
+            pill.textContent = t("noVisibleRelations");
+            host.appendChild(pill);
+            return;
+        }
+        for (const edge of edges) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "link-row";
+            const nodeId = mode === "outgoing" ? edge.target : edge.source;
+            const otherNode = state.nodeMap.get(nodeId);
+            const text = document.createElement("div");
+            text.className = "link-row-text";
+            const otherLabel = otherNode ? nodeTitle(otherNode) : String(nodeId || "");
+            const prefix = mode === "outgoing" ? t("toPrefix") : t("fromPrefix");
+            text.textContent = edge.label ? `${prefix}${otherLabel} | ${edge.label}` : `${prefix}${otherLabel}`;
+            button.appendChild(text);
+            button.addEventListener("click", () => {
+                if (otherNode && state.visibleNodeMap.has(otherNode.id)) {
+                    centerOnNode(otherNode);
+                    updateSelection(otherNode);
+                }
+            });
+            host.appendChild(button);
+        }
+    }
+
+    function updateSelection(node) {
+        state.selectedNode = node || null;
+        selectionMeta.replaceChildren();
+        payloadList.replaceChildren();
+        if (!state.selectedNode) {
+            selectionBadge.textContent = t("none");
+            selectionBadge.className = "pill";
+            payloadBadge.textContent = "0";
+            outgoingBadge.textContent = "0";
+            incomingBadge.textContent = "0";
+            renderLinkList(outgoingList, [], "outgoing");
+            renderLinkList(incomingList, [], "incoming");
+            const pill = document.createElement("div");
+            pill.className = "pill";
+            pill.textContent = t("selectionHint");
+            selectionMeta.appendChild(pill);
+            const payloadHint = document.createElement("div");
+            payloadHint.className = "pill";
+            payloadHint.textContent = t("payloadHint");
+            payloadList.appendChild(payloadHint);
+            draw();
+            return;
+        }
+        const outgoing = (state.outgoingMap.get(state.selectedNode.id) || []).filter((edge) => state.visibleNodeMap.has(edge.target));
+        const incoming = (state.incomingMap.get(state.selectedNode.id) || []).filter((edge) => state.visibleNodeMap.has(edge.source));
+        selectionBadge.textContent = roleLabel(state.selectedNode.role);
+        selectionBadge.className = state.selectedNode.role === "terminal" ? "pill start" : "pill";
+        payloadBadge.textContent = String(payloadLines(state.selectedNode).length);
+        outgoingBadge.textContent = String(outgoing.length);
+        incomingBadge.textContent = String(incoming.length);
+        const kv = document.createElement("dl");
+        kv.className = "kv";
+        const entries = [
+            [t("nodeLabel"), nodeNumberLabel(state.selectedNode)],
+            [t("sceneLabel"), nodeTitle(state.selectedNode)],
+            [t("roleLabel"), roleLabel(state.selectedNode.role)],
+            [t("lineCountLabel"), String(state.selectedNode.dialogue_count || 0)],
+        ];
+        for (const [k, v] of entries) {
+            const dt = document.createElement("dt");
+            dt.textContent = k;
+            const dd = document.createElement("dd");
+            dd.textContent = v;
+            kv.appendChild(dt);
+            kv.appendChild(dd);
+        }
+        selectionMeta.appendChild(kv);
+        const lines = payloadLines(state.selectedNode);
+        if (!lines.length) {
+            const item = document.createElement("div");
+            item.className = "pill";
+            item.textContent = t("noPayload");
+            payloadList.appendChild(item);
+        } else {
+            for (const line of lines) {
+                const item = document.createElement("div");
+                item.className = "payload-item";
+                item.textContent = line;
+                payloadList.appendChild(item);
+            }
+        }
+        renderLinkList(outgoingList, outgoing, "outgoing");
+        renderLinkList(incomingList, incoming, "incoming");
+        draw();
+    }
+
+    function updateMeta() {
+        const currentGraph = state.graphMap.get(state.graphId);
+        graphMode.textContent = currentGraph ? t("graphModeGraph", { index: currentGraph.index }) : t("graphModeInteractive");
+        statGraphs.textContent = String(currentGraph?.sceneCount || 0);
+        statNodes.textContent = String(state.visibleNodes.length || 0);
+        statEdges.textContent = String(state.visibleEdges.length || 0);
+        chipGraph.textContent = currentGraph ? currentGraph.display : "-";
+        chipNodes.textContent = String(state.visibleNodes.length || 0);
+        chipEdges.textContent = String(state.visibleEdges.length || 0);
+    }
+
+    function buildGraphs() {
+        const components = Array.isArray(state.raw?.components) ? state.raw.components : [];
+        const buckets = new Map();
+        for (const [index, component] of components.entries()) {
+            buckets.set(String(component.id || `component:${index + 1}`), {
+                id: String(component.id || `component:${index + 1}`),
+                order: index,
+                nodeIds: new Set(),
+                sceneIds: new Set(),
+                nodeCount: 0,
+                edgeCount: 0,
+                initialized: false,
+            });
+        }
+        for (const node of state.nodes) {
+            const key = graphKey(node);
+            if (!buckets.has(key)) {
+                buckets.set(key, {
+                    id: key,
+                    order: buckets.size,
+                    nodeIds: new Set(),
+                    sceneIds: new Set(),
+                    nodeCount: 0,
+                    edgeCount: 0,
+                    initialized: false,
+                });
+            }
+            const bucket = buckets.get(key);
+            bucket.nodeIds.add(node.id);
+            bucket.sceneIds.add(String(node.scene_id || node.scene_name || node.scene_no || ""));
+            bucket.nodeCount += 1;
+        }
+        for (const edge of state.edges) {
+            const source = state.nodeMap.get(edge.source);
+            const target = state.nodeMap.get(edge.target);
+            if (!source || !target) {
+                continue;
+            }
+            const sourceKey = graphKey(source);
+            const targetKey = graphKey(target);
+            if (sourceKey !== targetKey || !buckets.has(sourceKey)) {
+                continue;
+            }
+            buckets.get(sourceKey).edgeCount += 1;
+        }
+        state.graphs = [...buckets.values()]
+            .sort((a, b) => (
+                b.nodeCount - a.nodeCount
+                || b.edgeCount - a.edgeCount
+                || a.order - b.order
+                || String(a.id).localeCompare(String(b.id), "ja")
+            ))
+            .map((bucket, index) => {
+                const display = t("graphDisplay", { index: index + 1, nodes: bucket.nodeCount, edges: bucket.edgeCount });
+                return {
+                    id: bucket.id,
+                    index: index + 1,
+                    nodeIds: bucket.nodeIds,
+                    sceneCount: bucket.sceneIds.size,
+                    nodeCount: bucket.nodeCount,
+                    edgeCount: bucket.edgeCount,
+                    display,
+                    initialized: false,
+                };
+            });
+        state.graphMap = new Map(state.graphs.map((graph) => [graph.id, graph]));
+    }
+
+    function updateGraphSelect() {
+        if (state.graphs.length <= 1) {
+            graphSelect.classList.add("hidden");
+            graphSelect.innerHTML = `<option value="">${t("currentGraph")}</option>`;
+            return;
+        }
+        graphSelect.classList.remove("hidden");
+        graphSelect.innerHTML = state.graphs.map((graph) => `<option value="${graph.id}">${graph.display}</option>`).join("");
+        graphSelect.value = state.graphId;
+    }
+
+    function defaultGraphNode() {
+        if (!state.visibleNodes.length) {
+            return null;
+        }
+        const roots = state.visibleNodes
+            .filter((node) => Number(node.incoming || 0) === 0)
+            .sort((a, b) => (
+                Number(a.start_line || 0) - Number(b.start_line || 0)
+                || Number(a.node_no || 0) - Number(b.node_no || 0)
+            ));
+        if (roots.length) {
+            return roots[0];
+        }
+        return state.visibleNodes
+            .slice()
+            .sort((a, b) => (
+                Number(a.start_line || 0) - Number(b.start_line || 0)
+                || Number(a.node_no || 0) - Number(b.node_no || 0)
+            ))[0] || null;
+    }
+
+    function applyCurrentGraph(reseed) {
+        const graph = state.graphMap.get(state.graphId);
+        if (!graph) {
+            state.visibleNodes = [];
+            state.visibleEdges = [];
+            state.visibleNodeMap = new Map();
+            updateMeta();
+            updateSelection(null);
+            setSearchStatus(t("searchNoGraph"));
+            clearSearchResults();
+            draw();
+            return;
+        }
+        state.visibleNodes = state.nodes.filter((node) => graph.nodeIds.has(node.id));
+        state.visibleEdges = state.edges.filter((edge) => graph.nodeIds.has(edge.source) && graph.nodeIds.has(edge.target));
+        state.visibleNodeMap = new Map(state.visibleNodes.map((node) => [node.id, node]));
+        for (const node of state.visibleNodes) {
+            node.visibleDegree = 0;
+        }
+        for (const edge of state.visibleEdges) {
+            const source = state.visibleNodeMap.get(edge.source);
+            const target = state.visibleNodeMap.get(edge.target);
+            if (source) {
+                source.visibleDegree += 1;
+            }
+            if (target) {
+                target.visibleDegree += 1;
+            }
+        }
+        state.visibleAverageDegree = state.visibleNodes.length ? (state.visibleEdges.length * 2) / state.visibleNodes.length : 0;
+        if (reseed || !graph.initialized) {
+            seedVisibleNodes();
+            layoutVisible();
+            graph.initialized = true;
+        }
+        updateMeta();
+        const selectedNode = defaultGraphNode();
+        updateSelection(selectedNode);
+        setSearchStatus(state.visibleNodes.length ? t("searchReady") : t("searchNoGraph"));
+        clearSearchResults();
+        fitGraph();
+        kickPhysics(0.42);
+        syncEdgeAnimationLoop();
+        draw();
+    }
+
+    function loadData(graphData) {
+        if (!graphData || !Array.isArray(graphData.nodes) || !Array.isArray(graphData.edges)) {
+            emptyState.classList.remove("hidden");
+            emptyState.textContent = t("invalidTutorialJson");
+            clearSearchResults();
+            return;
+        }
+        state.raw = graphData;
+        state.nodes = graphData.nodes.map((node) => ({ ...node, role: roleOf(node), x: 0, y: 0, vx: 0, vy: 0 }));
+        state.edges = graphData.edges.map((edge, index) => ({
+            ...edge,
+            motionOffset: (hashText([
+                String(edge.source || ""),
+                String(edge.target || ""),
+                String(edge.kind || ""),
+                String(edge.label || ""),
+                String(edge.id || index),
+            ].join("\u0000")) % 4096) / 4096,
+        }));
+        const parallelGroups = new Map();
+        for (const edge of state.edges) {
+            const key = `${String(edge.source || "")}\u0000${String(edge.target || "")}`;
+            if (!parallelGroups.has(key)) {
+                parallelGroups.set(key, []);
+            }
+            parallelGroups.get(key).push(edge);
+        }
+        for (const group of parallelGroups.values()) {
+            group
+                .sort((a, b) => [
+                    String(a.label || ""),
+                    String(a.kind || ""),
+                    String(a.id || ""),
+                ].join("\u0000").localeCompare([
+                    String(b.label || ""),
+                    String(b.kind || ""),
+                    String(b.id || ""),
+                ].join("\u0000"), "ja"))
+                .forEach((edge, index) => {
+                    edge.parallelIndex = index;
+                    edge.parallelCount = group.length;
+                });
+        }
+        state.nodeMap = new Map();
+        state.outgoingMap = new Map();
+        state.incomingMap = new Map();
+        for (const node of state.nodes) {
+            state.nodeMap.set(node.id, node);
+            state.outgoingMap.set(node.id, []);
+            state.incomingMap.set(node.id, []);
+        }
+        for (const edge of state.edges) {
+            if (state.outgoingMap.has(edge.source)) {
+                state.outgoingMap.get(edge.source).push(edge);
+            }
+            if (state.incomingMap.has(edge.target)) {
+                state.incomingMap.get(edge.target).push(edge);
+            }
+        }
+        for (const list of state.outgoingMap.values()) {
+            list.sort((a, b) => String(a.target).localeCompare(String(b.target), "ja"));
+        }
+        for (const list of state.incomingMap.values()) {
+            list.sort((a, b) => String(a.source).localeCompare(String(b.source), "ja"));
+        }
+        buildGraphs();
+        state.graphId = state.graphs[0]?.id || "";
+        state.selectedNode = null;
+        state.panX = 0;
+        state.panY = 0;
+        state.zoom = 1;
+        setSearchStatus(state.nodes.length ? t("searchReady") : t("searchNoGraph"));
+        updateGraphSelect();
+        emptyState.classList.add("hidden");
+        applyCurrentGraph(true);
+        document.title = `${graphData?.source?.name || "tutorial graph"} - ${t("viewerTitleSuffix")}`;
+    }
+
+    fileInput.addEventListener("change", async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) {
+            return;
+        }
+        await openGraphFile(file);
+        fileInput.value = "";
+    });
+
+    openBtn.addEventListener("click", () => {
+        openFilePicker();
+    });
+
+    langBtn.addEventListener("click", () => {
+        state.lang = state.lang === "en" ? "zhHans" : "en";
+        applyLanguage();
+    });
+
+    themeBtn.addEventListener("click", () => {
+        state.darkMode = !state.darkMode;
+        applyTheme();
+        applyLanguage();
+    });
+
+    searchMode.addEventListener("change", () => {
+        updateSearchPlaceholder();
+        setSearchStatus(state.visibleNodes.length ? t("searchReady") : t("idle"));
+        clearSearchResults();
+    });
+
+    searchBtn.addEventListener("click", () => {
+        runSearch();
+    });
+
+    clearSearchBtn.addEventListener("click", () => {
+        searchInput.value = "";
+        setSearchStatus(state.visibleNodes.length ? t("searchReady") : t("idle"));
+        clearSearchResults();
+    });
+
+    searchInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            runSearch();
+        }
+    });
+
+    pinBtn.addEventListener("click", () => {
+        state.drawerPinned = !state.drawerPinned;
+        state.drawerHover = state.drawerPinned;
+        syncDrawer();
+    });
+
+    drawerTrigger.addEventListener("mouseenter", () => {
+        if (state.drawerPinned) {
+            return;
+        }
+        state.drawerHover = true;
+        syncDrawer();
+    });
+
+    drawer.addEventListener("mouseenter", () => {
+        if (state.drawerPinned) {
+            return;
+        }
+        state.drawerHover = true;
+        syncDrawer();
+    });
+
+    drawer.addEventListener("mouseleave", () => {
+        if (state.drawerPinned) {
+            return;
+        }
+        state.drawerHover = false;
+        syncDrawer();
+    });
+
+    graphSelect.addEventListener("change", () => {
+        state.graphId = graphSelect.value || state.graphs[0]?.id || "";
+        applyCurrentGraph(false);
+    });
+
+    layoutBtn.addEventListener("click", () => {
+        seedVisibleNodes();
+        layoutVisible();
+        fitGraph();
+        kickPhysics(0.55);
+    });
+    resetBtn.addEventListener("click", resetView);
+    fitBtn.addEventListener("click", () => {
+        fitGraph();
+        kickPhysics(0.18);
+    });
+
+    stage.addEventListener("dblclick", openStageFilePickerIfEmpty);
+
+    window.addEventListener("dragover", (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+    });
+
+    window.addEventListener("drop", (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+    });
+
+    stage.addEventListener("dragenter", (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        state.dragDepth += 1;
+        stage.classList.add("is-drop-target");
+    });
+
+    stage.addEventListener("dragover", (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        stage.classList.add("is-drop-target");
+    });
+
+    stage.addEventListener("dragleave", (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        state.dragDepth = Math.max(0, state.dragDepth - 1);
+        if (!state.dragDepth) {
+            stage.classList.remove("is-drop-target");
+        }
+    });
+
+    stage.addEventListener("drop", async (event) => {
+        if (!dragHasFiles(event)) {
+            return;
+        }
+        event.preventDefault();
+        state.dragDepth = 0;
+        stage.classList.remove("is-drop-target");
+        const file = event.dataTransfer?.files?.[0];
+        if (!file) {
+            return;
+        }
+        await openGraphFile(file);
+    });
+
+    canvas.addEventListener("mousedown", (event) => {
+        state.mouseDown = true;
+        state.lastX = event.clientX;
+        state.lastY = event.clientY;
+        state.dragClock = event.timeStamp || performance.now();
+        state.dragNode = findNodeAt(event.clientX, event.clientY);
+        state.panMode = !state.dragNode;
+        if (state.dragNode) {
+            state.dragNode.vx = 0;
+            state.dragNode.vy = 0;
+            updateSelection(state.dragNode);
+            kickPhysics(0.2);
+        }
+    });
+
+    window.addEventListener("mouseup", () => {
+        if (state.dragNode) {
+            kickPhysics(0.9);
+        }
+        state.mouseDown = false;
+        state.dragNode = null;
+        state.panMode = false;
+    });
+
+    window.addEventListener("mousemove", (event) => {
+        if (!state.mouseDown) {
+            return;
+        }
+        const dx = event.clientX - state.lastX;
+        const dy = event.clientY - state.lastY;
+        state.lastX = event.clientX;
+        state.lastY = event.clientY;
+        if (state.dragNode) {
+            const rect = canvas.getBoundingClientRect();
+            const world = screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
+            const now = event.timeStamp || performance.now();
+            const elapsed = Math.max(1, now - state.dragClock);
+            const prevX = state.dragNode.x;
+            const prevY = state.dragNode.y;
+            state.dragNode.x = world.x;
+            state.dragNode.y = world.y;
+            state.dragNode.vx = ((world.x - prevX) / elapsed) * 16.6667;
+            state.dragNode.vy = ((world.y - prevY) / elapsed) * 16.6667;
+            state.dragClock = now;
+            kickPhysics(0.34);
+            draw();
+            return;
+        }
+        if (state.panMode) {
+            state.panX += dx / state.zoom;
+            state.panY += dy / state.zoom;
+            draw();
+        }
+    });
+
+    canvas.addEventListener("click", (event) => {
+        const node = findNodeAt(event.clientX, event.clientY);
+        updateSelection(node);
+    });
+
+    canvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+        const worldBefore = screenToWorld(screenX, screenY);
+        const factor = event.deltaY < 0 ? 1.09 : 0.91;
+        state.zoom = Math.max(state.minZoom, Math.min(state.maxZoom, state.zoom * factor));
+        const worldAfter = screenToWorld(screenX, screenY);
+        state.panX += worldAfter.x - worldBefore.x;
+        state.panY += worldAfter.y - worldBefore.y;
+        draw();
+    }, { passive: false });
+
+    window.addEventListener("resize", resizeCanvas);
+    syncDrawer();
+    applyTheme();
+    applyLanguage();
+    setSearchStatus(t("idle"));
+    clearSearchResults();
+    updateMeta();
+    updateSelection(null);
+    resizeCanvas();
+    const startupJsonUrl = autoLoadUrl();
+    if (startupJsonUrl) {
+        void openGraphUrl(startupJsonUrl);
+    }
+})();
+</script>
+</body>
+</html>

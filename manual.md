@@ -32,6 +32,7 @@
    - [-s / --sound — Work with Audio Files](#-s----sound--work-with-audio-files)
    - [-v / --video — Work with `.omv` Video Files](#-v----video--work-with-omv-video-files)
    - [-p / --patch — Patch `SiglusEngine.exe`](#-p----patch--patch-siglusengineexe)
+   - [-t / --tutorial — Build a Static Tutorial Graph](#-t----tutorial--build-a-static-tutorial-graph)
 5. [SiglusSceneScript Language Specification (SiglusSS; as Defined by `-c`)](#siglusss-language-spec)
 6. [Tips and Troubleshooting](#tips-and-troubleshooting)
 
@@ -112,7 +113,7 @@ siglus-ssu init
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p) [args]
+siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t) [args]
 ```
 
 ### Global Options
@@ -1331,6 +1332,70 @@ Written: /path/to/SiglusEngine_LOC0.exe
 `--loc` uses a conservative matcher that looks for the top-level guarded wrapper around the region check helpers. If the build is ambiguous or unsupported, it refuses to patch instead of guessing.
 
 
+
+### `-t` / `--tutorial` — Build a Static Tutorial Graph
+
+Builds a static dialogue graph JSON from the compiled scene data inside a `Scene.pck`. The output is designed for broad inspection rather than perfect VM-complete execution. It keeps all narrow-sense dialogue lines, prefers soundness over aggressive guessing, and only emits static edges that can be justified without reconstructing dynamic runtime state.
+
+The command also writes a self-contained HTML viewer next to the JSON and then tries to open that viewer in the default browser. Auto-open is best-effort and may fail harmlessly.
+
+#### Syntax
+
+```bash
+siglus-ssu -t <input_pck> [output_json]
+```
+
+#### Parameters
+
+| Parameter | Description |
+|---|---|
+| `<input_pck>` | Input `Scene.pck` archive to analyze. |
+| `[output_json]` | Optional output path for the generated tutorial graph JSON. If omitted, the default is `<input_name>.tutorial.json` next to the input `.pck`. |
+
+#### Output
+
+The command writes:
+
+- a tutorial graph JSON file
+- a sibling `tutorial_viewer.html`
+
+The JSON contains graph metadata plus per-node payload lines and per-edge static relations. The viewer can open the JSON directly, auto-load it when launched from `-t`, and inspect one connected graph at a time.
+
+#### What the Graph Represents
+
+- Node payloads are built from narrow-sense dialogue lines, defined here as all type-1 strings from `-m` style extraction.
+- Speaker attribution is intentionally conservative. When the source does not clearly expose a reliable speaker, the payload line is kept without forcing a guessed name.
+- The graph is allowed to have multiple disconnected components.
+
+#### Static-Edge Policy
+
+This mode intentionally favors correctness over maximal reach:
+
+- Included: direct static control-flow and statically-resolved scene-transfer edges that can be justified from disassembly without VM execution.
+- Excluded: dynamic string-built targets, runtime-only dispatch, and ambiguous helper / scheduler promotion that would risk false edges.
+
+As a result, the graph is a sound under-approximation: it may miss some real dynamic continuations, but it should avoid inventing misleading ones.
+
+#### Viewer Notes
+
+The generated viewer supports:
+
+- drag-and-drop JSON loading
+- graph selection when multiple disconnected graphs exist
+- force-based layout with directional edge particles
+- node inspection with scene name and natural source line numbers
+- search by dialogue / options, node number, scene name, or `scene @ line`
+- English / Simplified Chinese UI toggle and a light / dark theme toggle
+
+#### Example
+
+```bash
+# Write Scene.tutorial.json next to Scene.pck and try to open the viewer
+siglus-ssu -t /path/to/Scene.pck
+
+# Write to a custom JSON path
+siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
+```
 
 <a id="siglusss-language-spec"></a>
 ## SiglusSceneScript Language Specification (SiglusSS; as Defined by `-c`)
