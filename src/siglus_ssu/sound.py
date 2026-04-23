@@ -222,28 +222,27 @@ def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
         return out
 
 
-def extract_ogg_bytes_from_ovk_record(ovk_path: str, entry: OVKEntry) -> bytes:
-    with open(ovk_path, "rb") as f:
-        f.seek(entry.offset)
-        chunk = f.read(entry.size)
-        if len(chunk) != entry.size:
-            raise EOFError("Unexpected EOF while reading ovk chunk")
+def extract_ogg_bytes_from_ovk_stream(file_obj, entry: OVKEntry) -> bytes:
+    file_obj.seek(entry.offset)
+    chunk = file_obj.read(entry.size)
+    if len(chunk) != entry.size:
+        raise EOFError("Unexpected EOF while reading ovk chunk")
     chunk = _xor_decrypt_ogg_auto(chunk)
     if len(chunk) < 4 or chunk[:4] != b"OggS":
         raise ValueError("OVK entry is not OggS after decryption attempt")
     return chunk
 
 
-def extract_ogg_bytes_from_ovk_entry(ovk_path: str, entry_no: int) -> bytes:
-    for entry in read_ovk_table(ovk_path):
-        if entry.entry_no == entry_no:
-            return extract_ogg_bytes_from_ovk_record(ovk_path, entry)
-    raise KeyError(f"Entry not found: entry_no={entry_no}")
-
-
-def iter_ovk_entries(ovk_path: str) -> Iterator[Tuple[int, bytes]]:
-    for entry in read_ovk_table(ovk_path):
-        yield entry.entry_no, extract_ogg_bytes_from_ovk_record(ovk_path, entry)
+def iter_ovk_entries(
+    ovk_path: str,
+    entries: List[OVKEntry] | None = None,
+) -> Iterator[Tuple[int, bytes]]:
+    table = read_ovk_table(ovk_path) if entries is None else list(entries)
+    if not table:
+        return
+    with open(ovk_path, "rb") as f:
+        for entry in table:
+            yield entry.entry_no, extract_ogg_bytes_from_ovk_stream(f, entry)
 
 
 NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")

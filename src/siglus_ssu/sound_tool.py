@@ -1376,7 +1376,7 @@ def _extract_one(
             return 0
         multi = len(entries) > 1
         wrote = 0
-        for entry_no, ogg in sound.iter_ovk_entries(src_path):
+        for entry_no, ogg in sound.iter_ovk_entries(src_path, entries):
             if multi:
                 out_name = f"{base_name}_{entry_no}.ogg"
             else:

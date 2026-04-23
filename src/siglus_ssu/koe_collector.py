@@ -631,105 +631,65 @@ def main(argv=None):
     duration_counted = 0
     duration_failed = 0
     processed_koe = 0
-    if single_koe_no is None:
-        for koe_no in sorted(entries.keys()):
-            e = entries[koe_no]
-            is_unref = not e["callsites"]
-            role = e["name"].strip() or "unknown"
-            dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
-            out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
-            should_extract = not stats_only
-            duration_done = False
-            if not is_unref and os.path.isfile(out_path):
-                (
-                    total_duration_sec,
-                    duration_counted,
-                    duration_failed,
-                ) = _maybe_add_duration(
-                    total_duration_sec,
-                    duration_counted,
-                    duration_failed,
-                    _duration_from_path(out_path),
-                )
-                duration_done = True
-            if should_extract and os.path.isfile(out_path):
-                skipped += 1
-                continue
-            if not should_extract and (is_unref or duration_done):
-                continue
-            processed_koe += 1
-            _progress_koe(processed_koe, koe_no)
-            scene_no = koe_no // 100000
-            entry_no = koe_no % 100000
-            try:
-                ovk_path = _select_ovk(
-                    scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
-                )
-                entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
-                if entry is None:
-                    raise KeyError(f"Entry not found: entry_no={entry_no}")
-                ogg = b""
-                if should_extract or ((not is_unref) and (not duration_done)):
-                    ogg = sound.extract_ogg_bytes_from_ovk_record(ovk_path, entry)
-                if should_extract:
-                    os.makedirs(dest_dir, exist_ok=True)
-                    write_bytes(out_path, ogg)
-                    extracted += 1
-                if not is_unref and not duration_done:
-                    total_duration_sec, duration_counted, duration_failed = (
-                        _maybe_add_duration(
-                            total_duration_sec,
-                            duration_counted,
-                            duration_failed,
-                            _duration_from_ogg_bytes(ogg),
-                        )
+    current_ovk_path = ""
+    current_ovk_file = None
+
+    def _read_ogg_from_ovk(ovk_path: str, entry) -> bytes:
+        nonlocal current_ovk_path, current_ovk_file
+        if current_ovk_file is None or current_ovk_path != ovk_path:
+            prev_file = current_ovk_file
+            current_ovk_file = open(ovk_path, "rb")
+            current_ovk_path = ovk_path
+            if prev_file is not None:
+                prev_file.close()
+        return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
+
+    try:
+        if single_koe_no is None:
+            for koe_no in sorted(entries.keys()):
+                e = entries[koe_no]
+                is_unref = not e["callsites"]
+                role = e["name"].strip() or "unknown"
+                dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
+                out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
+                should_extract = not stats_only
+                duration_done = False
+                if not is_unref and os.path.isfile(out_path):
+                    (
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                    ) = _maybe_add_duration(
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                        _duration_from_path(out_path),
                     )
-            except Exception as ex:
-                if should_extract:
-                    failed += 1
-                    if not is_unref and not duration_done:
-                        duration_failed += 1
-                    eprint(f"Failed to extract koe_no={koe_no}: {ex}")
-                elif not is_unref and not duration_done:
-                    duration_failed += 1
-    else:
-        if single_found:
-            koe_no = int(single_koe_no)
-            processed_koe += 1
-            _progress_koe(processed_koe, koe_no)
-            out_path = os.path.join(out_dir, f"KOE({koe_no:09d}).ogg")
-            should_extract = not stats_only
-            duration_done = False
-            if os.path.isfile(out_path):
-                (
-                    total_duration_sec,
-                    duration_counted,
-                    duration_failed,
-                ) = _maybe_add_duration(
-                    total_duration_sec,
-                    duration_counted,
-                    duration_failed,
-                    _duration_from_path(out_path),
-                )
-                duration_done = True
-            if should_extract and os.path.isfile(out_path):
-                skipped += 1
-            else:
+                    duration_done = True
+                if should_extract and os.path.isfile(out_path):
+                    skipped += 1
+                    continue
+                if not should_extract and (is_unref or duration_done):
+                    continue
+                processed_koe += 1
+                _progress_koe(processed_koe, koe_no)
                 scene_no = koe_no // 100000
                 entry_no = koe_no % 100000
                 try:
-                    ovk_path = _select_ovk(scene_map, voice_dir, scene_no, -1)
+                    ovk_path = _select_ovk(
+                        scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
+                    )
                     entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
                     if entry is None:
                         raise KeyError(f"Entry not found: entry_no={entry_no}")
                     ogg = b""
-                    if should_extract or (not duration_done):
-                        ogg = sound.extract_ogg_bytes_from_ovk_record(ovk_path, entry)
+                    if should_extract or ((not is_unref) and (not duration_done)):
+                        ogg = _read_ogg_from_ovk(ovk_path, entry)
                     if should_extract:
-                        os.makedirs(out_dir, exist_ok=True)
+                        os.makedirs(dest_dir, exist_ok=True)
                         write_bytes(out_path, ogg)
                         extracted += 1
-                    if not duration_done:
+                    if not is_unref and not duration_done:
                         total_duration_sec, duration_counted, duration_failed = (
                             _maybe_add_duration(
                                 total_duration_sec,
@@ -741,11 +701,68 @@ def main(argv=None):
                 except Exception as ex:
                     if should_extract:
                         failed += 1
-                        if not duration_done:
+                        if not is_unref and not duration_done:
                             duration_failed += 1
                         eprint(f"Failed to extract koe_no={koe_no}: {ex}")
-                    elif not duration_done:
+                    elif not is_unref and not duration_done:
                         duration_failed += 1
+        else:
+            if single_found:
+                koe_no = int(single_koe_no)
+                processed_koe += 1
+                _progress_koe(processed_koe, koe_no)
+                out_path = os.path.join(out_dir, f"KOE({koe_no:09d}).ogg")
+                should_extract = not stats_only
+                duration_done = False
+                if os.path.isfile(out_path):
+                    (
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                    ) = _maybe_add_duration(
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                        _duration_from_path(out_path),
+                    )
+                    duration_done = True
+                if should_extract and os.path.isfile(out_path):
+                    skipped += 1
+                else:
+                    scene_no = koe_no // 100000
+                    entry_no = koe_no % 100000
+                    try:
+                        ovk_path = _select_ovk(scene_map, voice_dir, scene_no, -1)
+                        entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
+                        if entry is None:
+                            raise KeyError(f"Entry not found: entry_no={entry_no}")
+                        ogg = b""
+                        if should_extract or (not duration_done):
+                            ogg = _read_ogg_from_ovk(ovk_path, entry)
+                        if should_extract:
+                            os.makedirs(out_dir, exist_ok=True)
+                            write_bytes(out_path, ogg)
+                            extracted += 1
+                        if not duration_done:
+                            total_duration_sec, duration_counted, duration_failed = (
+                                _maybe_add_duration(
+                                    total_duration_sec,
+                                    duration_counted,
+                                    duration_failed,
+                                    _duration_from_ogg_bytes(ogg),
+                                )
+                            )
+                    except Exception as ex:
+                        if should_extract:
+                            failed += 1
+                            if not duration_done:
+                                duration_failed += 1
+                            eprint(f"Failed to extract koe_no={koe_no}: {ex}")
+                        elif not duration_done:
+                            duration_failed += 1
+    finally:
+        if current_ovk_file is not None:
+            current_ovk_file.close()
     eprint("")
     eprint("=== koe_collector summary ===")
     if stats_only:
