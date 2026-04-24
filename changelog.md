@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.2.6] - 2026-04-24
 
+- Added `-s --a <old.ovk> <new.ovk>` support to compare OVK archives by KOE number, size, sample count, and decoded Ogg payload content.
 - Changed `-a --payload` for `.pck` and `.dat` comparisons to split payload differences into `text_only` resolved-text changes and `real_diff` non-text scene-bytecode changes, while keeping the original full payload hash semantics for equal versus non-equal payloads.
 
 

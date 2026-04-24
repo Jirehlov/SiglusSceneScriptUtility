@@ -19,8 +19,10 @@ from .common import (
     eprint,
     hint_help as _hint_help,
     fmt_kv as _fmt_kv,
+    hx,
     parse_main_argv,
     prepare_batch_paths,
+    sha1,
     write_bytes,
     missing_input_file,
     read_text_auto,
@@ -148,6 +150,198 @@ def _analyze_one(path: str) -> int:
         return 0
     eprint("error: unsupported file type (expected .nwa/.ovk/.owp)")
     return 1
+
+
+@dataclass(frozen=True)
+class _OvkCompareEntry:
+    entry_no: int
+    occurrence: int
+    size: int
+    sample_count: int
+    payload_sha1: str
+    error: str = ""
+
+
+def _ovk_scene_no(path: str) -> int | None:
+    m = re.fullmatch(r"z(\d{4})\.ovk", os.path.basename(path), flags=re.IGNORECASE)
+    if not m:
+        return None
+    return int(m.group(1))
+
+
+def _ovk_koe_no_label(key, scene_no: int | None) -> str:
+    entry_no, _occurrence = key
+    if scene_no is None:
+        return "-"
+    return str(int(scene_no) * 100000 + int(entry_no))
+
+
+def _ovk_compare_entries(path: str) -> list[_OvkCompareEntry]:
+    entries = sound.read_ovk_table(path)
+    seen = {}
+    out = []
+    with open(path, "rb") as f:
+        for entry in entries:
+            occurrence = int(seen.get(entry.entry_no, 0))
+            seen[entry.entry_no] = occurrence + 1
+            payload_sha1 = ""
+            error = ""
+            try:
+                ogg = sound.extract_ogg_bytes_from_ovk_stream(f, entry)
+                payload_sha1 = sha1(ogg)
+            except Exception as exc:
+                error = str(exc)
+            out.append(
+                _OvkCompareEntry(
+                    entry_no=int(entry.entry_no),
+                    occurrence=occurrence,
+                    size=int(entry.size),
+                    sample_count=int(entry.sample_count),
+                    payload_sha1=payload_sha1,
+                    error=error,
+                )
+            )
+    return out
+
+
+def _compare_ovk(p1: str, p2: str) -> int:
+    ext1 = os.path.splitext(p1)[1].lower()
+    ext2 = os.path.splitext(p2)[1].lower()
+    if ext1 != ".ovk" or ext2 != ".ovk":
+        eprint("error: OVK compare expects two .ovk files")
+        return 2
+    try:
+        st1 = os.stat(p1)
+        st2 = os.stat(p2)
+        e1 = _ovk_compare_entries(p1)
+        e2 = _ovk_compare_entries(p2)
+    except Exception as exc:
+        eprint(f"error: OVK compare failed: {exc}")
+        return 1
+
+    print("==== Compare OVK ====")
+    print(f"file1: {p1}")
+    print(f"file2: {p2}")
+    print(f"type1: ovk  size1={st1.st_size:d} ({hx(st1.st_size)})")
+    print(f"type2: ovk  size2={st2.st_size:d} ({hx(st2.st_size)})")
+    print()
+    print(_fmt_kv("koe_count_1", len(e1)))
+    print(_fmt_kv("koe_count_2", len(e2)))
+    scene_no1 = _ovk_scene_no(p1)
+    scene_no2 = _ovk_scene_no(p2)
+    if scene_no1 is not None:
+        print(_fmt_kv("scene_no_1", scene_no1))
+    if scene_no2 is not None:
+        print(_fmt_kv("scene_no_2", scene_no2))
+
+    m1 = {(e.entry_no, e.occurrence): e for e in e1}
+    m2 = {(e.entry_no, e.occurrence): e for e in e2}
+    keys1 = set(m1.keys())
+    keys2 = set(m2.keys())
+    common = keys1 & keys2
+    only1 = keys1 - keys2
+    only2 = keys2 - keys1
+    print(
+        "koe_set: common=%d only1=%d only2=%d" % (len(common), len(only1), len(only2))
+    )
+    order1 = [(e.entry_no, e.occurrence) for e in e1]
+    order2 = [(e.entry_no, e.occurrence) for e in e2]
+    print("koe_order: " + ("identical" if order1 == order2 else "different"))
+
+    rows = []
+    payload_diff = 0
+    size_diff = 0
+    sample_diff = 0
+    read_errors = 0
+    for key in sorted(keys1 | keys2, key=lambda x: (int(x[0]), int(x[1]))):
+        a = m1.get(key)
+        b = m2.get(key)
+        if a is None or b is None:
+            rows.append((key, a, b, "only1" if b is None else "only2"))
+            continue
+        status = []
+        if a.size != b.size:
+            size_diff += 1
+            status.append("size")
+        if a.sample_count != b.sample_count:
+            sample_diff += 1
+            status.append("smp_cnt")
+        if a.error or b.error:
+            read_errors += 1
+            status.append("read_error")
+        elif a.payload_sha1 != b.payload_sha1:
+            payload_diff += 1
+            status.append("payload")
+        if status:
+            rows.append((key, a, b, "+".join(status)))
+
+    if not rows:
+        print("koe: identical by (koe_no, size, smp_cnt, decoded payload)")
+        return 0
+
+    print()
+    print("KOE differences:")
+    same_scene = scene_no1 is not None and scene_no1 == scene_no2
+    if same_scene:
+        print("KOE_NO          SIZE1       SMP1       SIZE2       SMP2  STATUS")
+        print("---------  ----------  ---------  ----------  ---------  ----------")
+    else:
+        print(
+            "KOE_NO1    KOE_NO2         SIZE1       SMP1       SIZE2       SMP2  STATUS"
+        )
+        print(
+            "---------  ---------  ----------  ---------  ----------  ---------  ----------"
+        )
+
+    def _cell_entry(e: _OvkCompareEntry | None):
+        if e is None:
+            return "-", "-"
+        return str(e.size), str(e.sample_count)
+
+    for key, a, b, status in rows[:5000]:
+        size1, smp1 = _cell_entry(a)
+        size2, smp2 = _cell_entry(b)
+        if same_scene:
+            print(
+                "%-9s  %10s  %9s  %10s  %9s  %s"
+                % (
+                    _ovk_koe_no_label(key, scene_no1),
+                    size1,
+                    smp1,
+                    size2,
+                    smp2,
+                    status,
+                )
+            )
+        else:
+            print(
+                "%-9s  %-9s  %10s  %9s  %10s  %9s  %s"
+                % (
+                    _ovk_koe_no_label(key, scene_no1 if a is not None else None),
+                    _ovk_koe_no_label(key, scene_no2 if b is not None else None),
+                    size1,
+                    smp1,
+                    size2,
+                    smp2,
+                    status,
+                )
+            )
+    if len(rows) > 5000:
+        print(f"... ({len(rows) - 5000:d} rows omitted)")
+    print()
+    print(
+        "summary: rows=%d size_diff=%d smp_cnt_diff=%d payload_diff=%d read_error=%d only1=%d only2=%d"
+        % (
+            len(rows),
+            size_diff,
+            sample_diff,
+            payload_diff,
+            read_errors,
+            len(only1),
+            len(only2),
+        )
+    )
+    return 0
 
 
 _BGM_RE = re.compile(
@@ -1397,14 +1591,19 @@ def main(argv=None) -> int:
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
-        if len(argv) != 1:
-            eprint("error: expected 1 input file for --a")
-            _hint_help()
-            return 2
-        inp = argv[0]
-        if missing_input_file(inp):
-            return 1
-        return _analyze_one(inp)
+        if len(argv) == 1:
+            inp = argv[0]
+            if missing_input_file(inp):
+                return 1
+            return _analyze_one(inp)
+        if len(argv) == 2:
+            p1, p2 = argv
+            if missing_input_file(p1) or missing_input_file(p2):
+                return 1
+            return _compare_ovk(p1, p2)
+        eprint("error: expected 1 input file, or 2 .ovk files, for --a")
+        _hint_help()
+        return 2
     if mode == "c":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")

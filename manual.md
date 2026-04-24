@@ -1018,8 +1018,8 @@ Provides tools for decoding, extracting, analyzing, and re-encoding audio files 
 # Extract / decode audio files
 siglus-ssu -s --x <input_dir | input_file> <output_dir> [--trim <path_to_Gameexe.dat>]
 
-# Analyze an audio file (structural info)
-siglus-ssu -s --a <input_file.(nwa | ovk | owp)>
+# Analyze an audio file, or compare two .ovk archives
+siglus-ssu -s --a <input_file.(nwa | ovk | owp)> [input_file_2.ovk]
 
 # Create / re-encode audio files
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
@@ -1033,7 +1033,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [path_to_Gameexe
 | Parameter | Description |
 |---|---|
 | `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
-| `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. |
+| `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. When two `.ovk` files are provided, compares by KOE number using size, sample count, and decoded Ogg payload content. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
 | `--play` | **Play** mode. Plays one `.nwa` / `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback runs in a full-screen terminal UI with a live progress bar and playlist view. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
 | `--trim <Gameexe.dat>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
@@ -1055,6 +1055,9 @@ siglus-ssu -s --a /path/to/bgm01.nwa
 
 # Analyze an .ovk archive table
 siglus-ssu -s --a /path/to/z0001.ovk
+
+# Compare two .ovk archives
+siglus-ssu -s --a /path/to/old/koe/z0001.ovk /path/to/new/koe/z0001.ovk
 
 # Analyze an .owp file
 siglus-ssu -s --a /path/to/bgm01.owp
