@@ -1080,7 +1080,7 @@ class _PlayerScreen:
         self._stream.flush()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> None:
+    def __exit__(self, _exc_type, _exc, _tb) -> None:
         if not self.enabled:
             return
         if self._term_state is not None and self._stdin_fd is not None:
