@@ -1,4 +1,5 @@
 from functools import lru_cache
+import struct
 from types import SimpleNamespace
 from ._const_manager import get_const_module
 from .common import (
@@ -12,7 +13,6 @@ from .common import (
     latest_stack_start,
     named_command_value_map,
     quote_ss_text,
-    read_i32_le,
     split_element_code as _element_owner,
     trim_stack_points,
     unary_result_form as _unary_result_form,
@@ -1075,21 +1075,26 @@ def disassemble_scn_bytes(
     cd_name = C.CD_NAME
     cd_sel_block_start = C.CD_SEL_BLOCK_START
     cd_sel_block_end = C.CD_SEL_BLOCK_END
+    payload_trace = trace_profile == "payload"
+    koe_trace = trace_profile == "koe"
+    need_trace_labels = bool(with_trace) and not (payload_trace or koe_trace)
+    render_text = bool(emit_text)
     labels_at = {}
-    for i, ofs in enumerate(label_list or []):
-        if ofs is None:
-            continue
-        o = _int_or_none(ofs)
-        if o is None:
-            continue
-        labels_at.setdefault(o, []).append(f"L{i:d}")
-    for i, ofs in enumerate(z_label_list or []):
-        if ofs is None:
-            continue
-        o = _int_or_none(ofs)
-        if o is None:
-            continue
-        labels_at.setdefault(o, []).append(f"Z{i:d}")
+    if render_text or need_trace_labels:
+        for i, ofs in enumerate(label_list or []):
+            if ofs is None:
+                continue
+            o = _int_or_none(ofs)
+            if o is None:
+                continue
+            labels_at.setdefault(o, []).append(f"L{i:d}")
+        for i, ofs in enumerate(z_label_list or []):
+            if ofs is None:
+                continue
+            o = _int_or_none(ofs)
+            if o is None:
+                continue
+            labels_at.setdefault(o, []).append(f"Z{i:d}")
     try:
         inc_property_cnt = max(0, int(inc_property_cnt))
     except Exception:
@@ -1106,6 +1111,22 @@ def disassemble_scn_bytes(
     inc_command_defs = list(inc_command_defs or [])
     namae_defs = list(namae_defs or [])
     read_flag_defs = list(read_flag_defs or [])
+    fm_void = _form_code(C.FM_VOID)
+    fm_int = _form_code(C.FM_INT)
+    fm_str = _form_code(C.FM_STR)
+    fm_label = _form_code(C.FM_LABEL)
+    fm_list = _form_code(C.FM_LIST)
+    fm_intlist = _form_code(C.FM_INTLIST)
+    fm_strlist = _form_code(C.FM_STRLIST)
+    fm_call = _form_code(C.FM_CALL)
+    fm_global = _form_code(C.FM_GLOBAL)
+    ref_to_val = {
+        _form_code(C.FM_INTREF): fm_int,
+        _form_code(C.FM_STRREF): fm_str,
+        _form_code(C.FM_INTLISTREF): fm_intlist,
+        _form_code(C.FM_STRLISTREF): fm_strlist,
+    }
+    scalar_forms = {int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)}
     scn_prop_info = {}
     for idx, it in enumerate(scn_prop_defs):
         try:
@@ -1120,7 +1141,7 @@ def disassemble_scn_bytes(
             scn_prop_info[code] = {
                 "type": C.ET_PROPERTY,
                 "parent": "",
-                "parent_code": _form_code(C.FM_GLOBAL),
+                "parent_code": fm_global,
                 "name": name,
                 "ret": form,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code),
@@ -1144,7 +1165,7 @@ def disassemble_scn_bytes(
             inc_prop_info[code] = {
                 "type": C.ET_PROPERTY,
                 "parent": "",
-                "parent_code": _form_code(C.FM_GLOBAL),
+                "parent_code": fm_global,
                 "name": name,
                 "ret": form,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code),
@@ -1166,7 +1187,7 @@ def disassemble_scn_bytes(
             inc_cmd_info[code] = {
                 "type": C.ET_COMMAND,
                 "parent": "",
-                "parent_code": _form_code(C.FM_GLOBAL),
+                "parent_code": fm_global,
                 "name": name,
                 "ret": None,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, code),
@@ -1207,14 +1228,6 @@ def disassemble_scn_bytes(
             continue
     call_slot_info = {}
     call_decl_forms = []
-    fm_void = _form_code(C.FM_VOID)
-    fm_int = _form_code(C.FM_INT)
-    fm_str = _form_code(C.FM_STR)
-    fm_label = _form_code(C.FM_LABEL)
-    fm_list = _form_code(C.FM_LIST)
-    fm_intlist = _form_code(C.FM_INTLIST)
-    fm_strlist = _form_code(C.FM_STRLIST)
-    scalar_forms = {int(x) for x in (fm_int, fm_str, fm_label) if isinstance(x, int)}
 
     def fmt_form(f):
         try:
@@ -1272,7 +1285,7 @@ def disassemble_scn_bytes(
         try:
             if not isinstance(it, dict):
                 return None
-            if int(it.get("form", -1)) != _form_code(C.FM_INT):
+            if int(it.get("form", -1)) != fm_int:
                 return None
             v = it.get("val")
             if v is None:
@@ -1303,17 +1316,17 @@ def disassemble_scn_bytes(
         if isinstance(info, dict):
             return info
         owner, code_idx = _element_owner(code)
-        if parent_form == _form_code(C.FM_CALL) and owner == C.ELM_OWNER_CALL_PROP:
+        if parent_form == fm_call and owner == C.ELM_OWNER_CALL_PROP:
             info = call_slot_info.get(code_idx)
             if not isinstance(info, dict):
                 return None
             return info
-        if parent_form == _form_code(C.FM_GLOBAL) and owner == C.ELM_OWNER_USER_PROP:
+        if parent_form == fm_global and owner == C.ELM_OWNER_USER_PROP:
             info = inc_prop_info.get(code_idx)
             if isinstance(info, dict):
                 return info
             return scn_prop_info.get(code_idx)
-        if parent_form == _form_code(C.FM_GLOBAL) and owner == C.ELM_OWNER_USER_CMD:
+        if parent_form == fm_global and owner == C.ELM_OWNER_USER_CMD:
             info = inc_cmd_info.get(code_idx)
             if isinstance(info, dict):
                 return info
@@ -1327,7 +1340,7 @@ def disassemble_scn_bytes(
                     return {
                         "type": C.ET_COMMAND,
                         "parent": "",
-                        "parent_code": _form_code(C.FM_GLOBAL),
+                        "parent_code": fm_global,
                         "name": name,
                         "ret": None,
                         "ec": code,
@@ -1354,13 +1367,23 @@ def disassemble_scn_bytes(
             form = int(form)
         except Exception:
             return None
-        ref_to_val = {
-            _form_code(C.FM_INTREF): fm_int,
-            _form_code(C.FM_STRREF): fm_str,
-            _form_code(C.FM_INTLISTREF): fm_intlist,
-            _form_code(C.FM_STRLISTREF): fm_strlist,
-        }
         return ref_to_val.get(form, form if form in scalar_forms else None)
+
+    def _trim_elm_points(stack_start):
+        try:
+            stack_start = int(stack_start)
+        except (TypeError, ValueError):
+            elm_points.clear()
+            return
+        while elm_points:
+            try:
+                sl = int((elm_points[-1] or {}).get("stack_len", 0) or 0)
+            except (TypeError, ValueError):
+                elm_points.pop()
+                continue
+            if sl < stack_start:
+                break
+            elm_points.pop()
 
     def _drop_stack_tail(stack_start):
         nonlocal elm_point_pending_idx
@@ -1368,7 +1391,7 @@ def disassemble_scn_bytes(
         if stack_start is None:
             return
         del stack[stack_start:]
-        elm_points[:] = trim_stack_points(elm_points, stack_start)
+        _trim_elm_points(stack_start)
         elm_point_pending_idx = None
 
     def _pop_stack_top():
@@ -1376,7 +1399,7 @@ def disassemble_scn_bytes(
         if not stack:
             return None
         it = stack.pop()
-        elm_points[:] = trim_stack_points(elm_points, len(stack))
+        _trim_elm_points(len(stack))
         elm_point_pending_idx = None
         return it
 
@@ -1551,7 +1574,7 @@ def disassemble_scn_bytes(
         return q
 
     def _render_property_expr_items(items):
-        parent_form = _form_code(C.FM_GLOBAL)
+        parent_form = fm_global
         if not items:
             return None
         idx = 0
@@ -1611,7 +1634,7 @@ def disassemble_scn_bytes(
         return None
 
     def _render_command_expr_items(items, arg_exprs, info_hint=None):
-        parent_form = _form_code(C.FM_GLOBAL)
+        parent_form = fm_global
         if not items:
             return None
         idx = 0
@@ -1900,7 +1923,7 @@ def disassemble_scn_bytes(
         return named_command_value_map(info, arg_values, named_ids)
 
     def _scan_property_slice(items):
-        parent_form = _form_code(C.FM_GLOBAL)
+        parent_form = fm_global
         if not items:
             return None
         idx = 0
@@ -1925,9 +1948,7 @@ def disassemble_scn_bytes(
                 if idx + 1 >= len(items):
                     return None
                 try:
-                    if int((items[idx + 1] or {}).get("form", -1)) != _form_code(
-                        C.FM_INT
-                    ):
+                    if int((items[idx + 1] or {}).get("form", -1)) != fm_int:
                         return None
                 except Exception:
                     return None
@@ -2074,7 +2095,7 @@ def disassemble_scn_bytes(
             argc = 0
         if not items:
             return None
-        return _scan_command_from(items, 0, _form_code(C.FM_GLOBAL), argc, expected_ret)
+        return _scan_command_from(items, 0, fm_global, argc, expected_ret)
 
     def _resolve_command_expr(argc, expected_ret=None):
         for ep in reversed(elm_points):
@@ -2091,14 +2112,17 @@ def disassemble_scn_bytes(
             return res
         return None
 
+    scn_len = len(scn)
+
     def read_u8(p):
-        if p < 0 or p >= len(scn):
+        if p < 0 or p >= scn_len:
             return None
         return scn[p]
 
     def read_i32(p):
-        v = read_i32_le(scn, p, default=None)
-        return v
+        if p < 0 or p + 4 > scn_len:
+            return None
+        return struct.unpack_from("<i", scn, p)[0]
 
     def _read_arg_layout(p):
         argc = read_i32(p)
@@ -2159,8 +2183,6 @@ def disassemble_scn_bytes(
             out_args.append(one)
         return out_args
 
-    render_text = bool(emit_text)
-    koe_trace = trace_profile == "koe"
     out = []
     trace = [] if with_trace else None
 
@@ -2176,7 +2198,7 @@ def disassemble_scn_bytes(
             "op": str(opname or ""),
             "line": (int(cur_line) if cur_line is not None else None),
         }
-        if not koe_trace:
+        if not (koe_trace or payload_trace):
             one["ofs"] = int(ofs)
             one["labels"] = list(labels_at.get(int(ofs), []) or [])
         for key, value in fields.items():
@@ -2201,7 +2223,9 @@ def disassemble_scn_bytes(
         if op is None:
             break
         i += 1
-        opname = op_names.get(op, f"OP_{op:02X}")
+        opname = op_names.get(op)
+        if opname is None:
+            opname = f"OP_{op:02X}"
         if op == cd_none:
             _emit(lambda: f"{ofs:08X}: {opname}")
             _trace(opname, ofs)
@@ -2217,9 +2241,10 @@ def disassemble_scn_bytes(
             nl_fields = {}
             if not koe_trace:
                 nl_fields["value"] = int(cur_line)
-                rf_ids = _read_flag_ids_for_line(cur_line)
-                if rf_ids:
-                    nl_fields["read_flag_ids"] = rf_ids
+                if not payload_trace:
+                    rf_ids = _read_flag_ids_for_line(cur_line)
+                    if rf_ids:
+                        nl_fields["read_flag_ids"] = rf_ids
             _trace(opname, ofs, **nl_fields)
             continue
         if op == cd_push:
@@ -2231,9 +2256,7 @@ def disassemble_scn_bytes(
             i += 8
             if render_text:
                 s = ""
-                if int(form) == _form_code(C.FM_STR) and 0 <= int(val) < len(
-                    str_list or []
-                ):
+                if int(form) == fm_str and 0 <= int(val) < len(str_list or []):
                     s = f' ; "{_escape_preview(str_list[int(val)])}"'
                 _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
             push_fields = {}
@@ -2243,14 +2266,13 @@ def disassemble_scn_bytes(
                     "value": int(val),
                     "text": (
                         str(str_list[int(val)])
-                        if int(form) == _form_code(C.FM_STR)
-                        and 0 <= int(val) < len(str_list or [])
+                        if int(form) == fm_str and 0 <= int(val) < len(str_list or [])
                         else None
                     ),
                 }
             _trace(opname, ofs, **push_fields)
             _push_stack_value(form, int(val), receiver=False)
-            if elm_point_pending_idx is not None and int(form) == _form_code(C.FM_INT):
+            if elm_point_pending_idx is not None and int(form) == fm_int:
                 pending_idx = _int_or_none(elm_point_pending_idx)
                 value_i = _int_or_none(val)
                 if (
@@ -2381,9 +2403,7 @@ def disassemble_scn_bytes(
                 if form_i in (fm_intlist, fm_strlist):
                     size_expr = None
                     try:
-                        size_exprs = _peek_arg_expr_list(
-                            [{"form": _form_code(C.FM_INT)}]
-                        )
+                        size_exprs = _peek_arg_expr_list([{"form": fm_int}])
                         if size_exprs:
                             size_expr = size_exprs[0]
                     except Exception:
@@ -2414,7 +2434,7 @@ def disassemble_scn_bytes(
             call_slot_info[call_slot_next] = {
                 "type": C.ET_PROPERTY,
                 "parent": C.FM_CALL,
-                "parent_code": _form_code(C.FM_CALL),
+                "parent_code": fm_call,
                 "name": name,
                 "ret": int(a),
                 "ec": C.create_elm_code(C.ELM_OWNER_CALL_PROP, 0, call_slot_next),
@@ -2446,22 +2466,16 @@ def disassemble_scn_bytes(
                 )
                 cond_s = f" ; cond={cond_expr}" if cond_expr else ""
                 _emit(lambda: f"{ofs:08X}: {opname} L{int(lid):d}{dest}{cond_s}")
-            _trace(
-                opname,
-                ofs,
-                **(
-                    {}
-                    if koe_trace
-                    else {
-                        "label_id": int(lid),
-                        "target_ofs": (
-                            int(label_list[int(lid)])
-                            if 0 <= int(lid) < len(label_list or [])
-                            else None
-                        ),
-                    }
-                ),
-            )
+            goto_fields = {}
+            if not koe_trace:
+                goto_fields["label_id"] = int(lid)
+                if not payload_trace:
+                    goto_fields["target_ofs"] = (
+                        int(label_list[int(lid)])
+                        if 0 <= int(lid) < len(label_list or [])
+                        else None
+                    )
+            _trace(opname, ofs, **goto_fields)
             if op in (cd_goto_true, cd_goto_false):
                 _pop_stack_top()
             continue
@@ -2499,13 +2513,14 @@ def disassemble_scn_bytes(
             if not koe_trace:
                 gosub_fields = {
                     "label_id": int(lid),
-                    "target_ofs": (
+                    "arg_layout": _clone_arg_layout(arg_forms),
+                }
+                if not payload_trace:
+                    gosub_fields["target_ofs"] = (
                         int(label_list[int(lid)])
                         if 0 <= int(lid) < len(label_list or [])
                         else None
-                    ),
-                    "arg_layout": _clone_arg_layout(arg_forms),
-                }
+                    )
             _trace(opname, ofs, **gosub_fields)
             for arg_info in reversed(list(arg_forms or [])):
                 _consume_arg_value(arg_info)
@@ -2555,19 +2570,15 @@ def disassemble_scn_bytes(
                         f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={int(c):d}{assign_s}"
                     )
                 )
-            _trace(
-                opname,
-                ofs,
-                **(
-                    {}
-                    if koe_trace
-                    else {
-                        "left_form": int(a),
-                        "right_form": int(b),
-                        "arg_list_id": int(c),
-                    }
-                ),
-            )
+            assign_fields = {}
+            if not koe_trace:
+                assign_fields = {
+                    "left_form": int(a),
+                    "right_form": int(b),
+                }
+                if not payload_trace:
+                    assign_fields["arg_list_id"] = int(c)
+            _trace(opname, ofs, **assign_fields)
             stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is not None:
                 _drop_stack_tail(stack_start)
@@ -2657,7 +2668,7 @@ def disassemble_scn_bytes(
                 break
             i += 4
             sid = None
-            if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
+            if stack and int(stack[-1].get("form", -1)) == fm_str:
                 sid = stack[-1].get("val")
             if render_text:
                 txt = ""
@@ -2668,7 +2679,7 @@ def disassemble_scn_bytes(
                 "text": (
                     str(str_list[int(sid)])
                     if stack
-                    and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR)
+                    and int(stack[-1].get("form", -1)) == fm_str
                     and sid is not None
                     and 0 <= int(sid) < len(str_list or [])
                     else None
@@ -2676,11 +2687,11 @@ def disassemble_scn_bytes(
             }
             if not koe_trace:
                 text_fields["read_flag"] = int(rf)
-            if sid is not None and not koe_trace:
+            if sid is not None and not (koe_trace or payload_trace):
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     text_fields["str_id"] = sid_i
-            if not koe_trace:
+            if not (koe_trace or payload_trace):
                 rf_line = _read_flag_line(rf)
                 if rf_line is not None:
                     text_fields["read_flag_line"] = int(rf_line)
@@ -2693,7 +2704,7 @@ def disassemble_scn_bytes(
             continue
         if op == cd_name:
             sid = None
-            if stack and int(stack[-1].get("form", -1)) == _form_code(C.FM_STR):
+            if stack and int(stack[-1].get("form", -1)) == fm_str:
                 sid = stack[-1].get("val")
             if render_text:
                 nm = ""
@@ -2707,7 +2718,7 @@ def disassemble_scn_bytes(
                     else None
                 ),
             }
-            if sid is not None and not koe_trace:
+            if sid is not None and not (koe_trace or payload_trace):
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     name_fields["str_id"] = sid_i
@@ -2795,8 +2806,11 @@ def disassemble_scn_bytes(
                 if render_text
                 else None
             )
-            arg_values = _peek_arg_value_list(arg_forms)
-            named_values = _command_named_values(info, arg_values, named_ids)
+            arg_values = []
+            named_values = {}
+            if not payload_trace:
+                arg_values = _peek_arg_value_list(arg_forms)
+                named_values = _command_named_values(info, arg_values, named_ids)
             if render_text:
                 ename = (" " + qname) if qname else ""
                 rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""
@@ -2809,34 +2823,40 @@ def disassemble_scn_bytes(
                         f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
                     )
                 )
-            cmd_fields = {
-                "_call_name": (qname or None),
-                "_call_base_name": (str(info.get("name") or "") or None),
-                "_arg_values": list(arg_values or []),
-                "_named_values": (
-                    dict(named_values) if isinstance(named_values, dict) else {}
-                ),
-            }
+            cmd_fields = {}
+            if not payload_trace:
+                cmd_fields = {
+                    "_call_name": (qname or None),
+                    "_call_base_name": (str(info.get("name") or "") or None),
+                    "_arg_values": list(arg_values or []),
+                    "_named_values": (
+                        dict(named_values) if isinstance(named_values, dict) else {}
+                    ),
+                }
             if not koe_trace:
                 cmd_fields.update(
                     {
-                        "arg_list_id": int(arg_list_id),
                         "arg_layout": _clone_arg_layout(arg_forms),
-                        "named_ids": list(named_ids),
                         "ret_form": int(ret_form),
                         "read_flag": (
                             int(read_flag) if read_flag is not None else None
-                        ),
-                        "read_flag_line": (
-                            int(_read_flag_line(read_flag))
-                            if _read_flag_line(read_flag) is not None
-                            else None
                         ),
                         "element_code": (
                             int(element_code) if element_code is not None else None
                         ),
                     }
                 )
+                if not payload_trace:
+                    rf_line = _read_flag_line(read_flag)
+                    cmd_fields.update(
+                        {
+                            "arg_list_id": int(arg_list_id),
+                            "named_ids": list(named_ids),
+                            "read_flag_line": (
+                                int(rf_line) if rf_line is not None else None
+                            ),
+                        }
+                    )
             _trace(opname, ofs, **cmd_fields)
             if cmd_stack_start is not None:
                 _collapse_command_expr(
@@ -2860,7 +2880,7 @@ def disassemble_scn_bytes(
         _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)
         break
-    if trace is not None and trace:
+    if trace is not None and trace and not payload_trace:
         tail = trace[-1]
         if scene_no is not None:
             try:

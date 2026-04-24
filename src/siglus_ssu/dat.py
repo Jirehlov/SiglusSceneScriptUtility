@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import struct
 import sys
@@ -167,6 +168,7 @@ def dat_disassembly_bundle(
     trace_profile=None,
 ):
     try:
+        payload_trace = trace_profile == "payload"
         decompiler_excluded = is_decompiler_excluded_dat(dat_path, scene_name)
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
@@ -195,8 +197,12 @@ def dat_disassembly_bundle(
         z_label_list = read_struct_list(
             blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), I32_STRUCT
         )
-        namae_defs = _build_namae_defs(meta.get("namae_list"), str_list)
-        read_flag_defs = _build_read_flag_defs(meta.get("read_flag_list"))
+        namae_defs = (
+            [] if payload_trace else _build_namae_defs(meta.get("namae_list"), str_list)
+        )
+        read_flag_defs = (
+            [] if payload_trace else _build_read_flag_defs(meta.get("read_flag_list"))
+        )
         dis_res = disam.disassemble_scn_bytes(
             scn,
             str_list,
@@ -495,29 +501,7 @@ def _scn_payload_bounds(blob):
     return so, ss
 
 
-_PAYLOAD_COMPARE_DROP_KEYS = frozenset(
-    {
-        "ofs",
-        "labels",
-        "target_ofs",
-        "str_id",
-        "namae_id",
-        "namae_ids",
-        "read_flag_line",
-        "read_flag_ids",
-        "scene_no",
-        "scene_name",
-        "namae_defs",
-        "read_flag_defs",
-        "arg_list_id",
-        "named_ids",
-    }
-)
-
-
 def _payload_trace_normalize_value(ev, key, value):
-    if key in _PAYLOAD_COMPARE_DROP_KEYS:
-        return None
     if key == "value" and ev.get("text") is not None:
         return None
     if isinstance(value, dict):
@@ -537,24 +521,54 @@ def _payload_trace_normalize_value(ev, key, value):
     return value
 
 
-def _payload_trace_lines(trace):
-    lines = []
+def _payload_trace_hash_bundles(trace):
+    full_h = hashlib.sha1()
+    no_text_h = hashlib.sha1()
+    full_size = 0
+    no_text_size = 0
+    full_wrote_line = False
+    no_text_wrote_line = False
+
+    def _update(hasher, size, wrote_line, norm):
+        if not norm:
+            return size, wrote_line
+        data = json.dumps(norm, ensure_ascii=False, sort_keys=True).encode(
+            "utf-8", "surrogatepass"
+        )
+        if wrote_line:
+            hasher.update(b"\n")
+            size += 1
+        hasher.update(data)
+        size += len(data)
+        return size, True
+
     for ev in trace or []:
         if not isinstance(ev, dict):
             continue
-        norm = {}
+        full_norm = {}
+        no_text_norm = {}
         for key in sorted(ev):
-            if str(key).startswith("_"):
+            skey = str(key)
+            if skey.startswith("_"):
                 continue
             val = _payload_trace_normalize_value(ev, key, ev.get(key))
             if val is not None:
-                norm[str(key)] = val
-        if norm:
-            lines.append(json.dumps(norm, ensure_ascii=False, sort_keys=True))
-    return lines
+                full_norm[skey] = val
+                if skey != "text":
+                    no_text_norm[skey] = val
+        full_size, full_wrote_line = _update(
+            full_h, full_size, full_wrote_line, full_norm
+        )
+        no_text_size, no_text_wrote_line = _update(
+            no_text_h, no_text_size, no_text_wrote_line, no_text_norm
+        )
+    return {
+        "full": {"size": full_size, "sha1": full_h.hexdigest()},
+        "no_text": {"size": no_text_size, "sha1": no_text_h.hexdigest()},
+    }
 
 
-def scn_payload_hash_bundle(
+def scn_payload_hash_bundles(
     blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
 ):
     bundle = dat_disassembly_bundle(
@@ -563,12 +577,12 @@ def scn_payload_hash_bundle(
         pack_context=pack_context,
         scene_no=scene_no,
         scene_name=scene_name,
+        emit_text=False,
+        trace_profile="payload",
     )
     if not isinstance(bundle, dict):
         return None
-    lines = _payload_trace_lines(bundle.get("trace") or [])
-    data = "\n".join(lines).encode("utf-8", "surrogatepass")
-    return {"size": len(data), "sha1": sha1(data)}
+    return _payload_trace_hash_bundles(bundle.get("trace") or [])
 
 
 def dat_sections(blob):
@@ -957,19 +971,25 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
         m1.get("call_prop_names") or [],
         m2.get("call_prop_names") or [],
     )
-    c1 = None
-    c2 = None
     if compare_payload:
-        c1 = scn_payload_hash_bundle(b1)
-        c2 = scn_payload_hash_bundle(b2)
+        c1 = scn_payload_hash_bundles(b1)
+        c2 = scn_payload_hash_bundles(b2)
         if c1 and c2:
-            payload_same = c1.get("size") == c2.get("size") and c1.get(
+            full1 = c1.get("full") or {}
+            full2 = c2.get("full") or {}
+            no_text1 = c1.get("no_text") or {}
+            no_text2 = c2.get("no_text") or {}
+            if full1.get("size") == full2.get("size") and full1.get(
                 "sha1"
-            ) == c2.get("sha1")
-            print(
-                "payload compare (normalized scn_bytes semantics): "
-                + ("identical" if payload_same else "different")
-            )
+            ) == full2.get("sha1"):
+                payload_status = "identical"
+            elif no_text1.get("size") == no_text2.get("size") and no_text1.get(
+                "sha1"
+            ) == no_text2.get("sha1"):
+                payload_status = "text_only"
+            else:
+                payload_status = "real_diff"
+            print("payload compare (normalized scn_bytes semantics): " + payload_status)
         else:
             print("payload compare (normalized scn_bytes semantics): unavailable")
     out_dir = globals().get("DAT_TXT_OUT_DIR")

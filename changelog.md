@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.6] - 2026-04-24
+
+- Changed `-a --payload` for `.pck` and `.dat` comparisons to split payload differences into `text_only` resolved-text changes and `real_diff` non-text scene-bytecode changes, while keeping the original full payload hash semantics for equal versus non-equal payloads.
+
+
 ## [v0.2.5] - 2026-04-23
 
 - Added `-t` / `--tutorial` mode to build a conservative static tutorial graph JSON from `Scene.pck`, write a sibling `tutorial_viewer.html`, print generation progress, and try to auto-open the viewer in the default browser.
@@ -38,7 +43,7 @@ All notable changes to this project will be documented in this file.
 - Added a deterministic built-in word-count rule so mixed CJK and non-CJK text is counted consistently across platforms.
 - Added `-k --stats-only` to collect KOE statistics and write CSV output without extracting audio files.
 - Added `-k --single <koe_no>` to extract only one specific KOE entry.
-- `.pck` analysis now also prints `暗号.dat` when an embedded or adjacent source is available, matching compile-mode summary output.
+- `.pck` analysis now also prints the angou data file when an embedded or adjacent source is available, matching compile-mode summary output.
 
 
 ## [v0.2.0] - 2026-04-05

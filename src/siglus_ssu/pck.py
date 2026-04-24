@@ -982,6 +982,55 @@ def pck(blob: bytes, input_pck: str = "") -> int:
     return 0
 
 
+def _payload_compare_scene_task(args):
+    (
+        row_index,
+        raw1,
+        raw2,
+        h1,
+        h2,
+        exe_el1,
+        exe_el2,
+        pack_ctx1,
+        pack_ctx2,
+        scene_name,
+    ) = args
+    try:
+        from . import dat as DAT
+
+        blob1 = _decode_scene_blob(raw1, h1, exe_el1, require_exe=True)
+        blob2 = _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
+        if not blob1 or not blob2:
+            return int(row_index), "-"
+        c1 = DAT.scn_payload_hash_bundles(
+            blob1,
+            pack_context=pack_ctx1,
+            scene_name=scene_name,
+        )
+        c2 = DAT.scn_payload_hash_bundles(
+            blob2,
+            pack_context=pack_ctx2,
+            scene_name=scene_name,
+        )
+        if not c1 or not c2:
+            return int(row_index), "-"
+        full1 = c1.get("full") or {}
+        full2 = c2.get("full") or {}
+        if full1.get("size") == full2.get("size") and full1.get("sha1") == full2.get(
+            "sha1"
+        ):
+            return int(row_index), "same"
+        no_text1 = c1.get("no_text") or {}
+        no_text2 = c2.get("no_text") or {}
+        if no_text1.get("size") == no_text2.get("size") and no_text1.get(
+            "sha1"
+        ) == no_text2.get("sha1"):
+            return int(row_index), "text_only"
+        return int(row_index), "real_diff"
+    except Exception:
+        return int(row_index), "-"
+
+
 def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -> int:
     s1, m1 = _pck_sections(b1, preview=False)
     s2, m2 = _pck_sections(b2, preview=False)
@@ -1051,40 +1100,34 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
         except Exception:
             pack_ctx2 = None
 
-    def _cmp_payload(r1, r2, scene_name=None):
-        if not (r1 and r2):
-            return "-"
+    def _run_payload_jobs(jobs):
         try:
-            from . import dat as DAT
-
-            blob1 = _decode_scene_blob(
-                b1[int(r1[0]) : int(r1[1])], h1, exe_el1, require_exe=True
-            )
-            blob2 = _decode_scene_blob(
-                b2[int(r2[0]) : int(r2[1])], h2, exe_el2, require_exe=True
-            )
-            if not blob1 or not blob2:
-                return "-"
-            c1 = DAT.scn_payload_hash_bundle(
-                blob1,
-                pack_context=pack_ctx1,
-                scene_name=scene_name,
-            )
-            c2 = DAT.scn_payload_hash_bundle(
-                blob2,
-                pack_context=pack_ctx2,
-                scene_name=scene_name,
-            )
-            if not c1 or not c2:
-                return "-"
-            same = c1.get("size") == c2.get("size") and c1.get("sha1") == c2.get("sha1")
-            return "same" if same else "diff"
+            workers = int(os.environ.get("SSU_PAYLOAD_COMPARE_WORKERS", "0") or 0)
         except Exception:
-            return "-"
+            workers = 0
+        if workers == 1 or len(jobs) <= 1:
+            return [_payload_compare_scene_task(job) for job in jobs]
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+
+            from .parallel import get_max_workers
+
+            max_workers = min(get_max_workers(workers), len(jobs))
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                return list(
+                    executor.map(
+                        _payload_compare_scene_task,
+                        jobs,
+                        chunksize=1,
+                    )
+                )
+        except Exception:
+            return [_payload_compare_scene_task(job) for job in jobs]
 
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=lambda x: x.lower())
     rows = []
-    payload_cmp_counts = {"same": 0, "diff": 0, "-": 0}
+    payload_cmp_counts = {"same": 0, "text_only": 0, "real_diff": 0, "-": 0}
+    payload_jobs = []
     for k in keys:
         l1 = sm1.get(k, [])
         l2 = sm2.get(k, [])
@@ -1102,13 +1145,38 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             l2x = hx(r2[1] - 1) if r2 else "-"
             nm = k if i == 0 else f"{k}#{i:d}"
             if compare_payload:
-                payload_cmp = _cmp_payload(r1, r2, scene_name=k)
-                payload_cmp_counts[payload_cmp] = (
-                    int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
-                )
+                payload_cmp = "-"
+                if r1 and r2:
+                    payload_jobs.append(
+                        (
+                            len(rows),
+                            b1[int(r1[0]) : int(r1[1])],
+                            b2[int(r2[0]) : int(r2[1])],
+                            h1,
+                            h2,
+                            exe_el1,
+                            exe_el2,
+                            pack_ctx1,
+                            pack_ctx2,
+                            k,
+                        )
+                    )
+                else:
+                    payload_cmp_counts[payload_cmp] = (
+                        int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
+                    )
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, payload_cmp))
             else:
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z))
+    if compare_payload and payload_jobs:
+        for row_index, payload_cmp in _run_payload_jobs(payload_jobs):
+            payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
+            row = list(rows[int(row_index)])
+            row[-1] = payload_cmp
+            rows[int(row_index)] = tuple(row)
+            payload_cmp_counts[payload_cmp] = (
+                int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
+            )
     os1 = _pck_original_sources(
         b1, h1, h1.get("scn_data_list_ofs", 0) + max_pair_end(idx1)
     )
@@ -1186,10 +1254,11 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
         if compare_payload and rows:
             print()
             print(
-                "scene_data payload: same=%d diff=%d unavailable=%d"
+                "scene_data payload: same=%d text_only=%d real_diff=%d unavailable=%d"
                 % (
                     int(payload_cmp_counts.get("same", 0) or 0),
-                    int(payload_cmp_counts.get("diff", 0) or 0),
+                    int(payload_cmp_counts.get("text_only", 0) or 0),
+                    int(payload_cmp_counts.get("real_diff", 0) or 0),
                     int(payload_cmp_counts.get("-", 0) or 0),
                 )
             )
