@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from contextlib import suppress
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .common import format_scene_name
@@ -18,6 +19,41 @@ def _env_or(name, parse, default):
         return parse(os.environ.get(name, "") or 0)
     except Exception:
         return default
+
+
+def parallel_process_map(
+    process_fn,
+    items,
+    max_workers: int | None = None,
+    chunksize: int = 1,
+    fallback_to_serial: bool = False,
+):
+    item_list = list(items)
+    if not item_list:
+        return []
+    if max_workers == 1 or len(item_list) <= 1:
+        return [process_fn(item) for item in item_list]
+    try:
+        from concurrent.futures import ProcessPoolExecutor
+
+        workers = min(get_max_workers(max_workers), len(item_list))
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            return list(executor.map(process_fn, item_list, chunksize=chunksize))
+    except Exception:
+        if not fallback_to_serial:
+            raise
+        return [process_fn(item) for item in item_list]
+
+
+def parallel_payload_compare(jobs, process_fn):
+    workers = _env_or("SSU_PAYLOAD_COMPARE_WORKERS", int, 0)
+    return parallel_process_map(
+        process_fn,
+        jobs,
+        max_workers=workers,
+        chunksize=1,
+        fallback_to_serial=True,
+    )
 
 
 def _compile_one_process(
@@ -280,6 +316,54 @@ def parallel_source_encrypt(
                 chunks.append(chunk)
     print(f"[PARALLEL] Source encryption complete: {len(sizes)} files")
     return (sizes, chunks)
+
+
+def _g00_extract_task(args):
+    path_s, out_s = args
+    from .g00 import extract_one
+
+    return extract_one(path_s, out_s)
+
+
+def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
+    from concurrent.futures import ProcessPoolExecutor
+
+    fs = list(g00_files)
+    if max_workers is not None and max_workers > 0:
+        workers = max_workers
+    else:
+        workers = os.cpu_count() or 4
+    ok = sk = bad = 0
+    it = iter(fs)
+    futures = set()
+    with ProcessPoolExecutor(max_workers=workers) as ex:
+        for _ in range(workers):
+            try:
+                f = next(it)
+            except StopIteration:
+                break
+            print(f"[*] {f}")
+            futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
+        while futures:
+            for fu in as_completed(futures):
+                futures.remove(fu)
+                try:
+                    st, _, _ = fu.result()
+                    if st == "skip":
+                        sk += 1
+                    else:
+                        ok += 1
+                except Exception as e:
+                    bad += 1
+                    print(f"[!] {e}", file=sys.stderr)
+                try:
+                    f = next(it)
+                    print(f"[*] {f}")
+                    futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
+                except StopIteration:
+                    pass
+                break
+    return ok, sk, bad
 
 
 def _seed_chunk_worker(args):

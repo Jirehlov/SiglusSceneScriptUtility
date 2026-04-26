@@ -1,9 +1,7 @@
 import json
-import os
 import struct
 import sys
 import re
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from ._const_manager import get_const_module
 from .native_ops import (
@@ -419,37 +417,9 @@ def run_extract(inp, out_dir):
     fs = iter_g00(inp)
     if not fs:
         return 2
-    mw = os.cpu_count() or 4
-    ok = sk = bad = 0
-    it = iter(fs)
-    futures = set()
-    with ProcessPoolExecutor(max_workers=mw) as ex:
-        for _ in range(mw):
-            try:
-                f = next(it)
-            except StopIteration:
-                break
-            print(f"[*] {f}")
-            futures.add(ex.submit(extract_one, str(f), str(out_dir)))
-        while futures:
-            for fu in as_completed(futures):
-                futures.remove(fu)
-                try:
-                    st, _, _ = fu.result()
-                    if st == "skip":
-                        sk += 1
-                    else:
-                        ok += 1
-                except Exception as e:
-                    bad += 1
-                    print(f"[!] {e}", file=sys.stderr)
-                try:
-                    f = next(it)
-                    print(f"[*] {f}")
-                    futures.add(ex.submit(extract_one, str(f), str(out_dir)))
-                except StopIteration:
-                    pass
-                break
+    from .parallel import parallel_g00_extract
+
+    ok, sk, bad = parallel_g00_extract(fs, out_dir)
     print(f"Done. OK={ok} SKIP={sk} FAIL={bad}")
     return 0 if bad == 0 else 1
 

@@ -1100,30 +1100,6 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
         except Exception:
             pack_ctx2 = None
 
-    def _run_payload_jobs(jobs):
-        try:
-            workers = int(os.environ.get("SSU_PAYLOAD_COMPARE_WORKERS", "0") or 0)
-        except Exception:
-            workers = 0
-        if workers == 1 or len(jobs) <= 1:
-            return [_payload_compare_scene_task(job) for job in jobs]
-        try:
-            from concurrent.futures import ProcessPoolExecutor
-
-            from .parallel import get_max_workers
-
-            max_workers = min(get_max_workers(workers), len(jobs))
-            with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                return list(
-                    executor.map(
-                        _payload_compare_scene_task,
-                        jobs,
-                        chunksize=1,
-                    )
-                )
-        except Exception:
-            return [_payload_compare_scene_task(job) for job in jobs]
-
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=lambda x: x.lower())
     rows = []
     payload_cmp_counts = {"same": 0, "text_only": 0, "real_diff": 0, "-": 0}
@@ -1169,7 +1145,12 @@ def compare_pck(p1: str, p2: str, b1: bytes, b2: bytes, compare_payload=False) -
             else:
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z))
     if compare_payload and payload_jobs:
-        for row_index, payload_cmp in _run_payload_jobs(payload_jobs):
+        from .parallel import parallel_payload_compare
+
+        for row_index, payload_cmp in parallel_payload_compare(
+            payload_jobs,
+            _payload_compare_scene_task,
+        ):
             payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
             row = list(rows[int(row_index)])
             row[-1] = payload_cmp
