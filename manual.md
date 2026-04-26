@@ -207,6 +207,7 @@ siglus-ssu -lsp [--serial]
 
 - Official entrypoint: `siglus-ssu -lsp`
 - By default, workspace-wide symbol and link scans run in parallel; use `--serial` to force serial scanning when needed
+- The LSP persists workspace indexes across sessions and reuses them only when the `.inc` / `.ss` MD5 input table, package version, and const profile match. Unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, speaker names, and macro declarations with used/unused distinction
 - The language service reuses the same `-c` compiler pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`) wherever they apply; semantic classification comes from that compiler-aligned analysis, while the LSP layer recovers source ranges and packages the results as semantic tokens, locations, and edits
 - The current project scope is directory-based, matching the present `-c` model for `.inc` / `.ss` joint analysis and global `.inc #command` linking

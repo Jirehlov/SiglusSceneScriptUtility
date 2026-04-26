@@ -206,6 +206,7 @@ siglus-ssu -lsp [--serial]
 
 - 官方启动入口：`siglus-ssu -lsp`
 - 默认会并行执行工作区级别的符号扫描与链接扫描；如需强制串行，可传入 `--serial`
+- LSP 会跨会话持久化工作区索引，并且只有在 `.inc` / `.ss` 的 MD5 输入表、程序版本与 const profile 都匹配时才复用。存在未保存的编辑器缓冲区时会跳过持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 当前能力：语义 token、诊断、自动补全、悬停说明、跳转到定义、查找引用、准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；当前语义 token 分类包含台词文本、system element（系统指令）、角色名，以及带“已使用 / 未使用”区分的宏声明
 - 语言服务会在适用处直接复用与 `-c` 相同的编译流水线阶段（`CA`、`LA`、`SA`、`MA`、`BS`）；语义分类来自这条与编译器对齐的分析结果，而 LSP 层负责恢复源文本范围，并把结果封装成 semantic token、location 与 edit
 - 当前项目作用域是目录级的，这与现行 `-c` 对 `.inc` / `.ss` 联合分析以及全局 `.inc #command` 链接的模型保持一致

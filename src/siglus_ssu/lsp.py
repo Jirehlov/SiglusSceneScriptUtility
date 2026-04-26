@@ -1,6 +1,7 @@
 from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 import os
@@ -265,6 +266,20 @@ def _append_definition(
     defs: dict[str, list[DefinitionRecord]], record: DefinitionRecord
 ) -> None:
     defs.setdefault(record.name.casefold(), []).append(record)
+
+
+def _project_link_command_names(project: ProjectContext) -> dict[str, str]:
+    iad = project.iad if isinstance(project.iad, dict) else None
+    if not isinstance(iad, dict):
+        return {}
+    inc_command_cnt = int(iad.get("inc_command_cnt", 0) or 0)
+    if inc_command_cnt <= 0:
+        return {}
+    return {
+        str(cmd.get("name", "") or "").casefold(): str(cmd.get("name", "") or "")
+        for cmd in list(iad.get("command_list") or [])[:inc_command_cnt]
+        if str(cmd.get("name", "") or "")
+    }
 
 
 def _format_form(form: Any) -> str:
@@ -1200,34 +1215,6 @@ def _unique_macro_definitions(
     return out
 
 
-def _local_call_property_defined(
-    result: AnalysisResult,
-    current_command: str,
-    key: str,
-) -> bool:
-    scope = f"command {current_command}"
-    return any(
-        record.kind == "property" and record.scope == scope
-        for record in result.local_definitions.get(key, [])
-    )
-
-
-def _user_command_defined(result: AnalysisResult, key: str) -> bool:
-    return any(
-        record.kind == "command"
-        for mapping in (result.local_definitions, result.project.definitions)
-        for record in mapping.get(key, [])
-    )
-
-
-def _user_global_property_defined(result: AnalysisResult, key: str) -> bool:
-    return any(
-        record.kind == "property" and not record.scope.casefold().startswith("command ")
-        for mapping in (result.local_definitions, result.project.definitions)
-        for record in mapping.get(key, [])
-    )
-
-
 def _builtin_kind_defined(key: str, kind: str) -> bool:
     return any(record.kind == kind for record in BUILTIN_RECORDS.get(key, []))
 
@@ -1275,6 +1262,49 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     for token in ident_tokens:
         line_tokens.setdefault(token.line, []).append(token)
     requests: list[tuple[int, int, str, str, str, str, bool, bool]] = []
+    local_command_keys = {
+        key
+        for key, records in result.local_definitions.items()
+        if any(record.kind == "command" for record in records)
+    }
+    project_command_keys = {
+        key
+        for key, records in result.project.definitions.items()
+        if any(record.kind == "command" for record in records)
+    }
+    user_command_keys = local_command_keys | project_command_keys
+    project_property_keys = {
+        key
+        for key, records in result.project.definitions.items()
+        if any(record.kind == "property" for record in records)
+    }
+    local_global_property_keys = {
+        key
+        for key, records in result.local_definitions.items()
+        if any(
+            record.kind == "property"
+            and not record.scope.casefold().startswith("command ")
+            for record in records
+        )
+    }
+    project_global_property_keys = {
+        key
+        for key, records in result.project.definitions.items()
+        if any(
+            record.kind == "property"
+            and not record.scope.casefold().startswith("command ")
+            for record in records
+        )
+    }
+    user_global_property_keys = (
+        local_global_property_keys | project_global_property_keys
+    )
+    local_call_property_keys = {
+        (record.scope, key)
+        for key, records in result.local_definitions.items()
+        for record in records
+        if record.kind == "property"
+    }
 
     def add_request(
         atom: dict[str, Any],
@@ -1346,10 +1376,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 renamable = True
             else:
                 symbol_id = _global_property_symbol_id(name)
-                renamable = any(
-                    record.kind == "property"
-                    for record in result.project.definitions.get(key, [])
-                )
+                renamable = key in project_property_keys
             add_request(
                 name_atom,
                 name,
@@ -1367,16 +1394,10 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             key = name.casefold()
             element_type = int(node.get("element_type", 0) or 0)
             if element_type == C.ET_COMMAND:
-                is_element = not _user_command_defined(
-                    result, key
-                ) and _builtin_kind_defined(key, "command")
-                renamable = any(
-                    record.kind == "command"
-                    for record in result.local_definitions.get(key, [])
-                ) or any(
-                    record.kind == "command"
-                    for record in result.project.definitions.get(key, [])
+                is_element = key not in user_command_keys and _builtin_kind_defined(
+                    key, "command"
                 )
+                renamable = key in local_command_keys or key in project_command_keys
                 add_request(
                     name_atom,
                     name,
@@ -1388,9 +1409,10 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 )
             elif element_type == C.ET_PROPERTY:
                 if node.get("element_parent_form") == C.FM_CALL and current_command:
-                    local_defined = _local_call_property_defined(
-                        result, current_command, key
-                    )
+                    local_defined = (
+                        f"command {current_command}",
+                        key,
+                    ) in local_call_property_keys
                     is_element = not local_defined and _builtin_kind_defined(
                         key, "property"
                     )
@@ -1404,9 +1426,10 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                         local_defined,
                     )
                 else:
-                    is_element = not _user_global_property_defined(
-                        result, key
-                    ) and _builtin_kind_defined(key, "property")
+                    is_element = (
+                        key not in user_global_property_keys
+                        and _builtin_kind_defined(key, "property")
+                    )
                     add_request(
                         name_atom,
                         name,
@@ -1414,10 +1437,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                         "property",
                         ("element" if is_element else "variable"),
                         False,
-                        any(
-                            record.kind == "property"
-                            for record in result.project.definitions.get(key, [])
-                        ),
+                        key in project_property_keys,
                     )
             walk(node.get("arg_list"), current_command)
             return
@@ -2307,6 +2327,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
+LSP_INDEX_CACHE_VERSION = 1
 
 
 @dataclass(slots=True)
@@ -2340,6 +2361,197 @@ class DirectoryLinkDiagnosticsEntry:
     file_has_diagnostics: dict[str, bool]
     diagnostics: dict[str, list[SourceDiagnostic]]
     revision: int = 0
+
+
+def _definition_record_to_cache(record: DefinitionRecord) -> dict[str, Any]:
+    return {
+        "name": record.name,
+        "path": record.path,
+        "line": record.line,
+        "kind": record.kind,
+        "directive": record.directive,
+        "detail": record.detail,
+        "scope": record.scope,
+        "signature": record.signature,
+    }
+
+
+def _definition_record_from_cache(item: dict[str, Any]) -> DefinitionRecord:
+    return DefinitionRecord(
+        name=str(item.get("name", "") or ""),
+        path=str(item.get("path", "") or ""),
+        line=int(item.get("line", 1) or 1),
+        kind=str(item.get("kind", "") or ""),
+        directive=str(item.get("directive", "") or ""),
+        detail=str(item.get("detail", "") or ""),
+        scope=str(item.get("scope", "") or ""),
+        signature=str(item.get("signature", "") or ""),
+    )
+
+
+def _source_diagnostic_to_cache(diagnostic: SourceDiagnostic) -> dict[str, Any]:
+    return {
+        "path": diagnostic.path,
+        "line": diagnostic.line,
+        "message": diagnostic.message,
+        "severity": diagnostic.severity,
+        "code": diagnostic.code,
+    }
+
+
+def _source_diagnostic_from_cache(item: dict[str, Any]) -> SourceDiagnostic:
+    code = item.get("code")
+    return SourceDiagnostic(
+        path=str(item.get("path", "") or ""),
+        line=int(item.get("line", 1) or 1),
+        message=str(item.get("message", "") or ""),
+        severity=int(item.get("severity", SEVERITY_ERROR) or SEVERITY_ERROR),
+        code=None if code is None else str(code),
+    )
+
+
+def _symbol_occurrence_to_cache(occurrence: SymbolOccurrence) -> dict[str, Any]:
+    return {
+        "symbol_id": occurrence.symbol_id,
+        "path": occurrence.path,
+        "line": occurrence.line,
+        "start_char": occurrence.start_char,
+        "end_char": occurrence.end_char,
+        "kind": occurrence.kind,
+        "semantic_type": occurrence.semantic_type,
+        "name": occurrence.name,
+        "definition": occurrence.definition,
+        "renamable": occurrence.renamable,
+    }
+
+
+def _symbol_occurrence_from_cache(item: dict[str, Any]) -> SymbolOccurrence:
+    return SymbolOccurrence(
+        symbol_id=str(item.get("symbol_id", "") or ""),
+        path=str(item.get("path", "") or ""),
+        line=int(item.get("line", 0) or 0),
+        start_char=int(item.get("start_char", 0) or 0),
+        end_char=int(item.get("end_char", 0) or 0),
+        kind=str(item.get("kind", "") or ""),
+        semantic_type=str(item.get("semantic_type", "") or ""),
+        name=str(item.get("name", "") or ""),
+        definition=bool(item.get("definition", False)),
+        renamable=bool(item.get("renamable", False)),
+    )
+
+
+def _lsp_index_cache_root() -> str:
+    override = os.environ.get("SIGLUS_SSU_LSP_CACHE_DIR")
+    if override:
+        return os.path.abspath(override)
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return os.path.join(base, "siglus_ssu", "lsp-index")
+    base = os.environ.get("XDG_CACHE_HOME")
+    if base:
+        return os.path.join(base, "siglus_ssu", "lsp-index")
+    return os.path.join(os.path.expanduser("~"), ".cache", "siglus_ssu", "lsp-index")
+
+
+def _lsp_index_cache_path(directory: str) -> str:
+    key_src = os.path.normcase(os.path.abspath(directory or "."))
+    key = hashlib.sha1(key_src.encode("utf-8", "surrogatepass")).hexdigest()
+    return os.path.join(_lsp_index_cache_root(), key + ".json")
+
+
+def _lsp_index_const_signature() -> dict[str, Any]:
+    return {
+        "profile": getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
+        "sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+    }
+
+
+def _md5_file(path: str) -> str:
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
+    root = os.path.abspath(directory or ".")
+    inputs: dict[str, dict[str, str]] = {"inc": {}, "ss": {}}
+    try:
+        groups = (
+            ("inc", _sorted_dir_paths(root, {}, ".inc")),
+            ("ss", _sorted_dir_paths(root, {}, ".ss")),
+        )
+        for key, paths in groups:
+            for path in paths:
+                inputs[key][os.path.basename(path)] = _md5_file(path)
+    except OSError:
+        return None
+    return inputs
+
+
+def _read_lsp_index_cache(
+    directory: str, inputs: dict[str, dict[str, str]]
+) -> dict[str, Any] | None:
+    try:
+        data = json.loads(Path(_lsp_index_cache_path(directory)).read_text("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        version = int(data.get("version", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if version != LSP_INDEX_CACHE_VERSION:
+        return None
+    if str(data.get("package", "") or "") != str(package_version() or ""):
+        return None
+    if data.get("const") != _lsp_index_const_signature():
+        return None
+    if data.get("inputs") != inputs:
+        return None
+    return data
+
+
+def _write_lsp_index_cache(directory: str, data: dict[str, Any]) -> None:
+    path = _lsp_index_cache_path(directory)
+    tmp_path = path + f".{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(
+                data, f, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _update_lsp_index_cache(
+    directory: str,
+    inputs: dict[str, dict[str, str]],
+    section: str,
+    payload: dict[str, Any],
+) -> None:
+    data = _read_lsp_index_cache(directory, inputs)
+    if data is None:
+        data = {
+            "version": LSP_INDEX_CACHE_VERSION,
+            "package": str(package_version() or ""),
+            "const": _lsp_index_const_signature(),
+            "directory": os.path.abspath(directory or "."),
+            "inputs": inputs,
+        }
+    data[section] = payload
+    _write_lsp_index_cache(directory, data)
 
 
 @dataclass(slots=True)
@@ -2563,6 +2775,214 @@ class SSLanguageServer:
             return ("missing",)
         return ("file", state)
 
+    def persistent_index_inputs(
+        self, directory: str
+    ) -> dict[str, dict[str, str]] | None:
+        directory = os.path.abspath(directory or ".")
+        for doc in self.documents.values():
+            path = os.path.abspath(doc.path)
+            lower = path.lower()
+            if os.path.dirname(path) != directory:
+                continue
+            if not lower.endswith((".inc", ".ss")):
+                continue
+            if doc.overlay_active:
+                return None
+            if doc.opened and doc.file_state != _file_state(doc.path):
+                return None
+        return _lsp_index_cache_inputs(directory)
+
+    def load_persistent_link_diagnostics(
+        self,
+        directory: str,
+        project_entry: ProjectCacheEntry,
+        scene_paths: list[str],
+    ) -> DirectoryLinkDiagnosticsEntry | None:
+        inputs = self.persistent_index_inputs(directory)
+        if inputs is None:
+            return None
+        data = _read_lsp_index_cache(directory, inputs)
+        if data is None:
+            return None
+        payload = data.get("link")
+        if not isinstance(payload, dict):
+            return None
+        ordered_paths = [os.path.abspath(path) for path in scene_paths]
+        current_paths = set(ordered_paths)
+        cached_paths = {
+            os.path.abspath(str(path))
+            for path in (payload.get("paths") or [])
+            if str(path)
+        }
+        if cached_paths != current_paths:
+            return None
+        try:
+            raw_commands = payload.get("file_commands") or {}
+            raw_has_diagnostics = payload.get("file_has_diagnostics") or {}
+            raw_diagnostics = payload.get("diagnostics") or {}
+            if not (
+                isinstance(raw_commands, dict)
+                and isinstance(raw_has_diagnostics, dict)
+                and isinstance(raw_diagnostics, dict)
+            ):
+                return None
+            if {os.path.abspath(str(path)) for path in raw_commands} != current_paths:
+                return None
+            if {
+                os.path.abspath(str(path)) for path in raw_has_diagnostics
+            } != current_paths:
+                return None
+            file_commands: dict[str, list[DefinitionRecord]] = {}
+            file_has_diagnostics: dict[str, bool] = {}
+            diagnostics: dict[str, list[SourceDiagnostic]] = {}
+            for path in ordered_paths:
+                file_commands[path] = [
+                    _definition_record_from_cache(item)
+                    for item in raw_commands.get(path, [])
+                    if isinstance(item, dict)
+                ]
+                file_has_diagnostics[path] = bool(raw_has_diagnostics.get(path, False))
+            for path, items in raw_diagnostics.items():
+                norm = os.path.abspath(str(path))
+                diagnostics[norm] = [
+                    _source_diagnostic_from_cache(item)
+                    for item in items
+                    if isinstance(item, dict)
+                ]
+            file_signatures = {
+                path: self.path_source_signature(path) for path in ordered_paths
+            }
+            return DirectoryLinkDiagnosticsEntry(
+                project_signature=project_entry.signature,
+                file_signatures=file_signatures,
+                file_commands=file_commands,
+                file_has_diagnostics=file_has_diagnostics,
+                diagnostics=diagnostics,
+                revision=int(payload.get("revision", 0) or 0),
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def save_persistent_link_diagnostics(
+        self,
+        directory: str,
+        scene_paths: list[str],
+        entry: DirectoryLinkDiagnosticsEntry,
+    ) -> None:
+        inputs = self.persistent_index_inputs(directory)
+        if inputs is None:
+            return
+        paths = [os.path.abspath(path) for path in scene_paths]
+        payload = {
+            "paths": paths,
+            "revision": entry.revision,
+            "file_commands": {
+                path: [
+                    _definition_record_to_cache(record)
+                    for record in entry.file_commands.get(path, [])
+                ]
+                for path in paths
+            },
+            "file_has_diagnostics": {
+                path: bool(entry.file_has_diagnostics.get(path, False))
+                for path in paths
+            },
+            "diagnostics": {
+                os.path.abspath(path): [
+                    _source_diagnostic_to_cache(diagnostic)
+                    for diagnostic in diagnostics
+                ]
+                for path, diagnostics in entry.diagnostics.items()
+            },
+        }
+        _update_lsp_index_cache(directory, inputs, "link", payload)
+
+    def load_persistent_occurrence_index(
+        self,
+        directory: str,
+        project_entry: ProjectCacheEntry,
+        paths: list[str],
+    ) -> DirectoryOccurrenceIndexEntry | None:
+        inputs = self.persistent_index_inputs(directory)
+        if inputs is None:
+            return None
+        data = _read_lsp_index_cache(directory, inputs)
+        if data is None:
+            return None
+        payload = data.get("occurrence")
+        if not isinstance(payload, dict):
+            return None
+        ordered_paths = [os.path.abspath(path) for path in paths]
+        current_paths = set(ordered_paths)
+        cached_paths = {
+            os.path.abspath(str(path))
+            for path in (payload.get("paths") or [])
+            if str(path)
+        }
+        if cached_paths != current_paths:
+            return None
+        try:
+            raw_occurrences = payload.get("file_occurrences") or {}
+            if not isinstance(raw_occurrences, dict):
+                return None
+            if {
+                os.path.abspath(str(path)) for path in raw_occurrences
+            } != current_paths:
+                return None
+            file_occurrences: dict[str, list[SymbolOccurrence]] = {}
+            for path in ordered_paths:
+                file_occurrences[path] = [
+                    _symbol_occurrence_from_cache(item)
+                    for item in raw_occurrences.get(path, [])
+                    if isinstance(item, dict)
+                ]
+            occurrences: dict[str, list[SymbolOccurrence]] = {}
+            for path in ordered_paths:
+                for occurrence in file_occurrences.get(path, []):
+                    occurrences.setdefault(occurrence.symbol_id, []).append(occurrence)
+            for items in occurrences.values():
+                items.sort(
+                    key=lambda item: (
+                        os.path.abspath(item.path),
+                        item.line,
+                        item.start_char,
+                        item.end_char,
+                    )
+                )
+            file_signatures = {
+                path: self.path_source_signature(path) for path in ordered_paths
+            }
+            return DirectoryOccurrenceIndexEntry(
+                project_signature=project_entry.signature,
+                file_signatures=file_signatures,
+                file_occurrences=file_occurrences,
+                occurrences=occurrences,
+            )
+        except (TypeError, ValueError):
+            return None
+
+    def save_persistent_occurrence_index(
+        self,
+        directory: str,
+        paths: list[str],
+        entry: DirectoryOccurrenceIndexEntry,
+    ) -> None:
+        inputs = self.persistent_index_inputs(directory)
+        if inputs is None:
+            return
+        norm_paths = [os.path.abspath(path) for path in paths]
+        payload = {
+            "paths": norm_paths,
+            "file_occurrences": {
+                path: [
+                    _symbol_occurrence_to_cache(occurrence)
+                    for occurrence in entry.file_occurrences.get(path, [])
+                ]
+                for path in norm_paths
+            },
+        }
+        _update_lsp_index_cache(directory, inputs, "occurrence", payload)
+
     def project_for_directory(self, directory: str) -> ProjectCacheEntry:
         directory = os.path.abspath(directory or ".")
         overlays = self.overlays_for_dir(directory, ".inc")
@@ -2661,6 +3081,13 @@ class SSLanguageServer:
         project_entry = self.project_for_directory(directory)
         scene_paths = self.scene_paths(directory)
         entry = self.link_diagnostics_cache.get(directory)
+        if entry is None or entry.project_signature != project_entry.signature:
+            cached_entry = self.load_persistent_link_diagnostics(
+                directory, project_entry, scene_paths
+            )
+            if cached_entry is not None:
+                entry = cached_entry
+                self.link_diagnostics_cache[directory] = entry
         rebuild_all = (
             entry is None or entry.project_signature != project_entry.signature
         )
@@ -2722,35 +3149,13 @@ class SSLanguageServer:
         finally:
             self.end_scan_progress(progress)
         diagnostics: dict[str, list[SourceDiagnostic]] = {}
-        iad = (
-            project_entry.project.iad
-            if isinstance(project_entry.project.iad, dict)
-            else None
-        )
-        if not isinstance(iad, dict):
-            if rebuild_all or removed or dirty_paths:
-                entry.revision += 1
-            entry.diagnostics = diagnostics
-            self.link_diagnostics_cache[directory] = entry
-            return entry
-        inc_command_cnt = int(iad.get("inc_command_cnt", 0) or 0)
-        if inc_command_cnt <= 0:
-            if rebuild_all or removed or dirty_paths:
-                entry.revision += 1
-            entry.diagnostics = diagnostics
-            self.link_diagnostics_cache[directory] = entry
-            return entry
-        cmd_list = list(iad.get("command_list") or [])[:inc_command_cnt]
-        global_names = {
-            str(cmd.get("name", "") or "").casefold(): str(cmd.get("name", "") or "")
-            for cmd in cmd_list
-            if str(cmd.get("name", "") or "")
-        }
+        global_names = _project_link_command_names(project_entry.project)
         if not global_names:
             if rebuild_all or removed or dirty_paths:
                 entry.revision += 1
             entry.diagnostics = diagnostics
             self.link_diagnostics_cache[directory] = entry
+            self.save_persistent_link_diagnostics(directory, scene_paths, entry)
             return entry
         if not any(entry.file_has_diagnostics.get(path, False) for path in scene_paths):
             implemented: dict[str, list[DefinitionRecord]] = {
@@ -2796,6 +3201,7 @@ class SSLanguageServer:
             entry.revision += 1
         entry.diagnostics = diagnostics
         self.link_diagnostics_cache[directory] = entry
+        self.save_persistent_link_diagnostics(directory, scene_paths, entry)
         return entry
 
     def occurrence_index_for_directory(
@@ -2805,6 +3211,13 @@ class SSLanguageServer:
         paths = self.directory_paths(directory)
         project_entry = self.project_for_directory(directory)
         entry = self.occurrence_index_cache.get(directory)
+        if entry is None or entry.project_signature != project_entry.signature:
+            cached_entry = self.load_persistent_occurrence_index(
+                directory, project_entry, paths
+            )
+            if cached_entry is not None:
+                entry = cached_entry
+                self.occurrence_index_cache[directory] = entry
         rebuild_all = (
             entry is None or entry.project_signature != project_entry.signature
         )
@@ -2874,12 +3287,17 @@ class SSLanguageServer:
             )
         entry.occurrences = occurrences
         self.occurrence_index_cache[directory] = entry
+        self.save_persistent_occurrence_index(directory, paths, entry)
         return entry
 
     def analyze(self, doc: DocumentState, force: bool = False) -> AnalysisResult:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
         base = self.analyze_base(doc, force=force)
         if not doc.path.lower().endswith(".ss") or base.diagnostics:
+            doc.analysis = base
+            doc.analysis_signature = doc.base_analysis_signature
+            return doc.analysis
+        if not _project_link_command_names(base.project):
             doc.analysis = base
             doc.analysis_signature = doc.base_analysis_signature
             return doc.analysis
@@ -3312,18 +3730,28 @@ class SSLanguageServer:
             return
         result = self.analyze_base(doc)
         unused_macro_symbol_ids = set()
-        directory = os.path.dirname(doc.path) or "."
-        entry = self.occurrence_index_for_directory(directory)
-        for symbol_id, occurrences in entry.occurrences.items():
-            if not str(symbol_id).startswith("macro:") and not str(
-                symbol_id
-            ).startswith("macrolocal:"):
-                continue
-            if not any(item.definition for item in occurrences):
-                continue
-            if any(not item.definition for item in occurrences):
-                continue
-            unused_macro_symbol_ids.add(symbol_id)
+        doc_occurrences = occurrences_for_result(result)
+        if any(item.definition and item.kind == "macro" for item in doc_occurrences):
+            directory = os.path.dirname(doc.path) or "."
+            entry = self.occurrence_index_for_directory(directory)
+            for symbol_id, occurrences in entry.occurrences.items():
+                symbol_text = str(symbol_id)
+                if not (
+                    symbol_text.startswith("macro:")
+                    or symbol_text.startswith("macrolocal:")
+                ):
+                    continue
+                has_definition = False
+                has_reference = False
+                for item in occurrences:
+                    if item.definition:
+                        has_definition = True
+                    else:
+                        has_reference = True
+                    if has_definition and has_reference:
+                        break
+                if has_definition and not has_reference:
+                    unused_macro_symbol_ids.add(symbol_id)
         self.respond(
             msg_id,
             result={
