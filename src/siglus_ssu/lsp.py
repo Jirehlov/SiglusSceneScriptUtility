@@ -866,13 +866,9 @@ _SCAN_WORKER_PROJECT: ProjectContext | None = None
 
 
 def _scan_worker_count() -> int:
-    try:
-        cpu = os.process_cpu_count()
-    except AttributeError:
-        cpu = os.cpu_count()
-    if not cpu or cpu < 1:
-        return 1
-    return max(1, min(int(cpu), 8))
+    from .parallel import get_max_workers
+
+    return get_max_workers(None)
 
 
 def _init_scan_worker(project: ProjectContext) -> None:

@@ -10,8 +10,12 @@ from .common import format_scene_name
 def get_max_workers(max_workers: int | None = None) -> int:
     if max_workers is not None and max_workers > 0:
         return max_workers
-    cpu_count = os.cpu_count() or 4
-    return min(cpu_count, 32)
+    try:
+        cpu_count = os.process_cpu_count()
+    except AttributeError:
+        cpu_count = os.cpu_count()
+    cpu_count = int(cpu_count or 4)
+    return max(1, min(cpu_count // 2, 16))
 
 
 def _env_or(name, parse, default):
@@ -332,7 +336,7 @@ def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
     if max_workers is not None and max_workers > 0:
         workers = max_workers
     else:
-        workers = os.cpu_count() or 4
+        workers = get_max_workers(None)
     ok = sk = bad = 0
     it = iter(fs)
     futures = set()
