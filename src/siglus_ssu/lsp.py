@@ -1,5 +1,7 @@
 from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import redirect_stdout
+import io
 import json
 import os
 import re
@@ -1749,11 +1751,12 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
         "utf8": _source_uses_utf8(path, text),
     }
     try:
-        tokens, iad = tm.collect_tokens(
-            text,
-            ctx,
-            iad_base=tm.BS.build_ia_data(ctx),
-        )
+        with redirect_stdout(io.StringIO()):
+            tokens, iad = tm.collect_tokens(
+                text,
+                ctx,
+                iad_base=tm.BS.build_ia_data(ctx),
+            )
     except Exception:
         return []
     line_offsets = _line_start_offsets(text)
