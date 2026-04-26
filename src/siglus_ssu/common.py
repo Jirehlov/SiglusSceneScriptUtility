@@ -1414,6 +1414,10 @@ def read_struct_list(dat, ofs, cnt, st: struct.Struct):
     need = cnt * st.size
     if ofs + need > len(dat):
         return out
+    if st is I32_STRUCT:
+        return [t[0] for t in st.iter_unpack(memoryview(dat)[ofs : ofs + need])]
+    if st is I32_PAIR_STRUCT:
+        return list(st.iter_unpack(memoryview(dat)[ofs : ofs + need]))
     u = st.unpack_from
     step = st.size
     for i in range(cnt):
@@ -1426,7 +1430,9 @@ def max_pair_end(pairs):
     m = 0
     for a, b in pairs or []:
         if a >= 0 and b > 0:
-            m = max(m, a + b)
+            end = a + b
+            if end > m:
+                m = end
     return m
 
 
