@@ -41,10 +41,31 @@ def new_replace_tree():
     return {"c": {}, "r": None}
 
 
+class _ReplaceTreeCopy(dict):
+    pass
+
+
+def copy_replace_tree(rt):
+    if not isinstance(rt, dict):
+        return new_replace_tree()
+    return _ReplaceTreeCopy({"c": dict(rt.get("c", {})), "r": rt.get("r")})
+
+
 def add_replace_tree(rt, name, rep):
     n = rt
     for ch in name:
-        n = n["c"].setdefault(ch, new_replace_tree())
+        if isinstance(n, _ReplaceTreeCopy):
+            c = n["c"]
+            child = c.get(ch)
+            child = (
+                copy_replace_tree(child)
+                if isinstance(child, dict)
+                else new_replace_tree()
+            )
+            c[ch] = child
+        else:
+            child = n["c"].setdefault(ch, new_replace_tree())
+        n = child
     n["r"] = rep
 
 

@@ -4,7 +4,7 @@ import struct
 import copy
 import time
 from ._const_manager import get_const_module
-from .CA import CharacterAnalizer, new_replace_tree
+from .CA import CharacterAnalizer, copy_replace_tree, new_replace_tree
 from .IA import IncAnalyzer
 from .LA import la_analize
 from .SA import SA
@@ -121,12 +121,7 @@ def get_elm_owner(code):
 
 
 def _copy_replace_tree(rt):
-    if not isinstance(rt, dict):
-        return {"c": {}, "r": None}
-    return {
-        "c": {k: _copy_replace_tree(v) for k, v in rt.get("c", {}).items()},
-        "r": rt.get("r"),
-    }
+    return copy_replace_tree(rt)
 
 
 def copy_ia_data(base):
