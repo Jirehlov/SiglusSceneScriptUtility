@@ -11,6 +11,7 @@ def la_analize(pcad):
     atom_list = []
     str_list = []
     label_list = []
+    label_map = {}
     unknown_list = []
 
     def err(line, msg):
@@ -32,15 +33,30 @@ def la_analize(pcad):
             return i, 1
 
     def find_label(name):
-        for k, lbl in enumerate(label_list):
-            if lbl["name"] == name:
-                return k
-        return -1
+        return label_map.get(name, -1)
 
     def to_i32(v):
         v = int(v) & 0xFFFFFFFF
         return v if v < 0x80000000 else v - 0x100000000
 
+    keywords = {
+        "command": "COMMAND",
+        "property": "PROPERTY",
+        "goto": "GOTO",
+        "gosub": "GOSUB",
+        "gosubstr": "GOSUBSTR",
+        "return": "RETURN",
+        "if": "IF",
+        "elseif": "ELSEIF",
+        "else": "ELSE",
+        "for": "FOR",
+        "while": "WHILE",
+        "continue": "CONTINUE",
+        "break": "BREAK",
+        "switch": "SWITCH",
+        "case": "CASE",
+        "default": "DEFAULT",
+    }
     i = 0
     while s[i] != "\0":
         i, ok = skip(i)
@@ -73,24 +89,7 @@ def la_analize(pcad):
             while ("a" <= s[i] <= "z") or ("0" <= s[i] <= "9") or s[i] in "_$@":
                 i += 1
             w = s[st:i]
-            kw = {
-                "command": "COMMAND",
-                "property": "PROPERTY",
-                "goto": "GOTO",
-                "gosub": "GOSUB",
-                "gosubstr": "GOSUBSTR",
-                "return": "RETURN",
-                "if": "IF",
-                "elseif": "ELSEIF",
-                "else": "ELSE",
-                "for": "FOR",
-                "while": "WHILE",
-                "continue": "CONTINUE",
-                "break": "BREAK",
-                "switch": "SWITCH",
-                "case": "CASE",
-                "default": "DEFAULT",
-            }.get(w)
+            kw = keywords.get(w)
             if kw:
                 a["type"] = C.LA_T[kw]
             else:
@@ -158,6 +157,7 @@ def la_analize(pcad):
                 if idx < 0:
                     a["subopt"] = len(label_list)
                     label_list.append({"name": name, "line": cur_line})
+                    label_map[name] = a["subopt"]
                 else:
                     a["subopt"] = idx
             else:
@@ -166,6 +166,7 @@ def la_analize(pcad):
                 if idx < 0:
                     a["opt"] = len(label_list)
                     label_list.append({"name": name, "line": cur_line})
+                    label_map[name] = a["opt"]
                 else:
                     a["opt"] = idx
         elif s.startswith(">>>=", i):
