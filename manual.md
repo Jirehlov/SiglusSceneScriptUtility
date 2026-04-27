@@ -33,6 +33,7 @@
    - [-v / --video — Work with `.omv` Video Files](#-v----video--work-with-omv-video-files)
    - [-p / --patch — Patch `SiglusEngine.exe`](#-p----patch--patch-siglusengineexe)
    - [-t / --tutorial — Build a Static Tutorial Graph](#-t----tutorial--build-a-static-tutorial-graph)
+   - [test — Round-Trip Compile Test](#test--round-trip-compile-test)
 5. [SiglusSceneScript Language Specification (SiglusSS; as Defined by `-c`)](#siglusss-language-spec)
 6. [Tips and Troubleshooting](#tips-and-troubleshooting)
 
@@ -184,7 +185,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Download const.py from a specific tagged release
-siglus-ssu init --ref v0.2.6
+siglus-ssu init --ref v0.2.7
 ```
 
 ---
@@ -384,8 +385,8 @@ siglus-ssu -a --word <input_pck> [output_csv]
 # Compare two files of the same type
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
-# Analyze or derive the exe_el key from 暗号.dat / SiglusEngine.exe / directory
-siglus-ssu -a <path_to_暗号.dat | SiglusEngine.exe | dir> --angou
+# Analyze or derive the exe_el key from 暗号.dat / Scene.pck / SiglusEngine.exe / directory
+siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir> --angou
 
 # Analyze or compare Gameexe.dat
 siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
@@ -401,7 +402,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--readall` | For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text scene-bytecode differences, and `-` when payload comparison is unavailable; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
-| `--angou` | Parse the input as a `暗号.dat` (or `SiglusEngine*.exe`, or directory containing one) and derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
+| `--angou` | Parse the input as a `暗号.dat`, extract embedded `暗号.dat` from a `.pck`, or read `SiglusEngine*.exe` / a directory containing one, then derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
 
 #### Examples
@@ -1401,6 +1402,45 @@ siglus-ssu -t /path/to/Scene.pck
 
 # Write to a custom JSON path
 siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
+```
+
+### `test` — Round-Trip Compile Test
+
+Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back without changing normalized scene payload semantics.
+
+This mode is intended for archives that contain embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
+
+#### Syntax
+
+```bash
+siglus-ssu test <input_pck|input_dir>
+```
+
+#### Workflow
+
+For each `.pck`, the command:
+
+1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
+2. extracts the archive into a temporary test directory;
+3. recompiles the extracted source in place, trying `const-profile` 0, then 1, then 2 until one profile succeeds;
+4. compares the rebuilt `.pck` against the original with normalized `-a --payload` semantics;
+5. removes all temporary test files.
+
+#### Output
+
+Step log lines report status only. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. If compile falls back across profiles, the `compile` timing records only the final attempted profile, not earlier failed profiles.
+
+Compile errors are kept quiet while fallback profiles remain. If every profile fails, the command prints the captured compile output for the failed attempts and marks that file as `FAIL`.
+
+The final summary reports total counts, and lists only failed files with their total time and step timings.
+
+The command exits with `0` when at least one file passes and no file fails. It exits with `1` when any file fails, or when all discovered files are skipped.
+
+#### Example
+
+```bash
+siglus-ssu test /path/to/Scene.pck
+siglus-ssu test /path/to/pck_dir/
 ```
 
 <a id="siglusss-language-spec"></a>

@@ -3,9 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
-## [Unreleased]
+## [v0.2.7] - 2026-04-27
 
+- Optimized LSP.
 - Changed `-k --koe` to preserve multiple dialogue texts that share the same `koe_no`, write separate `koe_master.csv` rows per `koe_no`/text pair, and report `KOE multi-text` summary counts with the affected `koe_no` values.
+- Added `-a --angou <Scene.pck>` support to extract embedded `暗号.dat` from the `.pck` original-source area before deriving the `exe_el` key.
+- Added `siglus-ssu test <input_pck|input_dir>` to extract, in-place recompile with `const-profile` fallback, payload-compare with focused failure output, report total/summary step timings, and clean up round-trip tests for `.pck` files with embedded original sources.
 
 
 ## [v0.2.6] - 2026-04-24

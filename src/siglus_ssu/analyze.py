@@ -31,29 +31,8 @@ def _fmt_key_txt(el: bytes) -> str:
     return ", ".join(f"0x{x:02X}" for x in b)
 
 
-def analyze_angou_dat(path: str) -> int:
-    if os.path.isdir(path):
-        p = find_named_path(path, ANGOU_DAT_NAME, recursive=False)
-        if p:
-            return analyze_angou_dat(p)
-        ep = find_siglus_engine_exe(path)
-        if ep:
-            return analyze_angou_dat(ep)
-        sys.stderr.write(
-            f"not found: {os.path.join(path, ANGOU_DAT_NAME)} or SiglusEngine*.exe\n"
-        )
-        return 2
-    if not os.path.exists(path):
-        sys.stderr.write(f"not found: {path}\n")
-        return 2
-    blob = read_bytes(path)
-    st = os.stat(path)
-    bn = os.path.basename(path or "")
-    cf = bn.casefold()
-    exe_el = b""
-    is_exe = cf.startswith("siglusengine") and cf.endswith(".exe")
-    if is_exe:
-        exe_el = siglus_engine_exe_element(blob)
+def _analyze_angou_blob(path: str, blob: bytes, st, is_exe: bool = False) -> int:
+    exe_el = siglus_engine_exe_element(blob) if is_exe else b""
     print("==== Analyze ====")
     print(f"file: {path}")
     print(f"type: {'siglusengine.exe' if is_exe else 'angou.dat'}")
@@ -83,6 +62,46 @@ def analyze_angou_dat(path: str) -> int:
     else:
         print("key.txt: ")
     return 0
+
+
+def analyze_angou_dat(path: str) -> int:
+    if os.path.isdir(path):
+        p = find_named_path(path, ANGOU_DAT_NAME, recursive=False)
+        if p:
+            return analyze_angou_dat(p)
+        ep = find_siglus_engine_exe(path)
+        if ep:
+            return analyze_angou_dat(ep)
+        sys.stderr.write(
+            f"not found: {os.path.join(path, ANGOU_DAT_NAME)} or SiglusEngine*.exe\n"
+        )
+        return 2
+    if not os.path.exists(path):
+        sys.stderr.write(f"not found: {path}\n")
+        return 2
+    blob = read_bytes(path)
+    st = os.stat(path)
+    bn = os.path.basename(path or "")
+    cf = bn.casefold()
+    is_exe = cf.startswith("siglusengine") and cf.endswith(".exe")
+    if is_exe:
+        return _analyze_angou_blob(path, blob, st, is_exe=True)
+    is_pck = cf.endswith(".pck") or pck.looks_like_pck(blob)
+    if is_pck:
+        if not pck.looks_like_pck(blob):
+            sys.stderr.write(f"not a supported .pck file: {path}\n")
+            return 1
+        try:
+            name, raw = pck.extract_pck_angou_dat(blob)
+        except Exception as e:
+            sys.stderr.write(f"failed to extract {ANGOU_DAT_NAME} from {path}: {e!s}\n")
+            return 1
+        if not raw:
+            sys.stderr.write(f"not found: {path}!{ANGOU_DAT_NAME}\n")
+            return 2
+        inner = name or ANGOU_DAT_NAME
+        return _analyze_angou_blob(f"{path}!{inner}", raw, st)
+    return _analyze_angou_blob(path, blob, st)
 
 
 def _detect_type(path, blob):

@@ -33,6 +33,7 @@
    - [-v / --video — 处理 `.omv` 视频文件](#-v----video--处理-omv-视频文件)
    - [-p / --patch — 修改 `SiglusEngine.exe`](#-p----patch--修改-siglusengineexe)
    - [-t / --tutorial — 生成静态剧情图](#-t----tutorial--生成静态剧情图)
+   - [test — 回编测试](#test--回编测试)
 5. [SiglusSceneScript语言规范（简称 SiglusSS语言；以 -c 编译器为定义）](#siglusss-language-spec)
 6. [提示与故障排除](#提示与故障排除)
 
@@ -183,7 +184,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.2.6
+siglus-ssu init --ref v0.2.7
 ```
 
 ---
@@ -383,8 +384,8 @@ siglus-ssu -a --word <input_pck> [output_csv]
 # 比较两个同类型文件
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
-# 从 暗号.dat / SiglusEngine.exe / 目录 分析或推导 exe_el 密钥
-siglus-ssu -a <暗号.dat路径 | SiglusEngine.exe路径 | 目录> --angou
+# 从 暗号.dat / Scene.pck / SiglusEngine.exe / 目录 分析或推导 exe_el 密钥
+siglus-ssu -a <暗号.dat路径 | Scene.pck路径 | SiglusEngine.exe路径 | 目录> --angou
 
 # 分析或比较 Gameexe.dat
 siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
@@ -400,7 +401,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--readall` | 对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
-| `--angou` | 将输入解析为 `暗号.dat`（或 `SiglusEngine*.exe`、或包含两者之一的目录），推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
+| `--angou` | 将输入解析为 `暗号.dat`，或从 `.pck` 的内嵌 original source 中提取 `暗号.dat`，或读取 `SiglusEngine*.exe` / 包含其中之一的目录，然后推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
 
 #### 示例
@@ -1395,6 +1396,45 @@ siglus-ssu -t /path/to/Scene.pck
 
 # 输出到自定义 JSON 路径
 siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
+```
+
+### `test` — 回编测试
+
+测试一个 `.pck`，或某个目录正下方的所有 `.pck`，能否在提取后原地回编，并保持规范化场景 payload 语义不变。
+
+本模式面向带有内嵌原始源码数据的 `.pck`。如果某个 `.pck` 没有 OS 区段，就会跳过，因为没有可用于回编的原始 `.ss` 源码。
+
+#### 语法
+
+```bash
+siglus-ssu test <input_pck|input_dir>
+```
+
+#### 流程
+
+对每个 `.pck`，命令会：
+
+1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
+2. 将 archive 解压到临时测试目录；
+3. 对解压出的源码进行原地回编，并依次尝试 `const-profile` 0、1、2，直到某个 profile 编译成功；
+4. 用规范化的 `-a --payload` 语义比较回编 `.pck` 与原始 `.pck`；
+5. 删除所有测试产生的临时文件。
+
+#### 输出
+
+分步骤日志只显示状态。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。如果编译经历 profile 回退，`compile` 耗时只记录最终尝试的 profile，不计入前面失败的 profile。
+
+只要还有 fallback profile 未尝试，编译错误会先静默捕获，不立即打印。只有所有 profile 都失败时，命令才会打印这些失败尝试的编译输出，并将该文件标记为 `FAIL`。
+
+最终汇总会输出总计数，并且只列出失败文件的总耗时与步骤耗时。
+
+当至少一个文件通过且没有文件失败时，命令返回 `0`。只要有文件失败，或发现的文件全部被跳过，命令返回 `1`。
+
+#### 示例
+
+```bash
+siglus-ssu test /path/to/Scene.pck
+siglus-ssu test /path/to/pck_dir/
 ```
 
 <a id="siglusss-language-spec"></a>

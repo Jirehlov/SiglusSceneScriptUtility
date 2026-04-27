@@ -29,7 +29,7 @@ def _usage(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
@@ -51,6 +51,7 @@ def _usage(out=None):
         "  -v, --video     Extract/analyze .omv videos\n"
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
         "  -t, --tutorial  Generate static tutorial graph JSON from a .pck\n"
+        "  test            Round-trip compile-test .pck files with embedded original sources and summary timings\n"
         "\n"
         "Init mode:\n"
         f"  {p} init [--force|-f] [--ref <git-ref>]\n"
@@ -90,13 +91,13 @@ def _usage(out=None):
         f"  {p} -a [--disam] [--readall] <input_file.(pck|dat|gan|sav|cgm|tcr)>\n"
         f"  {p} -a [--payload] <input_file_1> <input_file_2>\n"
         f"  {p} -a --word <input_pck> [output_csv]\n"
-        f"  {p} -a <path_to_\u6697\u53f7.dat|SiglusEngine.exe|dir> --angou\n"
+        f"  {p} -a <path_to_\u6697\u53f7.dat|Scene.pck|SiglusEngine.exe|dir> --angou\n"
         f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2]\n"
         "    --disam        Write .dat disassembly to __DATDIR__\n"
         "    --readall      For read.sav/global.sav: unlock read or engine-managed collection flags in-place\n"
         "    --word         Count dialogue units for each .dat/.ss inside a .pck and write CSV only\n"
         "    --payload      Compare normalized decoded/decompressed scn_bytes semantics for .pck/.dat comparisons (ignores string-pool ids when text matches); expensive\n"
-        "    --angou        Parse as \u6697\u53f7.dat and print derived exe_el key\n"
+        "    --angou        Parse \u6697\u53f7.dat, extract it from .pck, or read SiglusEngine.exe; print derived exe_el key\n"
         "    --gei          Analyze/compare Gameexe.dat\n"
         "\n"
         "KOE mode:\n"
@@ -170,6 +171,12 @@ def _usage(out=None):
         "Tutorial mode:\n"
         f"  {p} -t <input_pck> [output_json]\n"
         "    output_json    Defaults to <input_name>.tutorial.json next to input_pck\n"
+        "\n"
+        "Test mode:\n"
+        f"  {p} test <input_pck|input_dir>\n"
+        "    input_dir      Tests .pck files directly under the directory\n"
+        "    output         Prints total/summary timings for analyze/extract/compile/payload/cleanup\n"
+        "    const-profile  Compile tries profiles 0, 1, then 2 before reporting failure\n"
     )
     out.write(text)
 
@@ -180,7 +187,7 @@ def _usage_short(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     out.write(text)
@@ -266,6 +273,7 @@ MODE_MODULES = {
     "--patch": "patch",
     "-t": "tutorial",
     "--tutorial": "tutorial",
+    "test": "test",
 }
 
 

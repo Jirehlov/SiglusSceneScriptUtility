@@ -433,7 +433,7 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None):
         yield {"name": str(name or ""), "raw": bytes(raw or b"")}
 
 
-def _iter_pck_angou_sources(blob: bytes, hdr=None):
+def iter_pck_angou_dat_items(blob: bytes, hdr=None):
     cands = []
     for item in _iter_pck_original_source_items(blob, hdr=hdr) or []:
         nm = os.path.basename(str(item.get("name") or ""))
@@ -441,8 +441,19 @@ def _iter_pck_angou_sources(blob: bytes, hdr=None):
             continue
         cands.append((str(item.get("name") or nm), bytes(item.get("raw") or b"")))
     cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-    for _name, raw in cands:
-        yield raw
+    for name, raw in cands:
+        yield {"name": name, "raw": raw}
+
+
+def extract_pck_angou_dat(blob: bytes, hdr=None) -> tuple[str, bytes]:
+    for item in iter_pck_angou_dat_items(blob, hdr=hdr) or []:
+        return str(item.get("name") or ANGOU_DAT_NAME), bytes(item.get("raw") or b"")
+    return "", b""
+
+
+def _iter_pck_angou_sources(blob: bytes, hdr=None):
+    for item in iter_pck_angou_dat_items(blob, hdr=hdr) or []:
+        yield bytes(item.get("raw") or b"")
 
 
 def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
