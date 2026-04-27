@@ -577,7 +577,7 @@ Special characters in string values are escaped:
 
 Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files. In normal mode, files are grouped into per-character subdirectories.
 
-In normal mode, the command also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
+In normal mode, the command also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. If the same `koe_no` is referenced by multiple distinct dialogue texts, the CSV keeps separate rows and only merges call-sites for the same `koe_no`/text pair. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
 
 #### Syntax
 
@@ -640,10 +640,10 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 
 | Column | Description |
 |---|---|
-| `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Empty for call-sites where the OVK entry was not found. |
+| `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Empty for call-sites where the OVK entry was not found. If a found KOE is referenced by multiple distinct texts, the same number can appear on multiple rows. |
 | `character` | Character name inferred from `CD_NAME` events and inline voice metadata in the scene trace. |
 | `text` | Dialogue text inferred from `CD_TEXT` events and inline voice metadata in the scene trace. |
-| `callsite` | Semicolon-separated list of `filename:line` locations where this KOE is called, or `Scene.pck!scene.dat:line` when scanning a `.pck` directly. |
+| `callsite` | Semicolon-separated list of `filename:line` locations where this KOE/text row is called, or `Scene.pck!scene.dat:line` when scanning a `.pck` directly. |
 
 #### Summary Output
 
@@ -663,6 +663,8 @@ Scene missing    : 124
 KOE total        : 45,678
 KOE referenced   : 44,086
 KOE unreferenced : 1,592
+KOE multi-text   : 3
+KOE multi-text no: 200259, 2300267, 30100310
 Audio extracted  : 43,900
 Audio skipped    : 186
 Audio failed     : 0
@@ -674,7 +676,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. With `--single`, scene-scanning and CSV-related lines are omitted.
+The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. `KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, while missing OVK call-sites still keep an empty `koe_no` column in the CSV. With `--single`, scene-scanning and CSV-related lines are omitted.
 
 ---
 

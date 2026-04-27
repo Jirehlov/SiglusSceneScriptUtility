@@ -229,11 +229,70 @@ def _remember_voice_meta(voice_meta, koe_no, name, text):
     koe_no_i = _try_int(koe_no)
     if koe_no_i is None:
         return
-    one = voice_meta.setdefault(koe_no_i, {"name": "", "text": ""})
+    name = str(name or "")
+    text = str(text or "")
+    if not name and not text:
+        return
+    variants = voice_meta.setdefault(koe_no_i, {})
+    one = variants.setdefault((name, text), {"name": name, "text": text})
     if name and not one.get("name"):
-        one["name"] = str(name)
+        one["name"] = name
     if text and not one.get("text"):
-        one["text"] = str(text)
+        one["text"] = text
+
+
+def _unique_voice_meta(voice_meta, koe_no):
+    koe_no_i = _try_int(koe_no)
+    if koe_no_i is None:
+        return {}
+    variants = [
+        v
+        for v in (voice_meta.get(koe_no_i) or {}).values()
+        if v.get("name") or v.get("text")
+    ]
+    if len(variants) != 1:
+        return {}
+    return variants[0]
+
+
+def _entry_ref_key(name, text):
+    return str(name or ""), str(text or "")
+
+
+def _add_entry_ref(entry, chara_no, name, text, callsite):
+    name = str(name or "")
+    text = str(text or "")
+    ref = entry["refs"].setdefault(
+        _entry_ref_key(name, text),
+        {"name": name, "text": text, "callsites": set(), "chara_no": -1},
+    )
+    ref["callsites"].add(callsite)
+    entry["callsites"].add(callsite)
+    if name and not entry["name"]:
+        entry["name"] = name
+    if text and not entry["text"]:
+        entry["text"] = text
+    if ref["chara_no"] < 0 and chara_no >= 0:
+        ref["chara_no"] = chara_no
+    if entry["chara_no"] < 0 and chara_no >= 0:
+        entry["chara_no"] = chara_no
+
+
+def _multi_text_koe_nos(call_refs):
+    texts_by_koe = {}
+    for koe_no, _ch, _name, text, _callsite in call_refs:
+        koe_no_i = _try_int(koe_no)
+        if koe_no_i is None:
+            continue
+        text = str(text or "")
+        if not text:
+            continue
+        texts_by_koe.setdefault(koe_no_i, set()).add(text)
+    return [koe_no for koe_no in sorted(texts_by_koe) if len(texts_by_koe[koe_no]) > 1]
+
+
+def _format_koe_nos(koe_nos):
+    return ", ".join(str(int(koe_no)) for koe_no in koe_nos) if koe_nos else "-"
 
 
 def _voice_call_base_name(ev):
@@ -382,7 +441,7 @@ def _scan_bundle_calls(bundle, scene_root: str):
             if ref is None:
                 continue
             koe_no, chara_no = ref
-            meta = dict(voice_meta.get(int(koe_no)) or {})
+            meta = dict(_unique_voice_meta(voice_meta, koe_no) or {})
             inline = dict(
                 line_meta.get((koe_no, chara_no)) or line_meta.get((koe_no, -1)) or {}
             )
@@ -485,6 +544,7 @@ def _index_ovk(voice_dir: str):
                     "name": "",
                     "text": "",
                     "callsites": set(),
+                    "refs": {},
                     "chara_no": -1,
                 }
     return (
@@ -590,21 +650,17 @@ def main(argv=None):
             if e is None:
                 missing_rows.append((name, text, callsite))
                 continue
-            if name and not e["name"]:
-                e["name"] = name
-            if text and not e["text"]:
-                e["text"] = text
-            e["callsites"].add(callsite)
-            if e["chara_no"] < 0 and ch >= 0:
-                e["chara_no"] = ch
+            _add_entry_ref(e, ch, name, text, callsite)
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
+        multi_text_koe_nos = _multi_text_koe_nos(call_refs)
     else:
         call_refs = []
         scene_files = 0
         missing_rows = []
         referenced = 0
         unreferenced = 0
+        multi_text_koe_nos = []
     csv_path = ""
     total_rows = 0
     if single_koe_no is None:
@@ -614,17 +670,31 @@ def main(argv=None):
             w.writerow(["koe_no", "character", "text", "callsite"])
             for koe_no in sorted(entries.keys()):
                 e = entries[koe_no]
-                w.writerow(
-                    [
-                        str(koe_no),
-                        e["name"],
-                        e["text"],
-                        ";".join(sorted(e["callsites"])),
-                    ]
-                )
+                refs = list((e.get("refs") or {}).values())
+                if refs:
+                    refs.sort(
+                        key=lambda x: (
+                            str(x.get("name") or ""),
+                            str(x.get("text") or ""),
+                            ";".join(sorted(x.get("callsites") or [])),
+                        )
+                    )
+                    for ref in refs:
+                        w.writerow(
+                            [
+                                str(koe_no),
+                                ref["name"],
+                                ref["text"],
+                                ";".join(sorted(ref["callsites"])),
+                            ]
+                        )
+                    continue
+                w.writerow([str(koe_no), e["name"], e["text"], ""])
             for name, text, callsite in sorted(missing_rows, key=lambda x: x[2]):
                 w.writerow(["", name, text, callsite])
-        total_rows = len(entries) + len(missing_rows)
+        total_rows = sum(
+            max(1, len(e.get("refs") or {})) for e in entries.values()
+        ) + len(missing_rows)
     single_found = single_koe_no is None or single_koe_no in entries
     extracted = skipped = failed = 0
     total_duration_sec = 0.0
@@ -782,6 +852,8 @@ def main(argv=None):
         eprint(f"KOE total        : {len(entries):,}")
         eprint(f"KOE referenced   : {referenced:,}")
         eprint(f"KOE unreferenced : {unreferenced:,}")
+        eprint(f"KOE multi-text   : {len(multi_text_koe_nos):,}")
+        eprint(f"KOE multi-text no: {_format_koe_nos(multi_text_koe_nos)}")
     eprint(f"Audio extracted  : {extracted:,}")
     eprint(f"Audio skipped    : {skipped:,}")
     eprint(f"Audio failed     : {failed:,}")

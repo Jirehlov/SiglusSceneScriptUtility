@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Changed `-k --koe` to preserve multiple dialogue texts that share the same `koe_no`, write separate `koe_master.csv` rows per `koe_no`/text pair, and report `KOE multi-text` summary counts with the affected `koe_no` values.
+
+
 ## [v0.2.6] - 2026-04-24
 
 - Added `-s --a <old.ovk> <new.ovk>` support to compare OVK archives by KOE number, size, sample count, and decoded Ogg payload content.

@@ -576,7 +576,7 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并提取对应的 `.ogg` 音频文件。普通模式下，输出会按角色名分类到子目录中。
 
-普通模式下还会生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
+普通模式下还会生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。如果同一个 `koe_no` 被多个不同的对话文本引用，CSV 会保留多行，并且只在相同 `koe_no`/文本组合内合并调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
 
 #### 语法
 
@@ -639,10 +639,10 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 
 | 列名 | 说明 |
 |---|---|
-| `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。对于未在 OVK 中找到的调用，这一列为空。 |
+| `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。对于未在 OVK 中找到的调用，这一列为空。若某个已匹配的 KOE 被多个不同文本引用，同一编号可能出现多行。 |
 | `character` | 从 scene trace 中的 `CD_NAME` 事件和行内语音元数据推断出的角色名。 |
 | `text` | 从 scene trace 中的 `CD_TEXT` 事件和行内语音元数据推断出的文本。 |
-| `callsite` | 分号分隔的 `文件名:行号` 调用位置列表；若直接扫描 `.pck`，则为 `Scene.pck!scene.dat:line`。 |
+| `callsite` | 分号分隔的当前 KOE/文本行的 `文件名:行号` 调用位置列表；若直接扫描 `.pck`，则为 `Scene.pck!scene.dat:line`。 |
 
 #### 完成后汇总输出（stderr）
 
@@ -660,6 +660,8 @@ Scene missing    : 124
 KOE total        : 45,678
 KOE referenced   : 44,086
 KOE unreferenced : 1,592
+KOE multi-text   : 3
+KOE multi-text no: 200259, 2300267, 30100310
 Audio extracted  : 43,900
 Audio skipped    : 186
 Audio failed     : 0
@@ -671,7 +673,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-上面的示例是普通模式输出。`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。使用 `--single` 时，不会显示场景扫描相关行，也不会显示 CSV 相关行。
+上面的示例是普通模式输出。`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。`KOE multi-text` 统计关联到多个非空对话文本的 `koe_no`，`KOE multi-text no` 会列出这些编号。这个列表基于 OVK 匹配前的场景引用计算；未在 OVK 中找到的调用在 CSV 中仍会保持 `koe_no` 列为空。使用 `--single` 时，不会显示场景扫描相关行，也不会显示 CSV 相关行。
 
 ---
 
