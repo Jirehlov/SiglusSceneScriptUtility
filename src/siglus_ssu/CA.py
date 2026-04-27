@@ -203,7 +203,7 @@ class CharacterAnalizer:
                     st = 1
                 elif c == '"':
                     st = 4
-                else:
+                elif c == "#":
                     j, ok = self._check_str(t, i, "#ifdef")
                     if ok:
                         i, w, ok2 = self._check_word(t, j)
