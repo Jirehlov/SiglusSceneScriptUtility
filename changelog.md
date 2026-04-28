@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.8] - 2026-04-28
+
+- Added `siglus-ssu -a --apply <global.sav>` support to read the sibling `global.txt` and write supported `G`, `Z`, `cg_table`, `bgm_table`, and `chrkoe.look_flag` entries back into `global.sav` in-place.
+- Aligned LSP with 3.17 standards.
+
+
 ## [v0.2.7] - 2026-04-27
 
 - Optimized LSP.

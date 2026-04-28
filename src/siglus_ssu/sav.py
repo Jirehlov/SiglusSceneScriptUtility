@@ -1,10 +1,14 @@
 import os
+import re
 import struct
 from ._const_manager import get_const_module
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
 from .common import dn, sha1
 
 C = get_const_module()
+
+_GLOBAL_APPLY_INT_RE = re.compile(r"^(G|Z|cg_table|bgm_table)\[(\d+)\]\s*:\s*(.*?)\s*$")
+_GLOBAL_APPLY_CHRKOE_RE = re.compile(r"^chrkoe\[(\d+)\]\.look_flag\s*:\s*(.*?)\s*$")
 
 
 def _zstr_u16(b):
@@ -845,6 +849,20 @@ def _set_fixed_int_list_all(buf, meta, value):
     return cnt
 
 
+def _set_fixed_int_list_items(buf, meta, values, name):
+    if not values:
+        return 0
+    if not meta:
+        raise ValueError(f"{name}: missing layout")
+    cnt = int(meta.get("count") or 0)
+    data_offset = int(meta["data_offset"])
+    for idx, value in values.items():
+        if idx < 0 or idx >= cnt:
+            raise ValueError(f"{name}[{idx}]: out of range 0..{cnt - 1}")
+        struct.pack_into("<i", buf, data_offset + idx * 4, int(value))
+    return len(values)
+
+
 def _parse_global_for_patch(blob):
     k = _try_parse_global_or_config(blob)
     if k is None or k["kind"] != "global":
@@ -863,6 +881,75 @@ def _parse_global_for_patch(blob):
         "payload_variant": variant,
         "payload_layout": layout,
     }
+
+
+def _decode_global_txt(blob):
+    for enc in ("utf-8-sig", "utf-8", "cp932"):
+        try:
+            return bytes(blob).decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return bytes(blob).decode("utf-8", "replace")
+
+
+def _parse_global_apply_value(value, line_no):
+    v = str(value).strip()
+    vl = v.casefold()
+    if vl == "true":
+        return 1
+    if vl == "false":
+        return 0
+    try:
+        return int(v, 0)
+    except ValueError as exc:
+        raise ValueError(f"global.txt:{line_no}: invalid value: {v}") from exc
+
+
+def _parse_global_txt_updates(txt_blob):
+    updates = {k: {} for k in ("G", "Z", "cg_table", "bgm_table")}
+    chrkoe = {}
+    for line_no, line in enumerate(_decode_global_txt(txt_blob).splitlines(), 1):
+        s = line.strip()
+        if not s:
+            continue
+        m = _GLOBAL_APPLY_INT_RE.match(s)
+        if m:
+            key = m.group(1)
+            idx = int(m.group(2), 10)
+            updates[key][idx] = _parse_global_apply_value(m.group(3), line_no)
+            continue
+        m = _GLOBAL_APPLY_CHRKOE_RE.match(s)
+        if m:
+            idx = int(m.group(1), 10)
+            chrkoe[idx] = 1 if _parse_global_apply_value(m.group(2), line_no) else 0
+    return updates, chrkoe
+
+
+def apply_global_txt(blob, txt_blob):
+    info = _parse_global_for_patch(blob)
+    raw = bytearray(info["raw"])
+    layout = info["payload_layout"]
+    updates, chrkoe = _parse_global_txt_updates(txt_blob)
+    stats = {}
+    for key, values in updates.items():
+        stats[key] = _set_fixed_int_list_items(raw, layout.get(key), values, key)
+    offsets = layout.get("chrkoe_look_flag_offsets") or []
+    if chrkoe:
+        for idx, value in chrkoe.items():
+            if idx < 0 or idx >= len(offsets):
+                raise ValueError(f"chrkoe[{idx}]: out of range 0..{len(offsets) - 1}")
+            raw[int(offsets[idx])] = int(value)
+    stats["chrkoe"] = len(chrkoe)
+    enc = _pack_tnm_data(bytes(raw))
+    tail = blob[12 + int(info["data_size"]) :]
+    out = bytearray()
+    out.extend(
+        struct.pack("<3i", int(info["major"]), int(info["minor"]), int(len(enc)))
+    )
+    out.extend(enc)
+    if tail:
+        out.extend(tail)
+    return bytes(out), stats
 
 
 def _readall_global(blob):

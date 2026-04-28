@@ -184,7 +184,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 从特定标签下载
-siglus-ssu init --ref v0.2.7
+siglus-ssu init --ref v0.2.8
 ```
 
 ---
@@ -376,7 +376,7 @@ siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 
 ```
 # 分析单个文件
-siglus-ssu -a [--disam] [--readall] <input_file>
+siglus-ssu -a [--disam] [--readall|--apply] <input_file>
 
 # 仅统计 .pck 中的台词计数并导出逐文件 CSV
 siglus-ssu -a --word <input_pck> [output_csv]
@@ -399,6 +399,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
 | `--disam` | 分析 `.dat` 文件时，将可读反汇编写在输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/*.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
 | `--readall` | 对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
+| `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
 | `--angou` | 将输入解析为 `暗号.dat`，或从 `.pck` 的内嵌 original source 中提取 `暗号.dat`，或读取 `SiglusEngine*.exe` / 包含其中之一的目录，然后推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
@@ -433,6 +434,10 @@ siglus-ssu -a --readall /path/to/savedata/read.sav
 
 # 解锁 global.sav 中由引擎管理的收集标志
 siglus-ssu -a --readall /path/to/savedata/global.sav
+
+# 生成 global.txt，手动编辑后，再把支持的值写回 global.sav
+siglus-ssu -a /path/to/savedata/global.sav
+siglus-ssu -a --apply /path/to/savedata/global.sav
 
 # 从 暗号.dat 推导 exe_el 密钥
 siglus-ssu -a /path/to/暗号.dat --angou

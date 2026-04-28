@@ -185,7 +185,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Download const.py from a specific tagged release
-siglus-ssu init --ref v0.2.7
+siglus-ssu init --ref v0.2.8
 ```
 
 ---
@@ -377,7 +377,7 @@ Analyzes the internal structure of a supported binary file and prints a detailed
 
 ```
 # Analyze a single file
-siglus-ssu -a [--disam] [--readall] <input_file>
+siglus-ssu -a [--disam] [--readall|--apply] <input_file>
 
 # Count dialogue units in a .pck only and write per-file CSV
 siglus-ssu -a --word <input_pck> [output_csv]
@@ -400,6 +400,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
 | `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
 | `--readall` | For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
+| `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool ID differences when the resolved text is the same. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text scene-bytecode differences, and `-` when payload comparison is unavailable; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
 | `--angou` | Parse the input as a `暗号.dat`, extract embedded `暗号.dat` from a `.pck`, or read `SiglusEngine*.exe` / a directory containing one, then derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
@@ -434,6 +435,10 @@ siglus-ssu -a --readall /path/to/savedata/read.sav
 
 # Unlock engine-managed collection flags in global.sav
 siglus-ssu -a --readall /path/to/savedata/global.sav
+
+# Generate global.txt, edit it, then write supported values back to global.sav
+siglus-ssu -a /path/to/savedata/global.sav
+siglus-ssu -a --apply /path/to/savedata/global.sav
 
 # Derive the exe_el key from 暗号.dat
 siglus-ssu -a /path/to/暗号.dat --angou

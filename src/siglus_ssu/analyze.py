@@ -129,7 +129,7 @@ def _detect_type(path, blob):
     return "bin"
 
 
-def analyze_file(path, readall=False):
+def analyze_file(path, readall=False, apply=False):
     if not os.path.exists(path):
         sys.stderr.write(f"not found: {path}\n")
         return 2
@@ -147,6 +147,9 @@ def analyze_file(path, readall=False):
         print(f"unsupported file type for -a mode: {ftype}")
         print("only .pck, .dat, .gan, .sav, .cgm and .tcr are supported.")
         return 1
+    if apply and ftype != "sav":
+        print("--apply supports global.sav only.")
+        return 1
     if ftype == "gan":
         return gan.gan(blob)
     if ftype == "pck":
@@ -158,6 +161,30 @@ def analyze_file(path, readall=False):
     if ftype == "tcr":
         return tcr.tcr(blob, path=path)
     if ftype == "sav":
+        if apply:
+            txt = os.path.splitext(path)[0] + ".txt"
+            try:
+                with open(txt, "rb") as f:
+                    txt_blob = f.read()
+            except Exception as e:
+                print(f"apply_txt_error: {e!s}")
+                return 1
+            try:
+                nb, stats = sav.apply_global_txt(blob, txt_blob)
+            except Exception as e:
+                print(f"apply_error: {e!s}")
+                return 1
+            try:
+                with open(path, "wb") as f:
+                    f.write(nb)
+                blob = nb
+                print(f"apply_txt: {txt}")
+                print(f"apply_written: {path}")
+                for key in ("G", "Z", "cg_table", "bgm_table", "chrkoe"):
+                    print(f"apply_{key}: {int(stats.get(key) or 0)}")
+            except Exception as e:
+                print(f"write_error: {e!s}")
+                return 1
         if readall:
             try:
                 nb = sav.readall(blob)
@@ -242,6 +269,10 @@ def main(argv=None):
     if "--readall" in args:
         args.remove("--readall")
         readall = True
+    apply = False
+    if "--apply" in args:
+        args.remove("--apply")
+        apply = True
     compare_payload = False
     if "--payload" in args:
         args.remove("--payload")
@@ -250,8 +281,10 @@ def main(argv=None):
     if "--angou" in args:
         args.remove("--angou")
         angou = True
+    if apply and (compare_payload or _disam):
+        return 2
     if word:
-        if gei or _disam or readall or compare_payload or angou:
+        if gei or _disam or readall or apply or compare_payload or angou:
             return 2
         if len(args) == 1:
             return pck.pck_word_count(args[0])
@@ -259,22 +292,26 @@ def main(argv=None):
             return pck.pck_word_count(args[0], args[1])
         return 2
     if angou:
-        if gei or readall:
+        if gei or readall or apply:
             return 2
         if len(args) != 1:
             sys.stderr.write("angou.dat compare is not supported\n")
             return 2
         return analyze_angou_dat(args[0])
     if gei:
+        if apply:
+            return 2
         if len(args) == 1:
             return dat.analyze_gameexe_dat(args[0])
         if len(args) == 2:
             return dat.compare_gameexe_dat(args[0], args[1])
         return 2
     if len(args) == 1:
-        return analyze_file(args[0], readall=readall)
+        if readall and apply:
+            return 2
+        return analyze_file(args[0], readall=readall, apply=apply)
     if len(args) == 2:
-        if readall:
+        if readall or apply:
             return 2
         return compare_files(args[0], args[1], compare_payload=compare_payload)
     return 2

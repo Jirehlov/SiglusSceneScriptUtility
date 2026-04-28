@@ -30,7 +30,15 @@ from .common import build_empty_ia_data, read_text_auto
 
 C = get_const_module()
 SEVERITY_ERROR = 1
+JSONRPC_PARSE_ERROR = -32700
+JSONRPC_INVALID_REQUEST = -32600
+JSONRPC_METHOD_NOT_FOUND = -32601
+JSONRPC_INVALID_PARAMS = -32602
+JSONRPC_INTERNAL_ERROR = -32603
+LSP_SERVER_NOT_INITIALIZED = -32002
+LSP_REQUEST_CANCELLED = -32800
 COMPLETION_KIND_FUNCTION = 3
+COMPLETION_KIND_TEXT = 1
 COMPLETION_KIND_VARIABLE = 6
 COMPLETION_KIND_KEYWORD = 14
 COMPLETION_KIND_REFERENCE = 18
@@ -193,6 +201,35 @@ SEMANTIC_TOKEN_TYPE_INDEX = {
     name: index for index, name in enumerate(SEMANTIC_TOKEN_TYPES)
 }
 SEMANTIC_TOKEN_MODIFIER_BITS = {"declaration": 1 << 0, "unused": 1 << 1}
+POSITION_ENCODING_UTF8 = "utf-8"
+POSITION_ENCODING_UTF16 = "utf-16"
+POSITION_ENCODING_UTF32 = "utf-32"
+SUPPORTED_POSITION_ENCODINGS = {
+    POSITION_ENCODING_UTF8,
+    POSITION_ENCODING_UTF16,
+    POSITION_ENCODING_UTF32,
+}
+
+
+class LSPMessageError(Exception):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+class LSPRequestCancelled(Exception):
+    pass
+
+
+def _content_type_charset(content_type: str) -> str:
+    for part in str(content_type or "").split(";")[1:]:
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        if key.strip().casefold() == "charset":
+            return value.strip().strip('"').strip("'").casefold()
+    return ""
 
 
 def _normalize_source_text(text: str) -> str:
@@ -206,6 +243,11 @@ def _decode_text_fallback(raw: bytes) -> str:
         except UnicodeDecodeError:
             continue
     return _normalize_source_text(raw.decode("utf-8", "replace"))
+
+
+def _silent_stdout_call(func: Any, *args: Any, **kwargs: Any) -> Any:
+    with redirect_stdout(io.StringIO()):
+        return func(*args, **kwargs)
 
 
 def _read_text(path: str, overlays: dict[str, str]) -> str:
@@ -516,19 +558,64 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
     )
 
 
-def _line_range(text: str, line_no: int) -> dict[str, Any]:
+def _encoding_units(text: str, position_encoding: str) -> int:
+    if position_encoding == POSITION_ENCODING_UTF8:
+        return len(text.encode("utf-8"))
+    if position_encoding == POSITION_ENCODING_UTF16:
+        return len(text.encode("utf-16-le")) // 2
+    return len(text)
+
+
+def _char_to_lsp_character(
+    line_text: str, character: int, position_encoding: str
+) -> int:
+    idx = max(0, min(len(line_text), int(character or 0)))
+    return _encoding_units(line_text[:idx], position_encoding)
+
+
+def _lsp_character_to_char(
+    line_text: str, character: int, position_encoding: str
+) -> int:
+    target = max(0, int(character or 0))
+    if position_encoding == POSITION_ENCODING_UTF32:
+        return min(target, len(line_text))
+    current = 0
+    for index, ch in enumerate(line_text):
+        next_current = current + _encoding_units(ch, position_encoding)
+        if next_current > target:
+            return index
+        if next_current == target:
+            return index + 1
+        current = next_current
+    return len(line_text)
+
+
+def _line_text_at(text: str, line: int) -> str:
+    lines = text.split("\n")
+    if line < 0 or line >= len(lines):
+        return ""
+    return lines[line]
+
+
+def _line_range(
+    text: str, line_no: int, position_encoding: str = POSITION_ENCODING_UTF16
+) -> dict[str, Any]:
     lines = text.split("\n")
     idx = max(0, min(len(lines) - 1, line_no - 1 if lines else 0))
-    width = len(lines[idx]) if lines else 0
+    width = _char_to_lsp_character(lines[idx], len(lines[idx]), position_encoding)
     return {
         "start": {"line": idx, "character": 0},
-        "end": {"line": idx, "character": max(1, width)},
+        "end": {"line": idx, "character": width},
     }
 
 
-def diagnostic_to_lsp(text: str, diagnostic: SourceDiagnostic) -> dict[str, Any]:
+def diagnostic_to_lsp(
+    text: str,
+    diagnostic: SourceDiagnostic,
+    position_encoding: str = POSITION_ENCODING_UTF16,
+) -> dict[str, Any]:
     item = {
-        "range": _line_range(text, diagnostic.line),
+        "range": _line_range(text, diagnostic.line, position_encoding),
         "severity": diagnostic.severity,
         "source": "ss-lsp",
         "message": diagnostic.message,
@@ -911,25 +998,35 @@ def _command_records(result: AnalysisResult) -> list[DefinitionRecord]:
 
 def _link_scan_result(
     result: AnalysisResult,
-) -> tuple[bool, list[DefinitionRecord]]:
-    return bool(result.diagnostics), _command_records(result)
+) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
+    return (
+        bool(result.diagnostics),
+        _command_records(result),
+        list(occurrences_for_result(result)),
+    )
 
 
 def _link_scan_worker(
     path: str,
     text: str,
-) -> tuple[bool, list[DefinitionRecord]]:
+) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
     return _link_scan_result(
-        analyze_document(path, text, project=_scan_worker_project())
+        _silent_stdout_call(
+            analyze_document, path, text, project=_scan_worker_project()
+        )
     )
 
 
-def _occurrence_scan_worker(path: str, text: str) -> list[SymbolOccurrence]:
-    result = analyze_document(path, text, project=_scan_worker_project())
-    return list(occurrences_for_result(result))
-
-
-def _range(line: int, start_char: int, end_char: int) -> dict[str, Any]:
+def _range(
+    line: int,
+    start_char: int,
+    end_char: int,
+    line_text: str | None = None,
+    position_encoding: str = POSITION_ENCODING_UTF16,
+) -> dict[str, Any]:
+    if line_text is not None:
+        start_char = _char_to_lsp_character(line_text, start_char, position_encoding)
+        end_char = _char_to_lsp_character(line_text, end_char, position_encoding)
     return {
         "start": {"line": max(0, line), "character": max(0, start_char)},
         "end": {"line": max(0, line), "character": max(start_char, end_char)},
@@ -937,7 +1034,10 @@ def _range(line: int, start_char: int, end_char: int) -> dict[str, Any]:
 
 
 def word_at_position(
-    text: str, line: int, character: int
+    text: str,
+    line: int,
+    character: int,
+    position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> tuple[str, dict[str, Any] | None, str]:
     lines = text.split("\n")
     if line < 0 or line >= len(lines):
@@ -945,6 +1045,7 @@ def word_at_position(
     src = lines[line]
     if not src:
         return "", None, ""
+    character = _lsp_character_to_char(src, character, position_encoding)
     idx = min(max(character, 0), len(src))
     if idx == len(src) and idx > 0:
         idx -= 1
@@ -962,7 +1063,11 @@ def word_at_position(
         st, ed = scan_ident(pos)
         if st >= ed or not _is_ident_start(src[st]):
             return "", None, ""
-        return src[st:ed], _range(line, st, ed), "ident"
+        return (
+            src[st:ed],
+            _range(line, st, ed, src, position_encoding),
+            "ident",
+        )
 
     def scan_hash(pos: int) -> tuple[str, dict[str, Any], str]:
         st = pos
@@ -971,7 +1076,7 @@ def word_at_position(
             ed += 1
         token = src[st:ed]
         kind = "directive" if token.casefold() in DIRECTIVE_DOCS else "label"
-        return token, _range(line, st, ed), kind
+        return token, _range(line, st, ed, src, position_encoding), kind
 
     if src[idx] == "#":
         return scan_hash(idx)
@@ -1226,6 +1331,9 @@ def _append_definition_location(
     fallback_path: str,
     current_path: str = "",
     current_text: str = "",
+    position_encoding: str = POSITION_ENCODING_UTF16,
+    text_for_path: Any = None,
+    uri_for_path: Any = None,
 ) -> None:
     path = os.path.abspath(record.path or fallback_path)
     marker = (path, record.line)
@@ -1235,12 +1343,12 @@ def _append_definition_location(
     text = (
         current_text
         if current_path and path == os.path.abspath(current_path)
-        else _read_text(path, {})
+        else (text_for_path(path) if callable(text_for_path) else _read_text(path, {}))
     )
     locations.append(
         {
-            "uri": path_to_uri(path),
-            "range": _line_range(text, record.line),
+            "uri": uri_for_path(path) if callable(uri_for_path) else path_to_uri(path),
+            "range": _line_range(text, record.line, position_encoding),
         }
     )
 
@@ -1834,7 +1942,11 @@ def occurrence_at_position(
     result: AnalysisResult,
     line: int,
     character: int,
+    position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> SymbolOccurrence | None:
+    character = _lsp_character_to_char(
+        _line_text_at(result.text, line), character, position_encoding
+    )
     for occurrence in occurrences_for_result(result):
         if occurrence.line != line:
             continue
@@ -1851,6 +1963,7 @@ def occurrence_at_position(
 def semantic_tokens_for_result(
     result: AnalysisResult,
     unused_macro_symbol_ids: set[str] | None = None,
+    position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> list[int]:
     encoded: dict[tuple[int, int, int], tuple[int, int]] = {}
     unused_macro_symbol_ids = (
@@ -1903,8 +2016,14 @@ def semantic_tokens_for_result(
     data: list[int] = []
     prev_line = 0
     prev_start = 0
+    lines = result.text.split("\n")
     for line, start_char, end_char in sorted(encoded):
         token_type_id, modifiers = encoded[(line, start_char, end_char)]
+        line_text = lines[line] if 0 <= line < len(lines) else ""
+        start_char = _char_to_lsp_character(line_text, start_char, position_encoding)
+        end_char = _char_to_lsp_character(line_text, end_char, position_encoding)
+        if end_char <= start_char:
+            continue
         delta_line = line - prev_line
         delta_start = start_char if delta_line else start_char - prev_start
         data.extend(
@@ -1917,6 +2036,9 @@ def semantic_tokens_for_result(
 
 def _occurrence_locations(
     occurrences: Iterable[SymbolOccurrence],
+    position_encoding: str = POSITION_ENCODING_UTF16,
+    text_for_path: Any = None,
+    uri_for_path: Any = None,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int, int]] = set()
@@ -1930,13 +2052,25 @@ def _occurrence_locations(
         if key in seen:
             continue
         seen.add(key)
+        text = (
+            text_for_path(occurrence.path)
+            if callable(text_for_path)
+            else _read_text(occurrence.path, {})
+        )
+        line_text = _line_text_at(text, occurrence.line)
         out.append(
             {
-                "uri": path_to_uri(occurrence.path),
+                "uri": (
+                    uri_for_path(occurrence.path)
+                    if callable(uri_for_path)
+                    else path_to_uri(occurrence.path)
+                ),
                 "range": _range(
                     occurrence.line,
                     occurrence.start_char,
                     occurrence.end_char,
+                    line_text,
+                    position_encoding,
                 ),
             }
         )
@@ -1965,19 +2099,7 @@ def _valid_rename_name(
 
 
 def path_to_uri(path: str) -> str:
-    from urllib.parse import quote, urlsplit
-
-    uri = Path(path).resolve().as_uri()
-    if os.name != "nt":
-        return uri
-    parsed = urlsplit(uri)
-    if parsed.netloc:
-        return uri
-    if not re.match(r"^/[A-Za-z]:", parsed.path):
-        return uri
-    drive = parsed.path[1:3]
-    tail = parsed.path[3:]
-    return "file:///" + quote(drive) + tail
+    return Path(path).resolve().as_uri()
 
 
 def uri_to_path(uri: str) -> str:
@@ -1995,6 +2117,19 @@ def uri_to_path(uri: str) -> str:
     return os.path.abspath(path)
 
 
+def document_key_for_uri(uri: str) -> str:
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(uri)
+    if parsed.scheme == "file":
+        return "file:" + os.path.normcase(os.path.abspath(uri_to_path(uri)))
+    return "uri:" + str(uri)
+
+
+def document_key_for_path(path: str) -> str:
+    return "file:" + os.path.normcase(os.path.abspath(path))
+
+
 def _symbol_kind(record: DefinitionRecord) -> int:
     if record.kind == "command":
         return SYMBOL_KIND_FUNCTION
@@ -2007,7 +2142,10 @@ def _symbol_kind(record: DefinitionRecord) -> int:
     return SYMBOL_KIND_STRING
 
 
-def document_symbols_to_lsp(result: AnalysisResult) -> list[dict[str, Any]]:
+def document_symbols_to_lsp(
+    result: AnalysisResult,
+    position_encoding: str = POSITION_ENCODING_UTF16,
+) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, int, str]] = set()
     for rec in result.document_symbols:
@@ -2015,7 +2153,7 @@ def document_symbols_to_lsp(result: AnalysisResult) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
-        rng = _line_range(result.text, rec.line)
+        rng = _line_range(result.text, rec.line, position_encoding)
         out.append(
             {
                 "name": rec.name,
@@ -2072,9 +2210,14 @@ DIRECTIVES = sorted(DIRECTIVE_DOCS)
 
 
 def completion_items(
-    result: AnalysisResult, line: int, character: int
+    result: AnalysisResult,
+    line: int,
+    character: int,
+    position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> list[dict[str, Any]]:
-    token, rng, token_kind = word_at_position(result.text, line, character)
+    token, rng, token_kind = word_at_position(
+        result.text, line, character, position_encoding
+    )
     prefix = token.casefold()
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -2150,9 +2293,14 @@ def completion_items(
 
 
 def hover_for_position(
-    result: AnalysisResult, line: int, character: int
+    result: AnalysisResult,
+    line: int,
+    character: int,
+    position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> dict[str, Any] | None:
-    token, rng, token_kind = word_at_position(result.text, line, character)
+    token, rng, token_kind = word_at_position(
+        result.text, line, character, position_encoding
+    )
     if not token or rng is None:
         return None
     key = token.casefold()
@@ -2212,9 +2360,16 @@ def hover_for_position(
 
 
 def definition_locations(
-    result: AnalysisResult, line: int, character: int
+    result: AnalysisResult,
+    line: int,
+    character: int,
+    position_encoding: str = POSITION_ENCODING_UTF16,
+    text_for_path: Any = None,
+    uri_for_path: Any = None,
 ) -> list[dict[str, Any]]:
-    token, _, token_kind = word_at_position(result.text, line, character)
+    token, _, token_kind = word_at_position(
+        result.text, line, character, position_encoding
+    )
     if not token:
         return []
     key = token.casefold()
@@ -2230,6 +2385,9 @@ def definition_locations(
                 result.path,
                 current_path=result.path,
                 current_text=result.text,
+                position_encoding=position_encoding,
+                text_for_path=text_for_path,
+                uri_for_path=uri_for_path,
             )
         return locations
     for mapping in (result.local_definitions, result.project.definitions):
@@ -2241,6 +2399,9 @@ def definition_locations(
                 result.path,
                 current_path=result.path,
                 current_text=result.text,
+                position_encoding=position_encoding,
+                text_for_path=text_for_path,
+                uri_for_path=uri_for_path,
             )
     return locations
 
@@ -2248,6 +2409,9 @@ def definition_locations(
 def definition_locations_for_occurrence(
     result: AnalysisResult,
     occurrence: SymbolOccurrence,
+    position_encoding: str = POSITION_ENCODING_UTF16,
+    text_for_path: Any = None,
+    uri_for_path: Any = None,
 ) -> list[dict[str, Any]]:
     key = occurrence.name.casefold()
     locations: list[dict[str, Any]] = []
@@ -2263,6 +2427,9 @@ def definition_locations_for_occurrence(
                         result.path,
                         current_path=result.path,
                         current_text=result.text,
+                        position_encoding=position_encoding,
+                        text_for_path=text_for_path,
+                        uri_for_path=uri_for_path,
                     )
         return locations
     if occurrence.symbol_id.startswith("cprop:"):
@@ -2278,6 +2445,9 @@ def definition_locations_for_occurrence(
                         result.path,
                         current_path=result.path,
                         current_text=result.text,
+                        position_encoding=position_encoding,
+                        text_for_path=text_for_path,
+                        uri_for_path=uri_for_path,
                     )
         return locations
     if occurrence.symbol_id.startswith("gprop:"):
@@ -2293,6 +2463,9 @@ def definition_locations_for_occurrence(
                         result.path,
                         current_path=result.path,
                         current_text=result.text,
+                        position_encoding=position_encoding,
+                        text_for_path=text_for_path,
+                        uri_for_path=uri_for_path,
                     )
         return locations
     if occurrence.symbol_id.startswith("macro:"):
@@ -2308,6 +2481,9 @@ def definition_locations_for_occurrence(
                         result.path,
                         current_path=result.path,
                         current_text=result.text,
+                        position_encoding=position_encoding,
+                        text_for_path=text_for_path,
+                        uri_for_path=uri_for_path,
                     )
         return locations
     if occurrence.symbol_id.startswith("macrolocal:"):
@@ -2321,13 +2497,16 @@ def definition_locations_for_occurrence(
                 result.path,
                 current_path=result.path,
                 current_text=result.text,
+                position_encoding=position_encoding,
+                text_for_path=text_for_path,
+                uri_for_path=uri_for_path,
             )
         return locations
     return locations
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 1
+LSP_INDEX_CACHE_VERSION = 2
 
 
 @dataclass(slots=True)
@@ -2346,19 +2525,13 @@ class DocumentState:
 
 
 @dataclass(slots=True)
-class DirectoryOccurrenceIndexEntry:
-    project_signature: tuple[Any, ...]
-    file_signatures: dict[str, tuple[Any, ...]]
-    file_occurrences: dict[str, list[SymbolOccurrence]]
-    occurrences: dict[str, list[SymbolOccurrence]]
-
-
-@dataclass(slots=True)
 class DirectoryLinkDiagnosticsEntry:
     project_signature: tuple[Any, ...]
     file_signatures: dict[str, tuple[Any, ...]]
     file_commands: dict[str, list[DefinitionRecord]]
     file_has_diagnostics: dict[str, bool]
+    file_occurrences: dict[str, list[SymbolOccurrence]]
+    occurrences: dict[str, list[SymbolOccurrence]]
     diagnostics: dict[str, list[SourceDiagnostic]]
     revision: int = 0
 
@@ -2494,9 +2667,7 @@ def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
     return inputs
 
 
-def _read_lsp_index_cache(
-    directory: str, inputs: dict[str, dict[str, str]]
-) -> dict[str, Any] | None:
+def _read_lsp_index_cache_header(directory: str) -> dict[str, Any] | None:
     try:
         data = json.loads(Path(_lsp_index_cache_path(directory)).read_text("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -2513,9 +2684,60 @@ def _read_lsp_index_cache(
         return None
     if data.get("const") != _lsp_index_const_signature():
         return None
-    if data.get("inputs") != inputs:
-        return None
     return data
+
+
+def _normalize_lsp_cache_inputs(value: Any) -> dict[str, dict[str, str]] | None:
+    if not isinstance(value, dict):
+        return None
+    out: dict[str, dict[str, str]] = {"inc": {}, "ss": {}}
+    for group in ("inc", "ss"):
+        raw = value.get(group) or {}
+        if not isinstance(raw, dict):
+            return None
+        for name, digest in raw.items():
+            key = str(name or "")
+            if key:
+                out[group][key] = str(digest or "")
+    return out
+
+
+def _lsp_cache_section_inputs(
+    data: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, dict[str, str]] | None:
+    return _normalize_lsp_cache_inputs(
+        payload.get("inputs")
+    ) or _normalize_lsp_cache_inputs(data.get("inputs"))
+
+
+def _casefold_input_maps(
+    inputs: dict[str, dict[str, str]],
+) -> dict[str, dict[str, str]]:
+    return {
+        group: {
+            os.path.normcase(str(name)): str(digest or "")
+            for name, digest in (inputs.get(group) or {}).items()
+        }
+        for group in ("inc", "ss")
+    }
+
+
+def _cache_path_unchanged_in_maps(
+    old_maps: dict[str, dict[str, str]],
+    current_maps: dict[str, dict[str, str]],
+    path: str,
+) -> bool:
+    lower = path.lower()
+    if lower.endswith(".inc"):
+        group = "inc"
+    elif lower.endswith(".ss"):
+        group = "ss"
+    else:
+        return False
+    name = os.path.normcase(os.path.basename(path))
+    old_digest = old_maps.get(group, {}).get(name)
+    current_digest = current_maps.get(group, {}).get(name)
+    return bool(old_digest) and old_digest == current_digest
 
 
 def _write_lsp_index_cache(directory: str, data: dict[str, Any]) -> None:
@@ -2541,25 +2763,24 @@ def _update_lsp_index_cache(
     section: str,
     payload: dict[str, Any],
 ) -> None:
-    data = _read_lsp_index_cache(directory, inputs)
+    data = _read_lsp_index_cache_header(directory)
     if data is None:
         data = {
             "version": LSP_INDEX_CACHE_VERSION,
             "package": str(package_version() or ""),
             "const": _lsp_index_const_signature(),
             "directory": os.path.abspath(directory or "."),
-            "inputs": inputs,
         }
+    data["inputs"] = inputs
     data[section] = payload
     _write_lsp_index_cache(directory, data)
 
 
 @dataclass(slots=True)
 class ScanProgressState:
-    kind: str
-    directory: str
     title: str
     total: int
+    token: Any
     current: int = 0
 
 
@@ -2569,10 +2790,19 @@ class SSLanguageServer:
         self._stdout = sys.stdout.buffer
         self.documents: dict[str, DocumentState] = {}
         self.project_cache: dict[str, ProjectCacheEntry] = {}
-        self.occurrence_index_cache: dict[str, DirectoryOccurrenceIndexEntry] = {}
         self.link_diagnostics_cache: dict[str, DirectoryLinkDiagnosticsEntry] = {}
+        self.initialize_seen = False
+        self.initialized = False
         self.shutdown_requested = False
         self.serial = bool(serial)
+        self.client_capabilities: dict[str, Any] = {}
+        self.position_encoding = POSITION_ENCODING_UTF16
+        self.completion_kind_value_set = set(range(1, COMPLETION_KIND_REFERENCE + 1))
+        self.pull_diagnostics_enabled = False
+        self.active_request_ids: set[Any] = set()
+        self.cancelled_request_ids: set[Any] = set()
+        self.current_request_id: Any = None
+        self.current_work_done_token: Any = None
 
     def log_stderr(self, message: str) -> None:
         try:
@@ -2592,21 +2822,50 @@ class SSLanguageServer:
             try:
                 text = line.decode("ascii", "strict").strip()
             except UnicodeDecodeError:
-                continue
+                raise LSPMessageError(
+                    JSONRPC_INVALID_REQUEST, "Header is not ASCII encoded."
+                ) from None
             if not text or ":" not in text:
-                continue
+                raise LSPMessageError(JSONRPC_INVALID_REQUEST, "Malformed header line.")
             key, value = text.split(":", 1)
             headers[key.strip().lower()] = value.strip()
+        if "content-length" not in headers:
+            raise LSPMessageError(
+                JSONRPC_INVALID_REQUEST, "Missing Content-Length header."
+            )
         try:
             length = int(headers.get("content-length", "0"))
         except ValueError:
-            return None
+            raise LSPMessageError(
+                JSONRPC_INVALID_REQUEST, "Invalid Content-Length header."
+            ) from None
         if length <= 0:
-            return None
+            raise LSPMessageError(
+                JSONRPC_INVALID_REQUEST, "Content-Length must be positive."
+            )
+        charset = _content_type_charset(headers.get("content-type", ""))
+        if charset and charset not in {"utf-8", "utf8"}:
+            raise LSPMessageError(
+                JSONRPC_INVALID_REQUEST, "Unsupported Content-Type charset."
+            )
         payload = self._stdin.read(length)
-        if not payload:
+        if len(payload) != length:
             return None
-        return json.loads(payload.decode("utf-8"))
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise LSPMessageError(
+                JSONRPC_PARSE_ERROR, "Message content is not UTF-8 encoded."
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise LSPMessageError(JSONRPC_PARSE_ERROR, "Invalid JSON payload.") from exc
+        if not isinstance(data, dict):
+            raise LSPMessageError(
+                JSONRPC_INVALID_REQUEST, "JSON-RPC batch messages are not supported."
+            )
+        if data.get("jsonrpc") != "2.0":
+            raise LSPMessageError(JSONRPC_INVALID_REQUEST, "Invalid JSON-RPC version.")
+        return data
 
     def write_message(self, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
@@ -2617,77 +2876,120 @@ class SSLanguageServer:
         self._stdout.write(raw)
         self._stdout.flush()
 
-    def begin_scan_progress(
-        self,
-        kind: str,
-        directory: str,
-        title: str,
-        total: int,
-    ) -> ScanProgressState | None:
-        if total <= 1:
+    def request_id_key(self, msg_id: Any) -> Any | None:
+        if isinstance(msg_id, bool):
             return None
-        state = ScanProgressState(
-            kind=kind,
-            directory=os.path.abspath(directory or "."),
-            title=title,
-            total=total,
-        )
+        if isinstance(msg_id, (int, str)):
+            return msg_id
+        return None
+
+    def invalid_request_id(self, msg_id: Any) -> bool:
+        if isinstance(msg_id, bool):
+            return True
+        return not isinstance(msg_id, (int, str))
+
+    def coerce_params_object(
+        self, msg_id: Any, has_id: bool, params: Any
+    ) -> dict[str, Any] | None:
+        if params is None:
+            return {}
+        if isinstance(params, dict):
+            return params
+        if has_id:
+            self.respond(
+                msg_id,
+                error={
+                    "code": JSONRPC_INVALID_PARAMS,
+                    "message": "Request params must be an object.",
+                },
+            )
+        return None
+
+    def progress_token_from_params(self, params: dict[str, Any]) -> Any | None:
+        token = params.get("workDoneToken") if isinstance(params, dict) else None
+        if isinstance(token, bool):
+            return None
+        if isinstance(token, (int, str)):
+            return token
+        return None
+
+    def handle_cancel_request(self, params: dict[str, Any]) -> None:
+        request_id = params.get("id") if isinstance(params, dict) else None
+        key = self.request_id_key(request_id)
+        if key is not None and key in self.active_request_ids:
+            self.cancelled_request_ids.add(key)
+
+    def current_request_cancelled(self) -> bool:
+        key = self.request_id_key(self.current_request_id)
+        return key is not None and key in self.cancelled_request_ids
+
+    def raise_if_request_cancelled(self) -> None:
+        if self.current_request_cancelled():
+            raise LSPRequestCancelled()
+
+    def send_progress(self, token: Any, value: dict[str, Any]) -> None:
         self.write_message(
             {
                 "jsonrpc": "2.0",
-                "method": "siglusSS/scanStatus",
-                "params": {
-                    "phase": "begin",
-                    "kind": state.kind,
-                    "directory": state.directory,
-                    "title": state.title,
-                    "current": 0,
-                    "total": state.total,
-                    "message": f"0/{state.total}",
-                },
+                "method": "$/progress",
+                "params": {"token": token, "value": value},
             }
+        )
+
+    def begin_scan_progress(
+        self,
+        title: str,
+        total: int,
+    ) -> ScanProgressState | None:
+        self.raise_if_request_cancelled()
+        token = self.current_work_done_token
+        if total <= 1:
+            return None
+        if token is None:
+            return None
+        state = ScanProgressState(
+            title=title,
+            total=total,
+            token=token,
+        )
+        self.send_progress(
+            token,
+            {
+                "kind": "begin",
+                "title": state.title,
+                "cancellable": False,
+                "message": f"0/{state.total}",
+                "percentage": 0,
+            },
         )
         return state
 
     def report_scan_progress(
         self, state: ScanProgressState | None, step: int = 1
     ) -> None:
+        self.raise_if_request_cancelled()
         if state is None:
             return
         state.current = min(state.total, state.current + step)
-        self.write_message(
+        percentage = 100 if state.total <= 0 else int(state.current * 100 / state.total)
+        self.send_progress(
+            state.token,
             {
-                "jsonrpc": "2.0",
-                "method": "siglusSS/scanStatus",
-                "params": {
-                    "phase": "report",
-                    "kind": state.kind,
-                    "directory": state.directory,
-                    "title": state.title,
-                    "current": state.current,
-                    "total": state.total,
-                    "message": f"{state.current}/{state.total}",
-                },
-            }
+                "kind": "report",
+                "message": f"{state.current}/{state.total}",
+                "percentage": min(100, max(0, percentage)),
+            },
         )
 
     def end_scan_progress(self, state: ScanProgressState | None) -> None:
         if state is None:
             return
-        self.write_message(
+        self.send_progress(
+            state.token,
             {
-                "jsonrpc": "2.0",
-                "method": "siglusSS/scanStatus",
-                "params": {
-                    "phase": "end",
-                    "kind": state.kind,
-                    "directory": state.directory,
-                    "title": state.title,
-                    "current": state.total,
-                    "total": state.total,
-                    "message": f"{state.total}/{state.total}",
-                },
-            }
+                "kind": "end",
+                "message": f"{state.total}/{state.total}",
+            },
         )
 
     def respond(
@@ -2700,15 +3002,34 @@ class SSLanguageServer:
             payload["result"] = result
         self.write_message(payload)
 
+    def document_for_uri(self, uri: str) -> DocumentState | None:
+        return self.documents.get(document_key_for_uri(uri))
+
+    def document_for_path(self, path: str) -> DocumentState | None:
+        return self.documents.get(document_key_for_path(path))
+
+    def text_for_path(self, path: str) -> str:
+        doc = self.document_for_path(path)
+        if doc is not None:
+            return doc.text
+        return _read_text(path, {})
+
+    def uri_for_path(self, path: str) -> str:
+        doc = self.document_for_path(path)
+        if doc is not None and doc.uri:
+            return doc.uri
+        return path_to_uri(path)
+
     def get_or_load_document(self, uri: str) -> DocumentState | None:
         path = uri_to_path(uri)
         state = _file_state(path)
+        key = document_key_for_uri(uri)
         if state is None:
-            doc = self.documents.get(uri)
+            doc = self.documents.get(key)
             if doc is not None and (doc.opened or doc.overlay_active):
                 return doc
             return None
-        doc = self.documents.get(uri)
+        doc = self.documents.get(key)
         if doc is not None:
             if doc.opened or doc.overlay_active:
                 return doc
@@ -2729,7 +3050,7 @@ class SSLanguageServer:
             disk_text=text,
             file_state=state,
         )
-        self.documents[uri] = doc
+        self.documents[key] = doc
         return doc
 
     def overlays_for_dir(
@@ -2762,7 +3083,7 @@ class SSLanguageServer:
 
     def path_source_signature(self, path: str) -> tuple[Any, ...]:
         norm = os.path.abspath(path)
-        doc = self.documents.get(path_to_uri(norm))
+        doc = self.document_for_path(norm)
         if doc is not None:
             if doc.overlay_active:
                 return ("overlay", doc.text)
@@ -2796,146 +3117,98 @@ class SSLanguageServer:
         self,
         directory: str,
         project_entry: ProjectCacheEntry,
-        scene_paths: list[str],
+        paths: list[str],
     ) -> DirectoryLinkDiagnosticsEntry | None:
         inputs = self.persistent_index_inputs(directory)
         if inputs is None:
             return None
-        data = _read_lsp_index_cache(directory, inputs)
+        data = _read_lsp_index_cache_header(directory)
         if data is None:
             return None
         payload = data.get("link")
         if not isinstance(payload, dict):
             return None
-        ordered_paths = [os.path.abspath(path) for path in scene_paths]
-        current_paths = set(ordered_paths)
-        cached_paths = {
-            os.path.abspath(str(path))
-            for path in (payload.get("paths") or [])
-            if str(path)
-        }
-        if cached_paths != current_paths:
+        payload_inputs = _lsp_cache_section_inputs(data, payload)
+        if payload_inputs is None:
             return None
+        payload_input_maps = _casefold_input_maps(payload_inputs)
+        current_input_maps = _casefold_input_maps(inputs)
+        if payload_input_maps["inc"] != current_input_maps["inc"]:
+            return None
+        ordered_paths = [os.path.abspath(path) for path in paths]
+        current_paths = set(ordered_paths)
         try:
             raw_commands = payload.get("file_commands") or {}
             raw_has_diagnostics = payload.get("file_has_diagnostics") or {}
+            raw_occurrences = payload.get("file_occurrences") or {}
             raw_diagnostics = payload.get("diagnostics") or {}
             if not (
                 isinstance(raw_commands, dict)
                 and isinstance(raw_has_diagnostics, dict)
+                and isinstance(raw_occurrences, dict)
                 and isinstance(raw_diagnostics, dict)
             ):
                 return None
-            if {os.path.abspath(str(path)) for path in raw_commands} != current_paths:
-                return None
-            if {
-                os.path.abspath(str(path)) for path in raw_has_diagnostics
-            } != current_paths:
-                return None
+            raw_commands_by_path = {
+                os.path.abspath(str(path)): items
+                for path, items in raw_commands.items()
+                if str(path)
+            }
+            raw_has_diagnostics_by_path = {
+                os.path.abspath(str(path)): value
+                for path, value in raw_has_diagnostics.items()
+                if str(path)
+            }
+            raw_occurrences_by_path = {
+                os.path.abspath(str(path)): items
+                for path, items in raw_occurrences.items()
+                if str(path)
+            }
+            cached_paths = [
+                os.path.abspath(str(path))
+                for path in (payload.get("paths") or [])
+                if str(path)
+            ]
+            if not cached_paths:
+                cached_paths = sorted(
+                    set(raw_commands_by_path)
+                    | set(raw_has_diagnostics_by_path)
+                    | set(raw_occurrences_by_path),
+                    key=lambda path: os.path.basename(path).casefold(),
+                )
             file_commands: dict[str, list[DefinitionRecord]] = {}
             file_has_diagnostics: dict[str, bool] = {}
+            file_occurrences: dict[str, list[SymbolOccurrence]] = {}
             diagnostics: dict[str, list[SourceDiagnostic]] = {}
-            for path in ordered_paths:
+            file_signatures: dict[str, tuple[Any, ...]] = {}
+            for path in cached_paths:
+                if path not in current_paths:
+                    file_signatures[path] = ("missing",)
+                    continue
+                if not _cache_path_unchanged_in_maps(
+                    payload_input_maps, current_input_maps, path
+                ):
+                    continue
+                if (
+                    path not in raw_commands_by_path
+                    or path not in raw_has_diagnostics_by_path
+                    or path not in raw_occurrences_by_path
+                ):
+                    continue
                 file_commands[path] = [
                     _definition_record_from_cache(item)
-                    for item in raw_commands.get(path, [])
+                    for item in raw_commands_by_path.get(path, [])
                     if isinstance(item, dict)
                 ]
-                file_has_diagnostics[path] = bool(raw_has_diagnostics.get(path, False))
-            for path, items in raw_diagnostics.items():
-                norm = os.path.abspath(str(path))
-                diagnostics[norm] = [
-                    _source_diagnostic_from_cache(item)
-                    for item in items
-                    if isinstance(item, dict)
-                ]
-            file_signatures = {
-                path: self.path_source_signature(path) for path in ordered_paths
-            }
-            return DirectoryLinkDiagnosticsEntry(
-                project_signature=project_entry.signature,
-                file_signatures=file_signatures,
-                file_commands=file_commands,
-                file_has_diagnostics=file_has_diagnostics,
-                diagnostics=diagnostics,
-                revision=int(payload.get("revision", 0) or 0),
-            )
-        except (TypeError, ValueError):
-            return None
-
-    def save_persistent_link_diagnostics(
-        self,
-        directory: str,
-        scene_paths: list[str],
-        entry: DirectoryLinkDiagnosticsEntry,
-    ) -> None:
-        inputs = self.persistent_index_inputs(directory)
-        if inputs is None:
-            return
-        paths = [os.path.abspath(path) for path in scene_paths]
-        payload = {
-            "paths": paths,
-            "revision": entry.revision,
-            "file_commands": {
-                path: [
-                    _definition_record_to_cache(record)
-                    for record in entry.file_commands.get(path, [])
-                ]
-                for path in paths
-            },
-            "file_has_diagnostics": {
-                path: bool(entry.file_has_diagnostics.get(path, False))
-                for path in paths
-            },
-            "diagnostics": {
-                os.path.abspath(path): [
-                    _source_diagnostic_to_cache(diagnostic)
-                    for diagnostic in diagnostics
-                ]
-                for path, diagnostics in entry.diagnostics.items()
-            },
-        }
-        _update_lsp_index_cache(directory, inputs, "link", payload)
-
-    def load_persistent_occurrence_index(
-        self,
-        directory: str,
-        project_entry: ProjectCacheEntry,
-        paths: list[str],
-    ) -> DirectoryOccurrenceIndexEntry | None:
-        inputs = self.persistent_index_inputs(directory)
-        if inputs is None:
-            return None
-        data = _read_lsp_index_cache(directory, inputs)
-        if data is None:
-            return None
-        payload = data.get("occurrence")
-        if not isinstance(payload, dict):
-            return None
-        ordered_paths = [os.path.abspath(path) for path in paths]
-        current_paths = set(ordered_paths)
-        cached_paths = {
-            os.path.abspath(str(path))
-            for path in (payload.get("paths") or [])
-            if str(path)
-        }
-        if cached_paths != current_paths:
-            return None
-        try:
-            raw_occurrences = payload.get("file_occurrences") or {}
-            if not isinstance(raw_occurrences, dict):
-                return None
-            if {
-                os.path.abspath(str(path)) for path in raw_occurrences
-            } != current_paths:
-                return None
-            file_occurrences: dict[str, list[SymbolOccurrence]] = {}
-            for path in ordered_paths:
+                file_has_diagnostics[path] = bool(
+                    raw_has_diagnostics_by_path.get(path, False)
+                )
                 file_occurrences[path] = [
                     _symbol_occurrence_from_cache(item)
-                    for item in raw_occurrences.get(path, [])
+                    for item in raw_occurrences_by_path.get(path, [])
                     if isinstance(item, dict)
                 ]
+                file_signatures[path] = self.path_source_signature(path)
             occurrences: dict[str, list[SymbolOccurrence]] = {}
             for path in ordered_paths:
                 for occurrence in file_occurrences.get(path, []):
@@ -2949,39 +3222,67 @@ class SSLanguageServer:
                         item.end_char,
                     )
                 )
-            file_signatures = {
-                path: self.path_source_signature(path) for path in ordered_paths
-            }
-            return DirectoryOccurrenceIndexEntry(
+            for path, items in raw_diagnostics.items():
+                norm = os.path.abspath(str(path))
+                diagnostics[norm] = [
+                    _source_diagnostic_from_cache(item)
+                    for item in items
+                    if isinstance(item, dict)
+                ]
+            return DirectoryLinkDiagnosticsEntry(
                 project_signature=project_entry.signature,
                 file_signatures=file_signatures,
+                file_commands=file_commands,
+                file_has_diagnostics=file_has_diagnostics,
                 file_occurrences=file_occurrences,
                 occurrences=occurrences,
+                diagnostics=diagnostics,
+                revision=int(payload.get("revision", 0) or 0),
             )
         except (TypeError, ValueError):
             return None
 
-    def save_persistent_occurrence_index(
+    def save_persistent_link_diagnostics(
         self,
         directory: str,
         paths: list[str],
-        entry: DirectoryOccurrenceIndexEntry,
+        entry: DirectoryLinkDiagnosticsEntry,
     ) -> None:
         inputs = self.persistent_index_inputs(directory)
         if inputs is None:
             return
-        norm_paths = [os.path.abspath(path) for path in paths]
+        paths = [os.path.abspath(path) for path in paths]
         payload = {
-            "paths": norm_paths,
+            "inputs": inputs,
+            "paths": paths,
+            "revision": entry.revision,
+            "file_commands": {
+                path: [
+                    _definition_record_to_cache(record)
+                    for record in entry.file_commands.get(path, [])
+                ]
+                for path in paths
+            },
+            "file_has_diagnostics": {
+                path: bool(entry.file_has_diagnostics.get(path, False))
+                for path in paths
+            },
             "file_occurrences": {
                 path: [
                     _symbol_occurrence_to_cache(occurrence)
                     for occurrence in entry.file_occurrences.get(path, [])
                 ]
-                for path in norm_paths
+                for path in paths
+            },
+            "diagnostics": {
+                os.path.abspath(path): [
+                    _source_diagnostic_to_cache(diagnostic)
+                    for diagnostic in diagnostics
+                ]
+                for path, diagnostics in entry.diagnostics.items()
             },
         }
-        _update_lsp_index_cache(directory, inputs, "occurrence", payload)
+        _update_lsp_index_cache(directory, inputs, "link", payload)
 
     def project_for_directory(self, directory: str) -> ProjectCacheEntry:
         directory = os.path.abspath(directory or ".")
@@ -2992,7 +3293,7 @@ class SSLanguageServer:
             return entry
         entry = ProjectCacheEntry(
             signature=signature,
-            project=_build_project_context(directory, overlays),
+            project=_silent_stdout_call(_build_project_context, directory, overlays),
         )
         self.project_cache[directory] = entry
         return entry
@@ -3019,8 +3320,8 @@ class SSLanguageServer:
         ):
             return doc.base_analysis
         overlays = self.overlays_for_dir(directory)
-        doc.base_analysis = analyze_document(
-            doc.path, doc.text, overlays, project_entry.project
+        doc.base_analysis = _silent_stdout_call(
+            analyze_document, doc.path, doc.text, overlays, project_entry.project
         )
         doc.base_analysis_signature = signature
         doc.analysis = None
@@ -3079,11 +3380,12 @@ class SSLanguageServer:
     ) -> DirectoryLinkDiagnosticsEntry:
         directory = os.path.abspath(directory or ".")
         project_entry = self.project_for_directory(directory)
+        paths = self.directory_paths(directory)
         scene_paths = self.scene_paths(directory)
         entry = self.link_diagnostics_cache.get(directory)
         if entry is None or entry.project_signature != project_entry.signature:
             cached_entry = self.load_persistent_link_diagnostics(
-                directory, project_entry, scene_paths
+                directory, project_entry, paths
             )
             if cached_entry is not None:
                 entry = cached_entry
@@ -3097,10 +3399,12 @@ class SSLanguageServer:
                 file_signatures={},
                 file_commands={},
                 file_has_diagnostics={},
+                file_occurrences={},
+                occurrences={},
                 diagnostics={},
             )
         assert entry is not None
-        current_paths = set(scene_paths)
+        current_paths = set(paths)
         removed = False
         for path in list(entry.file_signatures):
             if path in current_paths:
@@ -3108,19 +3412,18 @@ class SSLanguageServer:
             entry.file_signatures.pop(path, None)
             entry.file_commands.pop(path, None)
             entry.file_has_diagnostics.pop(path, None)
+            entry.file_occurrences.pop(path, None)
             removed = True
         dirty_paths = [
             path
-            for path in scene_paths
+            for path in paths
             if rebuild_all
             or entry.file_signatures.get(path) != self.path_source_signature(path)
         ]
         if not rebuild_all and not removed and not dirty_paths:
             return entry
         progress = self.begin_scan_progress(
-            "link-diagnostics",
-            directory,
-            "SiglusSS: Scanning scene links",
+            "SiglusSS: Scanning project symbols",
             len(dirty_paths),
         )
         try:
@@ -3131,6 +3434,7 @@ class SSLanguageServer:
                     entry.file_signatures.pop(path, None)
                     entry.file_commands.pop(path, None)
                     entry.file_has_diagnostics.pop(path, None)
+                    entry.file_occurrences.pop(path, None)
                     self.report_scan_progress(progress)
                     continue
                 scan_docs.append((path, doc))
@@ -3142,12 +3446,31 @@ class SSLanguageServer:
                 lambda doc: _link_scan_result(self.analyze_base(doc)),
             )
             for path, doc in scan_docs:
-                result_has_diagnostics, result_commands = scan_results[path]
+                (
+                    result_has_diagnostics,
+                    result_commands,
+                    result_occurrences,
+                ) = scan_results[path]
                 entry.file_signatures[path] = self.document_source_signature(doc)
                 entry.file_has_diagnostics[path] = result_has_diagnostics
                 entry.file_commands[path] = result_commands
+                entry.file_occurrences[path] = result_occurrences
         finally:
             self.end_scan_progress(progress)
+        occurrences: dict[str, list[SymbolOccurrence]] = {}
+        for path in paths:
+            for occurrence in entry.file_occurrences.get(path, []):
+                occurrences.setdefault(occurrence.symbol_id, []).append(occurrence)
+        for items in occurrences.values():
+            items.sort(
+                key=lambda item: (
+                    os.path.abspath(item.path),
+                    item.line,
+                    item.start_char,
+                    item.end_char,
+                )
+            )
+        entry.occurrences = occurrences
         diagnostics: dict[str, list[SourceDiagnostic]] = {}
         global_names = _project_link_command_names(project_entry.project)
         if not global_names:
@@ -3155,7 +3478,7 @@ class SSLanguageServer:
                 entry.revision += 1
             entry.diagnostics = diagnostics
             self.link_diagnostics_cache[directory] = entry
-            self.save_persistent_link_diagnostics(directory, scene_paths, entry)
+            self.save_persistent_link_diagnostics(directory, paths, entry)
             return entry
         if not any(entry.file_has_diagnostics.get(path, False) for path in scene_paths):
             implemented: dict[str, list[DefinitionRecord]] = {
@@ -3201,93 +3524,7 @@ class SSLanguageServer:
             entry.revision += 1
         entry.diagnostics = diagnostics
         self.link_diagnostics_cache[directory] = entry
-        self.save_persistent_link_diagnostics(directory, scene_paths, entry)
-        return entry
-
-    def occurrence_index_for_directory(
-        self, directory: str
-    ) -> DirectoryOccurrenceIndexEntry:
-        directory = os.path.abspath(directory or ".")
-        paths = self.directory_paths(directory)
-        project_entry = self.project_for_directory(directory)
-        entry = self.occurrence_index_cache.get(directory)
-        if entry is None or entry.project_signature != project_entry.signature:
-            cached_entry = self.load_persistent_occurrence_index(
-                directory, project_entry, paths
-            )
-            if cached_entry is not None:
-                entry = cached_entry
-                self.occurrence_index_cache[directory] = entry
-        rebuild_all = (
-            entry is None or entry.project_signature != project_entry.signature
-        )
-        if rebuild_all:
-            entry = DirectoryOccurrenceIndexEntry(
-                project_signature=project_entry.signature,
-                file_signatures={},
-                file_occurrences={},
-                occurrences={},
-            )
-        assert entry is not None
-        current_paths = set(paths)
-        removed_paths = [
-            path for path in entry.file_signatures if path not in current_paths
-        ]
-        for path in removed_paths:
-            entry.file_signatures.pop(path, None)
-            entry.file_occurrences.pop(path, None)
-        dirty_paths = [
-            path
-            for path in paths
-            if rebuild_all
-            or entry.file_signatures.get(path) != self.path_source_signature(path)
-        ]
-        if not dirty_paths and not removed_paths:
-            return entry
-        progress = self.begin_scan_progress(
-            "occurrence-index",
-            directory,
-            "SiglusSS: Scanning symbols",
-            len(dirty_paths),
-        )
-        try:
-            scan_docs: list[tuple[str, DocumentState]] = []
-            for path in dirty_paths:
-                doc = self.get_or_load_document(path_to_uri(path))
-                if doc is None:
-                    entry.file_signatures.pop(path, None)
-                    entry.file_occurrences.pop(path, None)
-                    self.report_scan_progress(progress)
-                    continue
-                scan_docs.append((path, doc))
-            scan_results = self.parallel_scan_documents(
-                project_entry,
-                scan_docs,
-                progress,
-                _occurrence_scan_worker,
-                lambda doc: list(occurrences_for_result(self.analyze_base(doc))),
-            )
-            for path, doc in scan_docs:
-                entry.file_signatures[path] = self.document_source_signature(doc)
-                entry.file_occurrences[path] = scan_results[path]
-        finally:
-            self.end_scan_progress(progress)
-        occurrences: dict[str, list[SymbolOccurrence]] = {}
-        for path in paths:
-            for occurrence in entry.file_occurrences.get(path, []):
-                occurrences.setdefault(occurrence.symbol_id, []).append(occurrence)
-        for items in occurrences.values():
-            items.sort(
-                key=lambda item: (
-                    os.path.abspath(item.path),
-                    item.line,
-                    item.start_char,
-                    item.end_char,
-                )
-            )
-        entry.occurrences = occurrences
-        self.occurrence_index_cache[directory] = entry
-        self.save_persistent_occurrence_index(directory, paths, entry)
+        self.save_persistent_link_diagnostics(directory, paths, entry)
         return entry
 
     def analyze(self, doc: DocumentState, force: bool = False) -> AnalysisResult:
@@ -3331,19 +3568,30 @@ class SSLanguageServer:
         doc.analysis_signature = signature
         return doc.analysis
 
+    def lsp_diagnostics_for_result(
+        self, result: AnalysisResult
+    ) -> list[dict[str, Any]]:
+        return [
+            diagnostic_to_lsp(result.text, d, self.position_encoding)
+            for d in result.diagnostics
+        ]
+
+    def document_diagnostic_report(self, doc: DocumentState) -> dict[str, Any]:
+        result = self.analyze(doc)
+        return {"kind": "full", "items": self.lsp_diagnostics_for_result(result)}
+
     def publish_diagnostics(self, doc: DocumentState) -> None:
+        if self.pull_diagnostics_enabled:
+            return
         if not doc.opened:
             return
-        result = self.analyze(doc)
         self.write_message(
             {
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
                 "params": {
                     "uri": doc.uri,
-                    "diagnostics": [
-                        diagnostic_to_lsp(result.text, d) for d in result.diagnostics
-                    ],
+                    "diagnostics": self.document_diagnostic_report(doc)["items"],
                 },
             }
         )
@@ -3375,7 +3623,7 @@ class SSLanguageServer:
         self, directory: str, symbol_id: str
     ) -> list[SymbolOccurrence]:
         return list(
-            self.occurrence_index_for_directory(directory).occurrences.get(
+            self.link_diagnostics_for_directory(directory).occurrences.get(
                 symbol_id, []
             )
         )
@@ -3391,28 +3639,140 @@ class SSLanguageServer:
             for rec in records:
                 if rec.name.casefold() != key:
                     continue
-                _append_definition_location(locations, seen, rec, directory)
+                _append_definition_location(
+                    locations,
+                    seen,
+                    rec,
+                    directory,
+                    position_encoding=self.position_encoding,
+                    text_for_path=self.text_for_path,
+                    uri_for_path=self.uri_for_path,
+                )
         return locations
 
-    def handle_initialize(self, msg_id: Any, _params: dict[str, Any]) -> None:
+    def pick_position_encoding(self, capabilities: dict[str, Any]) -> str:
+        raw = (capabilities.get("general") or {}).get("positionEncodings") or []
+        if isinstance(raw, list):
+            for item in raw:
+                encoding = str(item or "")
+                if encoding in SUPPORTED_POSITION_ENCODINGS:
+                    return encoding
+        return POSITION_ENCODING_UTF16
+
+    def update_completion_kind_value_set(self, capabilities: dict[str, Any]) -> None:
+        raw = (
+            ((capabilities.get("textDocument") or {}).get("completion") or {}).get(
+                "completionItemKind"
+            )
+            or {}
+        ).get("valueSet")
+        if not isinstance(raw, list) or not raw:
+            self.completion_kind_value_set = set(
+                range(1, COMPLETION_KIND_REFERENCE + 1)
+            )
+            return
+        values: set[int] = set()
+        for item in raw:
+            try:
+                values.add(int(item))
+            except (TypeError, ValueError):
+                continue
+        self.completion_kind_value_set = values or set(
+            range(1, COMPLETION_KIND_REFERENCE + 1)
+        )
+
+    def completion_kind(
+        self, preferred: int, fallback: int = COMPLETION_KIND_TEXT
+    ) -> int:
+        if preferred in self.completion_kind_value_set:
+            return preferred
+        if fallback in self.completion_kind_value_set:
+            return fallback
+        if COMPLETION_KIND_TEXT in self.completion_kind_value_set:
+            return COMPLETION_KIND_TEXT
+        return min(self.completion_kind_value_set or {COMPLETION_KIND_TEXT})
+
+    def normalize_completion_items(
+        self, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        for item in items:
+            try:
+                kind = int(
+                    item.get("kind", COMPLETION_KIND_TEXT) or COMPLETION_KIND_TEXT
+                )
+            except (TypeError, ValueError):
+                kind = COMPLETION_KIND_TEXT
+            if kind == COMPLETION_KIND_CONSTANT:
+                item["kind"] = self.completion_kind(kind, COMPLETION_KIND_VARIABLE)
+            elif kind == COMPLETION_KIND_TYPE_PARAMETER:
+                item["kind"] = self.completion_kind(kind, COMPLETION_KIND_KEYWORD)
+            else:
+                item["kind"] = self.completion_kind(kind)
+        return items
+
+    def client_supports_work_done_progress(self) -> bool:
+        return bool(
+            ((self.client_capabilities.get("window") or {}).get("workDoneProgress"))
+        )
+
+    def client_supports_prepare_rename(self) -> bool:
+        return bool(
+            (
+                (
+                    (self.client_capabilities.get("textDocument") or {}).get("rename")
+                    or {}
+                ).get("prepareSupport", False)
+            )
+        )
+
+    def client_supports_pull_diagnostics(self) -> bool:
+        raw = (self.client_capabilities.get("textDocument") or {}).get("diagnostic")
+        return isinstance(raw, dict)
+
+    def handle_initialize(self, msg_id: Any, params: dict[str, Any]) -> None:
+        capabilities = (params or {}).get("capabilities") or {}
+        if not isinstance(capabilities, dict):
+            capabilities = {}
+        self.client_capabilities = capabilities
+        self.position_encoding = self.pick_position_encoding(capabilities)
+        self.update_completion_kind_value_set(capabilities)
+        self.pull_diagnostics_enabled = self.client_supports_pull_diagnostics()
+        work_done_progress = self.client_supports_work_done_progress()
+        definition_provider: bool | dict[str, bool] = True
+        references_provider: bool | dict[str, bool] = True
+        rename_provider: bool | dict[str, bool] = True
+        semantic_tokens_provider: dict[str, Any] = {
+            "legend": {
+                "tokenTypes": SEMANTIC_TOKEN_TYPES,
+                "tokenModifiers": SEMANTIC_TOKEN_MODIFIERS,
+            },
+            "full": True,
+        }
+        if work_done_progress:
+            definition_provider = {"workDoneProgress": True}
+            references_provider = {"workDoneProgress": True}
+            semantic_tokens_provider["workDoneProgress"] = True
+        if self.client_supports_prepare_rename():
+            rename_provider = {"prepareProvider": True}
+            if work_done_progress:
+                rename_provider["workDoneProgress"] = True
         result = {
             "capabilities": {
-                "textDocumentSync": TEXT_DOCUMENT_SYNC_FULL,
+                "positionEncoding": self.position_encoding,
+                "textDocumentSync": {
+                    "openClose": True,
+                    "change": TEXT_DOCUMENT_SYNC_FULL,
+                    "save": {"includeText": True},
+                },
                 "completionProvider": {
                     "resolveProvider": False,
                     "triggerCharacters": [".", "#", "@"],
                 },
                 "hoverProvider": True,
-                "definitionProvider": True,
-                "referencesProvider": True,
-                "renameProvider": {"prepareProvider": True},
-                "semanticTokensProvider": {
-                    "legend": {
-                        "tokenTypes": SEMANTIC_TOKEN_TYPES,
-                        "tokenModifiers": SEMANTIC_TOKEN_MODIFIERS,
-                    },
-                    "full": True,
-                },
+                "definitionProvider": definition_provider,
+                "referencesProvider": references_provider,
+                "renameProvider": rename_provider,
+                "semanticTokensProvider": semantic_tokens_provider,
                 "documentSymbolProvider": True,
             },
             "serverInfo": {
@@ -3420,6 +3780,13 @@ class SSLanguageServer:
                 "version": package_version() or "unknown",
             },
         }
+        if self.pull_diagnostics_enabled:
+            result["capabilities"]["diagnosticProvider"] = {
+                "interFileDependencies": True,
+                "workspaceDiagnostics": False,
+            }
+            if work_done_progress:
+                result["capabilities"]["diagnosticProvider"]["workDoneProgress"] = True
         self.respond(msg_id, result=result)
 
     def handle_did_open(self, params: dict[str, Any]) -> None:
@@ -3429,6 +3796,7 @@ class SSLanguageServer:
             return
         text = _normalize_source_text(item.get("text") or "")
         path = uri_to_path(uri)
+        key = document_key_for_uri(uri)
         doc = self.get_or_load_document(uri)
         old_signature: tuple[Any, ...] | None = None
         if doc is None:
@@ -3443,6 +3811,8 @@ class SSLanguageServer:
             )
         else:
             old_signature = self.document_source_signature(doc)
+            doc.uri = uri
+            doc.path = path
             doc.opened = True
             if text == doc.disk_text:
                 doc.text = doc.disk_text
@@ -3452,7 +3822,7 @@ class SSLanguageServer:
                 doc.overlay_active = True
             if old_signature != self.document_source_signature(doc):
                 self.clear_document_cache(doc)
-        self.documents[uri] = doc
+        self.documents[key] = doc
         self.publish_diagnostics(doc)
         if old_signature != self.document_source_signature(doc):
             if doc.path.lower().endswith(".inc"):
@@ -3469,7 +3839,7 @@ class SSLanguageServer:
     def handle_did_change(self, params: dict[str, Any]) -> None:
         td = (params or {}).get("textDocument") or {}
         uri = str(td.get("uri") or "")
-        doc = self.documents.get(uri)
+        doc = self.document_for_uri(uri)
         if doc is None:
             return
         changes = (params or {}).get("contentChanges") or []
@@ -3501,7 +3871,7 @@ class SSLanguageServer:
     def handle_did_save(self, params: dict[str, Any]) -> None:
         td = (params or {}).get("textDocument") or {}
         uri = str(td.get("uri") or "")
-        doc = self.documents.get(uri)
+        doc = self.document_for_uri(uri)
         if doc is None:
             return
         old_signature = self.document_source_signature(doc)
@@ -3530,14 +3900,15 @@ class SSLanguageServer:
         uri = str(td.get("uri") or "")
         if not uri:
             return
-        doc = self.documents.get(uri)
-        self.write_message(
-            {
-                "jsonrpc": "2.0",
-                "method": "textDocument/publishDiagnostics",
-                "params": {"uri": uri, "diagnostics": []},
-            }
-        )
+        doc = self.document_for_uri(uri)
+        if not self.pull_diagnostics_enabled:
+            self.write_message(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "textDocument/publishDiagnostics",
+                    "params": {"uri": uri, "diagnostics": []},
+                }
+            )
         if doc is not None:
             old_signature = self.document_source_signature(doc)
             doc.opened = False
@@ -3555,6 +3926,15 @@ class SSLanguageServer:
                 elif doc.path.lower().endswith(".ss"):
                     self.refresh_directory(os.path.dirname(doc.path) or ".")
 
+    def handle_document_diagnostic(self, msg_id: Any, params: dict[str, Any]) -> None:
+        td = (params or {}).get("textDocument") or {}
+        uri = str(td.get("uri") or "")
+        doc = self.get_or_load_document(uri)
+        if doc is None:
+            self.respond(msg_id, result={"kind": "full", "items": []})
+            return
+        self.respond(msg_id, result=self.document_diagnostic_report(doc))
+
     def handle_completion(self, msg_id: Any, params: dict[str, Any]) -> None:
         td = (params or {}).get("textDocument") or {}
         uri = str(td.get("uri") or "")
@@ -3568,7 +3948,9 @@ class SSLanguageServer:
             result,
             int(pos.get("line", 0) or 0),
             int(pos.get("character", 0) or 0),
+            self.position_encoding,
         )
+        items = self.normalize_completion_items(items)
         self.respond(msg_id, result={"isIncomplete": False, "items": items})
 
     def handle_hover(self, msg_id: Any, params: dict[str, Any]) -> None:
@@ -3584,6 +3966,7 @@ class SSLanguageServer:
             result,
             int(pos.get("line", 0) or 0),
             int(pos.get("character", 0) or 0),
+            self.position_encoding,
         )
         self.respond(msg_id, result=hover)
 
@@ -3598,7 +3981,9 @@ class SSLanguageServer:
         result = self.analyze_base(doc)
         line = int(pos.get("line", 0) or 0)
         character = int(pos.get("character", 0) or 0)
-        occurrence = occurrence_at_position(result, line, character)
+        occurrence = occurrence_at_position(
+            result, line, character, self.position_encoding
+        )
         if occurrence is not None:
             if occurrence.symbol_id.startswith("cmd:"):
                 defs = self.command_implementation_locations(
@@ -3607,11 +3992,24 @@ class SSLanguageServer:
                 if defs:
                     self.respond(msg_id, result=defs)
                     return
-            defs = definition_locations_for_occurrence(result, occurrence)
+            defs = definition_locations_for_occurrence(
+                result,
+                occurrence,
+                self.position_encoding,
+                self.text_for_path,
+                self.uri_for_path,
+            )
             if defs:
                 self.respond(msg_id, result=defs)
                 return
-        defs = definition_locations(result, line, character)
+        defs = definition_locations(
+            result,
+            line,
+            character,
+            self.position_encoding,
+            self.text_for_path,
+            self.uri_for_path,
+        )
         self.respond(msg_id, result=defs)
 
     def handle_references(self, msg_id: Any, params: dict[str, Any]) -> None:
@@ -3627,6 +4025,7 @@ class SSLanguageServer:
             result,
             int(pos.get("line", 0) or 0),
             int(pos.get("character", 0) or 0),
+            self.position_encoding,
         )
         if occurrence is None:
             self.respond(msg_id, result=[])
@@ -3639,7 +4038,12 @@ class SSLanguageServer:
         )
         if not include_declaration:
             refs = [item for item in refs if not item.definition]
-        self.respond(msg_id, result=_occurrence_locations(refs))
+        self.respond(
+            msg_id,
+            result=_occurrence_locations(
+                refs, self.position_encoding, self.text_for_path, self.uri_for_path
+            ),
+        )
 
     def handle_prepare_rename(self, msg_id: Any, params: dict[str, Any]) -> None:
         td = (params or {}).get("textDocument") or {}
@@ -3654,6 +4058,7 @@ class SSLanguageServer:
             result,
             int(pos.get("line", 0) or 0),
             int(pos.get("character", 0) or 0),
+            self.position_encoding,
         )
         if occurrence is None or not occurrence.renamable:
             self.respond(msg_id, result=None)
@@ -3662,7 +4067,11 @@ class SSLanguageServer:
             msg_id,
             result={
                 "range": _range(
-                    occurrence.line, occurrence.start_char, occurrence.end_char
+                    occurrence.line,
+                    occurrence.start_char,
+                    occurrence.end_char,
+                    _line_text_at(result.text, occurrence.line),
+                    self.position_encoding,
                 ),
                 "placeholder": occurrence.name,
             },
@@ -3681,13 +4090,14 @@ class SSLanguageServer:
             result,
             int(pos.get("line", 0) or 0),
             int(pos.get("character", 0) or 0),
+            self.position_encoding,
         )
         new_name = str((params or {}).get("newName") or "")
         if occurrence is None or not occurrence.renamable:
             self.respond(
                 msg_id,
                 error={
-                    "code": -32602,
+                    "code": JSONRPC_INVALID_PARAMS,
                     "message": "The selected symbol cannot be renamed.",
                 },
             )
@@ -3698,7 +4108,10 @@ class SSLanguageServer:
         if not _valid_rename_name(occurrence, new_name, matches):
             self.respond(
                 msg_id,
-                error={"code": -32602, "message": "The replacement name is invalid."},
+                error={
+                    "code": JSONRPC_INVALID_PARAMS,
+                    "message": "The replacement name is invalid.",
+                },
             )
             return
         changes: dict[str, list[dict[str, Any]]] = {}
@@ -3713,9 +4126,16 @@ class SSLanguageServer:
             if key in seen:
                 continue
             seen.add(key)
-            changes.setdefault(path_to_uri(item.path), []).append(
+            item_text = self.text_for_path(item.path)
+            changes.setdefault(self.uri_for_path(item.path), []).append(
                 {
-                    "range": _range(item.line, item.start_char, item.end_char),
+                    "range": _range(
+                        item.line,
+                        item.start_char,
+                        item.end_char,
+                        _line_text_at(item_text, item.line),
+                        self.position_encoding,
+                    ),
                     "newText": new_name,
                 }
             )
@@ -3733,7 +4153,7 @@ class SSLanguageServer:
         doc_occurrences = occurrences_for_result(result)
         if any(item.definition and item.kind == "macro" for item in doc_occurrences):
             directory = os.path.dirname(doc.path) or "."
-            entry = self.occurrence_index_for_directory(directory)
+            entry = self.link_diagnostics_for_directory(directory)
             for symbol_id, occurrences in entry.occurrences.items():
                 symbol_text = str(symbol_id)
                 if not (
@@ -3758,6 +4178,7 @@ class SSLanguageServer:
                 "data": semantic_tokens_for_result(
                     result,
                     unused_macro_symbol_ids=unused_macro_symbol_ids,
+                    position_encoding=self.position_encoding,
                 )
             },
         )
@@ -3770,23 +4191,167 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         result = self.analyze_base(doc)
-        self.respond(msg_id, result=document_symbols_to_lsp(result))
+        self.respond(
+            msg_id,
+            result=document_symbols_to_lsp(result, self.position_encoding),
+        )
+
+    def run_request_handler(
+        self, msg_id: Any, params: dict[str, Any], handler: Any
+    ) -> None:
+        key = self.request_id_key(msg_id)
+        previous_request_id = self.current_request_id
+        previous_work_done_token = self.current_work_done_token
+        if key is not None:
+            self.active_request_ids.add(key)
+        self.current_request_id = msg_id
+        self.current_work_done_token = self.progress_token_from_params(params)
+        try:
+            self.raise_if_request_cancelled()
+            handler()
+        except LSPRequestCancelled:
+            self.respond(
+                msg_id,
+                error={
+                    "code": LSP_REQUEST_CANCELLED,
+                    "message": "Request cancelled.",
+                },
+            )
+        finally:
+            if key is not None:
+                self.active_request_ids.discard(key)
+                self.cancelled_request_ids.discard(key)
+            self.current_request_id = previous_request_id
+            self.current_work_done_token = previous_work_done_token
 
     def handle_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")
+        has_id = "id" in message
         msg_id = message.get("id")
-        params = message.get("params") or {}
-        if method == "initialize":
-            self.handle_initialize(msg_id, params)
+        raw_params = message.get("params")
+        if not isinstance(method, str) or not method:
+            if has_id and ("result" in message or "error" in message):
+                return
+            if has_id:
+                self.respond(
+                    msg_id,
+                    error={
+                        "code": JSONRPC_INVALID_REQUEST,
+                        "message": "Invalid JSON-RPC request.",
+                    },
+                )
             return
-        if method == "initialized":
+        if has_id and self.invalid_request_id(msg_id):
+            self.respond(
+                None,
+                error={
+                    "code": JSONRPC_INVALID_REQUEST,
+                    "message": "Invalid JSON-RPC request id.",
+                },
+            )
             return
-        if method == "shutdown":
-            self.shutdown_requested = True
-            self.respond(msg_id, result=None)
+        if method == "$/cancelRequest":
+            if has_id:
+                self.respond(
+                    msg_id,
+                    error={
+                        "code": JSONRPC_METHOD_NOT_FOUND,
+                        "message": f"Method not found: {method}",
+                    },
+                )
+                return
+            params = raw_params if isinstance(raw_params, dict) else {}
+            self.handle_cancel_request(params)
             return
         if method == "exit":
             raise SystemExit(0 if self.shutdown_requested else 1)
+        if not self.initialize_seen:
+            if method == "initialize":
+                if not has_id:
+                    return
+                params = self.coerce_params_object(msg_id, has_id, raw_params)
+                if params is None:
+                    return
+                self.initialize_seen = True
+                self.handle_initialize(msg_id, params)
+                return
+            if has_id:
+                self.respond(
+                    msg_id,
+                    error={
+                        "code": LSP_SERVER_NOT_INITIALIZED,
+                        "message": "Server has not been initialized.",
+                    },
+                )
+            return
+        if method == "initialize":
+            if has_id:
+                self.respond(
+                    msg_id,
+                    error={
+                        "code": JSONRPC_INVALID_REQUEST,
+                        "message": "initialize may only be sent once.",
+                    },
+                )
+            return
+        if self.shutdown_requested:
+            if has_id:
+                self.respond(
+                    msg_id,
+                    error={
+                        "code": JSONRPC_INVALID_REQUEST,
+                        "message": "Server has already shut down.",
+                    },
+                )
+            return
+        if method == "shutdown":
+            if has_id:
+                self.shutdown_requested = True
+                self.respond(msg_id, result=None)
+            return
+        notification_methods = {
+            "initialized",
+            "window/workDoneProgress/cancel",
+            "textDocument/didOpen",
+            "textDocument/didChange",
+            "textDocument/didSave",
+            "textDocument/didClose",
+        }
+        if has_id and method in notification_methods:
+            self.respond(
+                msg_id,
+                error={
+                    "code": JSONRPC_METHOD_NOT_FOUND,
+                    "message": f"Method not found: {method}",
+                },
+            )
+            return
+        if method == "initialized":
+            self.initialized = True
+            return
+        if method == "window/workDoneProgress/cancel":
+            return
+        methods_with_object_params = {
+            "textDocument/didOpen",
+            "textDocument/didChange",
+            "textDocument/didSave",
+            "textDocument/didClose",
+            "textDocument/diagnostic",
+            "textDocument/completion",
+            "textDocument/hover",
+            "textDocument/definition",
+            "textDocument/references",
+            "textDocument/prepareRename",
+            "textDocument/rename",
+            "textDocument/semanticTokens/full",
+            "textDocument/documentSymbol",
+        }
+        if method in methods_with_object_params:
+            params = self.coerce_params_object(msg_id, has_id, raw_params)
+            if params is None:
+                return
+        else:
+            params = {}
         if method == "textDocument/didOpen":
             self.handle_did_open(params)
             return
@@ -3799,36 +4364,83 @@ class SSLanguageServer:
         if method == "textDocument/didClose":
             self.handle_did_close(params)
             return
+        if method == "textDocument/diagnostic":
+            if has_id:
+                self.run_request_handler(
+                    msg_id,
+                    params,
+                    lambda: self.handle_document_diagnostic(msg_id, params),
+                )
+            return
         if method == "textDocument/completion":
-            self.handle_completion(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_completion(msg_id, params)
+                )
             return
         if method == "textDocument/hover":
-            self.handle_hover(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_hover(msg_id, params)
+                )
             return
         if method == "textDocument/definition":
-            self.handle_definition(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_definition(msg_id, params)
+                )
             return
         if method == "textDocument/references":
-            self.handle_references(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_references(msg_id, params)
+                )
             return
         if method == "textDocument/prepareRename":
-            self.handle_prepare_rename(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_prepare_rename(msg_id, params)
+                )
             return
         if method == "textDocument/rename":
-            self.handle_rename(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_rename(msg_id, params)
+                )
             return
         if method == "textDocument/semanticTokens/full":
-            self.handle_semantic_tokens_full(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id,
+                    params,
+                    lambda: self.handle_semantic_tokens_full(msg_id, params),
+                )
             return
         if method == "textDocument/documentSymbol":
-            self.handle_document_symbol(msg_id, params)
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_document_symbol(msg_id, params)
+                )
             return
-        if msg_id is not None:
-            self.respond(msg_id, result=None)
+        if has_id:
+            self.respond(
+                msg_id,
+                error={
+                    "code": JSONRPC_METHOD_NOT_FOUND,
+                    "message": f"Method not found: {method}",
+                },
+            )
 
     def run(self) -> int:
         while True:
-            message = self.read_message()
+            try:
+                message = self.read_message()
+            except LSPMessageError as exc:
+                self.respond(
+                    None,
+                    error={"code": exc.code, "message": exc.message},
+                )
+                continue
             if message is None:
                 break
             try:
@@ -3841,7 +4453,10 @@ class SSLanguageServer:
                 if msg_id is not None:
                     self.respond(
                         msg_id,
-                        error={"code": -32603, "message": f"Internal error: {exc}"},
+                        error={
+                            "code": JSONRPC_INTERNAL_ERROR,
+                            "message": f"Internal error: {exc}",
+                        },
                     )
         return 0
 
