@@ -42,7 +42,6 @@ TEXTMAP_KIND_DIALOGUE = 1
 TEXTMAP_KIND_NAME = 2
 TEXTMAP_KIND_OTHER = 3
 TEXTMAP_DBS_COLUMN = "dbs"
-TEXTMAP_DBS_EN_COLUMN = "replacement_en"
 TEXTMAP_DBS_CONTEXT = "dbs_context"
 TEXTMAP_DBS_CONTEXT_EXPR = "expr"
 TEXTMAP_DBS_CONTEXT_TEXT = "text"
@@ -67,7 +66,6 @@ DBS_SWITCH_KEY = 121
 DBS_LANGUAGE_LABELS = (
     "\u65e5\u672c\u8a9e",
     "\u7b80\u4f53\u4e2d\u6587",
-    "English",
 )
 DBS_MESSAGE_PREFIX_WORDS = {
     "ruby",
@@ -204,9 +202,9 @@ def _merge_textmap_meta(cur_meta, new_kind, new_context):
         context = str(new_context or "")
     elif not context:
         context = str(new_context or "")
-    elif (
-        context == TEXTMAP_DBS_CONTEXT_EXPR
-        and new_context in (TEXTMAP_DBS_CONTEXT_TEXT, TEXTMAP_DBS_CONTEXT_NAME)
+    elif context == TEXTMAP_DBS_CONTEXT_EXPR and new_context in (
+        TEXTMAP_DBS_CONTEXT_TEXT,
+        TEXTMAP_DBS_CONTEXT_NAME,
     ):
         context = str(new_context or "")
     return {
@@ -584,7 +582,6 @@ def _write_map(csv_path: str, entries):
                 TEXTMAP_DBS_COLUMN,
                 "original",
                 "replacement",
-                TEXTMAP_DBS_EN_COLUMN,
             ]
         )
         for e in entries:
@@ -601,7 +598,6 @@ def _write_map(csv_path: str, entries):
                     e.get("quoted", 0),
                     e.get("kind", TEXTMAP_KIND_OTHER),
                     "1" if _dbs_default_selected(e) else "0",
-                    _csv_escape_text(e.get("text", "")),
                     _csv_escape_text(e.get("text", "")),
                     _csv_escape_text(e.get("text", "")),
                 ]
@@ -1440,9 +1436,6 @@ def _dbs_sync_map_csv(csv_path: str, entries) -> list[tuple[dict, dict]]:
         replacement = old.get("replacement")
         if replacement is None:
             replacement = _csv_escape_text(text)
-        replacement_en = old.get(TEXTMAP_DBS_EN_COLUMN)
-        if replacement_en is None:
-            replacement_en = _csv_escape_text(text)
         row = {
             "index": str(entry.get("index", 0)),
             "line": str(entry.get("line", 0)),
@@ -1455,7 +1448,6 @@ def _dbs_sync_map_csv(csv_path: str, entries) -> list[tuple[dict, dict]]:
             TEXTMAP_DBS_COLUMN: "1" if selected else "0",
             "original": _csv_escape_text(text),
             "replacement": replacement,
-            TEXTMAP_DBS_EN_COLUMN: replacement_en,
         }
         rows.append(row)
         pairs.append((entry, row))
@@ -1473,7 +1465,6 @@ def _dbs_sync_map_csv(csv_path: str, entries) -> list[tuple[dict, dict]]:
             TEXTMAP_DBS_COLUMN,
             "original",
             "replacement",
-            TEXTMAP_DBS_EN_COLUMN,
         ]
         writer = csv.DictWriter(f, fieldnames=fields, lineterminator="\r\n")
         writer.writeheader()
@@ -1574,7 +1565,7 @@ def _dbs_macro_arg(value: str, force_quote: bool = False) -> str:
         or not value
         or value[:1].isspace()
         or value[-1:].isspace()
-        or any(ch in value for ch in ",()\"\r\n\t")
+        or any(ch in value for ch in ',()"\r\n\t')
     ):
         return '"' + _encode_quoted(value) + '"'
     return value
@@ -1609,8 +1600,6 @@ def _dbs_synthetic_text(parts, rows_by_key: dict, name: str) -> str:
             raise KeyError(key)
         if name == "original":
             out.append(str(row.get("original", "") or ""))
-        elif name == TEXTMAP_DBS_EN_COLUMN:
-            out.append(str(row.get(TEXTMAP_DBS_EN_COLUMN, "") or ""))
         else:
             out.append(str(row.get("replacement", "") or ""))
     return "".join(out)
@@ -1729,9 +1718,7 @@ def _dbs_source_change(text: str, entry: dict, serial: int):
         return None
     kind = _int_value(entry.get("kind", TEXTMAP_KIND_OTHER), TEXTMAP_KIND_OTHER)
     bracket_span = (
-        _dbs_bracket_name_span(text, entry)
-        if kind == TEXTMAP_KIND_NAME
-        else None
+        _dbs_bracket_name_span(text, entry) if kind == TEXTMAP_KIND_NAME else None
     )
     if bracket_span is not None:
         b_start, b_end = bracket_span
@@ -1855,7 +1842,9 @@ def _dbs_render_synthetic_message_line(
             continue
         if start > cursor:
             parts.append(body[cursor:start])
-        parts.append(_dbs_name_call(serial, _dbs_macro_arg(str(entry.get("text", "")), True)))
+        parts.append(
+            _dbs_name_call(serial, _dbs_macro_arg(str(entry.get("text", "")), True))
+        )
         cursor = max(cursor, end)
         used += 1
     segment_start = first_start
@@ -1888,20 +1877,12 @@ def _dbs_render_synthetic_message_line(
         rows_by_key[key] = {
             "original": _dbs_item_text_value(item, "original"),
             "replacement": _dbs_item_text_value(item, "replacement"),
-            TEXTMAP_DBS_EN_COLUMN: (
-                _dbs_item_text_value(item, TEXTMAP_DBS_EN_COLUMN)
-            ),
         }
     first["original"] = _dbs_synthetic_text(synthetic_parts, rows_by_key, "original")
     first["replacement"] = _dbs_synthetic_text(
         synthetic_parts,
         rows_by_key,
         "replacement",
-    )
-    first[TEXTMAP_DBS_EN_COLUMN] = _dbs_synthetic_text(
-        synthetic_parts,
-        rows_by_key,
-        TEXTMAP_DBS_EN_COLUMN,
     )
     first[DBS_SYNTHETIC_PARTS] = synthetic_parts
     for item in message_items[1:]:
@@ -2069,7 +2050,7 @@ def _dbs_update_gameexe_database_entries(
         )
     generated = [f"#DATABASE.CNT = {new_count}"]
     for name, index in sorted(db_index_by_name.items(), key=lambda x: int(x[1])):
-        generated.append(f"#DATABASE.{int(index):03d}=\"{name}\"")
+        generated.append(f'#DATABASE.{int(index):03d}="{name}"')
     if insert_at is None:
         if first_db_at is None:
             if kept and kept[-1] != "":
@@ -2241,7 +2222,9 @@ def _dbs_runtime_slots(gameexe_text: str, work_dir: str, manifest: dict) -> dict
 
 
 def _dbs_parse_start_scene(gameexe_text: str) -> str:
-    for line in str(gameexe_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for line in (
+        str(gameexe_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    ):
         s = line.strip()
         if not s.upper().startswith("#START_SCENE"):
             continue
@@ -2314,7 +2297,7 @@ def _dbs_write_runtime_files(
             "",
             "command $ssu_dbs_start_language_switch",
             "{",
-            "\tframe_action_ch[@SSU_DBS_FRAME_CH].start_real(-1,\"$ssu_dbs_language_frame\")",
+            '\tframe_action_ch[@SSU_DBS_FRAME_CH].start_real(-1,"$ssu_dbs_language_frame")',
             "}",
             "",
             "command $ssu_dbs_initial_language_menu",
@@ -2348,12 +2331,7 @@ def _dbs_write_runtime_files(
             "\t\t$col_no = 2",
             "\t}",
             "\telse{",
-            "\t\tif(@SSU_DBS_LANG == 2){",
-            "\t\t\t$col_no = 1",
-            "\t\t}",
-            "\t\telse{",
-            "\t\t\t$col_no = 0",
-            "\t\t}",
+            "\t\t$col_no = 0",
             "\t}",
             f"\tif($col_no >= {int(columns)}){{",
             "\t\t$col_no = 0",
@@ -2410,7 +2388,7 @@ def _dbs_write_dbs_csv(csv_path: str, selected_rows) -> None:
                 [
                     str(int(item.get("serial", 0) or 0)),
                     item.get("original", ""),
-                    item.get(TEXTMAP_DBS_EN_COLUMN, ""),
+                    "",
                     item.get("replacement", ""),
                     "",
                     "",
@@ -2430,22 +2408,13 @@ def _dbs_collect_selected_rows(pairs) -> list[dict]:
             continue
         replacement = row.get("replacement")
         replacement = (
-            _csv_unescape_text(replacement)
-            if replacement is not None
-            else original
-        )
-        replacement_en = row.get(TEXTMAP_DBS_EN_COLUMN)
-        replacement_en = (
-            _csv_unescape_text(replacement_en)
-            if replacement_en is not None
-            else original
+            _csv_unescape_text(replacement) if replacement is not None else original
         )
         out.append(
             {
                 "entry": entry,
                 "original": original,
                 "replacement": replacement,
-                TEXTMAP_DBS_EN_COLUMN: replacement_en,
             }
         )
     return out
@@ -2530,15 +2499,12 @@ def _dbs_current_selected_csv_rows(source_dir: str) -> dict:
             if key in rows_by_key:
                 raise ValueError(f"duplicate selected CSV row: {rel_path}")
             replacement = row.get("replacement")
-            replacement = original if replacement is None else _csv_unescape_text(replacement)
-            replacement_en = row.get(TEXTMAP_DBS_EN_COLUMN)
-            replacement_en = (
-                original if replacement_en is None else _csv_unescape_text(replacement_en)
+            replacement = (
+                original if replacement is None else _csv_unescape_text(replacement)
             )
             rows_by_key[key] = {
                 "original": original,
                 "replacement": replacement,
-                TEXTMAP_DBS_EN_COLUMN: replacement_en,
             }
     return rows_by_key
 
@@ -2643,11 +2609,6 @@ def _dbs_try_fast_update(
                         current_rows,
                         "replacement",
                     ),
-                    TEXTMAP_DBS_EN_COLUMN: _dbs_synthetic_text(
-                        synthetic_parts,
-                        current_rows,
-                        TEXTMAP_DBS_EN_COLUMN,
-                    ),
                 }
             except KeyError:
                 _dbs_log("fast update unavailable: synthetic CSV row missing")
@@ -2658,7 +2619,6 @@ def _dbs_try_fast_update(
             "serial": serial,
             "original": row.get("original", ""),
             "replacement": row.get("replacement", ""),
-            TEXTMAP_DBS_EN_COLUMN: row.get(TEXTMAP_DBS_EN_COLUMN, ""),
         }
         serial_key = (db_name, serial)
         old = rows_by_serial.get(serial_key)
@@ -2811,9 +2771,7 @@ def _dbs_mode(game_root: str) -> int:
         os.makedirs(backup_dir, exist_ok=True)
     source_dir = os.path.join(game_root, DBS_SOURCE_DIR)
     os.makedirs(source_dir, exist_ok=True)
-    _dbs_log(
-        "do not add/delete CSV rows; edit only dbs, replacement, and replacement_en"
-    )
+    _dbs_log("do not add/delete CSV rows; edit only dbs and replacement")
     scene_pck = _dbs_find_scene_pck(game_root)
     if not scene_pck:
         eprint("textmap dbs: no .pck found in game root", errors="replace")
@@ -2839,8 +2797,7 @@ def _dbs_mode(game_root: str) -> int:
         ss_files = [
             pth
             for pth in ss_files
-            if os.path.basename(pth).casefold()
-            not in (DBS_HELPER_SS_NAME.casefold(),)
+            if os.path.basename(pth).casefold() not in (DBS_HELPER_SS_NAME.casefold(),)
         ]
         if not ss_files:
             eprint("textmap dbs: no .ss sources found", errors="replace")
@@ -2902,7 +2859,6 @@ def _dbs_mode(game_root: str) -> int:
                     key = (
                         row.get("original", ""),
                         row.get("replacement", ""),
-                        row.get(TEXTMAP_DBS_EN_COLUMN, ""),
                     )
                     name_row = name_by_key.get(key)
                     if name_row is None:
@@ -2910,10 +2866,6 @@ def _dbs_mode(game_root: str) -> int:
                             "entry": row.get("entry") or {},
                             "original": row.get("original", ""),
                             "replacement": row.get("replacement", ""),
-                            TEXTMAP_DBS_EN_COLUMN: row.get(
-                                TEXTMAP_DBS_EN_COLUMN,
-                                "",
-                            ),
                         }
                         name_by_key[key] = name_row
                         name_rows.append(name_row)
@@ -3009,9 +2961,7 @@ def _dbs_mode(game_root: str) -> int:
             dbs_path = os.path.join(dbs_build_dir, DBS_NAME_DATABASE + ".dbs")
             _dbs_write_dbs_csv(csv_path, name_rows)
             dbs.create_one_dbs_from_csv(csv_path, dbs_path)
-            install_items.append(
-                ("dat/" + DBS_NAME_DATABASE + ".dbs", dbs_path, "dbs")
-            )
+            install_items.append(("dat/" + DBS_NAME_DATABASE + ".dbs", dbs_path, "dbs"))
             built_rows += len(name_rows)
             _dbs_log(f"built dat/{DBS_NAME_DATABASE}.dbs rows={len(name_rows)}")
         _dbs_write_runtime_files(

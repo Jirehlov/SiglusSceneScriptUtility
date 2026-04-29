@@ -807,7 +807,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 
    The command creates `ssu_dbs_source`, installs generated `.dbs` files under `dat/`, rewrites the scene `.pck` and `Gameexe*.dat`, and prints the installed file list. Files that may be overwritten are backed up and recorded in `ssu_dbs_manifest.json`.
 
-2. **Edit generated CSV files under `ssu_dbs_source`:** Do not add or delete rows. Edit only `dbs`, `replacement`, and `replacement_en`.
+2. **Edit generated CSV files under `ssu_dbs_source`:** Do not add or delete rows. Edit only `dbs` and `replacement`.
 
    `dbs=1` includes the row in dynamic DBS output; `dbs=0` leaves it as regular script text. For message lines with ruby or other same-line expressions, the tool follows the script order and synthesizes one DBS message row from the selected CSV fragments.
 
@@ -825,14 +825,14 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
    siglus-ssu -m --dbs-undo /path/to/game_root
    ```
 
-The generated `.dbs` files use seven official-style string columns: `0 = Japanese`, `1 = English`, `2 = Simplified Chinese`, and `3` through `6` reserved. At runtime the startup language selector appears once, and F10 opens the selector again during play.
+The generated `.dbs` files keep seven official-style string columns: `0 = Japanese/source`, `1 = blank`, `2 = Simplified Chinese`, and `3` through `6` reserved. At runtime the startup language selector appears once, F10 opens the selector again during play, and the selector exposes only Japanese and Simplified Chinese.
 
 #### Dynamic `.dbs` Limits and CSV Rules
 
-- `ssu_dbs_source` is the stable user edit surface. Do not add, delete, reorder, or rename generated CSV rows/files, and do not edit structural columns such as `index`, `line`, `order`, `start`, `span_start`, `span_end`, `quoted`, `kind`, or `original`. Only `dbs`, `replacement`, and `replacement_en` are intended for manual editing.
-- A freshly generated source has no real translation yet. Column `0` is Japanese/source text, column `1` uses `replacement_en`, column `2` uses `replacement`, and columns `3` through `6` are reserved.
+- `ssu_dbs_source` is the stable user edit surface. Do not add, delete, reorder, or rename generated CSV rows/files, and do not edit structural columns such as `index`, `line`, `order`, `start`, `span_start`, `span_end`, `quoted`, `kind`, or `original`. Only `dbs` and `replacement` are intended for manual editing.
+- A freshly generated source has no real translation yet. Column `0` is always Japanese/source text, column `1` is left blank, column `2` uses `replacement` as Simplified Chinese text, and columns `3` through `6` are reserved.
 - Empty strings are always excluded. The initial `dbs` selection is conservative, but later runs follow the generated CSV values; enable or disable rows by changing only the `dbs` column.
-- Ruby/control same-line messages are grouped in script order and written as one synthetic DBS message row, but the tool does not infer human ruby readings or translation semantics. Add those details explicitly in `replacement` or `replacement_en` when needed.
+- Ruby/control same-line messages are grouped in script order and written as one synthetic DBS message row, but the tool does not infer human ruby readings or translation semantics. Add those details explicitly in `replacement` when needed.
 - The fast update path is used only when the CSV row structure and selected synthetic groups are unchanged. If the selected structure changes, the command falls back to a full scene rebuild.
 - SiglusEngine limits database entries to 256. The command checks generated and existing `Gameexe*.dat` database entries, but unusually fragmented projects can still exceed the engine limit.
 - The runtime helper reserves F10 for the language selector and scans for free `G` and `frame_action_ch` slots, but games with custom startup, input, or frame-action logic still need manual in-game verification.
@@ -874,9 +874,8 @@ The generated `.dbs` files use seven official-style string columns: `0 = Japanes
 | `dbs` | Dynamic DBS selection flag used by `-m --dbs`: `1` includes the row, `0` excludes it. Empty strings are always excluded. This is a user-editable selection column. |
 | `original` | The original string value (escape-encoded). |
 | `replacement` | Simplified Chinese text used by `-m --dbs` column `2`. Initially identical to `original`. |
-| `replacement_en` | English text used by `-m --dbs` column `1`. Initially identical to `original`. |
 
-Special characters in `original`, `replacement`, and `replacement_en` are escape-encoded:
+Special characters in `original` and `replacement` are escape-encoded:
 
 | Escape | Meaning |
 |---|---|
@@ -1220,26 +1219,14 @@ siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
 
 ### `-p` / `--patch` — Patch `SiglusEngine.exe`
 
-Applies binary patches to `SiglusEngine.exe`. Supports four patch operations:
-
-- **`--altkey`**: Replace the embedded `exe_el` decryption key with a different one.
-- **`--lang`**: Apply a language preset (`chs` or `eng`) or a custom JSON-specified mapping to redirect the engine to a different `.pck` file, save directory, and language slots.
-- **`--info`**: Print a read-only preview of the patchable `ALTKEY`, `LANG`, and `LOC` slots in the target executable.
-- **`--loc`**: Toggle the built-in region check (`0` = disable/force pass, `1` = re-enable only a function-stub patch made by this tool).
+Patch mode modifies selected binary values inside `SiglusEngine.exe`.
 
 #### Syntax
 
-```
-# Patch the embedded exe_el key
+```bash
 siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
-
-# Apply a language patch
-siglus-ssu -p --lang (chs | eng | <json>) <input_exe> [-o output_exe] [--inplace]
-
-# Preview patchable info without writing a file
+siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace]
 siglus-ssu -p --info <input_exe>
-
-# Toggle region detection
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
 
@@ -1248,157 +1235,74 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | Parameter | Description |
 |---|---|
 | `<input_exe>` | Path to `SiglusEngine.exe` to patch. |
-| `<input_key>` | **(--altkey only)** The new 16-byte key. Accepts: a literal like `0xA9, 0x86, ...`; `key.txt`; `暗号.dat`; `SiglusEngine*.exe`; or a directory (auto-derives key). |
-| `-o`, `--output` | Path for the output patched executable. Defaults to `<stem>_alt.exe` (altkey), `<stem>_CHS.exe` / `<stem>_ENG.exe` (lang), or `<stem>_LOC0.exe` / `<stem>_LOC1.exe` (loc). |
-| `--inplace` | Overwrite the input file directly instead of writing to a new path. If both `-o`/`--output` and `--inplace` are given, `--inplace` takes precedence. |
-| `--lang chs` | Apply the built-in Simplified Chinese preset. |
-| `--lang eng` | Apply the built-in English preset. |
-| `--lang <json>` | Apply a custom JSON-specified patch (see below). Here `<json>` is an **inline JSON string**, not a path to a JSON file. |
-| `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit. Does not write a file and rejects `-o` / `--inplace`. |
-| `--loc 0` | Disable region detection by replacing the matched top-level check routine with a 3-byte always-pass stub. |
-| `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. Ambiguous, unsupported, or branch-patched builds are refused. |
+| `<input_key>` | **(`--altkey` only)** The new 16-byte key. Accepts a literal like `0xA9, 0x86, ...`; `key.txt`; `暗号.dat`; `SiglusEngine*.exe`; or a directory. |
+| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. |
+| `--inplace` | Overwrite the input executable directly. |
+| `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
+| `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
+| `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
+| `--loc 0` | Disable region detection by replacing the matched top-level check routine with an always-pass stub. |
+| `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. |
 
-#### Language Patch Presets
+#### Language Presets
 
-**`--lang chs`** makes these changes:
-- Sets `charset1` to `0x00` and `charset2` to `0x86`.
-- Replaces standalone slots: `japanese` → `chinese`, `ja` → `zh`, `Scene.pck` → `Scene.chs`, `savedata` → `savechs`.
-- Replaces all fixed-length `Gameexe.dat` hits with `Gameexe.chs`, including user-facing prompt text.
+`--lang cjk` changes Japanese/CJK charset compare slots to `0x86`, relocates the active locale string to `chinese`, and relocates the active language code string to `zh`.
 
-**`--lang eng`** makes these changes:
-- Sets `charset1` to `0x00` and `charset2` to `0x00`.
-- Replaces standalone slots: `japanese` → `english`, `ja` → `en`, `Scene.pck` → `Scene.eng`, `savedata` → `saveeng`.
-- Replaces all fixed-length `Gameexe.dat` hits with `Gameexe.eng`, including user-facing prompt text.
+`--lang cjk-path` performs the same changes, then writes the official ZH path strings into an unused PE string cave and repoints active references to them. The original short strings may remain in the file as unreferenced data.
 
-Built-in `chs` / `eng` only auto-write charset slots when the current layout matches the known-safe pattern `charset1=0x00` and `charset2=0x00` / `0x80` / `0x86`. If the build uses a different layout, the preset refuses to patch those slots and you should use custom JSON with explicit `charset1` / `charset2`.
-
-If some expected locale/code/path slots are absent in the target build, the built-in preset still writes the matches it can find and prints a warning that the result may be only partially patched.
+`--lang` no longer accepts custom JSON. The old fixed-length `Scene.chs`, `Scene.eng`, `savechs`, `saveeng`, `Gameexe.chs`, and `Gameexe.eng` patching scheme has been removed.
 
 #### Charset Slots
 
-`--info` reports two charset slots, `charset1` and `charset2`, because the engine uses two independent `lfCharSet` compare sites when building font lists in currently supported builds.
+`--info` reports every matched `80 78 17 xx` charset compare site instead of requiring exactly two slots. The common values are:
 
-- `charset1` is the first matched compare site (lower file offset).
-- `charset2` is the second matched compare site (higher file offset).
+- `0x00` (`ANSI_CHARSET`): ANSI font search.
+- `0x80` (`SHIFTJIS_CHARSET`): Shift-JIS font search.
+- `0x86` (`GB2312_CHARSET`): GB2312 font search.
 
-In the old Tona3/Siglus source, the relevant filtering rules are:
-
-- `0x00` (`ANSI_CHARSET`): keeps `ANSI` and `SHIFTJIS` font entries, and prefers the `SHIFTJIS` entry when the same face name appears in both charsets.
-- `0x80` (`SHIFTJIS_CHARSET`): keeps only `SHIFTJIS` font entries.
-- `0x86` (`GB2312_CHARSET`): keeps only `GB2312` font entries.
-
-Current supported builds commonly use one slot for the runtime text font list and the other slot for the font-selection dialog list. The built-in presets rely on the currently known-safe slot order; if your build differs, use custom JSON to control the two slots explicitly.
-
-#### Custom JSON `--lang` Configuration
-
-```json
-{
-  "charset1": 0,
-  "charset2": 0,
-  "suffix": "ENG",
-  "replace": {
-    "Scene.pck": "Scene.eng",
-    "savedata": "saveeng"
-  },
-  "standalone_only": ["Scene.pck"],
-  "skip_standalone": ["savedata"]
-}
-```
-
-| JSON Field | Description |
-|---|---|
-| `charset1` | Value for the first charset slot. Accepts `0` / `"eng"` (ANSI), `128` / `"jp"` (Shift-JIS), `134` / `"chs"` (GBK), or any integer. |
-| `charset2` | Value for the second charset slot. Accepts `0` / `"eng"` (ANSI), `128` / `"jp"` (Shift-JIS), `134` / `"chs"` (GBK), or any integer. |
-| `suffix` | Suffix used for the default output filename (e.g., `"ENG"` → `SiglusEngine_ENG.exe`). |
-| `replace` | Object mapping old string → new string (UTF-16LE in-place replacement). The new string must not be longer than the old. |
-| `standalone_only` | List of old strings to replace only when they appear as standalone UTF-16LE slots surrounded by NUL bytes. |
-| `skip_standalone` | List of old strings to skip when they appear surrounded by NUL bytes (i.e., when they appear isolated in memory rather than as part of a path). |
-
-Use at most one of `standalone_only` or `skip_standalone` for the same source string.
+The CJK presets primarily patch existing Japanese/CJK slots. If no Japanese/CJK slot is present, they fall back to the last detected charset slot.
 
 #### Examples
 
 ```bash
-# Patch the exe_el key from a key.txt file
 siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/SiglusEngine_patched.exe
-
-# Patch using a literal 16-byte key
-siglus-ssu -p --altkey /path/to/SiglusEngine.exe "0xA9, 0x86, 0x3F, 0x12, 0x5E, 0xC1, 0x78, 0x04, 0xBB, 0xA1, 0xF2, 0x93, 0xD4, 0x7E, 0x60, 0x55"
-
-# Patch using the key derived from 暗号.dat
-siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/暗号.dat --inplace
-
-# Apply the English language patch
-siglus-ssu -p --lang eng /path/to/SiglusEngine.exe
-
-# Apply the CHS language patch in-place
-siglus-ssu -p --lang chs /path/to/SiglusEngine.exe --inplace
-
-# Apply a custom JSON language patch
-siglus-ssu -p --lang '{"charset1":0,"charset2":0,"suffix":"ENG","replace":{"Scene.pck":"Scene.eng"}}' /path/to/SiglusEngine.exe
-
-# Preview current patchable info
+siglus-ssu -p --lang cjk /path/to/SiglusEngine.exe
+siglus-ssu -p --lang cjk-path /path/to/SiglusEngine.exe --inplace
 siglus-ssu -p --info /path/to/SiglusEngine.exe
-
-# Disable region detection
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
-
-# Re-enable region detection in-place
 siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
 ```
 
 #### Output
 
-The patch command prints a summary of changes to stdout before writing the output file:
-
 ```
 Input : /path/to/SiglusEngine.exe
-Mode  : lang:eng
+Mode  : lang:cjk-path
 SHA256(before): abc123...
 SHA256(after) : def456...
 Applied changes: N bytes
- - lfCharSet: -> 0x00 (N bytes)
- - Scene.pck -> Scene.eng (N bytes)
- - savedata -> saveeng (N bytes)
- - japanese -> english (N bytes)
- - Gameexe.dat -> Gameexe.eng (N bytes)
-Written: /path/to/SiglusEngine_ENG.exe
+ - LANG charset: jp/shift-jis -> chs/gbk (1 bytes)
+ - LANG string SceneZH.pck (N bytes)
+ - LANG Scene: Scene.pck -> SceneZH.pck (N bytes)
+Written: /path/to/SiglusEngine_CJKPATH.exe
 ```
 
-`--info` prints a read-only preview instead of patching:
+`--info` prints active code-referenced language/path slots:
 
 ```
 Input : /path/to/SiglusEngine.exe
 SHA256: abc123...
 ALTKEY: 0xAA, 0xBB, ...
-LANG charset1: 0x201AC8=0x00 (eng/ansi)
-LANG charset2: 0x2BE0E3=0x80 (jp/shift-jis)
-LANG Locale : japanese @ 0x677C94
-LANG Code   : ja @ 0x64FC6C
-LANG Scene  : Scene.pck @ 0x66D208
-LANG Save   : savedata @ 0x66D814
-LANG Gameexe: Gameexe.dat x4 (last @ 0x677C30)
+LANG charset1: 0x201BC8=0x00 (eng/ansi)
+LANG charset2: 0x2BE1D3=0x80 (jp/shift-jis)
+LANG presets: cjk, cjk-path
+LANG Locale : japanese @ 0x677C94 refs=1
+LANG Code   : ja @ 0x64FC6C refs=3
+LANG Scene  : Scene.pck @ 0x66D208 refs=2
+LANG Save   : savedata @ 0x66D814 refs=1
+LANG Gameexe: Gameexe.dat @ 0x672C4C refs=1
 LOC   : enabled (original function, func=0x22BF20)
 ```
-
-For `--loc`, the summary also prints the previous and new switch states:
-
-```
-Input : /path/to/SiglusEngine.exe
-Mode  : loc:0
-SHA256(before): abc123...
-SHA256(after) : def456...
-LOC(before): enabled
-LOC(after) : disabled
-Applied changes: 3 bytes
- - region detection: enabled -> disabled (3 bytes)
-Written: /path/to/SiglusEngine_LOC0.exe
-```
-
-`--loc` uses a conservative matcher that looks for the top-level guarded wrapper around the region check helpers. If the build is ambiguous or unsupported, it refuses to patch instead of guessing.
-
-
-
 ### `-t` / `--tutorial` — Build a Static Tutorial Graph
 
 Builds a static dialogue graph JSON from the compiled scene data inside a `Scene.pck`. The output is designed for broad inspection rather than perfect VM-complete execution. It keeps all narrow-sense dialogue lines, prefers soundness over aggressive guessing, and only emits static edges that can be justified without reconstructing dynamic runtime state.

@@ -3,7 +3,6 @@ import sys
 import re
 import argparse
 import hashlib
-import json
 import struct
 from bisect import bisect_right
 from .common import (
@@ -590,161 +589,7 @@ def _find_charset_slot_offsets(data: bytearray):
         raise RuntimeError(
             "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
         )
-    if len(candidates) != 2:
-        raise RuntimeError(
-            f"Expected exactly 2 charset compare slots, found {len(candidates)} in this SiglusEngine.exe build."
-        )
     return [i + 3 for i in candidates]
-
-
-def _ensure_known_builtin_charset_layout(data: bytearray):
-    slot_offsets = _find_charset_slot_offsets(data)
-    slot_values = tuple(data[off] for off in slot_offsets)
-    if slot_values[0] == 0 and slot_values[1] in (0, 128, 134):
-        return slot_offsets
-    raise RuntimeError(
-        "Built-in 'chs'/'eng' presets only support known charset slot layouts "
-        "(charset1=0x00 and charset2=0x00/0x80/0x86). Use custom JSON with "
-        "explicit charset1/charset2 for this SiglusEngine.exe build."
-    )
-
-
-def _charset_from_value(v):
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return int(v) & 0xFF
-    if isinstance(v, (int, float)):
-        return int(v) & 0xFF
-    s = str(v).strip().lower()
-    if s in ("eng", "english", "ansi", "en"):
-        return 0
-    if s in ("chs", "chinese", "gb", "gb2312", "cn"):
-        return 134
-    if s in ("jp", "jpn", "japanese", "shiftjis", "sjis"):
-        return 128
-    if re.fullmatch(r"0x[0-9a-f]{1,2}", s):
-        return int(s, 16) & 0xFF
-    if re.fullmatch(r"\d{1,3}", s):
-        return int(s) & 0xFF
-    raise ValueError(f"invalid charset value: {v!r}")
-
-
-def patch_lfcharset_slots(data: bytearray, charset1=None, charset2=None):
-    slot_offsets = _find_charset_slot_offsets(data)
-    targets = (
-        (1, slot_offsets[0], _charset_from_value(charset1)),
-        (2, slot_offsets[1], _charset_from_value(charset2)),
-    )
-    changes = []
-    for slot_no, off, new_charset in targets:
-        if new_charset is None:
-            continue
-        old = data[off]
-        if old != new_charset:
-            data[off] = new_charset
-            changes.append((off, old, new_charset, f"lfCharSet{slot_no}"))
-    return changes
-
-
-def replace_all_fixedlen(
-    data: bytearray,
-    old_s: str,
-    new_s: str,
-    *,
-    encoding: str,
-    skip_standalone: bool,
-    standalone_only: bool = False,
-):
-    if skip_standalone and standalone_only:
-        raise ValueError("skip_standalone and standalone_only cannot be used together")
-    old_b = str(old_s).encode(encoding)
-    new_b0 = str(new_s).encode(encoding)
-    if len(new_b0) > len(old_b):
-        raise ValueError(
-            f"Length mismatch: {old_s!r} -> {new_s!r} (new string too long for in-place replacement)."
-        )
-    if len(new_b0) < len(old_b):
-        new_b = new_b0 + (b"\x00" * (len(old_b) - len(new_b0)))
-    else:
-        new_b = new_b0
-    changes = []
-    hits = []
-    start2 = 0
-    while True:
-        j = data.find(old_b, start2)
-        if j == -1:
-            break
-        if skip_standalone:
-            pre = data[j - 2 : j] if j >= 2 else b"\x00\x00"
-            post = (
-                data[j + len(old_b) : j + len(old_b) + 2]
-                if j + len(old_b) + 2 <= len(data)
-                else b"\x00\x00"
-            )
-            if pre == b"\x00\x00" and post == b"\x00\x00":
-                start2 = j + 2
-                continue
-        if standalone_only:
-            pre = data[j - 2 : j] if j >= 2 else b"\x00\x00"
-            post = (
-                data[j + len(old_b) : j + len(old_b) + 2]
-                if j + len(old_b) + 2 <= len(data)
-                else b"\x00\x00"
-            )
-            if not (pre == b"\x00\x00" and post == b"\x00\x00"):
-                start2 = j + 2
-                continue
-        hits.append(j)
-        start2 = j + 2
-    for j in hits:
-        for k, (ob, nb) in enumerate(zip(old_b, new_b)):
-            if ob != nb:
-                off = j + k
-                if data[off] != ob:
-                    raise RuntimeError(
-                        f"Patch verification failed: offset 0x{off:X} expected 0x{ob:02X} got 0x{data[off]:02X}."
-                    )
-                data[off] = nb
-                changes.append((off, ob, nb, f"{old_s} -> {new_s}"))
-    return changes
-
-
-def _find_fixedlen_patch_hits(
-    data: bytes,
-    text: str,
-    *,
-    encoding: str,
-    skip_standalone: bool = False,
-    standalone_only: bool = False,
-):
-    if skip_standalone and standalone_only:
-        raise ValueError("skip_standalone and standalone_only cannot be used together")
-    needle = str(text).encode(encoding)
-    hits = []
-    step = 2 if str(encoding).lower() == "utf-16le" else 1
-    start = 0
-    while True:
-        i = data.find(needle, start)
-        if i == -1:
-            break
-        if skip_standalone or standalone_only:
-            pre = data[i - 2 : i] if i >= 2 else b"\x00\x00"
-            post = (
-                data[i + len(needle) : i + len(needle) + 2]
-                if i + len(needle) + 2 <= len(data)
-                else b"\x00\x00"
-            )
-            is_standalone = pre == b"\x00\x00" and post == b"\x00\x00"
-            if skip_standalone and is_standalone:
-                start = i + step
-                continue
-            if standalone_only and not is_standalone:
-                start = i + step
-                continue
-        hits.append(i)
-        start = i + step
-    return hits
 
 
 def _format_charset_label(v: int):
@@ -758,184 +603,344 @@ def _format_charset_label(v: int):
     return f"0x{v:02X}"
 
 
-def _format_hit_list(hits):
-    show = hits[:4]
-    if len(hits) == 1:
-        return f"0x{hits[0]:X}"
-    rendered = ", ".join(f"0x{x:X}" for x in show)
-    if len(hits) > len(show):
-        rendered += ", ..."
-    return rendered
+def _utf16z(text: str) -> bytes:
+    return str(text).encode("utf-16le") + b"\x00\x00"
 
 
-def _describe_slot_state(
-    data: bytes,
-    base_text: str,
-    variant_texts,
-    *,
-    encoding: str,
-    standalone_only: bool,
-    allow_multi_base: bool = False,
-    allow_multi_variant: bool = False,
-):
-    base_hits = _find_fixedlen_patch_hits(
-        data, base_text, encoding=encoding, standalone_only=standalone_only
+def _find_bytes_all(data: bytes, needle: bytes, start: int = 0, end: int | None = None):
+    hits = []
+    limit = len(data) if end is None else int(end)
+    pos = int(start)
+    while True:
+        i = data.find(needle, pos, limit)
+        if i < 0:
+            return hits
+        hits.append(i)
+        pos = i + 1
+
+
+def _find_utf16z_offsets(data: bytes, text: str):
+    return _find_bytes_all(data, _utf16z(text))
+
+
+def _find_va_refs(data: bytes, layout, va: int):
+    needle = struct.pack("<I", int(va) & 0xFFFFFFFF)
+    hits = []
+    for sec in layout["sections"]:
+        name = str(sec["name"]).lower()
+        if name not in (".text", ".rdata", ".data", "_rdata"):
+            continue
+        start = int(sec["raw_offset"])
+        end = min(len(data), start + int(sec["raw_size"]))
+        hits.extend(_find_bytes_all(data, needle, start, end))
+    return hits
+
+
+def _section_for_file_off(layout, off: int):
+    off = int(off)
+    for sec in layout["sections"]:
+        raw_start = int(sec["raw_offset"])
+        raw_end = raw_start + int(sec["raw_size"])
+        if raw_start <= off < raw_end:
+            return sec
+    return None
+
+
+def _is_code_ref(layout, off: int):
+    sec = _section_for_file_off(layout, off)
+    if not sec:
+        return False
+    return (
+        str(sec["name"]).lower() == ".text"
+        or (int(sec["characteristics"]) & 0x20000000) != 0
     )
-    variant_hits = []
-    for text in variant_texts:
-        hits = _find_fixedlen_patch_hits(
-            data, text, encoding=encoding, standalone_only=standalone_only
-        )
-        if hits:
-            variant_hits.append((text, hits))
-    base_cnt = len(base_hits)
-    variant_cnt = sum(len(hits) for _text, hits in variant_hits)
-    if base_cnt == 0 and variant_cnt == 0:
-        return {
-            "state": "missing",
-            "base_hits": base_hits,
-            "variant_hits": variant_hits,
-        }
-    if base_cnt and not variant_cnt and (allow_multi_base or base_cnt == 1):
-        return {
-            "state": "base",
-            "base_hits": base_hits,
-            "variant_hits": variant_hits,
-        }
-    if variant_cnt and not base_cnt:
-        if len(variant_hits) == 1:
-            text, hits = variant_hits[0]
-            if allow_multi_variant or len(hits) == 1:
-                return {
-                    "state": "target",
-                    "base_hits": base_hits,
-                    "variant_hits": variant_hits,
-                    "target_text": text,
-                }
-        return {
-            "state": "ambiguous",
-            "base_hits": base_hits,
-            "variant_hits": variant_hits,
-        }
-    return {
-        "state": "ambiguous",
-        "base_hits": base_hits,
-        "variant_hits": variant_hits,
-    }
 
 
-def _format_slot_state(desc):
-    state = desc["state"]
-    base_hits = desc["base_hits"]
-    variant_hits = desc["variant_hits"]
-    if state == "missing":
-        return "not found"
-    if state == "base":
-        text = desc["base_text"]
-        if len(base_hits) == 1:
-            return f"{text} @ 0x{base_hits[0]:X}"
-        return f"{text} x{len(base_hits)} ({_format_hit_list(base_hits)})"
-    if state == "target":
-        text = desc["target_text"]
-        hits = variant_hits[0][1]
-        if len(hits) == 1:
-            return f"target-only: {text} @ 0x{hits[0]:X}"
-        return f"target-only: {text} x{len(hits)} ({_format_hit_list(hits)})"
-    parts = []
-    if base_hits:
-        if len(base_hits) == 1:
-            parts.append(f"{desc['base_text']} (0x{base_hits[0]:X})")
-        else:
-            parts.append(
-                f"{desc['base_text']} x{len(base_hits)} ({_format_hit_list(base_hits)})"
-            )
-    for text, hits in variant_hits:
-        if len(hits) == 1:
-            parts.append(f"{text} (0x{hits[0]:X})")
-        else:
-            parts.append(f"{text} x{len(hits)} ({_format_hit_list(hits)})")
-    return "ambiguous: " + "; ".join(parts)
+def _patch_bytes(data: bytearray, off: int, new_bytes: bytes, reason: str, changes):
+    off = int(off)
+    if off < 0 or off + len(new_bytes) > len(data):
+        raise RuntimeError(f"Patch offset out of range: 0x{off:X}")
+    for idx, new in enumerate(new_bytes):
+        old = data[off + idx]
+        if old != new:
+            data[off + idx] = new
+            changes.append((off + idx, old, new, reason))
 
 
-def _format_slot_preview(
-    data: bytes,
-    base_text: str,
-    variant_texts,
-    *,
-    encoding: str,
-    standalone_only: bool,
-    allow_multi_base: bool = False,
-    allow_multi_variant: bool = False,
-):
-    desc = _describe_slot_state(
-        data,
-        base_text,
-        variant_texts,
-        encoding=encoding,
-        standalone_only=standalone_only,
-        allow_multi_base=allow_multi_base,
-        allow_multi_variant=allow_multi_variant,
-    )
-    desc["base_text"] = base_text
-    return _format_slot_state(desc)
+def _patch_dword(data: bytearray, off: int, value: int, reason: str, changes):
+    _patch_bytes(data, off, struct.pack("<I", int(value) & 0xFFFFFFFF), reason, changes)
 
 
-def _builtin_preset_warnings(data: bytes, replacements):
-    slot_descs = []
-    for label, old_s, new_s, standalone_only in replacements:
-        desc = _describe_slot_state(
-            data,
-            old_s,
-            (new_s,),
-            encoding="utf-16le",
-            standalone_only=standalone_only,
-            allow_multi_base=(label == "Gameexe"),
-            allow_multi_variant=(label == "Gameexe"),
-        )
-        desc["label"] = label
-        desc["base_text"] = old_s
-        slot_descs.append(desc)
-    states = {desc["state"] for desc in slot_descs}
-    if states == {"base"}:
-        return []
-    warnings = []
-    for desc in slot_descs:
-        label = desc["label"]
-        state = desc["state"]
-        if state == "base":
-            continue
-        if state == "missing":
-            warnings.append(
-                f"preset slot '{label}' was not found; output may be only partially patched"
-            )
-            continue
-        if state == "target":
-            warnings.append(
-                f"preset slot '{label}' already matches only the target literal; output may be partially patched or ambiguous"
-            )
-            continue
-        parts = []
-        if desc["base_hits"]:
-            hits = desc["base_hits"]
-            if len(hits) == 1:
-                parts.append(f"{desc['base_text']} (0x{hits[0]:X})")
-            else:
-                parts.append(
-                    f"{desc['base_text']} x{len(hits)} ({_format_hit_list(hits)})"
+def _section_file_limit(sec):
+    raw_start = int(sec["raw_offset"])
+    raw_size = int(sec["raw_size"])
+    virtual_size = int(sec["virtual_size"])
+    usable = raw_size if virtual_size <= 0 else min(raw_size, virtual_size)
+    return raw_start, raw_start + max(0, usable)
+
+
+def _range_overlaps(start: int, end: int, ranges):
+    for a, b in ranges:
+        if int(start) < int(b) and int(a) < int(end):
+            return True
+    return False
+
+
+def _alloc_sections(layout):
+    sections = list(layout["sections"])
+
+    def score(sec):
+        name = str(sec["name"]).lower()
+        if name == ".rdata":
+            return 0
+        if name == ".data":
+            return 1
+        return 2
+
+    return sorted(sections, key=score)
+
+
+def _alloc_utf16z(data: bytearray, layout, text: str, used, changes):
+    raw = _utf16z(text)
+    need = len(raw) + 2
+    for sec in _alloc_sections(layout):
+        start, end = _section_file_limit(sec)
+        pos = start
+        while pos + need <= end:
+            hit = bytes(data).find(b"\x00" * need, pos, end)
+            if hit < 0:
+                break
+            aligned = (hit + 1) & ~1
+            if aligned + need <= end and not _range_overlaps(
+                aligned, aligned + need, used
+            ):
+                if all(x == 0 for x in data[aligned : aligned + need]):
+                    _patch_bytes(data, aligned, raw, f"LANG string {text}", changes)
+                    used.append((aligned, aligned + need))
+                    va = pe32_file_off_to_va(layout, aligned)
+                    if va is None:
+                        raise RuntimeError(
+                            f"Allocated string is not mapped: 0x{aligned:X}"
+                        )
+                    return va
+            pos = hit + 2
+    raise RuntimeError(f"Could not find a PE string cave for {text!r}.")
+
+
+def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = True):
+    active = []
+    for text in texts:
+        for off in _find_utf16z_offsets(data, text):
+            va = pe32_file_off_to_va(layout, off)
+            if va is None:
+                continue
+            refs = _find_va_refs(data, layout, va)
+            if require_code_ref and not any(_is_code_ref(layout, ref) for ref in refs):
+                continue
+            if refs:
+                active.append(
+                    {
+                        "text": text,
+                        "off": off,
+                        "va": va,
+                        "refs": refs,
+                    }
                 )
-        for text, hits in desc["variant_hits"]:
-            if len(hits) == 1:
-                parts.append(f"{text} (0x{hits[0]:X})")
-            else:
-                parts.append(f"{text} x{len(hits)} ({_format_hit_list(hits)})")
-        warnings.append(
-            f"preset slot '{label}' is ambiguous: {'; '.join(parts)}; output may be only partially patched"
+    return active
+
+
+def _patch_utf16_refs(
+    data: bytearray,
+    layout,
+    label: str,
+    texts,
+    target: str,
+    used,
+    changes,
+    warnings,
+    require_code_ref: bool = True,
+):
+    active = _active_utf16_refs(
+        bytes(data), layout, texts, require_code_ref=require_code_ref
+    )
+    target_active = [item for item in active if item["text"] == target]
+    source_active = [item for item in active if item["text"] != target]
+    if not source_active:
+        if not target_active:
+            warnings.append(f"{label}: active literal was not found")
+        return
+    target_va = _alloc_utf16z(data, layout, target, used, changes)
+    for item in source_active:
+        for ref_off in item["refs"]:
+            _patch_dword(
+                data,
+                ref_off,
+                target_va,
+                f"LANG {label}: {item['text']} -> {target}",
+                changes,
+            )
+
+
+def _patch_charset_slots(data: bytearray, target: int, accepted, changes, warnings):
+    try:
+        offsets = _find_charset_slot_offsets(data)
+    except Exception as e:
+        warnings.append(f"charset: {e}")
+        return
+    accepted_set = {int(x) & 0xFF for x in accepted}
+    touched = False
+    for off in offsets:
+        old = int(data[off]) & 0xFF
+        if old not in accepted_set:
+            continue
+        touched = True
+        new = int(target) & 0xFF
+        if old != new:
+            data[off] = new
+            changes.append(
+                (
+                    off,
+                    old,
+                    new,
+                    f"LANG charset: {_format_charset_label(old)} -> {_format_charset_label(new)}",
+                )
+            )
+    if not touched:
+        new = int(target) & 0xFF
+        if new != 0 and offsets:
+            off = offsets[-1]
+            old = int(data[off]) & 0xFF
+            if old != new:
+                data[off] = new
+                changes.append(
+                    (
+                        off,
+                        old,
+                        new,
+                        f"LANG charset: {_format_charset_label(old)} -> {_format_charset_label(new)}",
+                    )
+                )
+            return
+        labels = ", ".join(_format_charset_label(x) for x in sorted(accepted_set))
+        warnings.append(f"charset: no slot matched {labels}")
+
+
+_LANG_PRESETS = {
+    "cjk": {
+        "suffix": "CJK",
+        "charset": 134,
+        "accepted": (128, 134),
+        "locale": "chinese",
+        "code": "zh",
+        "paths": None,
+    },
+    "cjk-path": {
+        "suffix": "CJKPATH",
+        "charset": 134,
+        "accepted": (128, 134),
+        "locale": "chinese",
+        "code": "zh",
+        "paths": {
+            "Scene": "SceneZH.pck",
+            "Save": "savedata_zh",
+            "Gameexe": "GameexeZH.dat",
+        },
+    },
+}
+
+
+def _load_lang_preset(spec: str):
+    key = str(spec or "").strip().lower()
+    if not key:
+        raise ValueError("missing value for --lang")
+    if key not in _LANG_PRESETS:
+        names = "|".join(_LANG_PRESETS)
+        raise ValueError(f"--lang expects one of: {names}")
+    return key, _LANG_PRESETS[key]
+
+
+def patch_lang(data: bytearray, lang_spec: str):
+    tag, preset = _load_lang_preset(lang_spec)
+    layout = parse_pe32_layout(bytes(data))
+    changes = []
+    warnings = []
+    used = []
+    _patch_charset_slots(
+        data,
+        preset["charset"],
+        preset["accepted"],
+        changes,
+        warnings,
+    )
+    _patch_utf16_refs(
+        data,
+        layout,
+        "Locale",
+        ("japanese", "chinese"),
+        preset["locale"],
+        used,
+        changes,
+        warnings,
+    )
+    _patch_utf16_refs(
+        data,
+        layout,
+        "Code",
+        ("ja", "zh"),
+        preset["code"],
+        used,
+        changes,
+        warnings,
+    )
+    if preset["paths"]:
+        _patch_utf16_refs(
+            data,
+            layout,
+            "Scene",
+            ("Scene.pck", "SceneZH.pck"),
+            preset["paths"]["Scene"],
+            used,
+            changes,
+            warnings,
         )
-    return warnings
+        _patch_utf16_refs(
+            data,
+            layout,
+            "Save",
+            ("savedata", "savedata_zh"),
+            preset["paths"]["Save"],
+            used,
+            changes,
+            warnings,
+        )
+        _patch_utf16_refs(
+            data,
+            layout,
+            "Gameexe",
+            ("Gameexe.dat", "GameexeZH.dat"),
+            preset["paths"]["Gameexe"],
+            used,
+            changes,
+            warnings,
+        )
+    return tag, preset["suffix"], changes, warnings
+
+
+def _format_active_utf16_refs(data: bytes, layout, texts):
+    active = _active_utf16_refs(data, layout, texts, require_code_ref=True)
+    if not active:
+        return "not found"
+    parts = []
+    for item in active[:6]:
+        parts.append(f"{item['text']} @ 0x{item['off']:X} refs={len(item['refs'])}")
+    if len(active) > 6:
+        parts.append("...")
+    return "; ".join(parts)
 
 
 def print_patch_info(in_path: str, raw: bytes):
     data = bytearray(raw)
+    layout = parse_pe32_layout(raw)
     print(f"Input : {in_path}")
     print(f"SHA256: {hashlib.sha256(raw).hexdigest()}")
     altkey = siglus_engine_exe_element(raw, with_patch_points=True)
@@ -952,22 +957,20 @@ def print_patch_info(in_path: str, raw: bytes):
                 f"LANG charset{idx}: 0x{off:X}=0x{val:02X} ({_format_charset_label(val)})"
             )
     except Exception:
-        print("LANG charset1: not found")
-        print("LANG charset2: not found")
+        print("LANG charset: not found")
+    print("LANG presets: cjk, cjk-path")
     print(
-        f"LANG Locale : {_format_slot_preview(raw, 'japanese', ('chinese', 'english'), encoding='utf-16le', standalone_only=True)}"
+        f"LANG Locale : {_format_active_utf16_refs(raw, layout, ('japanese', 'chinese'))}"
+    )
+    print(f"LANG Code   : {_format_active_utf16_refs(raw, layout, ('ja', 'zh'))}")
+    print(
+        f"LANG Scene  : {_format_active_utf16_refs(raw, layout, ('Scene.pck', 'SceneZH.pck'))}"
     )
     print(
-        f"LANG Code   : {_format_slot_preview(raw, 'ja', ('zh', 'en'), encoding='utf-16le', standalone_only=True)}"
+        f"LANG Save   : {_format_active_utf16_refs(raw, layout, ('savedata', 'savedata_zh'))}"
     )
     print(
-        f"LANG Scene  : {_format_slot_preview(raw, 'Scene.pck', ('Scene.chs', 'Scene.eng'), encoding='utf-16le', standalone_only=True)}"
-    )
-    print(
-        f"LANG Save   : {_format_slot_preview(raw, 'savedata', ('savechs', 'saveeng'), encoding='utf-16le', standalone_only=True)}"
-    )
-    print(
-        f"LANG Gameexe: {_format_slot_preview(raw, 'Gameexe.dat', ('Gameexe.chs', 'Gameexe.eng'), encoding='utf-16le', standalone_only=False, allow_multi_base=True, allow_multi_variant=True)}"
+        f"LANG Gameexe: {_format_active_utf16_refs(raw, layout, ('Gameexe.dat', 'GameexeZH.dat'))}"
     )
     try:
         func_off = _find_loc_guard_function(data)
@@ -976,175 +979,6 @@ def print_patch_info(in_path: str, raw: bytes):
         print(f"LOC   : {state} ({detail}, func=0x{func_off:X})")
     except Exception as e:
         print(f"LOC   : unavailable ({e})")
-
-
-def _patch_siglus_preset(
-    data: bytearray, tag: str, suffix: str, charset1, charset2, replacements
-):
-    changes = []
-    warnings = []
-    _ensure_known_builtin_charset_layout(data)
-    warnings.extend(_builtin_preset_warnings(bytes(data), replacements))
-    changes.extend(patch_lfcharset_slots(data, charset1, charset2))
-    for _label, old_s, new_s, standalone_only in replacements:
-        changes.extend(
-            replace_all_fixedlen(
-                data,
-                old_s,
-                new_s,
-                encoding="utf-16le",
-                skip_standalone=False,
-                standalone_only=standalone_only,
-            )
-        )
-    for idx, (off, old, new, reason) in enumerate(changes):
-        if reason == "lfCharSet1":
-            changes[idx] = (
-                off,
-                old,
-                new,
-                f"lfCharSet1: -> 0x{_charset_from_value(charset1):02X}",
-            )
-        if reason == "lfCharSet2":
-            changes[idx] = (
-                off,
-                old,
-                new,
-                f"lfCharSet2: -> 0x{_charset_from_value(charset2):02X}",
-            )
-    return tag, suffix, changes, warnings
-
-
-def patch_siglus_chs(data: bytearray):
-    return _patch_siglus_preset(
-        data,
-        "chs",
-        "CHS",
-        0,
-        134,
-        (
-            ("Locale", "japanese", "chinese", True),
-            ("Code", "ja", "zh", True),
-            ("Scene", "Scene.pck", "Scene.chs", True),
-            ("Save", "savedata", "savechs", True),
-            ("Gameexe", "Gameexe.dat", "Gameexe.chs", False),
-        ),
-    )
-
-
-def patch_siglus_eng(data: bytearray):
-    return _patch_siglus_preset(
-        data,
-        "eng",
-        "ENG",
-        0,
-        0,
-        (
-            ("Locale", "japanese", "english", True),
-            ("Code", "ja", "en", True),
-            ("Scene", "Scene.pck", "Scene.eng", True),
-            ("Save", "savedata", "saveeng", True),
-            ("Gameexe", "Gameexe.dat", "Gameexe.eng", False),
-        ),
-    )
-
-
-def _load_lang_spec(spec: str):
-    s = str(spec or "").strip()
-    if not s:
-        raise ValueError("missing value for --lang")
-    sl = s.lower()
-    if sl in ("chs", "eng"):
-        return sl, None
-    try:
-        obj = json.loads(s)
-    except Exception as e:
-        raise ValueError(f"--lang expects 'chs'/'eng' or a json object: {e}")
-    if isinstance(obj, str) and obj.strip().lower() in ("chs", "eng"):
-        return obj.strip().lower(), None
-    if not isinstance(obj, dict):
-        raise ValueError("json config must be an object")
-    return "json", obj
-
-
-def patch_lang(data: bytearray, lang_spec: str):
-    tag, obj = _load_lang_spec(lang_spec)
-    if obj is None:
-        if tag == "chs":
-            return patch_siglus_chs(data)
-        if tag == "eng":
-            return patch_siglus_eng(data)
-        raise ValueError(f"unknown preset: {tag!r}")
-    reserved = {
-        "charset",
-        "charset1",
-        "charset2",
-        "suffix",
-        "replace",
-        "map",
-        "encoding",
-        "standalone_only",
-        "standaloneOnly",
-        "skip_standalone",
-        "skipStandalone",
-        "tag",
-        "name",
-        "id",
-    }
-    if "charset" in obj:
-        raise ValueError(
-            "json config now uses 'charset1' and 'charset2' instead of 'charset'"
-        )
-    charset1 = _charset_from_value(obj.get("charset1")) if "charset1" in obj else None
-    charset2 = _charset_from_value(obj.get("charset2")) if "charset2" in obj else None
-    suffix = obj.get("suffix")
-    if suffix is None:
-        suffix = obj.get("tag") or obj.get("name") or obj.get("id") or "LANG"
-    suffix = str(suffix).strip() or "LANG"
-    encoding = str(obj.get("encoding") or "utf-16le")
-    skip_list = obj.get("skip_standalone", obj.get("skipStandalone", []))
-    if skip_list is None:
-        skip_list = []
-    if isinstance(skip_list, (str, bytes)):
-        skip_set = {str(skip_list)}
-    else:
-        skip_set = {str(x) for x in (skip_list or [])}
-    standalone_list = obj.get("standalone_only", obj.get("standaloneOnly", []))
-    if standalone_list is None:
-        standalone_list = []
-    if isinstance(standalone_list, (str, bytes)):
-        standalone_set = {str(standalone_list)}
-    else:
-        standalone_set = {str(x) for x in (standalone_list or [])}
-    mapping = None
-    if "replace" in obj:
-        mapping = obj.get("replace")
-    elif "map" in obj:
-        mapping = obj.get("map")
-    else:
-        mapping = {k: v for k, v in obj.items() if k not in reserved}
-    if mapping is None:
-        mapping = {}
-    if not isinstance(mapping, dict):
-        raise ValueError("json config 'replace' must be an object mapping old->new")
-    changes = []
-    warnings = []
-    if charset1 is not None or charset2 is not None:
-        changes.extend(patch_lfcharset_slots(data, charset1, charset2))
-    for old_s, new_s in mapping.items():
-        changes.extend(
-            replace_all_fixedlen(
-                data,
-                str(old_s),
-                str(new_s),
-                encoding=encoding,
-                skip_standalone=(str(old_s) in skip_set),
-                standalone_only=(str(old_s) in standalone_set),
-            )
-        )
-    tag2 = obj.get("tag") or obj.get("name") or obj.get("id") or suffix
-    tag2 = str(tag2).strip() or "custom"
-    return tag2, suffix, changes, warnings
 
 
 def _summarize_changes(changes):
@@ -1164,7 +998,7 @@ def main(argv=None):
     ap.add_argument("--inplace", action="store_true", help="overwrite input file")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--altkey", action="store_true", help="patch exe_el with <key>")
-    g.add_argument("--lang", metavar="LANG_OR_JSON", help="chs/eng or json config")
+    g.add_argument("--lang", metavar="PRESET", help="cjk or cjk-path")
     g.add_argument("--info", action="store_true", help="show patchable info and exit")
     g.add_argument("--loc", metavar="0|1", help="toggle region detection: 0=off, 1=on")
     args = ap.parse_args(argv)
