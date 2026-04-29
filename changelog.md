@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.2.9] - 2026-04-29
+
+- Added `siglus-ssu -m --dbs <game_root>` to build in-place dynamic `.dbs` text loading from a game root, with repeatable `ssu_dbs_source` CSV edits, backups, undo support, a one-time startup language selector, and F10 language switching.
+
+
 ## [v0.2.8] - 2026-04-28
 
 - Added `siglus-ssu -a --apply <global.sav>` support to read the sibling `global.txt` and write supported `G`, `Z`, `cg_table`, `bgm_table`, and `chrkoe.look_flag` entries back into `global.sav` in-place.

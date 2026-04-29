@@ -739,6 +739,12 @@ siglus-ssu -m <path_to_ss | path_to_dir>
 # 将已翻译的文本映射应用回 .ss 源文件
 siglus-ssu -m --apply <path_to_ss | path_to_dir>
 
+# 从游戏根目录就地生成动态 .dbs 文本加载
+siglus-ssu -m --dbs <game_root>
+
+# 按 manifest 撤回上一次 --dbs 安装
+siglus-ssu -m --dbs-undo <game_root>
+
 # 从已编译的 .dat 文件导出字符串列表
 siglus-ssu -m --disam <path_to_dat | path_to_dir>
 
@@ -752,9 +758,12 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 |---|---|
 | `<path_to_ss \| path_to_dir>` | 单个 `.ss` 文件或包含 `.ss` 文件的目录。**只接受 1 个路径参数**。 |
 | `<path_to_dat \| path_to_dir>` | 单个 `.dat` 文件或目录。**只接受 1 个路径参数**。 |
+| `<game_root>` | 游戏根目录，需包含 `dat` 目录、`Scene*.pck` 和 `Gameexe*.dat`。 |
 | `--apply`, `-a` | 将 `.ss.csv` 文本映射就地应用回对应的 `.ss` 文件。`.ss.csv` 必须已与 `.ss` 文件并排存在。 |
+| `--dbs` | 就地生成动态 `.dbs` 文本加载。首次运行会创建 `ssu_dbs_source`，写入 `dat/ssu_*.dbs`，回编场景 `.pck` 和 `Gameexe*.dat`，并在 `ssu_dbs_manifest.json` 中记录备份。之后再次运行会复用 `ssu_dbs_source`，若脚本结构未变，可只快速更新 `.dbs`。 |
+| `--dbs-undo` | 根据 manifest 恢复 `--dbs` 改动过的文件，并删除记录的备份目录。 |
 | `--disam` | 将已编译的 `.dat` 的字符串列表导出到紧邻 `.dat` 的 `.dat.csv` 文件。支持加密、LZSS 压缩或原始 `.dat`。扫描目录时会递归处理 `.dat`，并自动跳过 `Gameexe.dat` 和 `暗号.dat`。 |
-| `--disam-apply` | 将 `.dat.csv` 转换后的字符串列表就地应用回已编译的 `.dat`。`--apply`、`--disam`、`--disam-apply` 互斥。 |
+| `--disam-apply` | 将 `.dat.csv` 转换后的字符串列表就地应用回已编译的 `.dat`。`--apply`、`--dbs`、`--dbs-undo`、`--disam`、`--disam-apply` 互斥。 |
 
 #### `.ss` 文件工作流程
 
@@ -782,6 +791,49 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
    ```
 
    应用后，工具会自动对修改后的文件执行**括号内容修复**：删除出现在 `【】` 名前括号内的多余双引号和前导空格（这是粘贴翻译文本时的常见问题）。逐文件修复明细会输出到 stderr，最终摘要会输出到 stdout。
+
+#### 动态 `.dbs` 加载工作流程
+
+1. **生成初始 DBS source 并修改游戏根目录：**
+
+   ```bash
+   siglus-ssu -m --dbs /path/to/game_root
+   ```
+
+   命令会创建 `ssu_dbs_source`，将生成的 `.dbs` 安装到 `dat/` 下，重写场景 `.pck` 和 `Gameexe*.dat`，并打印安装文件清单。可能被覆盖的文件会先备份，并记录在 `ssu_dbs_manifest.json` 中。
+
+2. **编辑 `ssu_dbs_source` 下生成的 CSV：** 不要新增或删除行。只修改 `dbs`、`replacement` 和 `replacement_en`。
+
+   `dbs=1` 表示该行进入动态 DBS 输出，`dbs=0` 表示保留为普通脚本文本。遇到 ruby 或同一行多个表达式时，工具会按脚本顺序把选中的 CSV 片段合成为一条 DBS 台词。
+
+3. **再次运行同一命令：**
+
+   ```bash
+   siglus-ssu -m --dbs /path/to/game_root
+   ```
+
+   如果只改了 CSV 文本或选择列，命令会走快速路径，只重建 `.dbs`，不重新回编场景 `.pck`。
+
+4. **需要撤回时：**
+
+   ```bash
+   siglus-ssu -m --dbs-undo /path/to/game_root
+   ```
+
+生成的 `.dbs` 使用 7 列官方风格字符串列：`0 = 日文`、`1 = 英文`、`2 = 简体中文`、`3` 到 `6` 为预留列。运行时首次启动会出现一次语言选择，游玩中可按 F10 再次打开语言选择。
+
+#### 动态 `.dbs` 的边界和 CSV 规则
+
+- `ssu_dbs_source` 是稳定的用户编辑界面。不要新增、删除、重排、重命名生成的 CSV 行或文件，也不要修改 `index`、`line`、`order`、`start`、`span_start`、`span_end`、`quoted`、`kind`、`original` 等结构列。手动编辑只应修改 `dbs`、`replacement` 和 `replacement_en`。
+- 初次生成的 source 还没有真正译文。第 `0` 列是日文/源码文本，第 `1` 列使用 `replacement_en`，第 `2` 列使用 `replacement`，第 `3` 到 `6` 列为预留列。
+- 空字符串总是排除。初始 `dbs` 选择较保守，但后续运行会遵循生成的 CSV 值；启用或禁用某行时，只修改 `dbs` 列。
+- ruby 或控制表达式所在的同行台词会按脚本顺序合成为一条 synthetic DBS 台词，但工具不会自动推导人工 ruby 读音或翻译语义。需要这类内容时，请直接写进 `replacement` 或 `replacement_en`。
+- 快速更新路径只在 CSV 行结构和已选择的 synthetic 分组不变时使用。如果选择结构发生变化，命令会退回完整场景回编。
+- SiglusEngine 的数据库条目上限是 256。命令会检查生成项和既有 `Gameexe*.dat` 数据库项，但极端碎片化的工程仍可能超过引擎上限。
+- 运行时 helper 会保留 F10 作为语言选择键，并自动寻找空闲的 `G` 和 `frame_action_ch` slot；但有自定义启动流程、输入处理或 frame-action 管理的游戏仍需要进游戏验证。
+- 语言切换只影响之后渲染的文本。已经进入 backlog 的历史文本不会重新翻译。
+- 如果游戏根目录里混放多个 `Scene*.pck` 或 `Gameexe*.dat` 变体，请使用干净根目录。命令会优先选择 `Scene.pck` 和 `Gameexe.dat`，否则按文件名排序选择候选。
+- `--dbs-undo` 只能在 `ssu_dbs_manifest.json` 和记录的备份目录仍存在时恢复改动。
 
 #### `.dat` 文件工作流程
 
@@ -814,10 +866,12 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 | `span_end` | 完整 token 范围的绝对结束偏移。 |
 | `quoted` | `1` 表示源码中用 `"..."` 引用，`0` 表示未引用。 |
 | `kind` | token 分类：`1 = 台词`、`2 = 说话人名`、`3 = 其他文本`。 |
+| `dbs` | `-m --dbs` 使用的动态 DBS 选择列：`1` 表示进入 DBS，`0` 表示不进入。空字符串总是排除。这是用户可编辑的选择列。 |
 | `original` | 原始字符串值（转义编码）。 |
-| `replacement` | 翻译内容。初始与 `original` 相同，请在此填写翻译。 |
+| `replacement` | `-m --dbs` 第 `2` 列使用的简体中文文本。初始与 `original` 相同。 |
+| `replacement_en` | `-m --dbs` 第 `1` 列使用的英文文本。初始与 `original` 相同。 |
 
-在 `original` 和 `replacement` 中，特殊字符使用转义形式编码：
+在 `original`、`replacement` 和 `replacement_en` 中，特殊字符使用转义形式编码：
 
 | 转义 | 含义 |
 |---|---|
