@@ -742,12 +742,6 @@ siglus-ssu -m <path_to_ss | path_to_dir>
 # Apply translated text map back to .ss source(s)
 siglus-ssu -m --apply <path_to_ss | path_to_dir>
 
-# Build dynamic .dbs text loading in-place from a game root
-siglus-ssu -m --dbs <game_root>
-
-# Undo the last --dbs installation recorded in the manifest
-siglus-ssu -m --dbs-undo <game_root>
-
 # Export string list from compiled .dat file(s)
 siglus-ssu -m --disam <path_to_dat | path_to_dir>
 
@@ -761,12 +755,9 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 |---|---|
 | `<path_to_ss \| path_to_dir>` | A single `.ss` file or a directory of `.ss` files. Exactly one path argument is required. |
 | `<path_to_dat \| path_to_dir>` | A single `.dat` file or a directory. Exactly one path argument is required. |
-| `<game_root>` | A game root directory containing a `dat` directory, a `Scene*.pck`, and a `Gameexe*.dat`. |
 | `--apply`, `-a` | Apply a `.ss.csv` text map back to the corresponding `.ss` file in-place. The `.ss.csv` must already exist alongside the `.ss` file. |
-| `--dbs` | Build dynamic `.dbs` text loading in-place. The first run creates `ssu_dbs_source`, writes `dat/ssu_*.dbs`, patches the scene `.pck` and `Gameexe*.dat`, and records backups in `ssu_dbs_manifest.json`. Later runs reuse `ssu_dbs_source` and can fast-update only `.dbs` files when the script structure is unchanged. |
-| `--dbs-undo` | Restore files changed by `--dbs` from the manifest and remove the recorded backup directory. |
 | `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `.dat` files are recursively scanned, and `Gameexe.dat` and `暗号.dat` are automatically excluded. |
-| `--disam-apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. `--apply`, `--dbs`, `--dbs-undo`, `--disam`, and `--disam-apply` are mutually exclusive. |
+| `--disam-apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. `--apply`, `--disam`, and `--disam-apply` are mutually exclusive. |
 
 #### Workflow: `.ss` Files
 
@@ -796,49 +787,6 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
    ```
 
    After applying, the tool automatically performs a **bracket content fix** on the modified file: it strips spurious double-quote characters and leading spaces that appear inside `【】` name brackets (a common artifact when translated text is pasted without removing surrounding quotes). The number of fixed items is reported to stderr.
-
-#### Workflow: Dynamic `.dbs` Loading
-
-1. **Build the initial DBS source and patch the game root:**
-
-   ```bash
-   siglus-ssu -m --dbs /path/to/game_root
-   ```
-
-   The command creates `ssu_dbs_source`, installs generated `.dbs` files under `dat/`, rewrites the scene `.pck` and `Gameexe*.dat`, and prints the installed file list. Files that may be overwritten are backed up and recorded in `ssu_dbs_manifest.json`.
-
-2. **Edit generated CSV files under `ssu_dbs_source`:** Do not add or delete rows. Edit only `dbs` and `replacement`.
-
-   `dbs=1` includes the row in dynamic DBS output; `dbs=0` leaves it as regular script text. For message lines with ruby or other same-line expressions, the tool follows the script order and synthesizes one DBS message row from the selected CSV fragments.
-
-3. **Run the same command again:**
-
-   ```bash
-   siglus-ssu -m --dbs /path/to/game_root
-   ```
-
-   If only CSV text/selection changed, the command uses a fast path and rebuilds the `.dbs` files without recompiling the scene `.pck`.
-
-4. **Undo the installation when needed:**
-
-   ```bash
-   siglus-ssu -m --dbs-undo /path/to/game_root
-   ```
-
-The generated `.dbs` files keep seven official-style string columns: `0 = Japanese/source`, `1 = blank`, `2 = Simplified Chinese`, and `3` through `6` reserved. At runtime the startup language selector appears once, F10 opens the selector again during play, and the selector exposes only Japanese and Simplified Chinese.
-
-#### Dynamic `.dbs` Limits and CSV Rules
-
-- `ssu_dbs_source` is the stable user edit surface. Do not add, delete, reorder, or rename generated CSV rows/files, and do not edit structural columns such as `index`, `line`, `order`, `start`, `span_start`, `span_end`, `quoted`, `kind`, or `original`. Only `dbs` and `replacement` are intended for manual editing.
-- A freshly generated source has no real translation yet. Column `0` is always Japanese/source text, column `1` is left blank, column `2` uses `replacement` as Simplified Chinese text, and columns `3` through `6` are reserved.
-- Empty strings are always excluded. The initial `dbs` selection is conservative, but later runs follow the generated CSV values; enable or disable rows by changing only the `dbs` column.
-- Ruby/control same-line messages are grouped in script order and written as one synthetic DBS message row, but the tool does not infer human ruby readings or translation semantics. Add those details explicitly in `replacement` when needed.
-- The fast update path is used only when the CSV row structure and selected synthetic groups are unchanged. If the selected structure changes, the command falls back to a full scene rebuild.
-- SiglusEngine limits database entries to 256. The command checks generated and existing `Gameexe*.dat` database entries, but unusually fragmented projects can still exceed the engine limit.
-- The runtime helper reserves F10 for the language selector and scans for free `G` and `frame_action_ch` slots, but games with custom startup, input, or frame-action logic still need manual in-game verification.
-- Language switching affects newly rendered text only. Existing backlog history is not retranslated.
-- If a game root contains multiple `Scene*.pck` or `Gameexe*.dat` variants, use a clean root. The command prefers `Scene.pck` and `Gameexe.dat` when present, otherwise it chooses from sorted candidates.
-- `--dbs-undo` can restore changes only while `ssu_dbs_manifest.json` and the recorded backup directory are still available.
 
 #### Workflow: Compiled `.dat` Files
 
@@ -871,9 +819,8 @@ The generated `.dbs` files keep seven official-style string columns: `0 = Japane
 | `span_end` | Absolute offset of the end of the full token span. |
 | `quoted` | `1` if the token was quoted with `"..."` in source, `0` otherwise. |
 | `kind` | Token kind: `1 = dialogue`, `2 = speaker name`, `3 = other text`. |
-| `dbs` | Dynamic DBS selection flag used by `-m --dbs`: `1` includes the row, `0` excludes it. Empty strings are always excluded. This is a user-editable selection column. |
 | `original` | The original string value (escape-encoded). |
-| `replacement` | Simplified Chinese text used by `-m --dbs` column `2`. Initially identical to `original`. |
+| `replacement` | Translated string value to apply back to the source file. Initially identical to `original`. |
 
 Special characters in `original` and `replacement` are escape-encoded:
 

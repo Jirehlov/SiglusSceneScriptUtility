@@ -3,9 +3,8 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.2.9] - 2026-04-29
+## [v0.2.9] - 2026-05-04
 
-- Added `siglus-ssu -m --dbs <game_root>` to build in-place dynamic `.dbs` text loading from a game root, with repeatable `ssu_dbs_source` CSV edits, backups, undo support, a Japanese/Simplified Chinese startup language selector, and F10 language switching. The DBS source CSV keeps only `original` and `replacement`, while generated `.dbs` files keep the seven-column layout with Japanese in column `0` and Simplified Chinese in column `2`.
 - Changed `siglus-ssu -p --lang` to remove the old `chs`/`eng`/JSON patcher and add fixed `cjk` and `cjk-path` presets using PE string relocation for active language and path references.
 
 
