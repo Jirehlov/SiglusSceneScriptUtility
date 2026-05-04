@@ -185,7 +185,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Download const.py from a specific tagged release
-siglus-ssu init --ref v0.2.8
+siglus-ssu init --ref v0.3.0
 ```
 
 ---
