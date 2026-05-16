@@ -8,6 +8,7 @@ All notable changes to this project will be documented in this file.
 - Fixed duplicate buffered output parallel workers started, and added a regression test for flushing standard streams before process-pool startup.
 - Added `siglus-ssu -c --test-shuffle --csv <seed_csv>` to write per-script initial and final MSVC shuffle seeds while rebuilding matched scene scripts.
 - Changed `siglus-ssu -a --angou <value>` to accept a literal angou string directly when the argument is not an existing path.
+- Added `siglus-ssu -s --x --trim` support for `.nwa` BGM extraction, trimming decoded PCM to `.wav` from Gameexe loop points and requiring `ffmpeg` only when `.owp` files are trimmed.
 
 
 ## [v0.3.0] - 2026-05-04

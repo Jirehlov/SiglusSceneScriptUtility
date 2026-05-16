@@ -1052,7 +1052,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [path_to_Gameexe
 | `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. When two `.ovk` files are provided, compares entries by entry number/occurrence using size, sample count, and decoded Ogg payload content; for `z####.ovk` filenames it also reports the derived global KOE label. |
 | `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
 | `--play` | **Play** mode. Plays one `.nwa` / `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback runs in a full-screen terminal UI with a live progress bar and playlist view. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
-| `--trim <Gameexe.dat \| Gameexe.ini>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini` and trim each `.owp` to its loop region using **ffmpeg**. Requires `ffmpeg` to be on the system `PATH`. This option only affects `.owp` extraction; `.nwa`/`.ovk` files are not trimmed. |
+| `--trim <Gameexe.dat \| Gameexe.ini>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini` and trim `.owp` and `.nwa` BGM files to their loop regions. `.owp` trimming uses **ffmpeg** and writes `.ogg`; `.nwa` trimming slices decoded PCM directly and writes `.wav`. `.ovk` files are not trimmed. |
 
 #### Examples
 
@@ -1065,6 +1065,9 @@ siglus-ssu -s --x /path/to/z0001.ovk /path/to/ogg_out/
 
 # Decode .owp BGM files and trim to loop region using Gameexe.dat
 siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/ --trim /path/to/Gameexe.dat
+
+# Decode .nwa BGM files and trim to loop region using Gameexe.dat
+siglus-ssu -s --x /path/to/nwa_bgm/ /path/to/wav_out/ --trim /path/to/Gameexe.dat
 
 # Analyze an .nwa file header
 siglus-ssu -s --a /path/to/bgm01.nwa
@@ -1101,9 +1104,9 @@ When extracting a `.ovk` with multiple entries, output files are named:
 
 When creating `.ovk` from a directory, files named `<basename>_<N>.ogg` (where `N` is an integer) are only grouped into a single `<basename>.ovk` when at least two files share the same basename. If a group contains only one numerically-suffixed file, the current implementation treats it as a regular single-file input and produces an `.owp`. Files without a numeric suffix are also individually encoded as `.owp`.
 
-#### `.owp` Trim Details
+#### Sound Trim Details
 
-The `--trim` option reads the Gameexe.dat/Gameexe.ini BGM table (entries formatted as `#BGM.N = "...", "filename", start, end, repeat`) and calls **ffmpeg** to trim each decoded `.ogg` to the samples between `repeat` and `end`. This is useful for extracting seamlessly-loopable background music.
+The `--trim` option reads the Gameexe.dat/Gameexe.ini BGM table (entries formatted as `#BGM.N = "...", "filename", start, end, repeat`) and trims matching `.owp` and `.nwa` files to the samples between `repeat` and `end`. For `.owp`, it decodes to `.ogg` and calls **ffmpeg** to write the trimmed `.ogg`. For `.nwa`, it decodes to PCM, slices the sample range directly, and writes a trimmed `.wav` without requiring ffmpeg. `.ovk` files are not trimmed. This is useful for extracting seamlessly-loopable background music.
 
 #### Loop Playback Details
 
@@ -2028,7 +2031,7 @@ pip install pillow
 
 ### ffmpeg / ffplay Not Found (Sound Trim / Play Mode)
 
-The `--trim` feature in sound mode requires `ffmpeg`, and the `--play` feature requires `ffplay`, both installed and available on the system `PATH`. Install them from https://ffmpeg.org/ or via your system package manager.
+The `--trim` feature in sound mode requires `ffmpeg` only when trimming `.owp` files, and the `--play` feature requires `ffplay`; required tools must be installed and available on the system `PATH`. Install them from https://ffmpeg.org/ or via your system package manager.
 
 The `--play` feature also requires [psutil](https://pypi.org/project/psutil/):
 

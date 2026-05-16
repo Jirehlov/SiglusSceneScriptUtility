@@ -1052,7 +1052,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [path_to_Gameexe
 | `--a` | **分析**模式。打印单个音频文件的详细结构头部信息。提供两个 `.ovk` 文件时，会按条目编号/出现序号比较 size、sample count 和解密后的 Ogg payload 内容；对于 `z####.ovk` 文件名，还会报告推导出的全局 KOE 标签。 |
 | `--c` | **创建**模式。将 `.ogg` 文件编码为 `.owp`，或将编号的 `.ogg` 文件组合编码为 `.ovk` 文件。目录输入时会递归扫描 `.ogg`，并在输出端保留相对目录结构。 |
 | `--play` | **播放**模式。读取 `Gameexe.dat` 或 `Gameexe.ini` 中的 `#BGM.*` 循环点表，播放单个 `.nwa` / `.owp` / `.ogg` BGM，或播放一个可交互的目录播放列表。Gameexe 路径为可选；省略时会自动探测附近的 `Gameexe.dat`/`Gameexe.ini`。播放界面为整屏终端 UI，带实时进度条和播放列表视图。需要 `ffplay` 在系统 `PATH` 中，且已安装 [psutil](https://pypi.org/project/psutil/)。 |
-| `--trim <Gameexe.dat \| Gameexe.ini>` | （仅提取模式）从 `Gameexe.dat` 或 `Gameexe.ini` 读取 `#BGM.*` 循环点表，并用 **ffmpeg** 将每个 `.owp` 裁剪到其循环区域。需要 `ffmpeg` 在系统 `PATH` 中。该选项只影响 `.owp` 提取；`.nwa`/`.ovk` 不参与裁剪。 |
+| `--trim <Gameexe.dat \| Gameexe.ini>` | （仅提取模式）从 `Gameexe.dat` 或 `Gameexe.ini` 读取 `#BGM.*` 循环点表，并将 `.owp` 与 `.nwa` BGM 裁剪到其循环区域。`.owp` 裁剪会使用 **ffmpeg** 并输出 `.ogg`；`.nwa` 裁剪会直接截取解码后的 PCM 并输出 `.wav`。`.ovk` 文件不参与裁剪。 |
 
 #### 示例
 
@@ -1065,6 +1065,9 @@ siglus-ssu -s --x /path/to/z0001.ovk /path/to/ogg_out/
 
 # 解码 .owp BGM 并按 Gameexe.dat 循环点裁剪
 siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/ --trim /path/to/Gameexe.dat
+
+# 解码 .nwa BGM 并按 Gameexe.dat 循环点裁剪
+siglus-ssu -s --x /path/to/nwa_bgm/ /path/to/wav_out/ --trim /path/to/Gameexe.dat
 
 # 分析 .nwa 文件头
 siglus-ssu -s --a /path/to/bgm01.nwa
@@ -1101,9 +1104,9 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 
 从目录创建 `.ovk` 时，命名为 `<basename>_<N>.ogg`（`N` 为整数）的文件只有在同组至少存在两份时，才会被分组打包为单个 `<basename>.ovk`。若某组只有一份带数字后缀的文件，当前实现会把它按普通单文件输入处理并输出 `.owp`。不带数字后缀的文件也会单独编码为 `.owp`。
 
-#### `.owp` 裁剪细节
+#### 音频裁剪细节
 
-`--trim` 会读取 Gameexe.dat/Gameexe.ini 中的 BGM 表（条目格式为 `#BGM.N = "...", "filename", start, end, repeat`），并调用 **ffmpeg** 将每个解码得到的 `.ogg` 裁剪到 `repeat` 与 `end` 之间的采样区间。这对提取可无缝循环的背景音乐很有帮助。
+`--trim` 会读取 Gameexe.dat/Gameexe.ini 中的 BGM 表（条目格式为 `#BGM.N = "...", "filename", start, end, repeat`），并将匹配到的 `.owp` 与 `.nwa` 文件裁剪到 `repeat` 与 `end` 之间的采样区间。对于 `.owp`，它会先解码为 `.ogg`，再调用 **ffmpeg** 写出裁剪后的 `.ogg`。对于 `.nwa`，它会解码为 PCM，直接截取采样区间，并写出裁剪后的 `.wav`，不需要 ffmpeg。`.ovk` 文件不参与裁剪。这对提取可无缝循环的背景音乐很有帮助。
 
 #### 循环播放细节
 
@@ -2028,7 +2031,7 @@ pip install pillow
 
 ### 找不到 ffmpeg / ffplay（Sound 裁剪 / 播放模式）
 
-Sound 模式的 `--trim` 功能需要 `ffmpeg`，`--play` 功能需要 `ffplay`，两者都必须已安装并在系统 `PATH` 中可用。请从 https://ffmpeg.org/ 或通过系统包管理器安装。
+Sound 模式的 `--trim` 功能只有在裁剪 `.owp` 文件时才需要 `ffmpeg`，`--play` 功能需要 `ffplay`；所需工具必须已安装并在系统 `PATH` 中可用。请从 https://ffmpeg.org/ 或通过系统包管理器安装。
 
 `--play` 另外还需要安装 [psutil](https://pypi.org/project/psutil/)：
 

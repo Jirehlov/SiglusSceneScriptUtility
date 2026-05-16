@@ -471,6 +471,36 @@ def _ffmpeg_trim_ogg_bytes(
             os.remove(out_path)
 
 
+def _trim_nwa_to_wav_bytes(
+    nwa_bytes: bytes,
+    start_sample: int,
+    end_sample: int,
+) -> bytes:
+    if start_sample < 0:
+        raise RuntimeError("invalid repeat position (start_sample < 0)")
+    pcm, header = sound.decode_nwa_to_pcm_bytes(nwa_bytes)
+    bytes_per_frame = header.channels * (header.bits_per_sample // 8)
+    if bytes_per_frame <= 0:
+        raise RuntimeError("invalid NWA frame size")
+    if header.samples_per_sec <= 0:
+        raise RuntimeError("invalid NWA sample rate")
+    total_sample_cnt = len(pcm) // bytes_per_frame
+    if total_sample_cnt <= 0:
+        raise RuntimeError("failed to determine audio sample count")
+    if end_sample == -1 or end_sample > total_sample_cnt:
+        end_sample = total_sample_cnt
+    if end_sample <= start_sample:
+        raise RuntimeError("invalid trim range (end_sample <= start_sample)")
+    start_byte = start_sample * bytes_per_frame
+    end_byte = end_sample * bytes_per_frame
+    return sound._build_wav(
+        pcm[start_byte:end_byte],
+        header.channels,
+        header.bits_per_sample,
+        header.samples_per_sec,
+    )
+
+
 def _resolve_bgm_entry(trim_table, base_name: str):
     key = base_name.lower()
     if key not in trim_table:
@@ -1561,7 +1591,21 @@ def _extract_one(
         write_bytes(os.path.join(out_dir, base_name + ".ogg"), ogg)
         return 1
     if ext == ".nwa":
-        wav = sound.decode_nwa_to_wav_bytes(src_path)
+        if trim_table is not None:
+            bgm_entry = _resolve_bgm_entry(trim_table, base_name)
+            end_pos = bgm_entry.end_sample
+            rep_pos = bgm_entry.repeat_sample
+            eprint(
+                f"trim {base_name} #{bgm_entry.name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
+            )
+            with open(src_path, "rb") as f:
+                wav = _trim_nwa_to_wav_bytes(
+                    f.read(),
+                    start_sample=rep_pos,
+                    end_sample=end_pos,
+                )
+        else:
+            wav = sound.decode_nwa_to_wav_bytes(src_path)
         write_bytes(os.path.join(out_dir, base_name + ".wav"), wav)
         return 1
     if ext == ".ovk":
@@ -1732,11 +1776,13 @@ def main(argv=None) -> int:
     ffmpeg_path = ""
     tmp_dir = ""
     tmp_dir_owned = False
+    os.makedirs(out_root, exist_ok=True)
+    files, rc = collect_batch_files(
+        inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
+    )
+    if rc is not None:
+        return rc
     if trim_path:
-        ffmpeg_path = shutil.which("ffmpeg") or ""
-        if not ffmpeg_path:
-            eprint("ffmpeg not found in PATH")
-            return 1
         if not os.path.isfile(trim_path):
             eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
@@ -1745,19 +1791,20 @@ def main(argv=None) -> int:
         if not trim_table:
             eprint("error: no #BGM.* entries found in Gameexe.dat")
             return 1
-        tmp_dir = os.path.join(out_root, ".tmp_ffmpeg")
-        try:
-            os.makedirs(tmp_dir, exist_ok=True)
-        except Exception:
-            tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
-            tmp_dir_owned = True
-    os.makedirs(out_root, exist_ok=True)
-    files, rc = collect_batch_files(
-        inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
-    )
-    if rc is not None:
-        _cleanup_tmp_dir(tmp_dir, out_root, remove_owned=tmp_dir_owned)
-        return rc
+        needs_ffmpeg = any(
+            os.path.splitext(path)[1].lower() == ".owp" for path in files
+        )
+        if needs_ffmpeg:
+            ffmpeg_path = shutil.which("ffmpeg") or ""
+            if not ffmpeg_path:
+                eprint("ffmpeg not found in PATH")
+                return 1
+            tmp_dir = os.path.join(out_root, ".tmp_ffmpeg")
+            try:
+                os.makedirs(tmp_dir, exist_ok=True)
+            except Exception:
+                tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
+                tmp_dir_owned = True
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
