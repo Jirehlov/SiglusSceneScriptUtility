@@ -13,6 +13,7 @@ from .common import (
     siglus_engine_exe_element,
     looks_like_siglus_dat,
     parse_gei_disam_args,
+    angou_to_exe_el,
 )
 from . import pck
 from . import dat
@@ -64,6 +65,33 @@ def _analyze_angou_blob(path: str, blob: bytes, st, is_exe: bool = False) -> int
     return 0
 
 
+def _looks_like_missing_path(value: str) -> bool:
+    s = str(value or "")
+    if os.sep and os.sep in s:
+        return True
+    if os.altsep and os.altsep in s:
+        return True
+    if len(s) >= 2 and s[1] == ":":
+        return True
+    ext = os.path.splitext(s)[1].casefold()
+    return ext in (".dat", ".pck", ".exe", ".txt")
+
+
+def _analyze_angou_literal(text: str) -> int:
+    s0 = str((text or "").split("\n", 1)[0]).strip("\r\n")
+    print("==== Analyze ====")
+    print("input: literal")
+    print("type: angou.dat")
+    print()
+    print(f"angou: {s0}")
+    exe_el = angou_to_exe_el(s0)
+    if exe_el:
+        print(f"key.txt: {_fmt_key_txt(exe_el)}")
+    else:
+        print("key.txt: ")
+    return 0
+
+
 def analyze_angou_dat(path: str) -> int:
     if os.path.isdir(path):
         p = find_named_path(path, ANGOU_DAT_NAME, recursive=False)
@@ -77,6 +105,8 @@ def analyze_angou_dat(path: str) -> int:
         )
         return 2
     if not os.path.exists(path):
+        if not _looks_like_missing_path(path):
+            return _analyze_angou_literal(str(path or ""))
         sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)

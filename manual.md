@@ -233,7 +233,7 @@ siglus-ssu -c [options] <input_dir> <output_pck | output_dir>
 siglus-ssu -c --gei <input_dir | Gameexe.ini> <output_dir>
 
 # Compile with shuffle seed brute-force
-siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test_dir>
+siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck | output_dir> <test_dir>
 ```
 
 #### Parameters
@@ -254,6 +254,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. |
 | `--test-shuffle [seed0]` | Brute-force scan all possible 32-bit MSVC `rand()` seeds to find the one that reproduces the string table order in `<test_dir>`. Optionally start the scan at `seed0`. |
+| `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. |
 | `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage, writing a fixed filename `Gameexe.dat` into the resolved output directory. Pass an existing directory when you want the file created inside that directory; otherwise the shared output-path parser treats the argument as an output file path and uses its parent directory. |
 
 #### Compiling Stats
@@ -291,6 +292,9 @@ siglus-ssu -c --set-shuffle 12345 /path/to/src /path/to/Scene.pck
 
 # Brute-force the shuffle seed starting from 12345
 siglus-ssu -c --test-shuffle 12345 /path/to/src /path/to/out/ /path/to/original_dats/
+
+# Brute-force the shuffle seed and write per-scene initial/final seeds
+siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/to/out/ /path/to/original_dats/
 
 # Repack existing .dat files without re-compiling .ss files
 siglus-ssu -c --dat-repack /path/to/dat_dir /path/to/Scene_repacked.pck
@@ -385,8 +389,8 @@ siglus-ssu -a --word <input_pck> [output_csv]
 # Compare two files of the same type
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
-# Analyze or derive the exe_el key from 暗号.dat / Scene.pck / SiglusEngine.exe / directory
-siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir> --angou
+# Analyze or derive the exe_el key from 暗号.dat / Scene.pck / SiglusEngine.exe / directory / literal string
+siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir | literal_angou> --angou
 
 # Analyze or compare Gameexe.dat
 siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
@@ -403,7 +407,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool `str_id` differences when the resolved text is the same. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text scene-bytecode differences, and `-` when payload comparison is unavailable; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
-| `--angou` | Parse the input as a `暗号.dat`, extract embedded `暗号.dat` from a `.pck`, or read `SiglusEngine*.exe` / a directory containing one, then derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). |
+| `--angou` | Parse the input as a `暗号.dat`, extract embedded `暗号.dat` from a `.pck`, read `SiglusEngine*.exe` / a directory containing one, or use a literal angou string directly, then derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). Existing paths are treated as files/directories first; non-existing path-like arguments still report `not found`. |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
 
 #### Examples
@@ -442,6 +446,9 @@ siglus-ssu -a --apply /path/to/savedata/global.sav
 
 # Derive the exe_el key from 暗号.dat
 siglus-ssu -a /path/to/暗号.dat --angou
+
+# Derive the exe_el key directly from a literal angou string
+siglus-ssu -a --angou "literal_angou_string"
 
 # Derive the exe_el key from the SiglusEngine executable directly
 siglus-ssu -a /path/to/SiglusEngine.exe --angou
@@ -1981,6 +1988,12 @@ If you want a byte-for-byte identical output (e.g., for binary diffing), first t
 
 ```bash
 siglus-ssu -c --test-shuffle /path/to/src/ /path/to/out/ /path/to/original_dats/
+```
+
+To also record the serial seed state for each rebuilt scene, add `--csv`:
+
+```bash
+siglus-ssu -c --test-shuffle --csv /path/to/seeds.csv /path/to/src/ /path/to/out/ /path/to/original_dats/
 ```
 
 If found, compile with the seed:

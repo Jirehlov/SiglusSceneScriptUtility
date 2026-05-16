@@ -233,7 +233,7 @@ siglus-ssu -c [选项] <input_dir> <output_pck | output_dir>
 siglus-ssu -c --gei <input_dir | Gameexe.ini> <output_dir>
 
 # 编译并穷举搜索混淆种子
-siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test_dir>
+siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck | output_dir> <test_dir>
 ```
 
 #### 参数
@@ -254,6 +254,7 @@ siglus-ssu -c --test-shuffle [seed0] <input_dir> <output_pck | output_dir> <test
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。启用时等同于隐式带上 `--serial`。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。 |
 | `--test-shuffle [seed0]` | 穷举搜索所有可能的 32 位 MSVC `rand()` 种子，以找到能精确重建 `<test_dir>` 中字符串表混淆顺序的种子。可选从 `seed0` 开始扫描。 |
+| `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，写出 CSV，记录串行重建阶段每个场景对象的初态种子和终态种子。若路径是已存在目录或以路径分隔符结尾，则在其中写出 `test_shuffle_seeds.csv`。 |
 | `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段，并在解析后的输出目录写出固定文件名 `Gameexe.dat`。若希望写入某个目录，请传入已存在目录；否则通用输出路径解析器会把该参数视为输出文件路径，并使用其父目录。 |
 
 #### 编译统计
@@ -291,6 +292,9 @@ siglus-ssu -c --set-shuffle 12345 /path/to/src /path/to/Scene.pck
 
 # 从 12345 开始穷举搜索混淆种子
 siglus-ssu -c --test-shuffle 12345 /path/to/src /path/to/out/ /path/to/original_dats/
+
+# 穷举搜索混淆种子，并写出每个场景的初态/终态种子
+siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/to/out/ /path/to/original_dats/
 
 # 将现有 .dat 文件直接重新打包
 siglus-ssu -c --dat-repack /path/to/dat_dir /path/to/Scene_repacked.pck
@@ -385,8 +389,8 @@ siglus-ssu -a --word <input_pck> [output_csv]
 # 比较两个同类型文件
 siglus-ssu -a [--payload] <input_file_1> <input_file_2>
 
-# 从 暗号.dat / Scene.pck / SiglusEngine.exe / 目录 分析或推导 exe_el 密钥
-siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir> --angou
+# 从 暗号.dat / Scene.pck / SiglusEngine.exe / 目录 / 字符串 分析或推导 exe_el 密钥
+siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir | literal_angou> --angou
 
 # 分析或比较 Gameexe.dat
 siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
@@ -403,7 +407,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
-| `--angou` | 将输入解析为 `暗号.dat`，或从 `.pck` 的内嵌 original source 中提取 `暗号.dat`，或读取 `SiglusEngine*.exe` / 包含其中之一的目录，然后推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。 |
+| `--angou` | 将输入解析为 `暗号.dat`，或从 `.pck` 的内嵌 original source 中提取 `暗号.dat`，或读取 `SiglusEngine*.exe` / 包含其中之一的目录，也可以直接使用输入的暗号字符串，然后推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。若参数是已存在路径，会优先按文件或目录处理；不存在但形似路径的参数仍会报 `not found`。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
 
 #### 示例
@@ -442,6 +446,9 @@ siglus-ssu -a --apply /path/to/savedata/global.sav
 
 # 从 暗号.dat 推导 exe_el 密钥
 siglus-ssu -a /path/to/暗号.dat --angou
+
+# 直接从暗号字符串推导 exe_el 密钥
+siglus-ssu -a --angou "literal_angou_string"
 
 # 直接从 SiglusEngine 可执行文件推导 exe_el 密钥
 siglus-ssu -a /path/to/SiglusEngine.exe --angou
@@ -1981,6 +1988,12 @@ mes(【主角】, "等一下，我需要考虑一下。")
 
 ```bash
 siglus-ssu -c --test-shuffle /path/to/src/ /path/to/out/ /path/to/original_dats/
+```
+
+若还想记录串行重建时每个场景的种子状态，可以加上 `--csv`：
+
+```bash
+siglus-ssu -c --test-shuffle --csv /path/to/seeds.csv /path/to/src/ /path/to/out/ /path/to/original_dats/
 ```
 
 若成功找到，使用该种子编译：

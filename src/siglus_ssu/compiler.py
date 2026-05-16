@@ -6,12 +6,14 @@ import json
 import re
 import time
 import shutil
+import csv
 from contextlib import suppress
 from ._const_manager import get_const_module
 from .BS import (
     compile_all,
     compile_one,
     set_shuffle_seed,
+    get_shuffle_seed,
     build_ia_data,
 )
 from .GEI import write_gameexe_dat
@@ -251,6 +253,46 @@ def _read_scn_dat_str_pool(path):
             bb[i * 2 + 1] = (v >> 8) & 0xFF
         out.append(bytes(bb).decode("utf-16le", "surrogatepass"))
     return out
+
+
+def _resolve_test_shuffle_csv_path(csv_path):
+    p = str(csv_path or "").strip()
+    if not p:
+        return ""
+    if os.path.isdir(p) or p.endswith(os.sep) or (os.altsep and p.endswith(os.altsep)):
+        p = os.path.join(p, "test_shuffle_seeds.csv")
+    return os.path.abspath(p)
+
+
+def _write_test_shuffle_csv(csv_path, rows):
+    if not csv_path:
+        return
+    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f, lineterminator="\r\n")
+        w.writerow(
+            [
+                "object",
+                "initial_seed",
+                "initial_seed_hex",
+                "final_seed",
+                "final_seed_hex",
+                "matched",
+            ]
+        )
+        for row in rows or []:
+            initial_seed = int(row.get("initial_seed", 0) or 0) & 0xFFFFFFFF
+            final_seed = int(row.get("final_seed", 0) or 0) & 0xFFFFFFFF
+            w.writerow(
+                [
+                    row.get("object", ""),
+                    initial_seed,
+                    f"0x{initial_seed:08X}",
+                    final_seed,
+                    f"0x{final_seed:08X}",
+                    int(bool(row.get("matched"))),
+                ]
+            )
 
 
 def _read_scene_ssid(path):
@@ -603,11 +645,18 @@ def main(argv=None):
             "Accepts decimal or 0x... (default: 1; implies --serial)."
         ),
     )
+    ap.add_argument("--csv", dest="csv_path", default="")
     ap.add_argument("--gei", action="store_true", help="Only generate Gameexe.dat.")
     try:
         a = ap.parse_args(argv)
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
+        return 2
+    test_shuffle_csv_path = _resolve_test_shuffle_csv_path(
+        getattr(a, "csv_path", "") or ""
+    )
+    if test_shuffle_csv_path and not test_shuffle:
+        sys.stderr.write(f"{prog}: error: --csv requires --test-shuffle\n")
         return 2
     user_seed = None
     if getattr(a, "set_shuffle", None) is not None:
@@ -924,8 +973,11 @@ def main(argv=None):
                     sys.stderr.flush()
                     set_shuffle_seed(seed)
                     all_ok = True
+                    seed_rows = []
                     for i, ss_path in enumerate(compile_list):
+                        initial_seed = get_shuffle_seed()
                         compile_one(ctx, ss_path)
+                        final_seed = get_shuffle_seed()
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         my_dat = os.path.join(bs_dir, nm + ".dat")
                         if not os.path.isfile(my_dat):
@@ -941,6 +993,19 @@ def main(argv=None):
                             sys.stderr.write(
                                 f"{test_shuffle_prefix} index mismatch: {os.path.basename(ss_path)}\n"
                             )
+                        seed_rows.append(
+                            {
+                                "object": os.path.basename(ss_path),
+                                "initial_seed": initial_seed,
+                                "final_seed": final_seed,
+                                "matched": my_idx == targets[i],
+                            }
+                        )
+                    if test_shuffle_csv_path:
+                        _write_test_shuffle_csv(test_shuffle_csv_path, seed_rows)
+                        sys.stderr.write(
+                            f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n"
+                        )
                     if not all_ok:
                         sys.stderr.write(
                             f"{test_shuffle_prefix} WARNING: seed matched first script but mismatch found in later scripts; continuing to build output\n"

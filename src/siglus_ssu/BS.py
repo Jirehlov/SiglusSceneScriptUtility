@@ -274,6 +274,10 @@ def set_shuffle_seed(seed=1):
     return seed_i
 
 
+def get_shuffle_seed():
+    return int(getattr(_MSR, "x", 0) or 0) & 0xFFFFFFFF
+
+
 def _u16(t):
     b = t.encode("utf-16le", "surrogatepass")
     return [b[i] | (b[i + 1] << 8) for i in range(0, len(b), 2)]
