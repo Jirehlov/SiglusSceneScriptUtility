@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v3.0.1] - 2026-05-16
+
+- Fixed duplicate buffered output parallel workers started, and added a regression test for flushing standard streams before process-pool startup.
+
+
 ## [v0.3.0] - 2026-05-04
 
 - Changed `siglus-ssu -p --lang` to remove the old `chs`/`eng`/JSON patcher and add fixed `cjk` and `cjk-path` presets using PE string relocation for active language and path references.

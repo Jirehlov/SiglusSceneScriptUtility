@@ -25,6 +25,12 @@ def _env_or(name, parse, default):
         return default
 
 
+def _flush_stdio_before_process_pool() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        with suppress(Exception):
+            stream.flush()
+
+
 def parallel_process_map(
     process_fn,
     items,
@@ -41,6 +47,7 @@ def parallel_process_map(
         from concurrent.futures import ProcessPoolExecutor
 
         workers = min(get_max_workers(max_workers), len(item_list))
+        _flush_stdio_before_process_pool()
         with ProcessPoolExecutor(max_workers=workers) as executor:
             return list(executor.map(process_fn, item_list, chunksize=chunksize))
     except Exception:
@@ -130,6 +137,7 @@ def parallel_compile(
     scene_macro_counts = empty_macro_stat_counts()
     global_macro_usage_delta = {}
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
+    _flush_stdio_before_process_pool()
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -347,6 +355,7 @@ def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
             except StopIteration:
                 break
             print(f"[*] {f}")
+            _flush_stdio_before_process_pool()
             futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
         while futures:
             for fu in as_completed(futures):
@@ -363,6 +372,7 @@ def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
                 try:
                     f = next(it)
                     print(f"[*] {f}")
+                    _flush_stdio_before_process_pool()
                     futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
                 except StopIteration:
                     pass
@@ -460,6 +470,7 @@ def find_shuffle_seed_parallel(
         f"{prefix} seed scan (slow python): workers={workers} chunk={chunk} start={seed0}\n"
     )
     sys.stderr.flush()
+    _flush_stdio_before_process_pool()
 
     def _fmt_eta(sec: float) -> str:
         if (not isinstance(sec, (int, float))) or (not math.isfinite(sec)) or sec <= 0:
