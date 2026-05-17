@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import suppress
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager, suppress
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from .common import format_scene_name
 
 
@@ -31,6 +31,108 @@ def _flush_stdio_before_process_pool() -> None:
             stream.flush()
 
 
+@contextmanager
+def _multiprocessing_main():
+    import importlib.util
+
+    main_module = sys.modules["__main__"]
+    old_spec = main_module.__spec__
+    main_module.__spec__ = importlib.util.find_spec("siglus_ssu.__main__")
+    try:
+        yield
+    finally:
+        main_module.__spec__ = old_spec
+
+
+@contextmanager
+def process_pool(max_workers: int, initializer=None, initargs=()):
+    from concurrent.futures import ProcessPoolExecutor
+
+    _flush_stdio_before_process_pool()
+    with _multiprocessing_main():
+        with ProcessPoolExecutor(
+            max_workers=max_workers,
+            initializer=initializer,
+            initargs=tuple(initargs or ()),
+        ) as executor:
+            yield executor
+
+
+def parallel_process_completed_map(
+    process_fn,
+    items,
+    max_workers: int | None = None,
+    *,
+    initializer=None,
+    initargs=(),
+    on_result=None,
+    on_poll=None,
+    poll_interval: float = 0.05,
+):
+    item_list = list(items)
+    if not item_list:
+        return []
+    if max_workers == 1 or len(item_list) <= 1:
+        results = []
+        for item in item_list:
+            if on_poll is not None:
+                on_poll()
+            result = process_fn(item)
+            results.append(result)
+            if on_result is not None:
+                on_result(item, result)
+        return results
+    from concurrent.futures import ProcessPoolExecutor
+
+    workers = min(get_max_workers(max_workers), len(item_list))
+    results = [None] * len(item_list)
+    _flush_stdio_before_process_pool()
+    with _multiprocessing_main():
+        executor = ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=initializer,
+            initargs=tuple(initargs or ()),
+        )
+        futures = {}
+        pending = set()
+        try:
+            futures = {
+                executor.submit(process_fn, item): index
+                for index, item in enumerate(item_list)
+            }
+            pending = set(futures)
+            while pending:
+                if on_poll is not None:
+                    on_poll()
+                if on_poll is None:
+                    done = {next(as_completed(pending))}
+                else:
+                    done, pending = wait(
+                        pending,
+                        timeout=max(0.01, float(poll_interval)),
+                        return_when=FIRST_COMPLETED,
+                    )
+                    if not done:
+                        continue
+                for future in done:
+                    if on_poll is None:
+                        pending.remove(future)
+                    index = futures[future]
+                    item = item_list[index]
+                    result = future.result()
+                    results[index] = result
+                    if on_result is not None:
+                        on_result(item, result)
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown()
+    return results
+
+
 def parallel_process_map(
     process_fn,
     items,
@@ -44,11 +146,8 @@ def parallel_process_map(
     if max_workers == 1 or len(item_list) <= 1:
         return [process_fn(item) for item in item_list]
     try:
-        from concurrent.futures import ProcessPoolExecutor
-
         workers = min(get_max_workers(max_workers), len(item_list))
-        _flush_stdio_before_process_pool()
-        with ProcessPoolExecutor(max_workers=workers) as executor:
+        with process_pool(workers) as executor:
             return list(executor.map(process_fn, item_list, chunksize=chunksize))
     except Exception:
         if not fallback_to_serial:
@@ -116,8 +215,6 @@ def parallel_compile(
 ) -> dict:
     from .BS import empty_macro_stat_counts, merge_macro_stat_counts
 
-    from concurrent.futures import ProcessPoolExecutor
-
     if not ss_files:
         return {
             "parallel": True,
@@ -137,8 +234,7 @@ def parallel_compile(
     scene_macro_counts = empty_macro_stat_counts()
     global_macro_usage_delta = {}
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
-    _flush_stdio_before_process_pool()
-    with ProcessPoolExecutor(max_workers=workers) as executor:
+    with process_pool(workers) as executor:
         futures = [
             executor.submit(
                 _compile_one_process,
@@ -338,8 +434,6 @@ def _g00_extract_task(args):
 
 
 def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
-    from concurrent.futures import ProcessPoolExecutor
-
     fs = list(g00_files)
     if max_workers is not None and max_workers > 0:
         workers = max_workers
@@ -348,14 +442,13 @@ def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
     ok = sk = bad = 0
     it = iter(fs)
     futures = set()
-    with ProcessPoolExecutor(max_workers=workers) as ex:
+    with process_pool(workers) as ex:
         for _ in range(workers):
             try:
                 f = next(it)
             except StopIteration:
                 break
             print(f"[*] {f}")
-            _flush_stdio_before_process_pool()
             futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
         while futures:
             for fu in as_completed(futures):
@@ -372,7 +465,6 @@ def parallel_g00_extract(g00_files, out_dir, max_workers: int | None = None):
                 try:
                     f = next(it)
                     print(f"[*] {f}")
-                    _flush_stdio_before_process_pool()
                     futures.add(ex.submit(_g00_extract_task, (str(f), str(out_dir))))
                 except StopIteration:
                     pass
@@ -486,7 +578,7 @@ def find_shuffle_seed_parallel(
     def _scan_bits():
         done = 0
         nonlocal last
-        with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as ex:
+        with process_pool(workers) as ex:
             while done < total:
                 futs = []
                 base = seed0 + done

@@ -1,5 +1,4 @@
 from __future__ import annotations
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from contextlib import redirect_stdout
 import hashlib
 import io
@@ -1015,6 +1014,13 @@ def _link_scan_worker(
             analyze_document, path, text, project=_scan_worker_project()
         )
     )
+
+
+def _link_scan_worker_job(
+    job: tuple[str, str],
+) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
+    path, text = job
+    return _link_scan_worker(path, text)
 
 
 def _range(
@@ -2788,6 +2794,9 @@ class SSLanguageServer:
     def __init__(self, *, serial: bool = False) -> None:
         self._stdin = sys.stdin.buffer
         self._stdout = sys.stdout.buffer
+        self._stdin_fd = self._stdin.fileno()
+        self._input_buffer = bytearray()
+        self.deferred_messages: list[dict[str, Any]] = []
         self.documents: dict[str, DocumentState] = {}
         self.project_cache: dict[str, ProjectCacheEntry] = {}
         self.link_diagnostics_cache: dict[str, DirectoryLinkDiagnosticsEntry] = {}
@@ -2799,10 +2808,14 @@ class SSLanguageServer:
         self.position_encoding = POSITION_ENCODING_UTF16
         self.completion_kind_value_set = set(range(1, COMPLETION_KIND_REFERENCE + 1))
         self.pull_diagnostics_enabled = False
+        self.pending_request_ids: set[Any] = set()
         self.active_request_ids: set[Any] = set()
         self.cancelled_request_ids: set[Any] = set()
         self.current_request_id: Any = None
         self.current_work_done_token: Any = None
+        self.current_work_done_started = False
+        self.current_work_done_finished = False
+        self.draining_control_messages = False
 
     def log_stderr(self, message: str) -> None:
         try:
@@ -2811,46 +2824,68 @@ class SSLanguageServer:
         except OSError:
             pass
 
-    def read_message(self) -> dict[str, Any] | None:
+    def read_input_chunk(self, block: bool) -> bool:
+        os.set_blocking(self._stdin_fd, block)
+        try:
+            chunk = os.read(self._stdin_fd, 65536)
+        except BlockingIOError:
+            return False
+        finally:
+            if not block:
+                os.set_blocking(self._stdin_fd, True)
+        if not chunk:
+            return False
+        self._input_buffer.extend(chunk)
+        return True
+
+    def pop_buffered_message(self) -> dict[str, Any] | None:
+        header_end = self._input_buffer.find(b"\r\n\r\n")
+        if header_end < 0:
+            return None
+        header_size = header_end + 4
+        header_blob = bytes(self._input_buffer[:header_end])
         headers: dict[str, str] = {}
-        while True:
-            line = self._stdin.readline()
-            if not line:
-                return None
-            if line in (b"\r\n", b"\n"):
-                break
+        for line in header_blob.split(b"\r\n"):
             try:
                 text = line.decode("ascii", "strict").strip()
             except UnicodeDecodeError:
+                del self._input_buffer[:header_size]
                 raise LSPMessageError(
                     JSONRPC_INVALID_REQUEST, "Header is not ASCII encoded."
                 ) from None
             if not text or ":" not in text:
+                del self._input_buffer[:header_size]
                 raise LSPMessageError(JSONRPC_INVALID_REQUEST, "Malformed header line.")
             key, value = text.split(":", 1)
             headers[key.strip().lower()] = value.strip()
         if "content-length" not in headers:
+            del self._input_buffer[:header_size]
             raise LSPMessageError(
                 JSONRPC_INVALID_REQUEST, "Missing Content-Length header."
             )
         try:
             length = int(headers.get("content-length", "0"))
         except ValueError:
+            del self._input_buffer[:header_size]
             raise LSPMessageError(
                 JSONRPC_INVALID_REQUEST, "Invalid Content-Length header."
             ) from None
         if length <= 0:
+            del self._input_buffer[:header_size]
             raise LSPMessageError(
                 JSONRPC_INVALID_REQUEST, "Content-Length must be positive."
             )
         charset = _content_type_charset(headers.get("content-type", ""))
         if charset and charset not in {"utf-8", "utf8"}:
+            del self._input_buffer[:header_size]
             raise LSPMessageError(
                 JSONRPC_INVALID_REQUEST, "Unsupported Content-Type charset."
             )
-        payload = self._stdin.read(length)
-        if len(payload) != length:
+        message_size = header_size + length
+        if len(self._input_buffer) < message_size:
             return None
+        payload = bytes(self._input_buffer[header_size:message_size])
+        del self._input_buffer[:message_size]
         try:
             data = json.loads(payload.decode("utf-8"))
         except UnicodeDecodeError as exc:
@@ -2867,6 +2902,16 @@ class SSLanguageServer:
             raise LSPMessageError(JSONRPC_INVALID_REQUEST, "Invalid JSON-RPC version.")
         return data
 
+    def read_message(self) -> dict[str, Any] | None:
+        if self.deferred_messages:
+            return self.deferred_messages.pop(0)
+        while True:
+            message = self.pop_buffered_message()
+            if message is not None:
+                return message
+            if not self.read_input_chunk(True):
+                return None
+
     def write_message(self, payload: dict[str, Any]) -> None:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
@@ -2882,6 +2927,52 @@ class SSLanguageServer:
         if isinstance(msg_id, (int, str)):
             return msg_id
         return None
+
+    def message_request_key(self, message: dict[str, Any]) -> Any | None:
+        if "id" not in message:
+            return None
+        return self.request_id_key(message.get("id"))
+
+    def track_pending_request(self, message: dict[str, Any]) -> None:
+        key = self.message_request_key(message)
+        if key is not None:
+            self.pending_request_ids.add(key)
+
+    def finish_message_request(self, message: dict[str, Any]) -> None:
+        key = self.message_request_key(message)
+        if key is not None:
+            self.pending_request_ids.discard(key)
+            if key not in self.active_request_ids:
+                self.cancelled_request_ids.discard(key)
+
+    def drain_control_messages(self) -> None:
+        if self.draining_control_messages:
+            return
+        self.draining_control_messages = True
+        try:
+            while self.read_input_chunk(False):
+                pass
+            while True:
+                try:
+                    message = self.pop_buffered_message()
+                except LSPMessageError as exc:
+                    self.respond(
+                        None,
+                        error={"code": exc.code, "message": exc.message},
+                    )
+                    continue
+                if message is None:
+                    break
+                if message.get("method") == "$/cancelRequest" and "id" not in message:
+                    params = message.get("params")
+                    self.handle_cancel_request(
+                        params if isinstance(params, dict) else {}
+                    )
+                    continue
+                self.track_pending_request(message)
+                self.deferred_messages.append(message)
+        finally:
+            self.draining_control_messages = False
 
     def invalid_request_id(self, msg_id: Any) -> bool:
         if isinstance(msg_id, bool):
@@ -2916,7 +3007,9 @@ class SSLanguageServer:
     def handle_cancel_request(self, params: dict[str, Any]) -> None:
         request_id = params.get("id") if isinstance(params, dict) else None
         key = self.request_id_key(request_id)
-        if key is not None and key in self.active_request_ids:
+        if key is not None and (
+            key in self.active_request_ids or key in self.pending_request_ids
+        ):
             self.cancelled_request_ids.add(key)
 
     def current_request_cancelled(self) -> bool:
@@ -2924,10 +3017,19 @@ class SSLanguageServer:
         return key is not None and key in self.cancelled_request_ids
 
     def raise_if_request_cancelled(self) -> None:
+        if self.current_request_id is not None and not self.draining_control_messages:
+            self.drain_control_messages()
         if self.current_request_cancelled():
             raise LSPRequestCancelled()
 
     def send_progress(self, token: Any, value: dict[str, Any]) -> None:
+        if token == self.current_work_done_token:
+            kind = value.get("kind")
+            if kind == "begin":
+                self.current_work_done_started = True
+                self.current_work_done_finished = False
+            elif kind == "end":
+                self.current_work_done_finished = True
         self.write_message(
             {
                 "jsonrpc": "2.0",
@@ -2957,12 +3059,28 @@ class SSLanguageServer:
             {
                 "kind": "begin",
                 "title": state.title,
-                "cancellable": False,
+                "cancellable": True,
                 "message": f"0/{state.total}",
                 "percentage": 0,
             },
         )
         return state
+
+    def finish_work_done_progress(self) -> None:
+        token = self.current_work_done_token
+        if token is None:
+            return
+        if not self.current_work_done_started:
+            self.send_progress(
+                token,
+                {
+                    "kind": "begin",
+                    "title": "SiglusSS",
+                    "cancellable": True,
+                },
+            )
+        if not self.current_work_done_finished:
+            self.send_progress(token, {"kind": "end"})
 
     def report_scan_progress(
         self, state: ScanProgressState | None, step: int = 1
@@ -3333,50 +3451,40 @@ class SSLanguageServer:
         project_entry: ProjectCacheEntry,
         docs: list[tuple[str, DocumentState]],
         progress: ScanProgressState | None,
-        worker: Any,
-        fallback: Any,
+        scan_one: Any,
     ) -> dict[str, Any]:
         if not docs:
             return {}
         if self.serial:
             out: dict[str, Any] = {}
             for path, doc in docs:
-                out[path] = fallback(doc)
+                self.raise_if_request_cancelled()
+                out[path] = scan_one(doc)
                 self.report_scan_progress(progress)
             return out
         worker_count = min(len(docs), _scan_worker_count())
         if worker_count <= 1:
             out: dict[str, Any] = {}
             for path, doc in docs:
-                out[path] = fallback(doc)
+                self.raise_if_request_cancelled()
+                out[path] = scan_one(doc)
                 self.report_scan_progress(progress)
             return out
-        try:
-            from .parallel import _flush_stdio_before_process_pool
+        from .parallel import parallel_process_completed_map
 
-            _flush_stdio_before_process_pool()
-            with ProcessPoolExecutor(
-                max_workers=worker_count,
-                initializer=_init_scan_worker,
-                initargs=(project_entry.project,),
-            ) as executor:
-                futures = {
-                    executor.submit(worker, doc.path, doc.text): path
-                    for path, doc in docs
-                }
-                out: dict[str, Any] = {}
-                for future in as_completed(futures):
-                    path = futures[future]
-                    out[path] = future.result()
-                    self.report_scan_progress(progress)
-                return out
-        except Exception:
-            self.log_stderr(traceback.format_exc())
-            out = {}
-            for path, doc in docs:
-                out[path] = fallback(doc)
-                self.report_scan_progress(progress)
-            return out
+        jobs = [(doc.path, doc.text) for _, doc in docs]
+        results = parallel_process_completed_map(
+            _link_scan_worker_job,
+            jobs,
+            max_workers=worker_count,
+            initializer=_init_scan_worker,
+            initargs=(project_entry.project,),
+            on_result=lambda _job, _result: self.report_scan_progress(progress),
+            on_poll=self.raise_if_request_cancelled,
+        )
+        return {
+            path: result for (path, _doc), result in zip(docs, results, strict=True)
+        }
 
     def link_diagnostics_for_directory(
         self, directory: str
@@ -3445,10 +3553,10 @@ class SSLanguageServer:
                 project_entry,
                 scan_docs,
                 progress,
-                _link_scan_worker,
                 lambda doc: _link_scan_result(self.analyze_base(doc)),
             )
             for path, doc in scan_docs:
+                self.raise_if_request_cancelled()
                 (
                     result_has_diagnostics,
                     result_commands,
@@ -3462,9 +3570,11 @@ class SSLanguageServer:
             self.end_scan_progress(progress)
         occurrences: dict[str, list[SymbolOccurrence]] = {}
         for path in paths:
+            self.raise_if_request_cancelled()
             for occurrence in entry.file_occurrences.get(path, []):
                 occurrences.setdefault(occurrence.symbol_id, []).append(occurrence)
         for items in occurrences.values():
+            self.raise_if_request_cancelled()
             items.sort(
                 key=lambda item: (
                     os.path.abspath(item.path),
@@ -3489,6 +3599,7 @@ class SSLanguageServer:
             }
             any_labels = False
             for scene_path in scene_paths:
+                self.raise_if_request_cancelled()
                 commands = entry.file_commands.get(scene_path, [])
                 if commands:
                     any_labels = True
@@ -3515,6 +3626,7 @@ class SSLanguageServer:
                     if records:
                         continue
                     for scene_path in scene_paths:
+                        self.raise_if_request_cancelled()
                         diagnostics.setdefault(scene_path, []).append(
                             SourceDiagnostic(
                                 path=scene_path,
@@ -3579,11 +3691,15 @@ class SSLanguageServer:
             for d in result.diagnostics
         ]
 
-    def document_diagnostic_report(self, doc: DocumentState) -> dict[str, Any]:
-        result = self.analyze(doc)
+    def document_diagnostic_report(
+        self, doc: DocumentState, *, include_link: bool = True
+    ) -> dict[str, Any]:
+        result = self.analyze(doc) if include_link else self.analyze_base(doc)
         return {"kind": "full", "items": self.lsp_diagnostics_for_result(result)}
 
-    def publish_diagnostics(self, doc: DocumentState) -> None:
+    def publish_diagnostics(
+        self, doc: DocumentState, *, include_link: bool = True
+    ) -> None:
         if self.pull_diagnostics_enabled:
             return
         if not doc.opened:
@@ -3594,7 +3710,9 @@ class SSLanguageServer:
                 "method": "textDocument/publishDiagnostics",
                 "params": {
                     "uri": doc.uri,
-                    "diagnostics": self.document_diagnostic_report(doc)["items"],
+                    "diagnostics": self.document_diagnostic_report(
+                        doc, include_link=include_link
+                    )["items"],
                 },
             }
         )
@@ -3604,6 +3722,7 @@ class SSLanguageServer:
         directory: str,
         skip_uri: str | None = None,
         clear_base: bool = False,
+        include_link: bool = True,
     ) -> None:
         directory = os.path.abspath(directory or ".")
         docs = [
@@ -3620,7 +3739,7 @@ class SSLanguageServer:
             else:
                 doc.analysis = None
                 doc.analysis_signature = None
-            self.publish_diagnostics(doc)
+            self.publish_diagnostics(doc, include_link=include_link)
 
     def symbol_occurrences(
         self, directory: str, symbol_id: str
@@ -3858,17 +3977,20 @@ class SSLanguageServer:
             doc.overlay_active = True
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
-        self.publish_diagnostics(doc)
+        self.publish_diagnostics(doc, include_link=False)
         if old_signature != self.document_source_signature(doc):
             if doc.path.lower().endswith(".inc"):
                 self.refresh_directory(
                     os.path.dirname(doc.path) or ".",
                     skip_uri=doc.uri,
                     clear_base=True,
+                    include_link=False,
                 )
             elif doc.path.lower().endswith(".ss"):
                 self.refresh_directory(
-                    os.path.dirname(doc.path) or ".", skip_uri=doc.uri
+                    os.path.dirname(doc.path) or ".",
+                    skip_uri=doc.uri,
+                    include_link=False,
                 )
 
     def handle_did_save(self, params: dict[str, Any]) -> None:
@@ -4205,10 +4327,15 @@ class SSLanguageServer:
         key = self.request_id_key(msg_id)
         previous_request_id = self.current_request_id
         previous_work_done_token = self.current_work_done_token
+        previous_work_done_started = self.current_work_done_started
+        previous_work_done_finished = self.current_work_done_finished
         if key is not None:
+            self.pending_request_ids.discard(key)
             self.active_request_ids.add(key)
         self.current_request_id = msg_id
         self.current_work_done_token = self.progress_token_from_params(params)
+        self.current_work_done_started = False
+        self.current_work_done_finished = False
         try:
             self.raise_if_request_cancelled()
             handler()
@@ -4221,11 +4348,14 @@ class SSLanguageServer:
                 },
             )
         finally:
+            self.finish_work_done_progress()
             if key is not None:
                 self.active_request_ids.discard(key)
                 self.cancelled_request_ids.discard(key)
             self.current_request_id = previous_request_id
             self.current_work_done_token = previous_work_done_token
+            self.current_work_done_started = previous_work_done_started
+            self.current_work_done_finished = previous_work_done_finished
 
     def handle_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")
@@ -4447,20 +4577,23 @@ class SSLanguageServer:
             if message is None:
                 break
             try:
-                self.handle_message(message)
-            except SystemExit as exc:
-                raise exc
-            except Exception as exc:
-                self.log_stderr(traceback.format_exc())
-                msg_id = message.get("id")
-                if msg_id is not None:
-                    self.respond(
-                        msg_id,
-                        error={
-                            "code": JSONRPC_INTERNAL_ERROR,
-                            "message": f"Internal error: {exc}",
-                        },
-                    )
+                try:
+                    self.handle_message(message)
+                except SystemExit as exc:
+                    raise exc
+                except Exception as exc:
+                    self.log_stderr(traceback.format_exc())
+                    msg_id = message.get("id")
+                    if msg_id is not None:
+                        self.respond(
+                            msg_id,
+                            error={
+                                "code": JSONRPC_INTERNAL_ERROR,
+                                "message": f"Internal error: {exc}",
+                            },
+                        )
+            finally:
+                self.finish_message_request(message)
         return 0
 
 
