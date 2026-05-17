@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v3.0.1] - 2026-05-16
+## [v0.3.1] - 2026-05-17
 
 - Fixed duplicate buffered output parallel workers started, and added a regression test for flushing standard streams before process-pool startup.
 - Added `siglus-ssu -c --test-shuffle --csv <seed_csv>` to write per-script initial and final MSVC shuffle seeds while rebuilding matched scene scripts.
