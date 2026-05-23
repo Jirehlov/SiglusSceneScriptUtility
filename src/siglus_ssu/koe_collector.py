@@ -64,6 +64,18 @@ def _duration_from_ogg_bytes(ogg: bytes):
         return None
 
 
+def _duration_from_ovk_entry_ogg(entry, ogg: bytes):
+    try:
+        duration = sound.ogg_duration_seconds_from_sample_count(
+            ogg, getattr(entry, "sample_count", 0)
+        )
+    except (TypeError, ValueError, EOFError):
+        duration = None
+    if duration is not None:
+        return duration
+    return _duration_from_ogg_bytes(ogg)
+
+
 def _maybe_add_duration(
     total_seconds: float, counted: int, failed: int, duration
 ) -> tuple[float, int, int]:
@@ -578,6 +590,36 @@ def _format_duration(seconds: float) -> str:
     return f"{hours:d}:{minutes:02d}:{secs:02d}.{millis:03d}"
 
 
+def _format_duration_seconds_csv(duration) -> str:
+    if duration is None:
+        return ""
+    return f"{max(float(duration), 0.0):.6f}"
+
+
+def _collect_entry_durations(entries, scene_map, voice_dir, ovk_entry_map, read_ogg):
+    durations = {}
+    total = len(entries)
+    for idx, koe_no in enumerate(sorted(entries.keys()), 1):
+        if idx == 1 or idx % 100 == 0:
+            _progress(f"koe: reading duration {idx}/{total}: KOE({int(koe_no):09d})")
+        e = entries[koe_no]
+        scene_no = koe_no // 100000
+        entry_no = koe_no % 100000
+        try:
+            ovk_path = _select_ovk(
+                scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
+            )
+            entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
+            if entry is None:
+                raise KeyError(f"Entry not found: entry_no={entry_no}")
+            durations[koe_no] = _duration_from_ovk_entry_ogg(
+                entry, read_ogg(ovk_path, entry)
+            )
+        except Exception:
+            durations[koe_no] = None
+    return durations
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -661,16 +703,42 @@ def main(argv=None):
         referenced = 0
         unreferenced = 0
         multi_text_koe_nos = []
+    current_ovk_path = ""
+    current_ovk_file = None
+
+    def _close_current_ovk():
+        nonlocal current_ovk_path, current_ovk_file
+        if current_ovk_file is not None:
+            current_ovk_file.close()
+            current_ovk_file = None
+            current_ovk_path = ""
+
+    def _read_ogg_from_ovk(ovk_path: str, entry) -> bytes:
+        nonlocal current_ovk_path, current_ovk_file
+        if current_ovk_file is None or current_ovk_path != ovk_path:
+            prev_file = current_ovk_file
+            current_ovk_file = open(ovk_path, "rb")
+            current_ovk_path = ovk_path
+            if prev_file is not None:
+                prev_file.close()
+        return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
+
     csv_path = ""
     total_rows = 0
+    duration_by_koe = {}
     if single_koe_no is None:
+        duration_by_koe = _collect_entry_durations(
+            entries, scene_map, voice_dir, ovk_entry_map, _read_ogg_from_ovk
+        )
+        _close_current_ovk()
         csv_path = os.path.join(out_dir, "koe_master.csv")
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, lineterminator="\r\n")
-            w.writerow(["koe_no", "character", "text", "callsite"])
+            w.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
             for koe_no in sorted(entries.keys()):
                 e = entries[koe_no]
                 refs = list((e.get("refs") or {}).values())
+                duration_sec = _format_duration_seconds_csv(duration_by_koe.get(koe_no))
                 if refs:
                     refs.sort(
                         key=lambda x: (
@@ -685,13 +753,14 @@ def main(argv=None):
                                 str(koe_no),
                                 ref["name"],
                                 ref["text"],
+                                duration_sec,
                                 ";".join(sorted(ref["callsites"])),
                             ]
                         )
                     continue
-                w.writerow([str(koe_no), e["name"], e["text"], ""])
+                w.writerow([str(koe_no), e["name"], e["text"], duration_sec, ""])
             for name, text, callsite in sorted(missing_rows, key=lambda x: x[2]):
-                w.writerow(["", name, text, callsite])
+                w.writerow(["", name, text, "", callsite])
         total_rows = sum(
             max(1, len(e.get("refs") or {})) for e in entries.values()
         ) + len(missing_rows)
@@ -701,18 +770,6 @@ def main(argv=None):
     duration_counted = 0
     duration_failed = 0
     processed_koe = 0
-    current_ovk_path = ""
-    current_ovk_file = None
-
-    def _read_ogg_from_ovk(ovk_path: str, entry) -> bytes:
-        nonlocal current_ovk_path, current_ovk_file
-        if current_ovk_file is None or current_ovk_path != ovk_path:
-            prev_file = current_ovk_file
-            current_ovk_file = open(ovk_path, "rb")
-            current_ovk_path = ovk_path
-            if prev_file is not None:
-                prev_file.close()
-        return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
 
     try:
         if single_koe_no is None:
@@ -734,6 +791,18 @@ def main(argv=None):
                         duration_counted,
                         duration_failed,
                         _duration_from_path(out_path),
+                    )
+                    duration_done = True
+                elif stats_only and not is_unref and koe_no in duration_by_koe:
+                    (
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                    ) = _maybe_add_duration(
+                        total_duration_sec,
+                        duration_counted,
+                        duration_failed,
+                        duration_by_koe.get(koe_no),
                     )
                     duration_done = True
                 if should_extract and os.path.isfile(out_path):
@@ -765,7 +834,7 @@ def main(argv=None):
                                 total_duration_sec,
                                 duration_counted,
                                 duration_failed,
-                                _duration_from_ogg_bytes(ogg),
+                                _duration_from_ovk_entry_ogg(entry, ogg),
                             )
                         )
                 except Exception as ex:
@@ -819,7 +888,7 @@ def main(argv=None):
                                     total_duration_sec,
                                     duration_counted,
                                     duration_failed,
-                                    _duration_from_ogg_bytes(ogg),
+                                    _duration_from_ovk_entry_ogg(entry, ogg),
                                 )
                             )
                     except Exception as ex:
@@ -831,8 +900,7 @@ def main(argv=None):
                         elif not duration_done:
                             duration_failed += 1
     finally:
-        if current_ovk_file is not None:
-            current_ovk_file.close()
+        _close_current_ovk()
     eprint("")
     eprint("=== koe_collector summary ===")
     if stats_only:

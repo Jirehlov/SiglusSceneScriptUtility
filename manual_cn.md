@@ -210,6 +210,7 @@ siglus-ssu -lsp [--serial]
 - 默认会并行执行工作区级别的符号扫描与链接扫描；如需强制串行，可传入 `--serial`
 - LSP 会跨会话持久化工作区索引，并且只有在 `.inc` / `.ss` 的 MD5 输入表、程序版本与 const profile 都匹配时才复用。存在未保存的编辑器缓冲区时会跳过持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 当前能力：语义 token、诊断、自动补全、悬停说明、跳转到定义、查找引用、客户端支持时的准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；当前语义 token 分类包含台词文本、system element（系统指令）、角色名，以及带“已使用 / 未使用”区分的宏声明
+- 服务会协商客户端 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并会更严格地校验文档 URI 与请求结构。
 - 语言服务会在适用处直接复用与 `-c` 相同的编译流水线阶段（`CA`、`LA`、`SA`、`MA`、`BS`）；语义分类来自这条与编译器对齐的分析结果，而 LSP 层负责恢复源文本范围，并把结果封装成 semantic token、location 与 edit
 - 当前项目作用域是目录级的，这与现行 `-c` 对 `.inc` / `.ss` 联合分析以及全局 `.inc #command` 链接的模型保持一致
 - 服务本身与编辑器无关，可供 VS Code、Neovim、Emacs、Sublime Text、Kate、Helix 等任何支持外部 stdio LSP 的客户端接入
@@ -656,6 +657,7 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 | `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。对于未在 OVK 中找到的调用，这一列为空。若某个已匹配的 KOE 被多个不同文本引用，同一编号可能出现多行。 |
 | `character` | 从 scene trace 中的 `CD_NAME` 事件和行内语音元数据推断出的角色名。 |
 | `text` | 从 scene trace 中的 `CD_TEXT` 事件和行内语音元数据推断出的文本。 |
+| `duration_sec` | 语音时长，单位为秒，由 OVK 条目的 sample count 和 Ogg 采样率换算得出。若无法读取 OVK 条目或时长元数据，则为空。 |
 | `callsite` | 分号分隔的当前 KOE/文本行的 `filename:line`（文件名:行号）调用位置列表；若直接扫描 `.pck`，则为 `Scene.pck!scene.dat:line`。 |
 
 #### 完成后汇总输出（stderr）

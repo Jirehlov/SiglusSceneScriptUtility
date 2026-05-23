@@ -109,9 +109,28 @@ def estimate_ogg_duration_seconds(ogg_bytes: bytes) -> float | None:
     if info is None:
         return None
     _codec, sample_rate, pre_skip = info
+    sample_count = ogg_calc_smp_cnt(ogg_bytes)
+    return _duration_seconds_from_sample_count(sample_rate, pre_skip, sample_count)
+
+
+def ogg_duration_seconds_from_sample_count(
+    ogg_bytes: bytes, sample_count: int
+) -> float | None:
+    if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
+        return None
+    info = _ogg_ident_info(ogg_bytes)
+    if info is None:
+        return None
+    _codec, sample_rate, pre_skip = info
+    return _duration_seconds_from_sample_count(sample_rate, pre_skip, sample_count)
+
+
+def _duration_seconds_from_sample_count(
+    sample_rate: int, pre_skip: int, sample_count: int
+) -> float | None:
     if sample_rate <= 0:
         return None
-    sample_count = ogg_calc_smp_cnt(ogg_bytes)
+    sample_count = int(sample_count)
     if sample_count <= 0:
         return None
     if pre_skip > 0 and sample_count > pre_skip:

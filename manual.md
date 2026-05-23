@@ -210,6 +210,7 @@ siglus-ssu -lsp [--serial]
 - By default, workspace-wide symbol and link scans run in parallel; use `--serial` to force serial scanning when needed
 - The LSP persists workspace indexes across sessions and reuses them only when the `.inc` / `.ss` MD5 input table, package version, and const profile match. Unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename when the client supports it, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, speaker names, and macro declarations with used/unused distinction
+- The server negotiates client position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes defensively.
 - The language service reuses the same `-c` compiler pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`) wherever they apply; semantic classification comes from that compiler-aligned analysis, while the LSP layer recovers source ranges and packages the results as semantic tokens, locations, and edits
 - The current project scope is directory-based, matching the present `-c` model for `.inc` / `.ss` joint analysis and global `.inc #command` linking
 - The service itself is editor-agnostic and can be consumed by VS Code, Neovim, Emacs, Sublime Text, Kate, Helix, or any other client that can launch an external stdio LSP server
@@ -656,6 +657,7 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 | `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Empty for call-sites where the OVK entry was not found. If a found KOE is referenced by multiple distinct texts, the same number can appear on multiple rows. |
 | `character` | Character name inferred from `CD_NAME` events and inline voice metadata in the scene trace. |
 | `text` | Dialogue text inferred from `CD_TEXT` events and inline voice metadata in the scene trace. |
+| `duration_sec` | Voice duration in seconds, derived from the OVK entry sample count and Ogg sample rate. Empty when the OVK entry or duration metadata cannot be read. |
 | `callsite` | Semicolon-separated list of `filename:line` locations where this KOE/text row is called, or `Scene.pck!scene.dat:line` when scanning a `.pck` directly. |
 
 #### Summary Output
