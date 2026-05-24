@@ -34,7 +34,7 @@ def _usage(out=None):
         "Options:\n"
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force pure Python implementation (disable Rust accel)\n"
-        "  --const-profile Select const profile (0-2, default: 0)\n"
+        "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
         "\n"
         "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
@@ -66,19 +66,20 @@ def _usage(out=None):
         f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--lzss-level N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] [--csv <seed_csv>] <input_dir> <output_pck|output_dir>\n"
         f"  {p} -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck|output_dir> <test_dir>\n"
         f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
-        "    --debug         Keep temp files for inspection\n"
+        "    --debug         Keep temp files for inspection (not with --tmp)\n"
         "    --charset ENC   Force source charset (jis/cp932 or utf8)\n"
         "    --no-os         Skip OS stage (do not pack source files)\n"
-        "    --dat-repack    Repack existing .dat files in input_dir (skip .ss compilation)\n"
-        "    --no-angou      Disable encryption/compression (header_size=0)\n"
-        "    --no-lzss       Disable LZSS only (official easy link behavior)\n"
+        "    --dat-repack    Repack existing .dat files in input_dir (not with --tmp/--test-shuffle)\n"
+        "    --no-angou      Disable encryption/compression (header_size=0; not with --tmp)\n"
+        "    --no-lzss       Disable LZSS only (official easy link behavior; not with --tmp)\n"
         "    --serial        Disable parallel compilation\n"
         "    --max-workers   Limit parallel workers (default: auto; parallel only)\n"
         "    --lzss-level    LZSS compression level (2-17, default: 17)\n"
-        "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial\n"
-        "    --tmp           Use specific temp directory\n"
-        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order\n"
-        "    --csv           With --test-shuffle, write per-object initial/final seeds to CSV\n"
+        "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial (not with --tmp)\n"
+        "    --tmp           Use specific temp directory (not with --debug/--dat-repack/--no-angou/--no-lzss/--set-shuffle/--test-shuffle/--csv/--gei/--const-profile)\n"
+        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order (not with --tmp)\n"
+        "    --csv           With --test-shuffle, write per-object initial/final seeds to CSV (not with --tmp)\n"
+        "    --gei           Only generate Gameexe.dat (not with --tmp)\n"
         "\n"
         "Extract mode:\n"
         f"  {p} -x <input_pck> [output_dir]\n"
@@ -233,6 +234,14 @@ def _consume_global_options(argv):
     return out, profile
 
 
+def _has_option(argv, opt):
+    for item in argv or []:
+        s = str(item)
+        if s == opt or s.startswith(opt + "="):
+            return True
+    return False
+
+
 def _run_mode(module_name, args):
     module = import_module(f"siglus_ssu.{module_name}")
     rc = module.main(args)
@@ -301,6 +310,15 @@ def main(argv=None):
     elif len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
         _usage()
         return 0
+    if (
+        mode in ("-c", "--compile")
+        and const_profile is not None
+        and _has_option(argv[1:], "--tmp")
+    ):
+        sys.stderr.write(
+            f"{_prog()}: error: --tmp cannot be used with --const-profile\n"
+        )
+        return 2
     if mode in ("init", "--init"):
         from ._const_manager import download_const, load_const_module
 

@@ -190,6 +190,32 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
+def _has_option(argv, opt):
+    for item in argv or []:
+        s = str(item)
+        if s == opt or s.startswith(opt + "="):
+            return True
+    return False
+
+
+def _tmp_incompatible_options(argv, test_shuffle=False):
+    bad = []
+    if test_shuffle:
+        bad.append("--test-shuffle")
+    for opt in (
+        "--dat-repack",
+        "--csv",
+        "--gei",
+        "--set-shuffle",
+        "--no-angou",
+        "--no-lzss",
+        "--debug",
+    ):
+        if _has_option(argv, opt):
+            bad.append(opt)
+    return bad
+
+
 def _read_scn_dat(path):
     b = read_bytes(path)
     if len(b) < C.SCN_HDR_SIZE:
@@ -559,6 +585,13 @@ def main(argv=None):
                 test_seed0 = 0
             test_seed0_given = True
             argv.pop(i)
+    if _has_option(argv, "--tmp"):
+        bad_tmp = _tmp_incompatible_options(argv, test_shuffle=test_shuffle)
+        if bad_tmp:
+            sys.stderr.write(
+                f"{prog}: error: --tmp cannot be used with {', '.join(bad_tmp)}\n"
+            )
+            return 2
     dat_repack = "--dat-repack" in argv
     if dat_repack:
         if test_shuffle:
