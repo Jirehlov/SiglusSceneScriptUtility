@@ -191,6 +191,31 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
+def _parse_u32_token(t, opt):
+    s = str(t).strip() if t is not None else ""
+    if not _is_int_token(s):
+        raise ValueError(f"{opt} expects a u32 integer")
+    n = int(s, 0)
+    if n < 0 or n > 0xFFFFFFFF:
+        raise ValueError(f"{opt} expects a u32 integer")
+    return n
+
+
+def _write_md5_cache(path, payload):
+    tmp_path = path + ".tmp"
+    try:
+        write_text(
+            tmp_path,
+            json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            enc="utf-8",
+        )
+        os.replace(tmp_path, path)
+    except Exception:
+        with suppress(OSError):
+            os.remove(tmp_path)
+        raise
+
+
 def _tmp_incompatible_options(argv, test_shuffle=False):
     bad = []
     if test_shuffle:
@@ -836,9 +861,7 @@ def main(argv=None):
         action="store_true",
         help="Repack existing .dat files in input_dir (skip .ss compilation).",
     )
-    ap.add_argument(
-        "--no-angou", action="store_true", help="No encrypt/compress (header_size=0)."
-    )
+    ap.add_argument("--no-angou", action="store_true", help="No encrypt/compress.")
     ap.add_argument(
         "--no-lzss",
         action="store_true",
@@ -880,9 +903,10 @@ def main(argv=None):
     user_seed = None
     if getattr(a, "set_shuffle", None) is not None:
         try:
-            user_seed = int(str(a.set_shuffle).strip(), 0) & 0xFFFFFFFF
-        except Exception:
-            user_seed = None
+            user_seed = _parse_u32_token(a.set_shuffle, "--set-shuffle")
+        except ValueError as exc:
+            sys.stderr.write(f"{prog}: error: {exc}\n")
+            return 2
     force_serial_compile = bool(a.serial or (user_seed is not None))
     if test_shuffle:
         if (not test_seed0_given) and (user_seed is not None):
@@ -992,6 +1016,12 @@ def main(argv=None):
             md5_path = os.path.join(tmp, "_md5.json")
             cur_inc = {}
             cur_ss = {}
+            pending_md5 = None
+            cache_meta = {
+                "schema": 2,
+                "charset": enc,
+                "charset_force": charset,
+            }
 
             def _md5_file(p):
                 h = hashlib.md5()
@@ -1024,11 +1054,15 @@ def main(argv=None):
                 if not isinstance(old, dict):
                     full_compile = True
                 else:
-                    old_inc = old.get("inc") or {}
-                    for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
-                        if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
-                            full_compile = True
-                            break
+                    old_meta = old.get("meta") or {}
+                    if old_meta != cache_meta:
+                        full_compile = True
+                    else:
+                        old_inc = old.get("inc") or {}
+                        for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
+                            if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
+                                full_compile = True
+                                break
                 bs_dir = os.path.join(tmp, "bs")
                 if full_compile:
                     if (not a.no_angou) and os.path.isdir(bs_dir):
@@ -1069,15 +1103,7 @@ def main(argv=None):
                 for p in ss or []:
                     if os.path.isfile(p):
                         cur_ss[os.path.basename(p).lower()] = _md5_file(p)
-            write_text(
-                md5_path,
-                json.dumps(
-                    {"inc": cur_inc, "ss": cur_ss},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                enc="utf-8",
-            )
+            pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
             if getattr(a, "dat_repack", False):
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
@@ -1238,6 +1264,8 @@ def main(argv=None):
                         max_workers=a.max_workers,
                         parallel=(not force_serial_compile),
                     )
+            if pending_md5 is not None:
+                _write_md5_cache(md5_path, pending_md5)
             if full_compile_stats:
                 _set_macro_stats(ctx, _collect_macro_stats(ctx, compile_stats))
                 _set_source_stats(ctx, _finalize_source_stats(ctx, compile_stats))

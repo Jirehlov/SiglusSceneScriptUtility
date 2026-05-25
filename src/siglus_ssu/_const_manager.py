@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 import urllib.request
 from urllib import error as urlerror
 from importlib import util as iu
@@ -136,12 +137,27 @@ def get_const_module(path: Path | None = None, profile: int | None = None):
     return module
 
 
-def package_version() -> str:
-    from . import __version__ as _v
+def _source_project_version() -> str:
+    pkg_dir = Path(__file__).resolve().parent
+    for parent in pkg_dir.parents:
+        project_file = parent / "pyproject.toml"
+        source_pkg = parent / "src" / "siglus_ssu"
+        if not project_file.is_file() or not source_pkg.exists():
+            continue
+        try:
+            if source_pkg.resolve() != pkg_dir:
+                continue
+            data = tomllib.loads(project_file.read_text(encoding="utf-8"))
+            return str(((data.get("project") or {}).get("version")) or "").strip()
+        except Exception:
+            return ""
+    return ""
 
-    _v = str(_v or "").strip()
-    if _v:
-        return _v
+
+def package_version() -> str:
+    source_version = _source_project_version()
+    if source_version:
+        return source_version
     try:
         return str(dist_version("siglus-ssu") or "").strip()
     except PackageNotFoundError:

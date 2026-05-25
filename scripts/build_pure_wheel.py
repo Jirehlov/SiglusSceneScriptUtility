@@ -1,8 +1,13 @@
 from pathlib import Path
 import shutil
 import textwrap
+import tomllib
 
 root = Path.cwd()
+root_project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+version = str(((root_project.get("project") or {}).get("version")) or "").strip()
+if not version:
+    raise RuntimeError("Missing project.version in pyproject.toml")
 temp = root / ".pure-wheel-build"
 if temp.exists():
     shutil.rmtree(temp)
@@ -34,7 +39,7 @@ pyproject = (
     build-backend = "setuptools.build_meta"
     [project]
     name = "siglus-ssu"
-    version = "0.3.3"
+    version = "{version}"
     description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
     readme = "README.md"
     requires-python = ">=3.12"
@@ -55,4 +60,5 @@ pyproject = (
     ).strip()
     + "\n"
 )
+pyproject = pyproject.replace("{version}", version)
 (temp / "pyproject.toml").write_text(pyproject, encoding="utf-8", newline="\r\n")
