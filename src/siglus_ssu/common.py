@@ -128,6 +128,51 @@ def build_empty_ia_data(replace_tree, defined_names=None):
     }
 
 
+def has_option(argv, opt):
+    for item in argv or []:
+        s = str(item)
+        if s == opt or s.startswith(opt + "="):
+            return True
+    return False
+
+
+def int_or_none(value):
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def mark_named_usage(iad, name):
+    macro_map = (iad or {}).get("macro_map")
+    if not isinstance(macro_map, dict):
+        return
+    rep = macro_map.get(str(name or ""))
+    if isinstance(rep, dict) and "used_count" in rep:
+        rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
+
+
+def array_element_info(elm_array_exact, parent_form):
+    try:
+        info = elm_array_exact.get(int(parent_form))
+    except Exception:
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def is_trace_command_base(ev, base_name: str) -> bool:
+    if not isinstance(ev, dict):
+        return False
+    base_name = str(base_name or "").casefold()
+    if not base_name:
+        return False
+    base = str(ev.get("_call_base_name") or "").casefold()
+    if base == base_name:
+        return True
+    name = str(ev.get("_call_name") or "").casefold()
+    return name == base_name or name.endswith("." + base_name)
+
+
 def next_elseif_ifdef_state(state: int, matched: bool) -> int:
     if state == 3:
         return 3

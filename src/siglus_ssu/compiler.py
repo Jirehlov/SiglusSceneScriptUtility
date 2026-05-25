@@ -34,6 +34,7 @@ from .common import (
     parse_code,
     find_named_path,
     ANGOU_DAT_NAME,
+    has_option,
     norm_charset,
 )
 
@@ -189,14 +190,6 @@ def _is_int_token(t):
     return re.fullmatch(r"[0-9]+", s) is not None
 
 
-def _has_option(argv, opt):
-    for item in argv or []:
-        s = str(item)
-        if s == opt or s.startswith(opt + "="):
-            return True
-    return False
-
-
 def _tmp_incompatible_options(argv, test_shuffle=False):
     bad = []
     if test_shuffle:
@@ -210,7 +203,7 @@ def _tmp_incompatible_options(argv, test_shuffle=False):
         "--no-lzss",
         "--debug",
     ):
-        if _has_option(argv, opt):
+        if has_option(argv, opt):
             bad.append(opt)
     return bad
 
@@ -584,7 +577,7 @@ def main(argv=None):
                 test_seed0 = 0
             test_seed0_given = True
             argv.pop(i)
-    if _has_option(argv, "--tmp"):
+    if has_option(argv, "--tmp"):
         bad_tmp = _tmp_incompatible_options(argv, test_shuffle=test_shuffle)
         if bad_tmp:
             sys.stderr.write(

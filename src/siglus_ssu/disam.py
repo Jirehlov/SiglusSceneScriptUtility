@@ -1,15 +1,17 @@
-from functools import lru_cache
+from functools import lru_cache, partial
 import struct
 from types import SimpleNamespace
 from ._const_manager import get_const_module
 from .common import (
     augment_receiver_form_codes,
+    array_element_info,
     binary_result_form as _binary_result_form,
     build_operator_render_tables,
     clone_stack_segment,
     format_named_command_args,
     hx,
     invert_form_code_map,
+    int_or_none as _int_or_none,
     latest_stack_start,
     named_command_value_map,
     quote_ss_text,
@@ -47,13 +49,6 @@ _DISAM_OP_NAMES = (
     "CD_SEL_BLOCK_START",
     "CD_SEL_BLOCK_END",
 )
-
-
-def _int_or_none(value):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _read_flag_command_codes():
@@ -1282,13 +1277,6 @@ def disassemble_scn_bytes(
         except Exception:
             return []
 
-    def _array_element_info_cb(parent_form):
-        try:
-            info = elm_array_exact.get(int(parent_form))
-        except Exception:
-            return None
-        return info if isinstance(info, dict) else None
-
     def _element_info_cb(parent_form, code):
         try:
             parent_form = int(parent_form)
@@ -1386,7 +1374,7 @@ def disassemble_scn_bytes(
         receiver_forms=receiver_forms,
         unary_text=unary_text,
         binary_text=binary_text,
-        array_element_info=_array_element_info_cb,
+        array_element_info=partial(array_element_info, elm_array_exact),
         element_info=_element_info_cb,
         receiver_value_form=_receiver_value_form_cb,
         item_expr=_item_expr_cb,

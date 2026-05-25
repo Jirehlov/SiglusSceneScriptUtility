@@ -8,10 +8,12 @@ from ._const_manager import get_const_module
 from . import disam
 from .common import (
     augment_receiver_form_codes,
+    array_element_info,
     binary_result_form as _binary_result_form,
     build_operator_render_tables,
     format_named_command_args,
     invert_form_code_map,
+    int_or_none as _int_or_none,
     latest_stack_start,
     normalize_ss_quoted_literal_source,
     quote_ss_text,
@@ -241,13 +243,6 @@ def _decompiler_cache(bundle):
     cache = {}
     bundle[_DECOMPILER_CACHE_KEY] = cache
     return cache
-
-
-def _int_or_none(value):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 def _annotation_cache_signature(
@@ -1750,13 +1745,6 @@ class _Decompiler:
                 return None
             return ref_to_val.get(form_i, form_i if form_i in scalar_forms else None)
 
-        def _array_element_info_cb(parent_form):
-            try:
-                info = elm_array_exact.get(int(parent_form))
-            except Exception:
-                return None
-            return info if isinstance(info, dict) else None
-
         def _element_info_cb(parent_form, code):
             try:
                 parent_form_i = int(parent_form)
@@ -1887,7 +1875,7 @@ class _Decompiler:
             receiver_forms=receiver_forms,
             unary_text=unary_text,
             binary_text=binary_text,
-            array_element_info=_array_element_info_cb,
+            array_element_info=functools.partial(array_element_info, elm_array_exact),
             element_info=_element_info_cb,
             receiver_value_form=_receiver_value_form_cb,
             item_expr=_item_expr_cb,

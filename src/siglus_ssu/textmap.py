@@ -18,6 +18,7 @@ from .common import (
     max_pair_end,
     iter_files_by_ext,
     is_named_filename,
+    is_trace_command_base as _is_trace_command_base,
     ANGOU_DAT_NAME,
     read_struct_list,
     I32_PAIR_STRUCT,
@@ -333,19 +334,6 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
             }
         )
     return tokens, iad
-
-
-def _is_trace_command_base(ev, base_name: str) -> bool:
-    if not isinstance(ev, dict):
-        return False
-    base_name = str(base_name or "").casefold()
-    if not base_name:
-        return False
-    base = str(ev.get("_call_base_name") or "").casefold()
-    if base == base_name:
-        return True
-    name = str(ev.get("_call_name") or "").casefold()
-    return name == base_name or name.endswith("." + base_name)
 
 
 def _collect_disam_string_kinds(bundle, source_name: str = ""):

@@ -8,7 +8,12 @@ from .CA import (
     add_replace_tree,
 )
 from .MA import FormTable
-from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
+from .common import (
+    mark_named_usage,
+    next_else_ifdef_state,
+    next_elseif_ifdef_state,
+    scan_text_comments,
+)
 
 C = get_const_module()
 
@@ -26,14 +31,6 @@ class IncAnalyzer:
         if not self.es:
             self.el = line
             self.es = s
-
-    def _mark_named_usage(self, name):
-        macro_map = (self.iad or {}).get("macro_map")
-        if not isinstance(macro_map, dict):
-            return
-        rep = macro_map.get(str(name or ""))
-        if isinstance(rep, dict) and "used_count" in rep:
-            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
 
     def cc(self):
         result = scan_text_comments(
@@ -388,7 +385,7 @@ class IncAnalyzer:
                 if d >= 16:
                     self.err(line, "if depth overflow")
                     return None, i, line, 0
-                self._mark_named_usage(w)
+                mark_named_usage(self.iad, w)
                 ifs[d] = 1 if w in self.iad["name_set"] else 2
                 continue
             if t.startswith("#elseifdef", i):
@@ -402,7 +399,7 @@ class IncAnalyzer:
                     if not ok2:
                         self.err(line, "Missing word after #elseifdef.")
                         return None, i, line, 0
-                    self._mark_named_usage(w)
+                    mark_named_usage(self.iad, w)
                     ifs[d] = next_elseif_ifdef_state(ifs[d], w in self.iad["name_set"])
                     continue
                 self.err(line, "#elseifdef does not have a matching #if.")

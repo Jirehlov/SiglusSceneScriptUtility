@@ -1,7 +1,12 @@
 import unicodedata
 from functools import lru_cache
 from ._const_manager import get_const_module
-from .common import next_else_ifdef_state, next_elseif_ifdef_state, scan_text_comments
+from .common import (
+    mark_named_usage,
+    next_else_ifdef_state,
+    next_elseif_ifdef_state,
+    scan_text_comments,
+)
 
 C = get_const_module()
 
@@ -104,14 +109,6 @@ class CharacterAnalizer:
 
     def get_error_str(self):
         return self.error_str
-
-    def _mark_named_usage(self, name):
-        macro_map = (self.iad or {}).get("macro_map")
-        if not isinstance(macro_map, dict):
-            return
-        rep = macro_map.get(str(name or ""))
-        if isinstance(rep, dict) and "used_count" in rep:
-            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
 
     def _check_str(self, t, i, s):
         return (i + len(s), 1) if t.startswith(s, i) else (i, 0)
@@ -232,7 +229,7 @@ class CharacterAnalizer:
                             d += 1
                             if d >= 16:
                                 return self.error(self.m_line, "if depth overflow")
-                            self._mark_named_usage(w)
+                            mark_named_usage(self.iad, w)
                             ifs[d] = 1 if w in self.iad["name_set"] else 2
                             continue
                         return self.error(self.m_line, "Missing word after #ifdef.")
@@ -244,7 +241,7 @@ class CharacterAnalizer:
                                 ifs[d] = next_elseif_ifdef_state(
                                     ifs[d], w in self.iad["name_set"]
                                 )
-                                self._mark_named_usage(w)
+                                mark_named_usage(self.iad, w)
                                 continue
                             return self.error(
                                 self.m_line, "Missing word after #elseifdef."

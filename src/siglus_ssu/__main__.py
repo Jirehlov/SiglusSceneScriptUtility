@@ -233,14 +233,6 @@ def _consume_global_options(argv):
     return out, profile
 
 
-def _has_option(argv, opt):
-    for item in argv or []:
-        s = str(item)
-        if s == opt or s.startswith(opt + "="):
-            return True
-    return False
-
-
 def _run_mode(module_name, args):
     module = import_module(f"siglus_ssu.{module_name}")
     rc = module.main(args)
@@ -309,15 +301,6 @@ def main(argv=None):
     elif len(argv) > 1 and argv[1] in ("-h", "--help", "help"):
         _usage()
         return 0
-    if (
-        mode in ("-c", "--compile")
-        and const_profile is not None
-        and _has_option(argv[1:], "--tmp")
-    ):
-        sys.stderr.write(
-            f"{_prog()}: error: --tmp cannot be used with --const-profile\n"
-        )
-        return 2
     if mode in ("init", "--init"):
         from ._const_manager import download_const, load_const_module
 
@@ -357,6 +340,14 @@ def main(argv=None):
     except Exception as exc:
         sys.stderr.write(f"{_prog()}: failed to load const.py: {exc}\n")
         return 1
+    if mode in ("-c", "--compile") and const_profile is not None:
+        from .common import has_option
+
+        if has_option(argv[1:], "--tmp"):
+            sys.stderr.write(
+                f"{_prog()}: error: --tmp cannot be used with --const-profile\n"
+            )
+            return 2
     if mode == "-lsp":
         from . import lsp as lsp_server
 

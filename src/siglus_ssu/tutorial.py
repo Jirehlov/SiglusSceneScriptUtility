@@ -14,7 +14,11 @@ from pathlib import Path
 from . import dat
 from . import pck
 from . import textmap
-from .common import eprint
+from .common import (
+    eprint,
+    int_or_none as _int_or_none,
+    is_trace_command_base as _is_trace_command_base,
+)
 
 FORMAT_NAME = "siglus-tutorial/v1"
 VIEWER_FILE_NAME = "tutorial_viewer.html"
@@ -57,13 +61,6 @@ def _status(message: str) -> None:
     eprint(f"tutorial: {message}", errors="replace")
 
 
-def _int_or_none(value):
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
 def _safe_text(value) -> str:
     if value is None:
         return ""
@@ -83,19 +80,6 @@ def _block_key(scene_no: int, start_ofs: int) -> tuple[int, int]:
 
 def _segment_key(scene_no: int, start_ofs: int) -> str:
     return f"segment:{int(scene_no):d}:{int(start_ofs):08X}"
-
-
-def _is_trace_command_base(ev, base_name: str) -> bool:
-    if not isinstance(ev, dict):
-        return False
-    base_name = str(base_name or "").casefold()
-    if not base_name:
-        return False
-    base = str(ev.get("_call_base_name") or "").casefold()
-    if base == base_name:
-        return True
-    name = str(ev.get("_call_name") or "").casefold()
-    return name == base_name or name.endswith("." + base_name)
 
 
 def _trace_command_name(ev) -> str:

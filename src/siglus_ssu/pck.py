@@ -394,12 +394,6 @@ def _pck_original_source_rows(entries):
     return [(nm, a, b, len(raw), sha1(raw)) for nm, a, b, raw in entries]
 
 
-def _pck_original_sources(blob, h, scn_data_end):
-    return _pck_original_source_rows(
-        _pck_original_source_entries(blob, h, scn_data_end)
-    )
-
-
 def _read_scene_script_id(raw):
     try:
         line = bytes(raw or b"")[:1024].splitlines()[0]
