@@ -134,6 +134,10 @@ The CLI also accepts a few convenience aliases:
 - `siglus-ssu version` behaves the same as `siglus-ssu --version`
 - `siglus-ssu --init ...` behaves the same as `siglus-ssu init ...`
 
+### Python Module API
+
+This project supports the `siglus-ssu` command-line interface only. Importing or calling `siglus_ssu` modules from external Python code is not a supported API, and internal module names, functions, globals, and return shapes may change without compatibility guarantees.
+
 ### Getting Help
 
 ```bash

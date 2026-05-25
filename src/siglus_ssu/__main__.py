@@ -302,7 +302,11 @@ def main(argv=None):
         _usage()
         return 0
     if mode in ("init", "--init"):
-        from ._const_manager import download_const, load_const_module
+        from ._const_manager import (
+            _fallback_const_path,
+            download_const,
+            load_const_module,
+        )
 
         force = False
         ref = None
@@ -328,6 +332,11 @@ def main(argv=None):
         except Exception as e:
             sys.stderr.write(f"{_prog()}: init failed: {e}\n")
             return 1
+        fallback_const = _fallback_const_path()
+        if fallback_const.is_file():
+            sys.stderr.write(
+                f"{_prog()}: warning: package source const.py exists at {fallback_const}; normal runs from this source tree may load it before the user-data const.py.\n"
+            )
         sys.stdout.write(f"const.py installed at: {path}\n")
         return 0
     from ._const_manager import load_const_module

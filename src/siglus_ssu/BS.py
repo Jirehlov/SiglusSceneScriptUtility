@@ -23,6 +23,7 @@ from .common import (
     read_text_auto,
     write_text,
     write_bytes,
+    read_scn_header,
 )
 
 C = get_const_module()
@@ -362,19 +363,6 @@ def _inc_counter(mapping, key, amount=1):
     mapping[key] = int(mapping.get(key, 0) or 0) + int(amount or 0)
 
 
-def _scn_header_from_bytes(blob):
-    if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
-        return {}
-    fields = list(C.SCN_HDR_FIELDS or [])
-    if len(fields) * 4 != C.SCN_HDR_SIZE:
-        return {}
-    try:
-        vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
-    except struct.error:
-        return {}
-    return {fields[i]: int(vals[i]) for i in range(len(fields))}
-
-
 def _block_sentences(block):
     if isinstance(block, dict):
         if isinstance(block.get("sentense_list"), list):
@@ -641,7 +629,7 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, piad, dat_bytes):
     )
     _collect_statement_stats(root, plad, stats, inc_command_cnt)
     _collect_tree_stats(root, stats)
-    header = _scn_header_from_bytes(dat_bytes)
+    header = read_scn_header(dat_bytes)
     _collect_label_stats(plad, psad, header, stats)
     stats["expressions"]["default_arg_fills"] = int(
         (pbsd or {}).get("default_arg_fills", 0) or 0

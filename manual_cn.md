@@ -134,6 +134,10 @@ CLI 也接受几个便利用法：
 - `siglus-ssu version` 等同于 `siglus-ssu --version`
 - `siglus-ssu --init ...` 等同于 `siglus-ssu init ...`
 
+### Python 模块 API
+
+本项目只支持 `siglus-ssu` 命令行接口。不支持从外部 Python 代码导入或调用 `siglus_ssu` 模块；内部模块名、函数、全局变量和返回结构都可能变化，且不提供兼容性保证。
+
 ### 获取帮助
 
 ```bash

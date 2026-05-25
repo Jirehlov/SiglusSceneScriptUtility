@@ -317,18 +317,26 @@ def _int16_le(b: bytes, off: int) -> int:
     return struct.unpack_from("<h", b, off)[0]
 
 
-def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> bytes:
-    def _s16(v: int) -> int:
-        v &= 0xFFFF
-        if v >= 0x8000:
-            v -= 0x10000
-        return v
+def _nwa_s16(v: int) -> int:
+    v &= 0xFFFF
+    if v >= 0x8000:
+        v -= 0x10000
+    return v
 
-    br = None
-    nowsmp = 0
 
+def _nwa_pack_mod(pack_mod: int) -> int:
+    if pack_mod == 0:
+        pack_mod = 2
+    elif pack_mod == 1:
+        pack_mod = 1
+    elif pack_mod == 2:
+        pack_mod = 0
+    return 3 + pack_mod
+
+
+def _nwa_decode_sample(br, header: NWAHeader, mod: int, zero_cnt: int, nowsmp: int):
     def apply_delta(nbits: int, sign_bit: int, shift: int):
-        nonlocal nowsmp, br
+        nonlocal nowsmp
         code = br.get(nbits)
         if code & sign_bit:
             code &= sign_bit - 1
@@ -336,53 +344,50 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
         else:
             nowsmp += code << shift
 
+    if zero_cnt:
+        return zero_cnt - 1, nowsmp
+    mod_code = br.get(3)
+    if mod_code < 4:
+        if mod_code == 0:
+            if header.zero_mod:
+                z = br.get(1)
+                if z == 1:
+                    z = br.get(2)
+                    if z == 3:
+                        z = br.get(8)
+                zero_cnt = z
+        elif mod_code == 1:
+            _apply_by_mod(mod, apply_delta, which=1)
+        elif mod_code == 2:
+            _apply_by_mod(mod, apply_delta, which=2)
+        else:
+            _apply_by_mod(mod, apply_delta, which=3)
+    else:
+        if mod_code == 4:
+            _apply_by_mod(mod, apply_delta, which=4)
+        elif mod_code == 5:
+            _apply_by_mod(mod, apply_delta, which=5)
+        elif mod_code == 6:
+            _apply_by_mod(mod, apply_delta, which=6)
+        else:
+            b = br.get(1)
+            if b == 0:
+                _apply_by_mod(mod, apply_delta, which=7)
+            else:
+                nowsmp = 0
+    return zero_cnt, nowsmp
+
+
+def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> bytes:
     if header.channels == 1:
         nowsmp = _int16_le(data, 0)
         br = _BitReader(data, byte_pos=2, bit_pos=0)
         out = array("h", [0]) * src_smp_cnt
-        pack_mod = header.pack_mod
-        if pack_mod == 0:
-            pack_mod = 2
-        elif pack_mod == 1:
-            pack_mod = 1
-        elif pack_mod == 2:
-            pack_mod = 0
-        mod = 3 + pack_mod
+        mod = _nwa_pack_mod(header.pack_mod)
         zero_cnt = 0
         for i in range(src_smp_cnt):
-            if zero_cnt:
-                zero_cnt -= 1
-            else:
-                mod_code = br.get(3)
-                if mod_code < 4:
-                    if mod_code == 0:
-                        if header.zero_mod:
-                            z = br.get(1)
-                            if z == 1:
-                                z = br.get(2)
-                                if z == 3:
-                                    z = br.get(8)
-                            zero_cnt = z
-                    elif mod_code == 1:
-                        _apply_by_mod(mod, apply_delta, which=1)
-                    elif mod_code == 2:
-                        _apply_by_mod(mod, apply_delta, which=2)
-                    else:
-                        _apply_by_mod(mod, apply_delta, which=3)
-                else:
-                    if mod_code == 4:
-                        _apply_by_mod(mod, apply_delta, which=4)
-                    elif mod_code == 5:
-                        _apply_by_mod(mod, apply_delta, which=5)
-                    elif mod_code == 6:
-                        _apply_by_mod(mod, apply_delta, which=6)
-                    else:
-                        b = br.get(1)
-                        if b == 0:
-                            _apply_by_mod(mod, apply_delta, which=7)
-                        else:
-                            nowsmp = 0
-            out[i] = _s16(nowsmp)
+            zero_cnt, nowsmp = _nwa_decode_sample(br, header, mod, zero_cnt, nowsmp)
+            out[i] = _nwa_s16(nowsmp)
         if sys.byteorder != "little":
             out.byteswap()
         return out.tobytes()
@@ -390,54 +395,15 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
     nowsmp_r = _int16_le(data, 2)
     br = _BitReader(data, byte_pos=4, bit_pos=0)
     out = array("h", [0]) * src_smp_cnt
-    pack_mod = header.pack_mod
-    if pack_mod == 0:
-        pack_mod = 2
-    elif pack_mod == 1:
-        pack_mod = 1
-    elif pack_mod == 2:
-        pack_mod = 0
-    mod = 3 + pack_mod
+    mod = _nwa_pack_mod(header.pack_mod)
     zero_cnt = 0
-    nowsmp = 0
     for i in range(src_smp_cnt):
         if (i & 1) == 0:
             nowsmp = nowsmp_l
         else:
             nowsmp = nowsmp_r
-        if zero_cnt:
-            zero_cnt -= 1
-        else:
-            mod_code = br.get(3)
-            if mod_code < 4:
-                if mod_code == 0:
-                    if header.zero_mod:
-                        z = br.get(1)
-                        if z == 1:
-                            z = br.get(2)
-                            if z == 3:
-                                z = br.get(8)
-                        zero_cnt = z
-                elif mod_code == 1:
-                    _apply_by_mod(mod, apply_delta, which=1)
-                elif mod_code == 2:
-                    _apply_by_mod(mod, apply_delta, which=2)
-                else:
-                    _apply_by_mod(mod, apply_delta, which=3)
-            else:
-                if mod_code == 4:
-                    _apply_by_mod(mod, apply_delta, which=4)
-                elif mod_code == 5:
-                    _apply_by_mod(mod, apply_delta, which=5)
-                elif mod_code == 6:
-                    _apply_by_mod(mod, apply_delta, which=6)
-                else:
-                    b = br.get(1)
-                    if b == 0:
-                        _apply_by_mod(mod, apply_delta, which=7)
-                    else:
-                        nowsmp = 0
-        out[i] = _s16(nowsmp)
+        zero_cnt, nowsmp = _nwa_decode_sample(br, header, mod, zero_cnt, nowsmp)
+        out[i] = _nwa_s16(nowsmp)
         if (i & 1) == 0:
             nowsmp_l = nowsmp
         else:

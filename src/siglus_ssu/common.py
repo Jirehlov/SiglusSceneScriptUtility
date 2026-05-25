@@ -979,6 +979,19 @@ def parse_i32_header(dat: bytes, fields, size: int, offset: int = 0) -> dict:
     return {k: int(v) for k, v in zip(fields, vals)}
 
 
+def read_scn_header(blob):
+    if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
+        return {}
+    fields = list(C.SCN_HDR_FIELDS or [])
+    if len(fields) * 4 != C.SCN_HDR_SIZE:
+        return {}
+    try:
+        vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
+    except struct.error:
+        return {}
+    return {fields[i]: int(vals[i]) for i in range(len(fields))}
+
+
 def parse_i32_header_checked(
     dat: bytes,
     fields,

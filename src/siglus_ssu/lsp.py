@@ -1763,35 +1763,14 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
         )
     local_macro_defs = _unique_macro_definitions(result.local_definitions)
     macro_defs = _unique_macro_definitions(result.project.definitions)
-    for token in ident_tokens:
-        rng = (token.line, token.start_char, token.end_char)
-        if rng in seen_ranges:
-            continue
-        record = local_macro_defs.get(token.text.casefold())
-        if record is None:
-            record = macro_defs.get(token.text.casefold())
-        if record is None and not token.text.startswith("@"):
-            continue
-        seen_ranges.add(rng)
-        symbol_id = (
-            _definition_symbol_id(record)
-            if record is not None
-            else _macro_symbol_id("macro", token.text)
-        )
-        out.append(
-            SymbolOccurrence(
-                symbol_id=symbol_id,
-                path=result.path,
-                line=token.line,
-                start_char=token.start_char,
-                end_char=token.end_char,
-                kind="macro",
-                semantic_type="macro",
-                name=token.text,
-                definition=False,
-                renamable=record is not None and _definition_renamable(record),
-            )
-        )
+    _append_macro_use_occurrences(
+        out,
+        result,
+        ident_tokens,
+        seen_ranges,
+        (local_macro_defs, macro_defs),
+        mark_used_ranges=True,
+    )
     out.sort(
         key=lambda item: (item.line, item.start_char, item.end_char, item.symbol_id)
     )
@@ -1857,6 +1836,51 @@ def _macro_definition_span_in_text(
     return None
 
 
+def _append_macro_use_occurrences(
+    out: list[SymbolOccurrence],
+    result: AnalysisResult,
+    tokens,
+    used_ranges: set[tuple[int, int, int]],
+    macro_maps,
+    *,
+    mark_used_ranges: bool,
+) -> None:
+    for token in tokens:
+        if token.kind != "ident":
+            continue
+        rng = (token.line, token.start_char, token.end_char)
+        if rng in used_ranges:
+            continue
+        record = None
+        for macro_defs in macro_maps or ():
+            record = macro_defs.get(token.text.casefold())
+            if record is not None:
+                break
+        if record is None and not token.text.startswith("@"):
+            continue
+        if mark_used_ranges:
+            used_ranges.add(rng)
+        symbol_id = (
+            _definition_symbol_id(record)
+            if record is not None
+            else _macro_symbol_id("macro", token.text)
+        )
+        out.append(
+            SymbolOccurrence(
+                symbol_id=symbol_id,
+                path=result.path,
+                line=token.line,
+                start_char=token.start_char,
+                end_char=token.end_char,
+                kind="macro",
+                semantic_type="macro",
+                name=token.text,
+                definition=False,
+                renamable=record is not None and _definition_renamable(record),
+            )
+        )
+
+
 def _collect_inc_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     out: list[SymbolOccurrence] = []
     used_ranges: set[tuple[int, int, int]] = set()
@@ -1908,34 +1932,14 @@ def _collect_inc_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
         else None
     )
     macro_defs = _unique_macro_definitions(result.project.definitions)
-    for token in _scan_source_tokens(result.text, replace_tree=replace_tree):
-        if token.kind != "ident":
-            continue
-        rng = (token.line, token.start_char, token.end_char)
-        if rng in used_ranges:
-            continue
-        record = macro_defs.get(token.text.casefold())
-        if record is None and not token.text.startswith("@"):
-            continue
-        symbol_id = (
-            _definition_symbol_id(record)
-            if record is not None
-            else _macro_symbol_id("macro", token.text)
-        )
-        out.append(
-            SymbolOccurrence(
-                symbol_id=symbol_id,
-                path=result.path,
-                line=token.line,
-                start_char=token.start_char,
-                end_char=token.end_char,
-                kind="macro",
-                semantic_type="macro",
-                name=token.text,
-                definition=False,
-                renamable=record is not None and _definition_renamable(record),
-            )
-        )
+    _append_macro_use_occurrences(
+        out,
+        result,
+        _scan_source_tokens(result.text, replace_tree=replace_tree),
+        used_ranges,
+        (macro_defs,),
+        mark_used_ranges=False,
+    )
     out.sort(
         key=lambda item: (item.line, item.start_char, item.end_char, item.symbol_id)
     )

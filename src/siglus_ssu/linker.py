@@ -21,6 +21,7 @@ from .common import (
     KEY_TXT_NAME,
     read_exe_el_key,
     parse_i32_header,
+    read_scn_header,
 )
 from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
@@ -146,19 +147,6 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
     return enc_names, dat_list, lzss_list
 
 
-def _scn_header_from_bytes(blob):
-    if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
-        return {}
-    fields = list(C.SCN_HDR_FIELDS or [])
-    if len(fields) * 4 != C.SCN_HDR_SIZE:
-        return {}
-    try:
-        vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
-    except struct.error:
-        return {}
-    return {fields[i]: int(vals[i]) for i in range(len(fields))}
-
-
 def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
     if not isinstance(ctx, dict):
         return
@@ -170,7 +158,7 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
         dat = dat_list[i] if i < len(dat_list or []) else b""
         lz = lzss_list[i] if i < len(lzss_list or []) else b""
         dat_size = len(dat or b"")
-        header = _scn_header_from_bytes(dat)
+        header = read_scn_header(dat)
         scn_size = int(header.get("scn_size", 0) or 0)
         lzss_size = len(lz or b"") if lzss_mode else 0
         total_dat += dat_size
