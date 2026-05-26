@@ -1956,7 +1956,7 @@ def collect_batch_files(
         files = sorted(files, key=sort_key)
     if not files:
         eprint(empty_message)
-        return [], 0
+        return [], 1
     return files, None
 
 

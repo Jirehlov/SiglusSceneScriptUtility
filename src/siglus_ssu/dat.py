@@ -33,7 +33,6 @@ from .common import (
 )
 
 C = get_const_module()
-DAT_TXT_OUT_DIR = None
 
 
 def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
@@ -248,8 +247,6 @@ def dat_disassembly_bundle(
 
 def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
     try:
-        if out_dir is None:
-            out_dir = globals().get("DAT_TXT_OUT_DIR")
         if not out_dir:
             return None, None
         if not dat_path:
@@ -742,7 +739,7 @@ def dat_sections(blob):
     return secs, meta
 
 
-def dat(path, blob: bytes) -> int:
+def dat(path, blob: bytes, disam_out_dir=None) -> int:
     if len(blob) < C.SCN_HDR_SIZE:
         print("too small for dat header")
         return 1
@@ -782,7 +779,9 @@ def dat(path, blob: bytes) -> int:
     print()
     print_sections(secs, len(blob))
     disam_stats = new_disam_stats()
-    out_txt = _write_dat_disassembly(path, blob, stats=disam_stats)
+    out_txt = _write_dat_disassembly(
+        path, blob, out_dir=disam_out_dir, stats=disam_stats
+    )
     if out_txt:
         print()
         print(f"wrote: {out_txt}")
@@ -928,7 +927,9 @@ def compare_gameexe_dat(p1, p2):
     return 0
 
 
-def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
+def compare_dat(
+    p1, p2, b1: bytes, b2: bytes, compare_payload=False, disam_out_dir=None
+) -> int:
     s1, m1 = dat_sections(b1)
     s2, m2 = dat_sections(b2)
     h1 = m1.get("header") or {}
@@ -992,11 +993,10 @@ def compare_dat(p1, p2, b1: bytes, b2: bytes, compare_payload=False) -> int:
             print("payload compare (normalized scn_bytes semantics): " + payload_status)
         else:
             print("payload compare (normalized scn_bytes semantics): unavailable")
-    out_dir = globals().get("DAT_TXT_OUT_DIR")
-    if out_dir:
+    if disam_out_dir:
         disam_stats = new_disam_stats()
-        out1 = _write_dat_disassembly(p1, b1, out_dir, stats=disam_stats)
-        out2 = _write_dat_disassembly(p2, b2, out_dir, stats=disam_stats)
+        out1 = _write_dat_disassembly(p1, b1, out_dir=disam_out_dir, stats=disam_stats)
+        out2 = _write_dat_disassembly(p2, b2, out_dir=disam_out_dir, stats=disam_stats)
         if out1 or out2:
             print()
         if out1:

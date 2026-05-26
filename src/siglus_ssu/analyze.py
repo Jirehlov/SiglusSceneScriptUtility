@@ -171,7 +171,7 @@ def _detect_type(path, blob):
     return "bin"
 
 
-def analyze_file(path, readall=False, apply=False):
+def analyze_file(path, readall=False, apply=False, dat_disam_out_dir=None):
     if not os.path.exists(path):
         sys.stderr.write(f"not found: {path}\n")
         return 2
@@ -197,7 +197,7 @@ def analyze_file(path, readall=False, apply=False):
     if ftype == "pck":
         return pck.pck(blob, input_pck=path)
     if ftype == "dat":
-        return dat.dat(path, blob)
+        return dat.dat(path, blob, disam_out_dir=dat_disam_out_dir)
     if ftype == "cgm":
         return cgm.cgm(blob, path=path)
     if ftype == "tcr":
@@ -249,7 +249,7 @@ def analyze_file(path, readall=False, apply=False):
     return 0
 
 
-def compare_files(p1, p2, compare_payload=False):
+def compare_files(p1, p2, compare_payload=False, dat_disam_out_dir=None):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
@@ -273,17 +273,24 @@ def compare_files(p1, p2, compare_payload=False):
         print("Different types; structural compare is skipped.")
         print()
         print("--- Analyze file1 ---")
-        analyze_file(p1)
+        analyze_file(p1, dat_disam_out_dir=dat_disam_out_dir)
         print()
         print("--- Analyze file2 ---")
-        analyze_file(p2)
+        analyze_file(p2, dat_disam_out_dir=dat_disam_out_dir)
         return 0
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
     if t1 == "pck":
         return pck.compare_pck(p1, p2, b1, b2, compare_payload=compare_payload)
     if t1 == "dat":
-        return dat.compare_dat(p1, p2, b1, b2, compare_payload=compare_payload)
+        return dat.compare_dat(
+            p1,
+            p2,
+            b1,
+            b2,
+            compare_payload=compare_payload,
+            disam_out_dir=dat_disam_out_dir,
+        )
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
     if t1 == "cgm":
@@ -308,9 +315,9 @@ def main(argv=None):
         return 2
     args, gei, _disam = parse_gei_disam_args(
         args,
-        disam_action=lambda: setattr(dat, "DAT_TXT_OUT_DIR", "__DATDIR__"),
         allow_gei_disam=True,
     )
+    dat_disam_out_dir = "__DATDIR__" if _disam else None
     readall = False
     if "--readall" in args:
         args.remove("--readall")
@@ -338,7 +345,7 @@ def main(argv=None):
             return pck.pck_word_count(args[0], args[1])
         return 2
     if angou:
-        if gei or readall or apply:
+        if gei or _disam or readall or apply or compare_payload:
             return 2
         if len(args) != 1:
             sys.stderr.write("angou.dat compare is not supported\n")
@@ -355,9 +362,19 @@ def main(argv=None):
     if len(args) == 1:
         if readall and apply:
             return 2
-        return analyze_file(args[0], readall=readall, apply=apply)
+        return analyze_file(
+            args[0],
+            readall=readall,
+            apply=apply,
+            dat_disam_out_dir=dat_disam_out_dir,
+        )
     if len(args) == 2:
         if readall or apply:
             return 2
-        return compare_files(args[0], args[1], compare_payload=compare_payload)
+        return compare_files(
+            args[0],
+            args[1],
+            compare_payload=compare_payload,
+            dat_disam_out_dir=dat_disam_out_dir,
+        )
     return 2
