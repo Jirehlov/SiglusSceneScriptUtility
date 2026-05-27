@@ -905,7 +905,7 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
             idx = int(idx)
             if idx < 0:
                 raise ValueError("cut index must be >= 0")
-            while len(cuts) < idx:
+            while len(cuts) <= idx:
                 cuts.append(None)
         source = raw.get("source", default_source)
         source_rect = _parse_json_rect(
@@ -917,14 +917,18 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
             "cuts[].canvas_rect/target_rect",
         )
         center = _parse_json_xy(raw.get("center"), "cuts[].center") or default_center
-        cuts.append(
-            {
-                "source": source,
-                "source_rect": source_rect,
-                "canvas_rect": canvas_rect,
-                "center": (int(center[0]), int(center[1])),
-            }
-        )
+        cut = {
+            "source": source,
+            "source_rect": source_rect,
+            "canvas_rect": canvas_rect,
+            "center": (int(center[0]), int(center[1])),
+        }
+        if idx < len(cuts):
+            if cuts[idx] is not None:
+                raise ValueError(f"duplicate cut index: {idx}")
+            cuts[idx] = cut
+        else:
+            cuts.append(cut)
     return {
         "canvas": (canvas_w, canvas_h),
         "cuts": cuts,
