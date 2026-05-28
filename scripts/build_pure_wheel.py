@@ -21,7 +21,7 @@ for src in pkg_src.rglob("*"):
     rel_posix = rel.as_posix()
     if "__pycache__" in rel.parts:
         continue
-    if src.suffix in {".pyc", ".pyo"}:
+    if src.suffix in {".dll", ".dylib", ".pyd", ".pyc", ".pyo", ".so"}:
         continue
     if rel_posix == "const.py":
         continue

@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.3.3
+siglus-ssu init --force --ref v0.3.4
 ```
 
 ---
@@ -214,7 +214,7 @@ siglus-ssu -lsp [--serial]
 - Official entrypoint: `siglus-ssu -lsp`
 - By default, workspace-wide symbol and link scans run in parallel; use `--serial` to force serial scanning when needed
 - The LSP persists workspace indexes across sessions and reuses them only when the `.inc` / `.ss` MD5 input table, package version, and const profile match. Unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
-- Current capabilities: semantic tokens, diagnostics, completion, hover, go to definition, find references, prepare rename when the client supports it, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; the current semantic token categories include dialogue text, system elements, speaker names, and macro declarations with used/unused distinction
+- Current capabilities: semantic tokens, publish/pull diagnostics, completion, hover, go to definition, find references, prepare rename when the client supports it, rename, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis; pull diagnostics are advertised only when the client supports `textDocument/diagnostic`; the current semantic token categories include dialogue text, system elements, speaker names, and macro declarations with used/unused distinction
 - The server negotiates client position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes defensively.
 - The language service reuses the same `-c` compiler pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`) wherever they apply; semantic classification comes from that compiler-aligned analysis, while the LSP layer recovers source ranges and packages the results as semantic tokens, locations, and edits
 - The current project scope is directory-based, matching the present `-c` model for `.inc` / `.ss` joint analysis and global `.inc #command` linking
@@ -260,7 +260,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Brute-force scan all possible 32-bit MSVC `rand()` seeds to find the one that reproduces the string table order in `<test_dir>`. Optionally start the scan at `seed0`. Cannot be combined with `--tmp`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
-| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage, writing a fixed filename `Gameexe.dat` into the resolved output directory. Pass an existing directory when you want the file created inside that directory; otherwise the shared output-path parser treats the argument as an output file path and uses its parent directory. Cannot be combined with `--tmp`. |
+| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is parsed the same way as normal `-c`: if it is an existing directory or ends with a path separator, `Gameexe.dat` is written inside that directory; otherwise the argument is treated as an output-file path and `Gameexe.dat` is written to its parent directory. Cannot be combined with `--tmp`. |
 
 #### Compiling Stats
 
@@ -397,8 +397,8 @@ siglus-ssu -a [--disam] [--readall|--apply] <input_file>
 # Count dialogue units in a .pck only and write per-file CSV
 siglus-ssu -a --word <input_pck> [output_csv]
 
-# Compare two files of the same type
-siglus-ssu -a [--payload] <input_file_1> <input_file_2>
+# Compare two files; same-type pairs use structural comparison, different types are analyzed separately
+siglus-ssu -a [--payload] [--disam] <input_file_1> <input_file_2>
 
 # Analyze or derive the exe_el key from 暗号.dat / Scene.pck / SiglusEngine.exe / directory / literal string
 siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir | literal_angou> --angou
@@ -413,13 +413,13 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 |---|---|
 | `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. When analyzing or comparing `.pck` files, embedded `SCENE_SCRIPT_ID` values are shown in the existing tables as an `ID` column for embedded `.ss` source chunks; `.pck` comparisons also treat source IDs as comparison data. |
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
-| `--disam` | When analyzing a `.dat` file, write a human-readable disassembly to `<scene>.dat.txt` alongside the input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
-| `--readall` | For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
+| `--disam` | When analyzing a `.dat` file or comparing two `.dat` files, write human-readable disassembly to `<scene>.dat.txt` alongside each input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
+| `--readall` | Only meaningful for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--word`, `--angou`, or `--gei`; `--disam` and `--payload` do not change this single-file `.sav` operation. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
 | `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool `str_id` differences when the resolved text is the same. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text scene-bytecode differences, and `-` when payload comparison is unavailable; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
 | `--angou` | Parse the input as a `暗号.dat`, extract embedded `暗号.dat` from a `.pck`, read `SiglusEngine*.exe` / a directory containing one, or use a literal angou string directly, then derive and print the `exe_el` key (the 16-byte key shown in `key.txt` format). Existing paths are treated as files/directories first; non-existing path-like arguments still report `not found`. |
-| `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. |
+| `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode rejects other analyze modifiers such as `--disam`, `--readall`, `--apply`, `--payload`, `--word`, and `--angou`. |
 
 #### Examples
 
@@ -615,7 +615,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 | Parameter | Description |
 |---|---|
 | `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. Required in normal mode; not used with `--single`. |
-| `<voice_dir>` | Path to the directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. In directory mode, only `.ovk` files in that directory itself are scanned; the search is not recursive. |
+| `<voice_dir>` | Path to the flat top-level directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. In directory mode, only `.ovk` files in that directory itself are scanned; the search is not recursive and character subdirectories are not inspected. |
 | `<output_dir>` | Directory where extracted `.ogg` files will be written. In normal mode, `koe_master.csv` is also written there. With `--single`, the extracted file is written directly under `<output_dir>`. |
 | `--stats-only` | Prints the summary and does not write any `.ogg` files. In normal mode it still writes `koe_master.csv`; with `--single`, no CSV is written. |
 | `--single KOE_NO` | Only extracts the specified global KOE number. In this mode, no scene input is required, no `koe_master.csv` is generated, no character-name or `unreferenced` subdirectories are created, and the output file is written directly as `<output_dir>/KOE(XXXXXXXXX).ogg`. |
@@ -772,7 +772,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 
 | Parameter | Description |
 |---|---|
-| `<path_to_ss \| path_to_dir>` | A single `.ss` file or a directory of `.ss` files. Exactly one path argument is required. |
+| `<path_to_ss \| path_to_dir>` | A single `.ss` file or a directory of `.ss` files. Exactly one path argument is required. Directory inputs are scanned recursively. |
 | `<path_to_dat \| path_to_dir>` | A single `.dat` file or a directory. Exactly one path argument is required. |
 | `--apply`, `-a` | Apply a `.ss.csv` text map back to the corresponding `.ss` file in-place. The `.ss.csv` must already exist alongside the `.ss` file. |
 | `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `.dat` files are recursively scanned, and `Gameexe.dat` and `暗号.dat` are automatically excluded. |

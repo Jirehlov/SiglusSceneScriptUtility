@@ -904,9 +904,10 @@ def main(argv=None):
         gei_ini = os.path.basename(inp)
         inp = os.path.dirname(inp) or "."
         inp = os.path.abspath(inp)
-    out_pck = os.path.abspath(a.output_pck)
-    if os.path.isdir(out_pck) or out_pck.endswith(os.sep):
-        out = out_pck.rstrip(os.sep)
+    out_pck_arg = str(a.output_pck)
+    out_pck = os.path.abspath(out_pck_arg)
+    if os.path.isdir(out_pck) or out_pck_arg.endswith(("/", "\\")):
+        out = out_pck
         scene_pck = "Scene.pck"
     else:
         out = os.path.dirname(out_pck) or "."

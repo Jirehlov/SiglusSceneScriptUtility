@@ -251,8 +251,6 @@ def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
             return None, None
         if not dat_path:
             return None, None
-        if out_dir == "__DATDIR__":
-            out_dir = os.path.dirname(str(dat_path)) or "."
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None, None
         if not isinstance(bundle, dict):
@@ -928,7 +926,13 @@ def compare_gameexe_dat(p1, p2):
 
 
 def compare_dat(
-    p1, p2, b1: bytes, b2: bytes, compare_payload=False, disam_out_dir=None
+    p1,
+    p2,
+    b1: bytes,
+    b2: bytes,
+    compare_payload=False,
+    disam_out_dir=None,
+    disam_to_input_dir=False,
 ) -> int:
     s1, m1 = dat_sections(b1)
     s2, m2 = dat_sections(b2)
@@ -993,10 +997,16 @@ def compare_dat(
             print("payload compare (normalized scn_bytes semantics): " + payload_status)
         else:
             print("payload compare (normalized scn_bytes semantics): unavailable")
-    if disam_out_dir:
+    if disam_out_dir or disam_to_input_dir:
         disam_stats = new_disam_stats()
-        out1 = _write_dat_disassembly(p1, b1, out_dir=disam_out_dir, stats=disam_stats)
-        out2 = _write_dat_disassembly(p2, b2, out_dir=disam_out_dir, stats=disam_stats)
+        out1_dir = (
+            (os.path.dirname(str(p1)) or ".") if disam_to_input_dir else disam_out_dir
+        )
+        out2_dir = (
+            (os.path.dirname(str(p2)) or ".") if disam_to_input_dir else disam_out_dir
+        )
+        out1 = _write_dat_disassembly(p1, b1, out_dir=out1_dir, stats=disam_stats)
+        out2 = _write_dat_disassembly(p2, b2, out_dir=out2_dir, stats=disam_stats)
         if out1 or out2:
             print()
         if out1:

@@ -171,7 +171,7 @@ def _detect_type(path, blob):
     return "bin"
 
 
-def analyze_file(path, readall=False, apply=False, dat_disam_out_dir=None):
+def analyze_file(path, readall=False, apply=False, dat_disam=False):
     if not os.path.exists(path):
         sys.stderr.write(f"not found: {path}\n")
         return 2
@@ -197,7 +197,11 @@ def analyze_file(path, readall=False, apply=False, dat_disam_out_dir=None):
     if ftype == "pck":
         return pck.pck(blob, input_pck=path)
     if ftype == "dat":
-        return dat.dat(path, blob, disam_out_dir=dat_disam_out_dir)
+        return dat.dat(
+            path,
+            blob,
+            disam_out_dir=(os.path.dirname(str(path)) or ".") if dat_disam else None,
+        )
     if ftype == "cgm":
         return cgm.cgm(blob, path=path)
     if ftype == "tcr":
@@ -249,7 +253,7 @@ def analyze_file(path, readall=False, apply=False, dat_disam_out_dir=None):
     return 0
 
 
-def compare_files(p1, p2, compare_payload=False, dat_disam_out_dir=None):
+def compare_files(p1, p2, compare_payload=False, dat_disam=False):
     if not os.path.exists(p1) or not os.path.exists(p2):
         sys.stderr.write("not found\n")
         return 2
@@ -273,10 +277,10 @@ def compare_files(p1, p2, compare_payload=False, dat_disam_out_dir=None):
         print("Different types; structural compare is skipped.")
         print()
         print("--- Analyze file1 ---")
-        analyze_file(p1, dat_disam_out_dir=dat_disam_out_dir)
+        analyze_file(p1, dat_disam=dat_disam)
         print()
         print("--- Analyze file2 ---")
-        analyze_file(p2, dat_disam_out_dir=dat_disam_out_dir)
+        analyze_file(p2, dat_disam=dat_disam)
         return 0
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
@@ -289,7 +293,7 @@ def compare_files(p1, p2, compare_payload=False, dat_disam_out_dir=None):
             b1,
             b2,
             compare_payload=compare_payload,
-            disam_out_dir=dat_disam_out_dir,
+            disam_to_input_dir=dat_disam,
         )
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
@@ -317,7 +321,7 @@ def main(argv=None):
         args,
         allow_gei_disam=True,
     )
-    dat_disam_out_dir = "__DATDIR__" if _disam else None
+    dat_disam = bool(_disam)
     readall = False
     if "--readall" in args:
         args.remove("--readall")
@@ -366,7 +370,7 @@ def main(argv=None):
             args[0],
             readall=readall,
             apply=apply,
-            dat_disam_out_dir=dat_disam_out_dir,
+            dat_disam=dat_disam,
         )
     if len(args) == 2:
         if readall or apply:
@@ -375,6 +379,6 @@ def main(argv=None):
             args[0],
             args[1],
             compare_payload=compare_payload,
-            dat_disam_out_dir=dat_disam_out_dir,
+            dat_disam=dat_disam,
         )
     return 2

@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.3.4] - TBA
+## [v0.3.4] - 2026-05-28
 
 - Improved LSP protocol compatibility by negotiating client position encodings, returning range-aware completion edits, normalizing completion item kinds to client capabilities, supporting work-done progress cancellation, and validating document URIs and request shapes more defensively.
 - Hardened LSP workspace indexing by matching overlay paths case-insensitively where the platform does, validating persistent cache payloads more strictly, deriving cache files from input signatures, isolating protocol stdout from worker output, and terminating process-pool workers promptly when scans are cancelled.

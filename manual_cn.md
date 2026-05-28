@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.3.3
+siglus-ssu init --force --ref v0.3.4
 ```
 
 ---
@@ -214,7 +214,7 @@ siglus-ssu -lsp [--serial]
 - 官方启动入口：`siglus-ssu -lsp`
 - 默认会并行执行工作区级别的符号扫描与链接扫描；如需强制串行，可传入 `--serial`
 - LSP 会跨会话持久化工作区索引，并且只有在 `.inc` / `.ss` 的 MD5 输入表、程序版本与 const profile 都匹配时才复用。存在未保存的编辑器缓冲区时会跳过持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
-- 当前能力：语义 token、诊断、自动补全、悬停说明、跳转到定义、查找引用、客户端支持时的准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；当前语义 token 分类包含台词文本、system element（系统指令）、角色名，以及带“已使用 / 未使用”区分的宏声明
+- 当前能力：语义 token、push/pull 诊断、自动补全、悬停说明、跳转到定义、查找引用、客户端支持时的准备改名、改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新；其中 pull 诊断只会在客户端支持 `textDocument/diagnostic` 时声明；当前语义 token 分类包含台词文本、system element（系统指令）、角色名，以及带“已使用 / 未使用”区分的宏声明
 - 服务会协商客户端 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并会更严格地校验文档 URI 与请求结构。
 - 语言服务会在适用处直接复用与 `-c` 相同的编译流水线阶段（`CA`、`LA`、`SA`、`MA`、`BS`）；语义分类来自这条与编译器对齐的分析结果，而 LSP 层负责恢复源文本范围，并把结果封装成 semantic token、location 与 edit
 - 当前项目作用域是目录级的，这与现行 `-c` 对 `.inc` / `.ss` 联合分析以及全局 `.inc #command` 链接的模型保持一致
@@ -260,7 +260,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 穷举搜索所有可能的 32 位 MSVC `rand()` 种子，以找到能精确重建 `<test_dir>` 中字符串表混淆顺序的种子。可选从 `seed0` 开始扫描。不能与 `--tmp` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，写出 CSV，记录串行重建阶段每个场景对象的初态种子和终态种子。若路径是已存在目录或以路径分隔符结尾，则在其中写出 `test_shuffle_seeds.csv`。不能与 `--tmp` 同用。 |
-| `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段，并在解析后的输出目录写出固定文件名 `Gameexe.dat`。若希望写入某个目录，请传入已存在目录；否则通用输出路径解析器会把该参数视为输出文件路径，并使用其父目录。不能与 `--tmp` 同用。 |
+| `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段。输出参数按普通 `-c` 的同一规则解析：若它是已存在目录或以路径分隔符结尾，则将 `Gameexe.dat` 写入该目录；否则会把该参数视为输出文件路径，并将 `Gameexe.dat` 写入其父目录。不能与 `--tmp` 同用。 |
 
 #### 编译统计
 
@@ -397,8 +397,8 @@ siglus-ssu -a [--disam] [--readall|--apply] <input_file>
 # 仅统计 .pck 中的台词计数并导出逐文件 CSV
 siglus-ssu -a --word <input_pck> [output_csv]
 
-# 比较两个同类型文件
-siglus-ssu -a [--payload] <input_file_1> <input_file_2>
+# 比较两个文件；同类型执行结构比较，异类型则分别分析
+siglus-ssu -a [--payload] [--disam] <input_file_1> <input_file_2>
 
 # 从 暗号.dat / Scene.pck / SiglusEngine.exe / 目录 / 字符串 分析或推导 exe_el 密钥
 siglus-ssu -a <path_to_暗号.dat | Scene.pck | SiglusEngine.exe | dir | literal_angou> --angou
@@ -413,13 +413,13 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2]
 |---|---|
 | `<input_file>` | 要分析的文件路径。支持扩展名：`.pck`、`.dat`、`.gan`、`.sav`、`.cgm`、`.tcr`。分析或比较 `.pck` 时，若可读取内嵌 `.ss` original source chunk，会在原有表格中以 `ID` 列显示其中的 `SCENE_SCRIPT_ID`；比较 `.pck` 时，`.ss` source ID 也会作为比较对象。 |
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
-| `--disam` | 分析 `.dat` 文件时，将可读反汇编写在输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/<scene>.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
-| `--readall` | 对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
+| `--disam` | 分析 `.dat` 文件或比较两个 `.dat` 文件时，将可读反汇编写在各自输入 `.dat` 同目录下的 `<scene>.dat.txt`，并额外输出重建后的 `decompiled/<scene>.ss` 与 `decompiled/__decompiled.inc`。命令结束前会打印反汇编、hints 和反编译三个阶段的总耗时。decompiler 输出目前仍属实验性质，不应视为可靠真值。 |
+| `--readall` | 只对 `read.sav` 和 `global.sav` 有意义。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--word`、`--angou` 或 `--gei` 同用；`--disam` 与 `--payload` 不会改变这个单文件 `.sav` 操作。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，自动创建不覆盖旧文件的 `.bak` 备份，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
 | `--angou` | 将输入解析为 `暗号.dat`，或从 `.pck` 的内嵌 original source 中提取 `暗号.dat`，或读取 `SiglusEngine*.exe` / 包含其中之一的目录，也可以直接使用输入的暗号字符串，然后推导并打印 `exe_el` 密钥（`key.txt` 格式的 16 字节密钥）。若参数是已存在路径，会优先按文件或目录处理；不存在但形似路径的参数仍会报 `not found`。 |
-| `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。 |
+| `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。该模式会拒绝其他 analyze 修饰选项，例如 `--disam`、`--readall`、`--apply`、`--payload`、`--word` 和 `--angou`。 |
 
 #### 示例
 
@@ -615,7 +615,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 | 参数 | 说明 |
 |---|---|
 | `<scene_input>` | `Scene.pck`、单个场景 `.dat` 文件，或场景 `.dat` 目录树的路径。普通模式必填；使用 `--single` 时不需要。 |
-| `<voice_dir>` | 包含 `.ovk` 语音文件的目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。目录模式当前只扫描该目录当前层的 `.ovk` 文件，不递归。 |
+| `<voice_dir>` | 包含 `.ovk` 语音文件的扁平顶层目录（通常命名为 `z0001.ovk`、`z0002.ovk` 等）。也可以是单个 `.ovk` 文件的路径。目录模式当前只扫描该目录当前层的 `.ovk` 文件，不递归，也不会进入角色子目录。 |
 | `<output_dir>` | 提取的 `.ogg` 文件输出目录。普通模式下还会在这里写出 `koe_master.csv`；使用 `--single` 时，提取出的单个文件会直接写到 `<output_dir>` 根下。 |
 | `--stats-only` | 打印汇总，但不会写任何 `.ogg` 文件。普通模式下仍会写出 `koe_master.csv`；若同时使用 `--single`，则不会写 CSV。 |
 | `--single KOE_NO` | 仅提取指定的全局 KOE 编号。此模式下不需要场景输入，不会生成 `koe_master.csv`，不会创建角色名或 `unreferenced` 子目录，输出文件会直接写成 `<output_dir>/KOE(XXXXXXXXX).ogg`。 |
@@ -772,7 +772,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir>
 
 | 参数 | 说明 |
 |---|---|
-| `<path_to_ss \| path_to_dir>` | 单个 `.ss` 文件或包含 `.ss` 文件的目录。**只接受 1 个路径参数**。 |
+| `<path_to_ss \| path_to_dir>` | 单个 `.ss` 文件或包含 `.ss` 文件的目录。**只接受 1 个路径参数**。目录输入会递归扫描。 |
 | `<path_to_dat \| path_to_dir>` | 单个 `.dat` 文件或目录。**只接受 1 个路径参数**。 |
 | `--apply`, `-a` | 将 `.ss.csv` 文本映射就地应用回对应的 `.ss` 文件。`.ss.csv` 必须已与 `.ss` 文件并排存在。 |
 | `--disam` | 将已编译的 `.dat` 的字符串列表导出到紧邻 `.dat` 的 `.dat.csv` 文件。支持加密、LZSS 压缩或原始 `.dat`。扫描目录时会递归处理 `.dat`，并自动跳过 `Gameexe.dat` 和 `暗号.dat`。 |
