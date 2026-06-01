@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.3.4
+siglus-ssu init --force --ref v0.3.5
 ```
 
 ---
@@ -664,7 +664,7 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 
 | Column | Description |
 |---|---|
-| `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Empty for call-sites where the OVK entry was not found. If a found KOE is referenced by multiple distinct texts, the same number can appear on multiple rows. |
+| `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Kept when known even if the OVK entry was not found. If a KOE is referenced by multiple distinct character/text pairs, the same number can appear on multiple rows. |
 | `character` | Character name inferred from `CD_NAME` events and inline voice metadata in the scene trace. |
 | `text` | Dialogue text inferred from `CD_TEXT` events and inline voice metadata in the scene trace. |
 | `duration_sec` | Voice duration in seconds, derived from the OVK entry sample count and Ogg sample rate. Empty when the OVK entry or duration metadata cannot be read. |
@@ -701,7 +701,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. `KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, while missing OVK call-sites still keep an empty `koe_no` column in the CSV. With `--single`, scene-scanning and CSV-related lines are omitted.
+The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. `KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, and missing OVK call-sites keep their known `koe_no` in the CSV. With `--single`, scene-scanning and CSV-related lines are omitted.
 
 ---
 

@@ -20,6 +20,7 @@ _VOICE_CALL_NAMES = frozenset(
         "add_koe",
     }
 )
+_INLINE_VOICE_META_CALL_NAMES = frozenset({"$$add_msgback", "add_msgback"})
 _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
 _TEXT_QUOTE_PAIRS = (
     ("\u300c", "\u300d"),
@@ -217,7 +218,9 @@ def _line_name_text(events):
             name = text
             continue
         if op == "CD_TEXT":
-            texts.append(_normalize_voice_text(text))
+            text = _normalize_voice_text(text)
+            if text.strip():
+                texts.append(text)
     return name, "".join(texts)
 
 
@@ -235,36 +238,6 @@ def _normalize_voice_text(text):
         if not tail.strip().strip(cq):
             return s[len(oq) : end]
     return s
-
-
-def _remember_voice_meta(voice_meta, koe_no, name, text):
-    koe_no_i = _try_int(koe_no)
-    if koe_no_i is None:
-        return
-    name = str(name or "")
-    text = str(text or "")
-    if not name and not text:
-        return
-    variants = voice_meta.setdefault(koe_no_i, {})
-    one = variants.setdefault((name, text), {"name": name, "text": text})
-    if name and not one.get("name"):
-        one["name"] = name
-    if text and not one.get("text"):
-        one["text"] = text
-
-
-def _unique_voice_meta(voice_meta, koe_no):
-    koe_no_i = _try_int(koe_no)
-    if koe_no_i is None:
-        return {}
-    variants = [
-        v
-        for v in (voice_meta.get(koe_no_i) or {}).values()
-        if v.get("name") or v.get("text")
-    ]
-    if len(variants) != 1:
-        return {}
-    return variants[0]
 
 
 def _entry_ref_key(name, text):
@@ -361,7 +334,10 @@ def _line_inline_voice_meta(events, scene_no=None):
     for ev in events or []:
         if not isinstance(ev, dict) or str(ev.get("op") or "") != "CD_COMMAND":
             continue
-        if _voice_call_base_name(ev) in _VOICE_CALL_NAMES:
+        base = _voice_call_base_name(ev)
+        if base in _VOICE_CALL_NAMES:
+            continue
+        if base not in _INLINE_VOICE_META_CALL_NAMES:
             continue
         args = ev.get("_arg_values")
         if not isinstance(args, (list, tuple)):
@@ -405,80 +381,23 @@ def _scan_bundle_calls(bundle, scene_root: str):
         )
     trace = [x for x in trace if isinstance(x, dict)]
     scene_no = bundle.get("scene_no")
-    voice_meta = {}
-    pending = []
-    last_name = ""
-    last_text = ""
-    last_line = None
     for line_no, events in _iter_trace_line_groups(trace):
         name, text = _line_name_text(events)
         line_meta = _line_inline_voice_meta(events, scene_no=scene_no)
-        if name or text:
-            keep = []
-            for idx, src_line in pending:
-                if (
-                    line_no is None
-                    or src_line is None
-                    or int(line_no) - int(src_line) > 1
-                    or int(line_no) < int(src_line)
-                ):
-                    keep.append((idx, src_line))
-                    continue
-                if name and not refs[idx][2]:
-                    refs[idx][2] = name
-                if text and not refs[idx][3]:
-                    refs[idx][3] = text
-                if refs[idx][2] or refs[idx][3]:
-                    _remember_voice_meta(
-                        voice_meta, refs[idx][0], refs[idx][2], refs[idx][3]
-                    )
-                else:
-                    keep.append((idx, src_line))
-            pending = keep
-        elif line_no is not None:
-            pending = [
-                (idx, src_line)
-                for idx, src_line in pending
-                if src_line is None or int(line_no) - int(src_line) <= 1
-            ]
-        adjacent = (
-            line_no is not None
-            and last_line is not None
-            and 0 <= int(line_no) - int(last_line) <= 1
-        )
-        fallback_name = name or (last_name if adjacent else "")
-        fallback_text = text or (last_text if adjacent else "")
         for ev in events:
             ref = _voice_ref_from_event(ev, scene_no=scene_no)
             if ref is None:
                 continue
             koe_no, chara_no = ref
-            meta = dict(_unique_voice_meta(voice_meta, koe_no) or {})
             inline = dict(
                 line_meta.get((koe_no, chara_no)) or line_meta.get((koe_no, -1)) or {}
             )
-            ref_name = (
-                fallback_name
-                or str(inline.get("name") or "")
-                or str(meta.get("name") or "")
-            )
-            ref_text = (
-                fallback_text
-                or str(inline.get("text") or "")
-                or str(meta.get("text") or "")
-            )
+            inline_name = str(inline.get("name") or "")
+            inline_text = str(inline.get("text") or "")
+            ref_name = name or inline_name
+            ref_text = text or inline_text
             callsite = f"{rel}:{line_no}" if line_no is not None else rel
             refs.append([koe_no, chara_no, ref_name, ref_text, callsite])
-            if ref_name or ref_text:
-                _remember_voice_meta(voice_meta, koe_no, ref_name, ref_text)
-            else:
-                pending.append((len(refs) - 1, line_no))
-        if name:
-            last_name = name
-        if text:
-            last_text = text
-        if line_no is not None and (name or text):
-            last_line = int(line_no)
     return refs
 
 
@@ -668,7 +587,7 @@ def main(argv=None):
         for koe_no, ch, name, text, callsite in call_refs:
             e = entries.get(koe_no)
             if e is None:
-                missing_rows.append((name, text, callsite))
+                missing_rows.append((koe_no, name, text, callsite))
                 continue
             _add_entry_ref(e, ch, name, text, callsite)
         referenced = sum(1 for v in entries.values() if v["callsites"])
@@ -713,6 +632,7 @@ def main(argv=None):
         with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f, lineterminator="\r\n")
             w.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
+            csv_rows = []
             for koe_no in sorted(entries.keys()):
                 e = entries[koe_no]
                 refs = list((e.get("refs") or {}).values())
@@ -726,22 +646,47 @@ def main(argv=None):
                         )
                     )
                     for ref in refs:
-                        w.writerow(
-                            [
-                                str(koe_no),
-                                ref["name"],
-                                ref["text"],
-                                duration_sec,
-                                ";".join(sorted(ref["callsites"])),
-                            ]
+                        callsites = ";".join(sorted(ref["callsites"]))
+                        csv_rows.append(
+                            (
+                                int(koe_no),
+                                str(ref["name"] or ""),
+                                str(ref["text"] or ""),
+                                callsites,
+                                [
+                                    str(koe_no),
+                                    ref["name"],
+                                    ref["text"],
+                                    duration_sec,
+                                    callsites,
+                                ],
+                            )
                         )
                     continue
-                w.writerow([str(koe_no), e["name"], e["text"], duration_sec, ""])
-            for name, text, callsite in sorted(missing_rows, key=lambda x: x[2]):
-                w.writerow(["", name, text, "", callsite])
-        total_rows = sum(
-            max(1, len(e.get("refs") or {})) for e in entries.values()
-        ) + len(missing_rows)
+                csv_rows.append(
+                    (
+                        int(koe_no),
+                        str(e["name"] or ""),
+                        str(e["text"] or ""),
+                        "",
+                        [str(koe_no), e["name"], e["text"], duration_sec, ""],
+                    )
+                )
+            for koe_no, name, text, callsite in missing_rows:
+                koe_no_i = _try_int(koe_no)
+                csv_rows.append(
+                    (
+                        koe_no_i if koe_no_i is not None else -1,
+                        str(name or ""),
+                        str(text or ""),
+                        str(callsite or ""),
+                        [str(koe_no), name, text, "", callsite],
+                    )
+                )
+            csv_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+            for _koe_no_i, _name, _text, _callsite, row in csv_rows:
+                w.writerow(row)
+        total_rows = len(csv_rows)
     single_found = single_koe_no is None or single_koe_no in entries
     extracted = skipped = failed = 0
     total_duration_sec = 0.0

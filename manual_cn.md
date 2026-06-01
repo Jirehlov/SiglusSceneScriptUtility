@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.3.4
+siglus-ssu init --force --ref v0.3.5
 ```
 
 ---
@@ -664,7 +664,7 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 
 | 列名 | 说明 |
 |---|---|
-| `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。对于未在 OVK 中找到的调用，这一列为空。若某个已匹配的 KOE 被多个不同文本引用，同一编号可能出现多行。 |
+| `koe_no` | 全局 KOE 编号（场景号 × 100000 + 条目号）。只要调用位置中能解析出编号，即使未在 OVK 中找到也会保留。若某个 KOE 被多个不同角色/文本组合引用，同一编号可能出现多行。 |
 | `character` | 从 scene trace 中的 `CD_NAME` 事件和行内语音元数据推断出的角色名。 |
 | `text` | 从 scene trace 中的 `CD_TEXT` 事件和行内语音元数据推断出的文本。 |
 | `duration_sec` | 语音时长，单位为秒，由 OVK 条目的 sample count 和 Ogg 采样率换算得出。若无法读取 OVK 条目或时长元数据，则为空。 |
@@ -701,7 +701,7 @@ CSV rows         : 45,724
 Out dir          : /path/to/voice_out/
 ```
 
-上面的示例是普通模式输出。`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。`KOE multi-text` 统计关联到多个非空对话文本的 `koe_no`，`KOE multi-text no` 会列出这些编号。这个列表基于 OVK 匹配前的场景引用计算；未在 OVK 中找到的调用在 CSV 中仍会保持 `koe_no` 列为空。使用 `--single` 时，不会显示场景扫描相关行，也不会显示 CSV 相关行。
+上面的示例是普通模式输出。`Stats only` 和 `Single KOE` 仅在使用对应选项时出现。`KOE multi-text` 统计关联到多个非空对话文本的 `koe_no`，`KOE multi-text no` 会列出这些编号。这个列表基于 OVK 匹配前的场景引用计算；未在 OVK 中找到的调用在 CSV 中仍会保留已知的 `koe_no`。使用 `--single` 时，不会显示场景扫描相关行，也不会显示 CSV 相关行。
 
 ---
 

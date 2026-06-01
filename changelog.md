@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.3.5] - 2026-06-01
+- Happy birthday, Koyomi!
+- Fixed `siglus-ssu -k` `koe_master.csv` speaker inference so rows only use same-line trace metadata, anonymous voiced text no longer inherits nearby or same-`koe_no` speakers, callsites whose OVK entry is missing keep their known `koe_no`, and all CSV rows remain sorted by `koe_no`.
+
+
 ## [v0.3.4] - 2026-05-28
 
 - Improved LSP protocol compatibility by negotiating client position encodings, returning range-aware completion edits, normalizing completion item kinds to client capabilities, supporting work-done progress cancellation, and validating document URIs and request shapes more defensively.
