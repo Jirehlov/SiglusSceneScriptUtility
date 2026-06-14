@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 ## [v0.3.6] - 2026-06-14
 - Security updates.
 - Added --angou for more modes.
+- Changed `siglus-ssu -a` `.pck` comparison output to keep non-OS section rows before original-source rows instead of interleaving both groups during ID sorting.
 
 
 ## [v0.3.5] - 2026-06-01

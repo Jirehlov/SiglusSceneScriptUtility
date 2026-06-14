@@ -1390,7 +1390,10 @@ def compare_pck(
             return (0, name.casefold(), name)
         return (1, min(parts), name.casefold(), name)
 
-    allrows = sorted(rows + orows, key=_row_sort_key) if show_ids else rows + orows
+    if show_ids:
+        rows = sorted(rows, key=_row_sort_key)
+        orows = sorted(orows, key=_row_sort_key)
+    allrows = rows + orows
     if not allrows:
         if show_ids:
             print("Sections: identical by (name,size,sha1,id)")
