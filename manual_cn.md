@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.3.5
+siglus-ssu init --force --ref v0.3.6
 ```
 
 ---
@@ -910,7 +910,7 @@ siglus-ssu -g --a <input_g00>
 siglus-ssu -g --x [--trim] <input_g00 | input_dir> <output_dir>
 
 # 将多个 .g00 文件（或 cut）合并为单张 PNG
-siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
+siglus-ssu -g --m [--trim] <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
 
 # 从图片创建新的 .g00，或基于显式参考 .g00 执行更新
 siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
@@ -922,8 +922,8 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 |---|---|
 | `--a` | **分析**模式。打印类型、画布尺寸、LZSS 统计；对于 type2，还会输出最多前 50 个 cut 的详细信息。 |
 | `--x` | **提取**模式。解码每个 `.g00` 并写入 PNG 或 JPEG 文件；对于 type2，未使用 `--trim` 时还会额外写出一份可回灌的 `.type2.json` sidecar。若目标图片或 JSON 已存在，则跳过而不覆盖。 |
-| `--trim` | （仅提取模式）写出前裁剪导出的图片。PNG 输出会优先裁到非透明像素区域，若整张图均不透明则改用左上角背景色；JPEG 输出使用左上角背景色，且无需裁剪时保留原始 payload。启用裁剪时不会写出 type2 JSON sidecar。 |
-| `--m` | **合并**模式。将多个 `.g00` 图片或 cut 合成为一张 PNG。 |
+| `--trim` | 与 `--x` 使用时，写出前裁剪导出的图片。PNG 输出会优先裁到非透明像素区域，若整张图均不透明则改用左上角背景色；JPEG 输出使用左上角背景色，且无需裁剪时保留原始 payload。启用裁剪时不会写出 type2 JSON sidecar。与 `--m` 使用时，会裁掉合并后 PNG 四周的透明或纯背景色边缘。 |
+| `--m` | **合并**模式。将多个 `.g00` 图片或 cut 合成为一张 PNG。带 `--trim` 时，会裁掉合并后 PNG 四周的透明或纯背景色边缘。 |
 | `--c` | **创建/更新**模式。不带 `--refer` 时创建新的 `.g00`；带 `--refer` 时，以参考 `.g00` 为 base 更新图片数据。 |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | （仅合并模式）合并后 PNG 的输出目录。可省略；省略时输出到当前工作目录。 |
 | `--type N`, `--t N` | （仅 `--c` 模式）在创建模式下强制输出 `.g00` 类型；在更新模式下覆盖参考 `.g00` 的预期类型用于验证。 |
@@ -947,6 +947,9 @@ siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merg
 
 # 合并 type2 .g00 中的特定 cut
 siglus-ssu -g --m /path/to/sprite.g00:cut005 /path/to/overlay.g00 --o /path/to/out/
+
+# 合并并裁掉输出 PNG 边缘
+siglus-ssu -g --m --trim /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merged_out/
 
 # 从 PNG 创建新的 type0 .g00（输出可省略）
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00

@@ -190,7 +190,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.3.5
+siglus-ssu init --force --ref v0.3.6
 ```
 
 ---
@@ -910,7 +910,7 @@ siglus-ssu -g --a <input_g00>
 siglus-ssu -g --x [--trim] <input_g00 | input_dir> <output_dir>
 
 # Merge multiple .g00 files (or cuts) into a single PNG
-siglus-ssu -g --m <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
+siglus-ssu -g --m [--trim] <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
 
 # Create a new .g00 from image files, or update from an explicit reference .g00
 siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
@@ -922,8 +922,8 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 |---|---|
 | `--a` | **Analyze** mode. Prints type, canvas size, and LZSS stats; for type2, also prints detailed information for up to the first 50 cuts. |
 | `--x` | **Extract** mode. Decodes each `.g00` and writes PNG or JPEG files; for type2, also writes a round-trippable `.type2.json` sidecar unless `--trim` is used. Existing image or JSON targets are skipped rather than overwritten. |
-| `--trim` | (Extract mode only) Crop extracted images before writing them. PNG outputs are cropped to non-transparent pixels, falling back to the top-left background color when fully opaque; JPEG outputs use the top-left background color and keep the original payload when no crop is needed. Type2 JSON sidecars are not written when trimming. |
-| `--m` | **Merge** mode. Composites multiple `.g00` images or cuts into one PNG. |
+| `--trim` | With `--x`, crop extracted images before writing them. PNG outputs are cropped to non-transparent pixels, falling back to the top-left background color when fully opaque; JPEG outputs use the top-left background color and keep the original payload when no crop is needed. Type2 JSON sidecars are not written when trimming. With `--m`, crop transparent or opaque-background edges from the merged PNG. |
+| `--m` | **Merge** mode. Composites multiple `.g00` images or cuts into one PNG. With `--trim`, crops transparent or opaque-background edges from the merged PNG. |
 | `--c` | **Create/update** mode. Without `--refer`, creates a new `.g00`. With `--refer`, updates image payload using the referenced `.g00` as the base. |
 | `--o <output_dir>`, `-o`, `--output`, `--output-dir` | (Merge mode only) Optional output directory for the merged PNG. If omitted, the file is written to the current working directory. |
 | `--type N`, `--t N` | (Only valid with `--c`) In create mode, force the output `.g00` type. In update mode, override the expected reference `.g00` type for validation. |
@@ -947,6 +947,9 @@ siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merg
 
 # Merge a specific cut from a type2 .g00
 siglus-ssu -g --m /path/to/sprite.g00:cut005 /path/to/overlay.g00 --o /path/to/out/
+
+# Merge and crop the output PNG edges
+siglus-ssu -g --m --trim /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merged_out/
 
 # Create a new type0 .g00 from a PNG (output optional)
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00

@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 - Security updates.
 - Added --angou for more modes.
 - Added `siglus-ssu -g --x --trim` to crop extracted PNG transparent or fully opaque background-color edges and JPEG background-color edges, preserving untrimmed JPEG payloads and skipping type2 JSON sidecars because trimmed images are not rebuild layouts.
+- Added `siglus-ssu -g --m --trim` to crop transparent or opaque-background edges from merged G00 PNG output.
 - Changed `siglus-ssu -a` `.pck` comparison output to keep non-OS section rows before original-source rows instead of interleaving both groups during ID sorting.
 
 

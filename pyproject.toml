@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "siglus-ssu"
-version = "0.3.5"
+version = "0.3.6"
 description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -77,4 +77,5 @@ manifest-path = "src/siglus_ssu/rust/Cargo.toml"
 sdist-generator = "git"
 exclude = [
     "src/siglus_ssu/const.py",
+    { path = "src/siglus_ssu/rust/**/*", format = "wheel" },
 ]

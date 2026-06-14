@@ -39,6 +39,24 @@ def need_pil():
         raise RuntimeError("need pillow: pip install pillow")
 
 
+def _trim_image_edges(img):
+    full = (0, 0, *img.size)
+    bbox = None
+    if "A" in img.getbands():
+        bbox = img.getchannel("A").getbbox()
+        if bbox == full:
+            rgb = img.convert("RGB")
+            bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
+            bbox = ImageChops.difference(rgb, bg).getbbox()
+    else:
+        rgb = img.convert("RGB")
+        bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
+        bbox = ImageChops.difference(rgb, bg).getbbox()
+    if bbox and bbox != full:
+        return img.crop(bbox), True
+    return img, False
+
+
 def lzss(b: bytes) -> bytes:
     if len(b) < 8:
         raise ValueError("lzss short")
@@ -99,14 +117,7 @@ def save_png_bgra(bgra: bytes, w: int, h: int, p: Path, trim: bool = False) -> b
     need_pil()
     img = Image.frombytes("RGBA", (w, h), bgra, "raw", "BGRA")
     if trim:
-        full = (0, 0, w, h)
-        bbox = img.getchannel("A").getbbox()
-        if bbox == full:
-            rgb = img.convert("RGB")
-            bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
-            bbox = ImageChops.difference(rgb, bg).getbbox()
-        if bbox and bbox != full:
-            img = img.crop(bbox)
+        img, _cropped = _trim_image_edges(img)
     img.save(p, "PNG")
     return True
 
@@ -266,7 +277,7 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
     return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA")
 
 
-def merge_g00_files(g00_paths, output_dir=None):
+def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
     if len(g00_paths) < 2:
         raise ValueError("need >=2 input g00")
     specs = [_parse_g00_spec(x) for x in g00_paths]
@@ -290,6 +301,8 @@ def merge_g00_files(g00_paths, output_dir=None):
         out_dir = Path.cwd()
     out_name = "+".join([lab for (_p, _c, lab) in specs]) + ".png"
     out_path = out_dir / out_name
+    if trim:
+        base_img, _cropped = _trim_image_edges(base_img)
     base_img.save(out_path, "PNG")
     return out_path
 
@@ -303,14 +316,7 @@ def cut_to_png(
     canvas, cw, ch = _render_cut_canvas(blk, keep_hidden_rgb=preserve_hidden_rgb)
     img = Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA")
     if trim:
-        full = (0, 0, cw, ch)
-        bbox = img.getchannel("A").getbbox()
-        if bbox == full:
-            rgb = img.convert("RGB")
-            bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
-            bbox = ImageChops.difference(rgb, bg).getbbox()
-        if bbox and bbox != full:
-            img = img.crop(bbox)
+        img, _cropped = _trim_image_edges(img)
     img.save(p, "PNG")
     return True
 
@@ -327,19 +333,8 @@ def _extract_simple(pre: str, d: bytes, out: Path, trim: bool = False):
             from io import BytesIO
 
             img = Image.open(BytesIO(jpeg))
-            full = (0, 0, *img.size)
-            if "A" in img.getbands():
-                bbox = img.getchannel("A").getbbox()
-                if bbox == full:
-                    rgb = img.convert("RGB")
-                    bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
-                    bbox = ImageChops.difference(rgb, bg).getbbox()
-            else:
-                rgb = img.convert("RGB")
-                bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
-                bbox = ImageChops.difference(rgb, bg).getbbox()
-            if bbox and bbox != full:
-                img = img.crop(bbox)
+            img, cropped = _trim_image_edges(img)
+            if cropped:
                 img.save(dst, "JPEG")
             else:
                 write_bytes(str(dst), jpeg)
@@ -1560,9 +1555,14 @@ def _parse_merge_args(args):
         return None
     layers = []
     output_dir = None
+    trim = False
     i = 1
     while i < len(args):
         a = args[i]
+        if a == "--trim" and not trim:
+            trim = True
+            i += 1
+            continue
         if a in ("--o", "-o", "--output", "--output-dir"):
             if i + 1 >= len(args) or output_dir is not None:
                 return None
@@ -1571,7 +1571,7 @@ def _parse_merge_args(args):
             continue
         layers.append(a)
         i += 1
-    return (layers, output_dir) if len(layers) >= 2 else None
+    return (layers, output_dir, trim) if len(layers) >= 2 else None
 
 
 def main(argv=None):
@@ -1608,9 +1608,9 @@ def main(argv=None):
         parsed = _parse_merge_args(args)
         if parsed is None:
             return 2
-        layers, output_dir = parsed
+        layers, output_dir, trim = parsed
         try:
-            out_p = merge_g00_files(layers, output_dir=output_dir)
+            out_p = merge_g00_files(layers, output_dir=output_dir, trim=trim)
             print(f"Merge: {out_p}")
             return 0
         except Exception as e:
