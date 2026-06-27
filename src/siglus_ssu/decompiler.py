@@ -2837,7 +2837,7 @@ class _Decompiler:
             ]
             if not labels:
                 break
-            lines, next_idx = self._parse_raw(cur, end_ofs, ctx)
+            lines, next_idx = self._parse_raw(cur, ctx)
             out.extend(lines)
             if next_idx <= cur:
                 break
@@ -4555,7 +4555,7 @@ class _Decompiler:
         stop_idx = self._end_index_for_ofs(end_ofs)
         while idx < stop_idx:
             if self.event_ops[idx] != "CD_NL":
-                raw_lines, idx2 = self._parse_raw(idx, end_ofs, ctx)
+                raw_lines, idx2 = self._parse_raw(idx, ctx)
                 if idx2 <= idx:
                     break
                 lines.extend(raw_lines)
@@ -4568,7 +4568,7 @@ class _Decompiler:
             idx = idx2
         return lines, idx
 
-    def _parse_raw(self, idx, end_ofs, ctx):
+    def _parse_raw(self, idx, ctx):
         ev = self.events[idx]
         op = str(ev.get("op") or "")
         lines = []

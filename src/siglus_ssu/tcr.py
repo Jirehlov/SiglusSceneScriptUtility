@@ -80,7 +80,7 @@ def _parse(blob, want_payload=True):
     return out
 
 
-def tcr(blob: bytes, path: str = None) -> int:
+def tcr(blob: bytes) -> int:
     info = _parse(blob, want_payload=True)
     print("==== TCR Meta ====")
     print(f"max: {int(info.get('max') or 0):d}")

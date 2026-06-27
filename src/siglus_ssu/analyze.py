@@ -152,9 +152,9 @@ def analyze_file(
             disam_out_dir=(os.path.dirname(str(path)) or ".") if dat_disam else None,
         )
     if ftype == "cgm":
-        return cgm.cgm(blob, path=path)
+        return cgm.cgm(blob)
     if ftype == "tcr":
-        return tcr.tcr(blob, path=path)
+        return tcr.tcr(blob)
     if ftype == "sav":
         if apply:
             txt = os.path.splitext(path)[0] + ".txt"

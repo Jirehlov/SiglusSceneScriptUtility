@@ -112,7 +112,7 @@ def decode_cgm(blob):
     return r
 
 
-def cgm(blob, path=None):
+def cgm(blob):
     info = decode_cgm(blob)
     print("==== CGM Meta ====")
     print(f"head: {info.get('head') or ''}")

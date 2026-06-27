@@ -1417,12 +1417,10 @@ def _handle_player_action(
         reporter(_format_playlist_help(len(entries) > 1))
         return current_index, current, None
     if action == "list":
-        list_handler(entries, current_index, current.paused if current else False)
+        list_handler(entries, current_index)
         return current_index, current, None
     if action in ("page_up", "page_down", "top", "bottom"):
-        view_handler(
-            action, entries, current_index, current.paused if current else False
-        )
+        view_handler(action, entries)
         return current_index, current, None
     if action == "toggle_pause":
         if current is None:
@@ -1502,11 +1500,11 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
         screen.focus_current(len(entries), current_index)
         screen.set_message(_format_playlist_help(has_playlist))
 
-        def _screen_list(items, index, paused):
+        def _screen_list(items, index):
             screen.focus_current(len(items), index)
             screen.set_message(f"playlist {index + 1}/{len(items)} visible")
 
-        def _screen_view(action_name, items, index, paused):
+        def _screen_view(action_name, items):
             if action_name == "page_up":
                 screen.scroll_pages(len(items), -1)
                 return

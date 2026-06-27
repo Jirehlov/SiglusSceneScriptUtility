@@ -487,12 +487,6 @@ def iter_pck_angou_dat_items(blob: bytes, hdr=None):
         yield {"name": name, "raw": raw}
 
 
-def extract_pck_angou_dat(blob: bytes, hdr=None) -> tuple[str, bytes]:
-    for item in iter_pck_angou_dat_items(blob, hdr=hdr) or []:
-        return str(item.get("name") or ANGOU_DAT_NAME), bytes(item.get("raw") or b"")
-    return "", b""
-
-
 def _iter_pck_angou_sources(blob: bytes, hdr=None):
     for item in iter_pck_angou_dat_items(blob, hdr=hdr) or []:
         yield bytes(item.get("raw") or b"")
@@ -1676,34 +1670,6 @@ def iter_exe_el_candidates(
                 yield src
             else:
                 yield bytes(el)
-
-
-def compute_exe_el(
-    os_dir: str,
-    alt_dir: str = "",
-    explicit_angou: str = "",
-    include_parent: bool = True,
-):
-    dirs = []
-    for d in (os_dir, alt_dir):
-        if not d:
-            continue
-        try:
-            d = os.path.abspath(d)
-        except Exception:
-            d = str(d)
-        if d and d not in dirs:
-            dirs.append(d)
-    for d in dirs:
-        for src in iter_exe_el_sources(
-            explicit_angou=explicit_angou,
-            base_dir=d,
-            include_parent=bool(include_parent),
-        ):
-            el = src.get("exe_el") if isinstance(src, dict) else b""
-            if el and len(el) == 16:
-                return bytes(el)
-    return b""
 
 
 def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):

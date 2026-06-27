@@ -1421,23 +1421,6 @@ def iter_exe_el_sources(
                 yield src
 
 
-def find_exe_el(
-    base_dir: str, include_parent: bool = True, force_charset: str = ""
-) -> bytes:
-    try:
-        for src in iter_exe_el_sources(
-            base_dir=base_dir,
-            include_parent=bool(include_parent),
-            force_charset=(force_charset or ""),
-        ):
-            el = src.get("exe_el") if isinstance(src, dict) else b""
-            if el and len(el) == 16:
-                return bytes(el)
-    except Exception:
-        return b""
-    return b""
-
-
 def parse_code(v):
     if v is None:
         return None

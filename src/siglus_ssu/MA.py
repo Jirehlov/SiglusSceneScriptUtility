@@ -92,7 +92,8 @@ class FormTable:
         s.form_map_by_code = {}
         s.call_base = None
 
-    def _new_form(s, fc):
+    @staticmethod
+    def _new_form(fc):
         name = _form_name(fc)
         code = _form_code(fc)
         return {
@@ -321,7 +322,8 @@ class MA:
             else {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
         )
 
-    def _is_sel_cmd(s, parent_form, element_code):
+    @staticmethod
+    def _is_sel_cmd(parent_form, element_code):
         return bool(C.is_global_sel_command(parent_form, element_code))
 
     def analize(s):
@@ -331,7 +333,8 @@ class MA:
         s.psad["ma_label_info"] = s._collect_label_info((s.psad or {}).get("root"))
         return 1, s.psad
 
-    def _collect_label_info(s, root):
+    @staticmethod
+    def _collect_label_info(root):
         defs = {}
         zdefs = {}
         gref = []
@@ -455,7 +458,8 @@ class MA:
         sen["is_include_sel"] = bool(sel[0])
         return 1
 
-    def ma_label(s, n):
+    @staticmethod
+    def ma_label(n):
         if isinstance(n, dict):
             n["node_form"] = C.FM_VOID
         return 1
@@ -1049,7 +1053,8 @@ class MA:
                 return k
         return -1
 
-    def check_no_named_arg_list(s, temp, real):
+    @staticmethod
+    def check_no_named_arg_list(temp, real):
         if not isinstance(real, dict):
             return 0
         args = real.get("arg", [])
@@ -1156,7 +1161,8 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
-    def ma_literal(s, n):
+    @staticmethod
+    def ma_literal(n):
         if not isinstance(n, dict):
             return 0
         tp = (n.get("atom") or {}).get("type")
@@ -1171,10 +1177,12 @@ class MA:
         )
         return 1
 
-    def check_operate_1(s, rf):
+    @staticmethod
+    def check_operate_1(rf):
         return C.FM_INT if rf in (C.FM_INT, C.FM_INTREF) else C.FM_VOID
 
-    def check_operate_2(s, lf, rf, op):
+    @staticmethod
+    def check_operate_2(lf, rf, op):
         if lf in (C.FM_INT, C.FM_INTREF) and rf in (C.FM_INT, C.FM_INTREF):
             return (
                 C.FM_INT

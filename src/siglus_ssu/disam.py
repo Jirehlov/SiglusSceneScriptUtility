@@ -289,7 +289,7 @@ def new_expression_state(
             return q.rsplit(".", 1)[-1]
         return q
 
-    def _default_append_member_expr(base, parent_form, info, idx, items):
+    def _default_append_member_expr(base, info):
         name = _member_name(info)
         if base:
             return f"{base}.{name}" if name else base
@@ -298,9 +298,13 @@ def new_expression_state(
         except Exception:
             return name
 
-    if append_member_expr is None:
-        append_member_expr = _default_append_member_expr
+    use_default_append_member_expr = append_member_expr is None
     state = SimpleNamespace(stack=[], elm_points=[], elm_point_pending_idx=None)
+
+    def _append_member_expr(base, parent_form, info, idx, items):
+        if use_default_append_member_expr:
+            return _default_append_member_expr(base, info)
+        return append_member_expr(base, parent_form, info, idx, items)
 
     def _stack_int_value(it):
         try:
@@ -545,7 +549,7 @@ def new_expression_state(
                 C.ET_PROPERTY
             ):
                 return None
-            base = append_member_expr(base, parent_form, info, idx, items)
+            base = _append_member_expr(base, parent_form, info, idx, items)
             last_info = info
             last_ret = info.get("ret")
             if idx == len(items) - 1:
@@ -652,7 +656,7 @@ def new_expression_state(
                 info = chosen if isinstance(chosen, dict) else variants[0]
             tp = int(info.get("type", -1))
             if tp == int(C.ET_PROPERTY):
-                base = append_member_expr(base, parent_form, info, idx, items)
+                base = _append_member_expr(base, parent_form, info, idx, items)
                 ret_form = info.get("ret")
                 if not isinstance(ret_form, int):
                     return None
@@ -661,7 +665,7 @@ def new_expression_state(
                 continue
             if tp != int(C.ET_COMMAND):
                 return None
-            call_name = append_member_expr(base, parent_form, info, idx, items)
+            call_name = _append_member_expr(base, parent_form, info, idx, items)
             return {"info": info, "call_name": call_name or "<?command>"}
         return None
 

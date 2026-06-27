@@ -2534,7 +2534,7 @@ def _try_open_generated_viewer(viewer_path: str | None, output_json: str) -> boo
             )
             super().do_GET()
 
-        def log_message(self, format, *handler_args):
+        def log_message(self, _format, *_handler_args):
             return
 
     try:
