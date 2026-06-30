@@ -854,13 +854,12 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
         return t.replace("\r\n", "\n").replace("\r", "\n")
 
     cs = norm_charset(force_charset)
+    if force_charset and not cs:
+        raise ValueError(f"unsupported charset: {force_charset}")
     if cs:
-        try:
-            if cs == "cp932":
-                return _fix(_d9()), "cp932", had_bom
-            return _fix(_d8()), "utf-8", had_bom
-        except UnicodeDecodeError:
-            pass
+        if cs == "cp932":
+            return _fix(_d9()), "cp932", had_bom
+        return _fix(_d8()), "utf-8", had_bom
     t8 = t9 = None
     try:
         t8 = _d8()

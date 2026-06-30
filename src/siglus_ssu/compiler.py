@@ -878,6 +878,11 @@ def main(argv=None):
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
+    charset_arg = getattr(a, "charset", "") or ""
+    charset = norm_charset(charset_arg)
+    if charset_arg and not charset:
+        sys.stderr.write(f"{prog}: error: unsupported --charset: {charset_arg}\n")
+        return 2
     test_shuffle_csv_path = _resolve_test_shuffle_csv_path(
         getattr(a, "csv_path", "") or ""
     )
@@ -935,11 +940,6 @@ def main(argv=None):
             )
             os.makedirs(tmp, exist_ok=True)
     ini, inc, ss, scn_ssid_map = _scan_dir(inp)
-    charset = (
-        norm_charset(a.charset, keep_unknown=True)
-        if getattr(a, "charset", None)
-        else ""
-    )
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False
     ctx = {

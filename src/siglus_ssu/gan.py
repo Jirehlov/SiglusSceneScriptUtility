@@ -217,6 +217,7 @@ def gan(blob):
             print(f"error: {e}")
         print()
         print("(disassembly may be incomplete)")
+        return 1
     print()
     if sets:
         print("==== GAN Sets ====")
