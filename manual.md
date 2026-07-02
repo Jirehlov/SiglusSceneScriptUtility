@@ -821,6 +821,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
    The exported `.ss.csv` also includes a `kind` column:
    `1 = dialogue`, `2 = speaker name`, `3 = other text`.
 
+   `replacement` is always a string value, not raw `.ss` source text. CSV quoting is handled by the CSV reader before textmap processing; any double quotes that remain in the parsed cell are literal text and are escaped as `\"` when `.ss` source is written. There is no implicit raw-literal mode based on leading or trailing quotes.
+
 3. **Apply the translated text map:**
 
    ```bash
@@ -863,7 +865,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 | `quoted` | `1` if the token was quoted with `"..."` in source, `0` otherwise. |
 | `kind` | Token kind: `1 = dialogue`, `2 = speaker name`, `3 = other text`. |
 | `original` | The original string value (escape-encoded). |
-| `replacement` | Translated string value to apply back to the source file. Initially identical to `original`. |
+| `replacement` | Translated string value to apply back to the source file. Initially identical to `original`; never interpreted as raw `.ss` source. |
 
 Special characters in `original` and `replacement` are escape-encoded:
 
@@ -873,6 +875,8 @@ Special characters in `original` and `replacement` are escape-encoded:
 | `\n` | Newline |
 | `\r` | Carriage return |
 | `\t` | Tab |
+
+For `.ss.csv`, these escapes describe the CSV text value. When applying to `.ss`, the tool serializes that value back into valid SiglusSS source and preserves literal double quotes, backslashes, newlines, and tabs. Replacement values containing carriage returns are skipped because SiglusSS source preprocessing removes physical carriage-return characters. `.dat.csv` replacement can still store carriage returns directly in the compiled string table.
 
 #### `.dat.csv` Format
 

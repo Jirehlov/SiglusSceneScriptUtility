@@ -821,6 +821,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
    导出的 `.ss.csv` 还会包含一个 `kind` 列：
    `1 = dialogue`（台词）、`2 = speaker name`（说话人名）、`3 = other text`（其他文本）。
 
+   `replacement` 始终是字符串值，不是原始 `.ss` 源码片段。CSV 引号会先由 CSV 读取器处理；解析后的单元格里如果仍然有双引号，它们就是普通文本，写回 `.ss` 时会被转义为 `\"`。工具不会根据首尾引号隐式切换到 raw literal 模式。
+
 3. **应用翻译：**
 
    ```bash
@@ -863,7 +865,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 | `quoted` | `1` 表示源码中用 `"..."` 引用，`0` 表示未引用。 |
 | `kind` | token 分类：`1 = dialogue`（台词）、`2 = speaker name`（说话人名）、`3 = other text`（其他文本）。 |
 | `original` | 原始字符串值（转义编码）。 |
-| `replacement` | 要应用回源文件的译文字符串。初始与 `original` 相同。 |
+| `replacement` | 要应用回源文件的译文字符串。初始与 `original` 相同；不会被解释为原始 `.ss` 源码。 |
 
 在 `original` 和 `replacement` 中，特殊字符使用转义形式编码：
 
@@ -873,6 +875,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 | `\n` | 换行 |
 | `\r` | 回车 |
 | `\t` | 制表符 |
+
+对于 `.ss.csv`，这些转义描述的是 CSV 文本值。应用到 `.ss` 时，工具会把该值重新序列化为合法的 SiglusSS 源码，并保留字面双引号、反斜杠、换行和制表符。包含回车的 replacement 会被跳过，因为 SiglusSS 源码预处理会移除物理回车字符。`.dat.csv` replacement 仍可在编译后的字符串表中直接保存回车。
 
 #### `.dat.csv` 格式
 

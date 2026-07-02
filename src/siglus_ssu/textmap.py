@@ -706,6 +706,12 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 errors="replace",
             )
             continue
+        if "\r" in replacement:
+            eprint(
+                f"textmap: {filename}: skip index {_to_int(entry.get('index', 0), 0):d} (replacement contains carriage return)",
+                errors="replace",
+            )
+            continue
         row_span_start = _to_int(row.get("span_start", row.get("abs_start", "")), -1)
         row_span_end = _to_int(row.get("span_end", row.get("abs_end", "")), -1)
         entry_span_start = _to_int(entry.get("span_start", ""), -1)
@@ -776,17 +782,10 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 errors="replace",
             )
             continue
-        if (
-            replacement.startswith('"')
-            and replacement.endswith('"')
-            and len(replacement) >= 2
-        ):
-            replacement_lit = replacement
+        if replacement == "" or used_quoted or _needs_quoted_literal(replacement):
+            replacement_lit = '"' + _encode_quoted(replacement) + '"'
         else:
-            if used_quoted or _needs_quoted_literal(replacement):
-                replacement_lit = '"' + _encode_quoted(replacement) + '"'
-            else:
-                replacement_lit = replacement
+            replacement_lit = replacement
         changes.append((used_span[0], used_span[1], replacement_lit))
     if not changes:
         return text, 0
