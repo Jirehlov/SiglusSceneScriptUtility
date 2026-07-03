@@ -3,6 +3,50 @@ from .CA import is_zen
 
 C = get_const_module()
 
+_LA_SYMBOLS = (
+    (">>>=", "SR3_ASSIGN"),
+    (">>>", "SR3"),
+    ("<<=", "SL_ASSIGN"),
+    (">>=", "SR_ASSIGN"),
+    ("+=", "PLUS_ASSIGN"),
+    ("-=", "MINUS_ASSIGN"),
+    ("*=", "MULTIPLE_ASSIGN"),
+    ("/=", "DIVIDE_ASSIGN"),
+    ("%=", "PERCENT_ASSIGN"),
+    ("&=", "AND_ASSIGN"),
+    ("|=", "OR_ASSIGN"),
+    ("^=", "HAT_ASSIGN"),
+    ("<<", "SL"),
+    (">>", "SR"),
+    ("==", "EQUAL"),
+    ("!=", "NOT_EQUAL"),
+    (">=", "GREATER_EQUAL"),
+    ("<=", "LESS_EQUAL"),
+    ("&&", "LOGICAL_AND"),
+    ("||", "LOGICAL_OR"),
+    ("=", "ASSIGN"),
+    ("+", "PLUS"),
+    ("-", "MINUS"),
+    ("*", "MULTIPLE"),
+    ("/", "DIVIDE"),
+    ("%", "PERCENT"),
+    ("&", "AND"),
+    ("|", "OR"),
+    ("^", "HAT"),
+    (">", "GREATER"),
+    ("<", "LESS"),
+    ("~", "TILDE"),
+    (".", "DOT"),
+    (",", "COMMA"),
+    (":", "COLON"),
+    ("(", "OPEN_PAREN"),
+    (")", "CLOSE_PAREN"),
+    ("[", "OPEN_BRACKET"),
+    ("]", "CLOSE_BRACKET"),
+    ("{", "OPEN_BRACE"),
+    ("}", "CLOSE_BRACE"),
+)
+
 
 def la_analize(pcad):
     s = pcad["scn_text"] + ("\0" * 256)
@@ -211,131 +255,16 @@ def la_analize(pcad):
                     label_map[name] = a["opt"]
                 else:
                     a["opt"] = idx
-        elif s.startswith(">>>=", i):
-            a["type"] = C.LA_T["SR3_ASSIGN"]
-            i += 4
-        elif s.startswith(">>>", i):
-            a["type"] = C.LA_T["SR3"]
-            i += 3
-        elif s.startswith("<<=", i):
-            a["type"] = C.LA_T["SL_ASSIGN"]
-            i += 3
-        elif s.startswith(">>=", i):
-            a["type"] = C.LA_T["SR_ASSIGN"]
-            i += 3
-        elif s.startswith("+=", i):
-            a["type"] = C.LA_T["PLUS_ASSIGN"]
-            i += 2
-        elif s.startswith("-=", i):
-            a["type"] = C.LA_T["MINUS_ASSIGN"]
-            i += 2
-        elif s.startswith("*=", i):
-            a["type"] = C.LA_T["MULTIPLE_ASSIGN"]
-            i += 2
-        elif s.startswith("/=", i):
-            a["type"] = C.LA_T["DIVIDE_ASSIGN"]
-            i += 2
-        elif s.startswith("%=", i):
-            a["type"] = C.LA_T["PERCENT_ASSIGN"]
-            i += 2
-        elif s.startswith("&=", i):
-            a["type"] = C.LA_T["AND_ASSIGN"]
-            i += 2
-        elif s.startswith("|=", i):
-            a["type"] = C.LA_T["OR_ASSIGN"]
-            i += 2
-        elif s.startswith("^=", i):
-            a["type"] = C.LA_T["HAT_ASSIGN"]
-            i += 2
-        elif s.startswith("<<", i):
-            a["type"] = C.LA_T["SL"]
-            i += 2
-        elif s.startswith(">>", i):
-            a["type"] = C.LA_T["SR"]
-            i += 2
-        elif s.startswith("==", i):
-            a["type"] = C.LA_T["EQUAL"]
-            i += 2
-        elif s.startswith("!=", i):
-            a["type"] = C.LA_T["NOT_EQUAL"]
-            i += 2
-        elif s.startswith(">=", i):
-            a["type"] = C.LA_T["GREATER_EQUAL"]
-            i += 2
-        elif s.startswith("<=", i):
-            a["type"] = C.LA_T["LESS_EQUAL"]
-            i += 2
-        elif s.startswith("&&", i):
-            a["type"] = C.LA_T["LOGICAL_AND"]
-            i += 2
-        elif s.startswith("||", i):
-            a["type"] = C.LA_T["LOGICAL_OR"]
-            i += 2
-        elif c == "=":
-            a["type"] = C.LA_T["ASSIGN"]
-            i += 1
-        elif c == "+":
-            a["type"] = C.LA_T["PLUS"]
-            i += 1
-        elif c == "-":
-            a["type"] = C.LA_T["MINUS"]
-            i += 1
-        elif c == "*":
-            a["type"] = C.LA_T["MULTIPLE"]
-            i += 1
-        elif c == "/":
-            a["type"] = C.LA_T["DIVIDE"]
-            i += 1
-        elif c == "%":
-            a["type"] = C.LA_T["PERCENT"]
-            i += 1
-        elif c == "&":
-            a["type"] = C.LA_T["AND"]
-            i += 1
-        elif c == "|":
-            a["type"] = C.LA_T["OR"]
-            i += 1
-        elif c == "^":
-            a["type"] = C.LA_T["HAT"]
-            i += 1
-        elif c == ">":
-            a["type"] = C.LA_T["GREATER"]
-            i += 1
-        elif c == "<":
-            a["type"] = C.LA_T["LESS"]
-            i += 1
-        elif c == "~":
-            a["type"] = C.LA_T["TILDE"]
-            i += 1
-        elif c == ".":
-            a["type"] = C.LA_T["DOT"]
-            i += 1
-        elif c == ",":
-            a["type"] = C.LA_T["COMMA"]
-            i += 1
-        elif c == ":":
-            a["type"] = C.LA_T["COLON"]
-            i += 1
-        elif c == "(":
-            a["type"] = C.LA_T["OPEN_PAREN"]
-            i += 1
-        elif c == ")":
-            a["type"] = C.LA_T["CLOSE_PAREN"]
-            i += 1
-        elif c == "[":
-            a["type"] = C.LA_T["OPEN_BRACKET"]
-            i += 1
-        elif c == "]":
-            a["type"] = C.LA_T["CLOSE_BRACKET"]
-            i += 1
-        elif c == "{":
-            a["type"] = C.LA_T["OPEN_BRACE"]
-            i += 1
-        elif c == "}":
-            a["type"] = C.LA_T["CLOSE_BRACE"]
-            i += 1
         else:
-            return err(cur_line, "Invalid character: '" + c + "'")
+            symbol_type = None
+            for symbol, type_name in _LA_SYMBOLS:
+                if s.startswith(symbol, i):
+                    symbol_type = C.LA_T[type_name]
+                    i += len(symbol)
+                    break
+            if symbol_type is None:
+                return err(cur_line, "Invalid character: '" + c + "'")
+            a["type"] = symbol_type
         if a["type"] != C.LA_T["NONE"]:
             atom_list.append(a)
             if sidecar:
