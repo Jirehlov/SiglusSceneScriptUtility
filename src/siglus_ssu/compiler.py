@@ -1009,6 +1009,8 @@ def main(argv=None):
                 "schema": 2,
                 "charset": enc,
                 "charset_force": charset,
+                "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
+                "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
             }
 
             def _md5_file(p):

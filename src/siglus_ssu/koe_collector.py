@@ -292,6 +292,37 @@ def _multi_text_koe_nos(call_refs):
     return [koe_no for koe_no in sorted(texts_by_koe) if len(texts_by_koe[koe_no]) > 1]
 
 
+def _build_local_koe_no_index(entries):
+    local_index = {}
+    conflicts = set()
+    for koe_no in entries:
+        koe_no_i = _try_int(koe_no)
+        if koe_no_i is None:
+            continue
+        local_koe_no = koe_no_i % 100000
+        if local_koe_no in local_index and local_index[local_koe_no] != koe_no_i:
+            conflicts.add(local_koe_no)
+        else:
+            local_index[local_koe_no] = koe_no_i
+    for local_koe_no in conflicts:
+        local_index.pop(local_koe_no, None)
+    return local_index
+
+
+def _resolve_indexed_koe_no(entries, local_koe_no_index, koe_no):
+    koe_no_i = _try_int(koe_no)
+    if koe_no_i is None:
+        return koe_no
+    if koe_no_i in entries:
+        return koe_no_i
+    if not (0 <= koe_no_i < 100000):
+        return koe_no_i
+    resolved_koe_no = local_koe_no_index.get(koe_no_i)
+    if resolved_koe_no is not None:
+        return resolved_koe_no
+    return koe_no_i
+
+
 def _format_koe_nos(koe_nos):
     return ", ".join(str(int(koe_no)) for koe_no in koe_nos) if koe_nos else "-"
 
@@ -619,15 +650,21 @@ def main(argv=None):
             eprint("No scene .dat files or supported .pck scenes found.")
             return 1
         missing_rows = []
+        indexed_call_refs = []
+        local_koe_no_index = _build_local_koe_no_index(entries)
         for koe_no, ch, name, text, callsite in call_refs:
-            e = entries.get(koe_no)
+            resolved_koe_no = _resolve_indexed_koe_no(
+                entries, local_koe_no_index, koe_no
+            )
+            indexed_call_refs.append((resolved_koe_no, ch, name, text, callsite))
+            e = entries.get(resolved_koe_no)
             if e is None:
-                missing_rows.append((koe_no, name, text, callsite))
+                missing_rows.append((resolved_koe_no, name, text, callsite))
                 continue
             _add_entry_ref(e, ch, name, text, callsite)
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
-        multi_text_koe_nos = _multi_text_koe_nos(call_refs)
+        multi_text_koe_nos = _multi_text_koe_nos(indexed_call_refs)
     else:
         call_refs = []
         scene_files = 0
