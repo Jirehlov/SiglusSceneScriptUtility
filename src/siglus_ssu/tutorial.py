@@ -1519,47 +1519,82 @@ class TutorialBuilder:
         self.return_frontiers[key] = info
         return info
 
-    def _resolve_same_scene_return_frontier(
-        self, segment_id: str
+    def _resolve_same_scene_frontier(
+        self,
+        segment_id: str,
+        cache: dict,
+        *,
+        include_dialogue_targets: bool,
+        return_frontier_max_distance: int | None,
+        chain_max_distance: int,
+        require_return_records_same_scene: bool = False,
     ) -> tuple[tuple[str, str, str, bool], ...]:
         key = _safe_text(segment_id)
-        cached = self.same_scene_return_frontiers.get(key)
+        cached = cache.get(key)
         if cached is not None:
             return cached
         start = self.segment_index.get(key)
         if not isinstance(start, dict):
-            self.same_scene_return_frontiers[key] = ()
+            cache[key] = ()
             return ()
         if int(start.get("dialogue_count", 0) or 0) > 0:
-            self.same_scene_return_frontiers[key] = ()
+            cache[key] = ()
             return ()
         start_scene_no = int(start.get("scene_no", 0) or 0)
         best_distance = None
         resolved = set()
-        queued = set()
+        queued = {(key, "", "", False)} if include_dialogue_targets else set()
         queue = deque([(key, "", "", False, 0)])
+
+        def add_record(record, distance: int) -> None:
+            nonlocal best_distance, resolved
+            if best_distance is None or int(distance) < int(best_distance):
+                best_distance = int(distance)
+                resolved = {record}
+            elif int(distance) == int(best_distance):
+                resolved.add(record)
+
+        def add_records(records, distance: int) -> None:
+            nonlocal best_distance, resolved
+            if not records:
+                return
+            if best_distance is None or int(distance) < int(best_distance):
+                best_distance = int(distance)
+                resolved = set(records)
+            elif int(distance) == int(best_distance):
+                resolved.update(records)
+
         while queue:
             current_id, seed_kind, seed_label, seed_cross_scene, distance = (
                 queue.popleft()
             )
-            if best_distance is not None and int(distance) + 1 + 1 > int(best_distance):
-                continue
+            if best_distance is not None:
+                if include_dialogue_targets:
+                    if int(distance) >= int(best_distance):
+                        continue
+                elif int(distance) + 2 > int(best_distance):
+                    continue
             for target_id, records in self.segment_edge_groups.get(
                 current_id, {}
             ).items():
                 kind, label, cross_scene = _collapse_edge_records(records)
+                kind_text = _safe_text(kind)
+                if include_dialogue_targets and (
+                    bool(cross_scene) or kind_text == "return"
+                ):
+                    continue
                 next_kind, next_label, next_cross = _compose_seed(
                     seed_kind,
                     seed_label,
                     bool(seed_cross_scene),
-                    _safe_text(kind),
+                    kind_text,
                     _safe_text(label),
                     bool(cross_scene),
                 )
                 target = self.segment_index.get(_safe_text(target_id))
                 if not isinstance(target, dict):
                     continue
-                if _safe_text(kind) == "return":
+                if not include_dialogue_targets and kind_text == "return":
                     frontier_distance, frontier_records = (
                         self._resolve_return_frontier_info(_safe_text(target.get("id")))
                     )
@@ -1571,7 +1606,8 @@ class TutorialBuilder:
                     }
                     if (
                         frontier_distance is None
-                        or int(frontier_distance) > SHORT_RETURN_FRONTIER_MAX_DISTANCE
+                        or return_frontier_max_distance is None
+                        or int(frontier_distance) > int(return_frontier_max_distance)
                         or len(frontier_target_ids) != 1
                         or "return" in frontier_kind_set
                     ):
@@ -1581,242 +1617,54 @@ class TutorialBuilder:
                         best_distance
                     ):
                         continue
-                    new_records = {
-                        (
-                            rec[0],
-                            *_compose_seed(
-                                next_kind,
-                                next_label,
-                                bool(next_cross),
-                                rec[1],
-                                rec[2],
-                                bool(rec[3]),
-                            ),
-                        )
-                        for rec in frontier_records
-                    }
-                    if best_distance is None or total_distance < int(best_distance):
-                        best_distance = total_distance
-                        resolved = set(new_records)
-                    elif total_distance == int(best_distance):
-                        resolved.update(new_records)
-                    continue
-                if bool(cross_scene):
-                    continue
-                if int(target.get("scene_no", -1) or -1) != start_scene_no:
-                    continue
-                if int(target.get("dialogue_count", 0) or 0) > 0:
-                    continue
-                next_distance = int(distance) + 1
-                if next_distance > LATE_RETURN_CHAIN_MAX_DISTANCE:
-                    continue
-                state = (
-                    _safe_text(target.get("id")),
-                    _safe_text(next_kind),
-                    _safe_text(next_label),
-                    bool(next_cross),
-                )
-                if state in queued:
-                    continue
-                queued.add(state)
-                queue.append(state + (next_distance,))
-        result = tuple(
-            sorted(
-                resolved,
-                key=lambda item: (
-                    int(self.segment_index.get(item[0], {}).get("scene_no", 0) or 0),
-                    int(self.segment_index.get(item[0], {}).get("start_ofs", 0) or 0),
-                    _safe_text(item[1]),
-                    _safe_text(item[2]),
-                ),
-            )
-        )
-        self.same_scene_return_frontiers[key] = result
-        return result
-
-    def _resolve_same_scene_silent_frontier(
-        self, segment_id: str
-    ) -> tuple[tuple[str, str, str, bool], ...]:
-        key = _safe_text(segment_id)
-        cached = self.same_scene_silent_frontiers.get(key)
-        if cached is not None:
-            return cached
-        start = self.segment_index.get(key)
-        if not isinstance(start, dict):
-            self.same_scene_silent_frontiers[key] = ()
-            return ()
-        if int(start.get("dialogue_count", 0) or 0) > 0:
-            self.same_scene_silent_frontiers[key] = ()
-            return ()
-        start_scene_no = int(start.get("scene_no", 0) or 0)
-        best_distance = None
-        resolved = set()
-        queued = set([(key, "", "", False)])
-        queue = deque([(key, "", "", False, 0)])
-        while queue:
-            current_id, seed_kind, seed_label, seed_cross_scene, distance = (
-                queue.popleft()
-            )
-            if best_distance is not None and int(distance) >= int(best_distance):
-                continue
-            for target_id, records in self.segment_edge_groups.get(
-                current_id, {}
-            ).items():
-                kind, label, cross_scene = _collapse_edge_records(records)
-                if bool(cross_scene) or _safe_text(kind) == "return":
-                    continue
-                next_kind, next_label, next_cross = _compose_seed(
-                    seed_kind,
-                    seed_label,
-                    bool(seed_cross_scene),
-                    _safe_text(kind),
-                    _safe_text(label),
-                    bool(cross_scene),
-                )
-                target = self.segment_index.get(_safe_text(target_id))
-                if not isinstance(target, dict):
-                    continue
-                if int(target.get("scene_no", -1) or -1) != start_scene_no:
-                    continue
-                next_distance = int(distance) + 1
-                if int(target.get("dialogue_count", 0) or 0) > 0:
-                    record = (
-                        _safe_text(target.get("id")),
-                        _safe_text(next_kind),
-                        _safe_text(next_label),
-                        bool(next_cross),
-                    )
-                    if best_distance is None or next_distance < int(best_distance):
-                        best_distance = next_distance
-                        resolved = {record}
-                    elif next_distance == int(best_distance):
-                        resolved.add(record)
-                    continue
-                if next_distance > SAME_SCENE_SILENT_MAX_DISTANCE:
-                    continue
-                state = (
-                    _safe_text(target.get("id")),
-                    _safe_text(next_kind),
-                    _safe_text(next_label),
-                    bool(next_cross),
-                )
-                if state in queued:
-                    continue
-                queued.add(state)
-                queue.append(state + (next_distance,))
-        result = tuple(
-            sorted(
-                resolved,
-                key=lambda item: (
-                    int(self.segment_index.get(item[0], {}).get("scene_no", 0) or 0),
-                    int(self.segment_index.get(item[0], {}).get("start_ofs", 0) or 0),
-                    _safe_text(item[1]),
-                    _safe_text(item[2]),
-                ),
-            )
-        )
-        self.same_scene_silent_frontiers[key] = result
-        return result
-
-    def _resolve_same_scene_near_return_frontier(
-        self, segment_id: str
-    ) -> tuple[tuple[str, str, str, bool], ...]:
-        key = _safe_text(segment_id)
-        cached = self.same_scene_near_return_frontiers.get(key)
-        if cached is not None:
-            return cached
-        start = self.segment_index.get(key)
-        if not isinstance(start, dict):
-            self.same_scene_near_return_frontiers[key] = ()
-            return ()
-        if int(start.get("dialogue_count", 0) or 0) > 0:
-            self.same_scene_near_return_frontiers[key] = ()
-            return ()
-        start_scene_no = int(start.get("scene_no", 0) or 0)
-        best_distance = None
-        resolved = set()
-        queued = set()
-        queue = deque([(key, "", "", False, 0)])
-        while queue:
-            current_id, seed_kind, seed_label, seed_cross_scene, distance = (
-                queue.popleft()
-            )
-            if best_distance is not None and int(distance) + 1 + 1 > int(best_distance):
-                continue
-            for target_id, records in self.segment_edge_groups.get(
-                current_id, {}
-            ).items():
-                kind, label, cross_scene = _collapse_edge_records(records)
-                next_kind, next_label, next_cross = _compose_seed(
-                    seed_kind,
-                    seed_label,
-                    bool(seed_cross_scene),
-                    _safe_text(kind),
-                    _safe_text(label),
-                    bool(cross_scene),
-                )
-                target = self.segment_index.get(_safe_text(target_id))
-                if not isinstance(target, dict):
-                    continue
-                if _safe_text(kind) == "return":
-                    frontier_distance, frontier_records = (
-                        self._resolve_return_frontier_info(_safe_text(target.get("id")))
-                    )
-                    frontier_target_ids = {rec[0] for rec in frontier_records}
-                    frontier_kind_set = {
-                        _safe_text(rec[1])
-                        for rec in frontier_records
-                        if _safe_text(rec[1])
-                    }
-                    if (
-                        frontier_distance is None
-                        or int(frontier_distance) > NEAR_RETURN_FRONTIER_MAX_DISTANCE
-                        or len(frontier_target_ids) != 1
-                        or "return" in frontier_kind_set
-                    ):
-                        continue
-                    total_distance = int(distance) + 1 + int(frontier_distance)
-                    if best_distance is not None and total_distance > int(
-                        best_distance
-                    ):
-                        continue
-                    new_records = {
-                        (
-                            rec[0],
-                            *_compose_seed(
-                                next_kind,
-                                next_label,
-                                bool(next_cross),
-                                rec[1],
-                                rec[2],
-                                bool(rec[3]),
-                            ),
-                        )
-                        for rec in frontier_records
-                        if int(
-                            self.segment_index.get(_safe_text(rec[0]), {}).get(
-                                "scene_no", -1
+                    new_records = set()
+                    for rec in frontier_records:
+                        if (
+                            require_return_records_same_scene
+                            and int(
+                                self.segment_index.get(_safe_text(rec[0]), {}).get(
+                                    "scene_no", -1
+                                )
+                                or -1
                             )
-                            or -1
+                            != start_scene_no
+                        ):
+                            continue
+                        next_rec_kind, next_rec_label, next_rec_cross = _compose_seed(
+                            next_kind,
+                            next_label,
+                            bool(next_cross),
+                            rec[1],
+                            rec[2],
+                            bool(rec[3]),
                         )
-                        == start_scene_no
-                    }
-                    if not new_records:
-                        continue
-                    if best_distance is None or total_distance < int(best_distance):
-                        best_distance = total_distance
-                        resolved = set(new_records)
-                    elif total_distance == int(best_distance):
-                        resolved.update(new_records)
+                        new_records.add(
+                            (rec[0], next_rec_kind, next_rec_label, next_rec_cross)
+                        )
+                    add_records(new_records, total_distance)
                     continue
                 if bool(cross_scene):
                     continue
                 if int(target.get("scene_no", -1) or -1) != start_scene_no:
                     continue
+                next_distance = int(distance) + 1
+                if (
+                    include_dialogue_targets
+                    and int(target.get("dialogue_count", 0) or 0) > 0
+                ):
+                    add_record(
+                        (
+                            _safe_text(target.get("id")),
+                            _safe_text(next_kind),
+                            _safe_text(next_label),
+                            bool(next_cross),
+                        ),
+                        next_distance,
+                    )
+                    continue
                 if int(target.get("dialogue_count", 0) or 0) > 0:
                     continue
-                next_distance = int(distance) + 1
-                if next_distance > NEAR_RETURN_CHAIN_MAX_DISTANCE:
+                if next_distance > chain_max_distance:
                     continue
                 state = (
                     _safe_text(target.get("id")),
@@ -1839,7 +1687,7 @@ class TutorialBuilder:
                 ),
             )
         )
-        self.same_scene_near_return_frontiers[key] = result
+        cache[key] = result
         return result
 
     def _node_title(self, node: dict) -> str:
@@ -2217,16 +2065,24 @@ class TutorialBuilder:
                     and int(target.get("scene_no", -1) or -1)
                     == int(segment.get("scene_no", -2) or -2)
                 ):
-                    silent_records = self._resolve_same_scene_return_frontier(
-                        _safe_text(target.get("id"))
+                    silent_records = self._resolve_same_scene_frontier(
+                        _safe_text(target.get("id")),
+                        self.same_scene_return_frontiers,
+                        include_dialogue_targets=False,
+                        return_frontier_max_distance=SHORT_RETURN_FRONTIER_MAX_DISTANCE,
+                        chain_max_distance=LATE_RETURN_CHAIN_MAX_DISTANCE,
                     )
                     late_return_safe = bool(silent_records)
                 same_scene_silent_safe = False
                 if not silent_records and int(target.get("scene_no", -1) or -1) == int(
                     segment.get("scene_no", -2) or -2
                 ):
-                    silent_records = self._resolve_same_scene_silent_frontier(
-                        _safe_text(target.get("id"))
+                    silent_records = self._resolve_same_scene_frontier(
+                        _safe_text(target.get("id")),
+                        self.same_scene_silent_frontiers,
+                        include_dialogue_targets=True,
+                        return_frontier_max_distance=None,
+                        chain_max_distance=SAME_SCENE_SILENT_MAX_DISTANCE,
                     )
                     same_scene_silent_safe = bool(silent_records)
                 same_scene_helper_safe = False
@@ -2262,8 +2118,13 @@ class TutorialBuilder:
                 if int(target.get("scene_no", -1) or -1) == int(
                     segment.get("scene_no", -2) or -2
                 ):
-                    near_records = self._resolve_same_scene_near_return_frontier(
-                        _safe_text(target.get("id"))
+                    near_records = self._resolve_same_scene_frontier(
+                        _safe_text(target.get("id")),
+                        self.same_scene_near_return_frontiers,
+                        include_dialogue_targets=False,
+                        return_frontier_max_distance=NEAR_RETURN_FRONTIER_MAX_DISTANCE,
+                        chain_max_distance=NEAR_RETURN_CHAIN_MAX_DISTANCE,
+                        require_return_records_same_scene=True,
                     )
                     near_target_ids = {rec[0] for rec in near_records}
                     near_scene_ids = {

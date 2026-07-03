@@ -19,6 +19,48 @@ def _xor32_inplace(barr, code):
         struct.pack_into("<I", barr, i, v)
 
 
+def _dbs_plane_xor_merge(data: bytes) -> bytes | None:
+    size = len(data)
+    yl = size // (C.DBS_MAP_WIDTH * 4)
+    if yl <= 0:
+        return None
+    src = bytes(data)
+    planes = []
+    for plane, code in ((0, C.DBS_XOR32_CODE_A), (1, C.DBS_XOR32_CODE_B)):
+        buf = bytearray(size)
+        tile_copy(
+            buf,
+            src,
+            C.DBS_MAP_WIDTH,
+            yl,
+            C.DBS_TILE,
+            C.DBS_TILE_WIDTH,
+            C.DBS_TILE_HEIGHT,
+            0,
+            0,
+            plane,
+            128,
+        )
+        _xor32_inplace(buf, code)
+        planes.append((plane, bytes(buf)))
+    dst = bytearray(size)
+    for plane, plane_data in planes:
+        tile_copy(
+            dst,
+            plane_data,
+            C.DBS_MAP_WIDTH,
+            yl,
+            C.DBS_TILE,
+            C.DBS_TILE_WIDTH,
+            C.DBS_TILE_HEIGHT,
+            0,
+            0,
+            plane,
+            128,
+        )
+    return bytes(dst)
+
+
 def dbs_unpack(blob):
     if not blob or len(blob) < 12:
         return 0, b""
@@ -28,68 +70,10 @@ def dbs_unpack(blob):
     unpack_data = lzss_unpack(bytes(packed))
     if not unpack_data:
         return m_type, b""
-    unpack_size = len(unpack_data)
-    yl = unpack_size // (C.DBS_MAP_WIDTH * 4)
-    if yl <= 0:
+    merged = _dbs_plane_xor_merge(unpack_data)
+    if merged is None:
         return m_type, b""
-    temp_a = bytearray(unpack_size)
-    temp_b = bytearray(unpack_size)
-    tile_copy(
-        temp_a,
-        bytes(unpack_data),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        0,
-        128,
-    )
-    tile_copy(
-        temp_b,
-        bytes(unpack_data),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        1,
-        128,
-    )
-    _xor32_inplace(temp_a, C.DBS_XOR32_CODE_A)
-    _xor32_inplace(temp_b, C.DBS_XOR32_CODE_B)
-    dst = bytearray(unpack_size)
-    tile_copy(
-        dst,
-        bytes(temp_a),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        0,
-        128,
-    )
-    tile_copy(
-        dst,
-        bytes(temp_b),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        1,
-        128,
-    )
-    return m_type, bytes(dst)
+    return m_type, merged
 
 
 def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
@@ -551,68 +535,10 @@ def create_one_dbs_from_csv(
 def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
     if not expanded:
         return struct.pack("<i", int(m_type))
-    unpack_size = len(expanded)
-    yl = unpack_size // (C.DBS_MAP_WIDTH * 4)
-    if yl <= 0:
+    merged = _dbs_plane_xor_merge(expanded)
+    if merged is None:
         return struct.pack("<i", int(m_type))
-    temp_a = bytearray(unpack_size)
-    temp_b = bytearray(unpack_size)
-    tile_copy(
-        temp_a,
-        bytes(expanded),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        0,
-        128,
-    )
-    tile_copy(
-        temp_b,
-        bytes(expanded),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        1,
-        128,
-    )
-    _xor32_inplace(temp_a, C.DBS_XOR32_CODE_A)
-    _xor32_inplace(temp_b, C.DBS_XOR32_CODE_B)
-    merged = bytearray(unpack_size)
-    tile_copy(
-        merged,
-        bytes(temp_a),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        0,
-        128,
-    )
-    tile_copy(
-        merged,
-        bytes(temp_b),
-        C.DBS_MAP_WIDTH,
-        yl,
-        C.DBS_TILE,
-        C.DBS_TILE_WIDTH,
-        C.DBS_TILE_HEIGHT,
-        0,
-        0,
-        1,
-        128,
-    )
-    packed = bytearray(lzss_pack(bytes(merged)))
+    packed = bytearray(lzss_pack(merged))
     _xor32_inplace(packed, C.DBS_XOR32_CODE)
     return struct.pack("<i", int(m_type)) + bytes(packed)
 
