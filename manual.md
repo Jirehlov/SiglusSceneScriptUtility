@@ -114,7 +114,7 @@ siglus-ssu init
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [args]
+siglus-ssu [-h] [-V | --version] [--legacy] [--legacy-full] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [args]
 ```
 
 ### Global Options
@@ -123,7 +123,8 @@ siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -
 |---|---|
 | `-h`, `--help` | Show the help message and exit. |
 | `-V`, `--version` | Show the program version and exit. |
-| `--legacy` | Disable the Rust native acceleration and use the pure Python fallback implementation. Useful for debugging. |
+| `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
+| `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
 | `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`2`, default: `0`). Use a non-default profile only when targeting an engine/compiler variant whose form or element tables differ from the default profile. Cannot be combined with `-c --tmp`. |
 
 ### Command Aliases
@@ -212,6 +213,7 @@ siglus-ssu -lsp [--serial]
 #### Notes
 
 - Workspace-wide symbol and link scans run in parallel by default. With `--serial`, they run serially. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
+- When the Rust native scanner is available, LSP workspace scans and document symbols use it automatically and fall back to the Python pipeline if native scanning is unavailable or cannot handle the document.
 - Workspace indexes persist across sessions. Cache compatibility includes the directory, `.inc` MD5 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's MD5 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Capabilities include semantic tokens, publish/pull diagnostics, completion, hover, go to definition, references, rename and conditional prepare-rename support, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis. Pull diagnostics are advertised only when the client supports `textDocument/diagnostic`. Semantic token categories include dialogue text, system elements, speaker names, and used/unused macro declarations.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
@@ -222,6 +224,8 @@ siglus-ssu -lsp [--serial]
 ### `-c` / `--compile` — Compile Scripts
 
 Compiles a directory of `.ss` SceneScript source files into a `.pck` file. During compilation, individual scene `.dat` files are first generated in a temporary directory, then in the normal mode they are linked and packed into the final `Scene.pck`. The compilation pipeline implements the supported SiglusEngine-style build stages, including LZSS compression, per-script string-table shuffling, and encryption based on `暗号.dat`.
+
+By default, compile mode uses the Rust native backend when it is available and supported for the selected options, and falls back to the Python backend otherwise. Global `--legacy` forces the Python compile backend while still allowing native helpers such as LZSS; `--legacy-full` disables all Rust native acceleration.
 
 It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
 

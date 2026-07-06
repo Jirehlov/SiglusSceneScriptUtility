@@ -114,7 +114,7 @@ siglus-ssu init
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [参数]
+siglus-ssu [-h] [-V | --version] [--legacy] [--legacy-full] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [参数]
 ```
 
 ### 全局选项
@@ -123,7 +123,8 @@ siglus-ssu [-h] [-V | --version] [--legacy] [--const-profile N] (-lsp | init | -
 |---|---|
 | `-h`, `--help` | 显示帮助信息并退出。 |
 | `-V`, `--version` | 显示程序版本并退出。 |
-| `--legacy` | 禁用 Rust 原生加速，使用纯 Python 回退实现。可用于调试。 |
+| `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
+| `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
 | `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。不能与 `-c --tmp` 同用。 |
 
 ### 命令别名
@@ -212,6 +213,7 @@ siglus-ssu -lsp [--serial]
 #### 说明
 
 - 工作区级别的符号扫描与链接扫描默认并行执行；使用 `--serial` 时改为串行。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
+- 当 Rust 原生扫描器可用时，LSP 工作区扫描与文档符号会自动优先使用 Rust；若原生扫描不可用或不能处理该文档，则回退到 Python 流程。
 - 工作区索引会持久化到磁盘并跨会话复用。缓存兼容条件包括目录、`.inc` MD5 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 MD5 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 支持语义 token、push/pull 诊断、自动补全、悬停说明、跳转到定义、查找引用、改名、客户端支持时的准备改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新。只有客户端支持 `textDocument/diagnostic` 时才声明 pull 诊断。语义 token 分类包括台词文本、system element（系统指令）、角色名，以及已使用/未使用的宏声明。
 - 服务会协商 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并校验文档 URI 与请求结构。
@@ -222,6 +224,8 @@ siglus-ssu -lsp [--serial]
 ### `-c` / `--compile` — 编译脚本
 
 将一个目录中的 `.ss` SceneScript 源文件编译为 `.pck` 文件。编译过程中会先在临时目录生成各个场景的 `.dat`，然后在常规模式下再将它们链接并打包为最终的 `Scene.pck`。编译流程实现当前支持的 SiglusEngine 风格构建阶段，包括 LZSS 压缩、每脚本字符串表乱序、以及基于 `暗号.dat` 的加密。
+
+默认情况下，编译模式会在 Rust 原生 backend 可用且支持当前选项时优先使用 Rust，否则自动回退到 Python backend。全局 `--legacy` 强制使用 Python 编译 backend，但仍允许 LZSS 等 native helper；`--legacy-full` 会禁用全部 Rust 原生加速。
 
 也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。
 

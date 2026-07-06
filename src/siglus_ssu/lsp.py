@@ -26,6 +26,11 @@ from .MA import MA, FormTable
 from .SA import SA
 from ._const_manager import package_version
 from .common import build_empty_ia_data, read_text_auto
+from .native_ops import (
+    build_lsp_project_native,
+    native_lsp_scan_available,
+    scan_lsp_document_native,
+)
 
 C = get_const_module()
 SEVERITY_ERROR = 1
@@ -1336,6 +1341,7 @@ def analyze_document(
 
 
 _SCAN_WORKER_PROJECT: ProjectContext | None = None
+_SCAN_WORKER_NATIVE_PROJECT: Any = None
 
 
 def _scan_worker_count() -> int:
@@ -1344,9 +1350,12 @@ def _scan_worker_count() -> int:
     return get_max_workers(None)
 
 
-def _init_scan_worker(project: ProjectContext) -> None:
-    global _SCAN_WORKER_PROJECT
+def _init_scan_worker(
+    project: ProjectContext, native_config: dict[str, Any] | None = None
+) -> None:
+    global _SCAN_WORKER_PROJECT, _SCAN_WORKER_NATIVE_PROJECT
     _SCAN_WORKER_PROJECT = project
+    _SCAN_WORKER_NATIVE_PROJECT = _build_native_lsp_project(native_config)
 
 
 def _scan_worker_project() -> ProjectContext:
@@ -1354,6 +1363,10 @@ def _scan_worker_project() -> ProjectContext:
     if project is None:
         raise RuntimeError("scan worker project is not initialized")
     return project
+
+
+def _scan_worker_native_project() -> Any:
+    return _SCAN_WORKER_NATIVE_PROJECT
 
 
 def _command_records(result: AnalysisResult) -> list[DefinitionRecord]:
@@ -1375,10 +1388,174 @@ def _link_scan_result(
     )
 
 
+def _definition_record_to_native(record: DefinitionRecord) -> dict[str, Any]:
+    return {
+        "name": record.name,
+        "path": record.path,
+        "line": record.line,
+        "kind": record.kind,
+        "directive": record.directive,
+        "detail": record.detail,
+        "scope": record.scope,
+        "signature": record.signature,
+        "start_char": record.start_char,
+        "end_char": record.end_char,
+    }
+
+
+def _native_lsp_project_config(
+    directory: str,
+    project: ProjectContext,
+    overlays: dict[str, str],
+) -> dict[str, Any] | None:
+    if not native_lsp_scan_available() or project.build_error is not None:
+        return None
+    try:
+        from .compiler import _native_compile_constants_config
+
+        inc_paths = _sorted_dir_paths(directory, overlays, ".inc")
+        definitions = [
+            _definition_record_to_native(record)
+            for records in project.definitions.values()
+            for record in records
+        ]
+        return {
+            "constants": _native_compile_constants_config(),
+            "inc_docs": [
+                {"path": os.path.abspath(path), "text": _read_text(path, overlays)}
+                for path in inc_paths
+            ],
+            "definitions": definitions,
+        }
+    except Exception:
+        return None
+
+
+def _build_native_lsp_project(native_config: dict[str, Any] | None) -> Any:
+    if not native_config:
+        return None
+    try:
+        return build_lsp_project_native(native_config)
+    except Exception:
+        return None
+
+
+def _native_definition_record(
+    item: dict[str, Any], fallback_path: str
+) -> DefinitionRecord:
+    return DefinitionRecord(
+        name=str(item.get("name", "") or ""),
+        path=os.path.abspath(str(item.get("path", "") or fallback_path)),
+        line=max(1, _native_int_field(item, "line", 1)),
+        kind=str(item.get("kind", "") or ""),
+        directive=str(item.get("directive", "") or ""),
+        detail=str(item.get("detail", "") or ""),
+        scope=str(item.get("scope", "") or ""),
+        signature=str(item.get("signature", "") or ""),
+        start_char=_native_int_field(item, "start_char", -1),
+        end_char=_native_int_field(item, "end_char", -1),
+    )
+
+
+def _native_symbol_occurrence(
+    item: dict[str, Any], fallback_path: str
+) -> SymbolOccurrence:
+    return SymbolOccurrence(
+        symbol_id=str(item.get("symbol_id", "") or ""),
+        path=os.path.abspath(str(item.get("path", "") or fallback_path)),
+        line=max(0, int(item.get("line", 0) or 0)),
+        start_char=max(0, int(item.get("start_char", 0) or 0)),
+        end_char=max(0, int(item.get("end_char", 0) or 0)),
+        kind=str(item.get("kind", "") or ""),
+        semantic_type=str(item.get("semantic_type", "") or ""),
+        name=str(item.get("name", "") or ""),
+        definition=bool(item.get("definition", False)),
+        renamable=bool(item.get("renamable", False)),
+    )
+
+
+def _native_scan_document_result(
+    native_project: Any, path: str, text: str, run_bs: bool
+) -> dict[str, Any] | None:
+    if native_project is None or not path.lower().endswith(".ss"):
+        return None
+    try:
+        result = scan_lsp_document_native(native_project, path, text, run_bs)
+    except Exception:
+        return None
+    if not isinstance(result, dict) or not result.get("handled"):
+        return None
+    return result
+
+
+def _native_link_scan_result(
+    native_project: Any,
+    path: str,
+    text: str,
+) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]] | None:
+    result = _native_scan_document_result(native_project, path, text, False)
+    if result is None:
+        return None
+    commands_raw = result.get("commands")
+    occurrences_raw = result.get("occurrences")
+    if not isinstance(commands_raw, list) or not isinstance(occurrences_raw, list):
+        return None
+    try:
+        return (
+            bool(result.get("has_diagnostics", False)),
+            [
+                _native_definition_record(item, path)
+                for item in commands_raw
+                if isinstance(item, dict)
+            ],
+            [
+                _native_symbol_occurrence(item, path)
+                for item in occurrences_raw
+                if isinstance(item, dict)
+            ],
+        )
+    except Exception:
+        return None
+
+
+def _native_int_field(item: dict[str, Any], name: str, default: int) -> int:
+    raw = item.get(name, default)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _native_document_symbols_result(
+    native_project: Any,
+    path: str,
+    text: str,
+) -> list[DefinitionRecord] | None:
+    result = _native_scan_document_result(native_project, path, text, True)
+    if result is None:
+        return None
+    symbols_raw = result.get("document_symbols")
+    if not isinstance(symbols_raw, list):
+        return None
+    try:
+        return [
+            _native_definition_record(item, path)
+            for item in symbols_raw
+            if isinstance(item, dict)
+        ]
+    except Exception:
+        return None
+
+
 def _link_scan_worker(
     path: str,
     text: str,
 ) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
+    native_result = _native_link_scan_result(_scan_worker_native_project(), path, text)
+    if native_result is not None:
+        return native_result
     return _link_scan_result(
         _silent_stdout_call(
             analyze_document, path, text, project=_scan_worker_project(), run_bs=False
@@ -3341,6 +3518,9 @@ class SSLanguageServer:
         self.deferred_messages: list[dict[str, Any]] = []
         self.documents: dict[str, DocumentState] = {}
         self.project_cache: dict[str, ProjectCacheEntry] = {}
+        self.native_lsp_project_cache: dict[
+            str, tuple[tuple[Any, ...], Any, dict[str, Any] | None]
+        ] = {}
         self.link_diagnostics_cache: dict[str, DirectoryLinkDiagnosticsEntry] = {}
         self.initialize_seen = False
         self.shutdown_requested = False
@@ -4062,6 +4242,27 @@ class SSLanguageServer:
         self.project_cache[directory] = entry
         return entry
 
+    def native_lsp_project_for_directory(
+        self, directory: str, project_entry: ProjectCacheEntry
+    ) -> tuple[Any, dict[str, Any] | None]:
+        directory = os.path.abspath(directory or ".")
+        cached = self.native_lsp_project_cache.get(directory)
+        if cached is not None and cached[0] == project_entry.signature:
+            return cached[1], cached[2]
+        overlays = self.overlays_for_dir(directory, ".inc")
+        native_config = _native_lsp_project_config(
+            directory,
+            project_entry.project,
+            overlays,
+        )
+        native_project = _build_native_lsp_project(native_config)
+        self.native_lsp_project_cache[directory] = (
+            project_entry.signature,
+            native_project,
+            native_config,
+        )
+        return native_project, native_config
+
     def scene_paths(self, directory: str) -> list[str]:
         directory = os.path.abspath(directory or ".")
         return _sorted_dir_paths(directory, self.overlays_for_dir(directory), ".ss")
@@ -4088,6 +4289,8 @@ class SSLanguageServer:
     def parallel_scan_documents(
         self,
         project_entry: ProjectCacheEntry,
+        native_project: Any,
+        native_config: dict[str, Any] | None,
         docs: list[tuple[str, DocumentState]],
         progress: ScanProgressState | None,
         scan_one: Any,
@@ -4098,7 +4301,7 @@ class SSLanguageServer:
             out: dict[str, Any] = {}
             for path, doc in docs:
                 self.raise_if_request_cancelled()
-                out[path] = scan_one(doc)
+                out[path] = scan_one(doc, native_project)
                 self.report_scan_progress(progress)
             return out
         worker_count = min(len(docs), _scan_worker_count())
@@ -4106,7 +4309,7 @@ class SSLanguageServer:
             out: dict[str, Any] = {}
             for path, doc in docs:
                 self.raise_if_request_cancelled()
-                out[path] = scan_one(doc)
+                out[path] = scan_one(doc, native_project)
                 self.report_scan_progress(progress)
             return out
         from .parallel import parallel_process_completed_map
@@ -4117,7 +4320,7 @@ class SSLanguageServer:
             jobs,
             max_workers=worker_count,
             initializer=_init_scan_worker,
-            initargs=(project_entry.project,),
+            initargs=(project_entry.project, native_config),
             on_result=lambda _job, _result: self.report_scan_progress(progress),
             on_poll=self.raise_if_request_cancelled,
         )
@@ -4188,6 +4391,9 @@ class SSLanguageServer:
         )
         if not rebuild_all and not removed and not dirty_paths:
             return entry
+        native_project, native_config = self.native_lsp_project_for_directory(
+            directory, project_entry
+        )
         progress = self.begin_scan_progress(
             "SiglusSS: Scanning project symbols",
             len(dirty_paths),
@@ -4206,15 +4412,24 @@ class SSLanguageServer:
                 scan_docs.append((path, doc))
             scan_results = self.parallel_scan_documents(
                 project_entry,
+                native_project,
+                native_config,
                 scan_docs,
                 progress,
-                lambda doc: _link_scan_result(
-                    _silent_stdout_call(
-                        analyze_document,
+                lambda doc, native_project: (
+                    _native_link_scan_result(
+                        native_project,
                         doc.path,
                         doc.text,
-                        project=project_entry.project,
-                        run_bs=False,
+                    )
+                    or _link_scan_result(
+                        _silent_stdout_call(
+                            analyze_document,
+                            doc.path,
+                            doc.text,
+                            project=project_entry.project,
+                            run_bs=False,
+                        )
                     )
                 ),
             )
@@ -4437,6 +4652,22 @@ class SSLanguageServer:
                     uri_for_path=self.uri_for_path,
                 )
         return locations
+
+    def native_document_symbols(self, doc: DocumentState) -> AnalysisResult | None:
+        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
+        project_entry = self.project_for_directory(directory)
+        native_project, _native_config = self.native_lsp_project_for_directory(
+            directory, project_entry
+        )
+        symbols = _native_document_symbols_result(native_project, doc.path, doc.text)
+        if symbols is None:
+            return None
+        return AnalysisResult(
+            path=doc.path,
+            text=doc.text,
+            project=project_entry.project,
+            document_symbols=symbols,
+        )
 
     def pick_position_encoding(self, capabilities: dict[str, Any]) -> str:
         raw = _dict_member(capabilities, "general").get("positionEncodings") or []
@@ -5036,7 +5267,7 @@ class SSLanguageServer:
         if doc is None:
             self.respond(msg_id, result=[])
             return
-        result = self.analyze_base(doc)
+        result = self.native_document_symbols(doc) or self.analyze_base(doc)
         self.respond(
             msg_id,
             result=document_symbols_to_lsp(result, self.position_encoding),

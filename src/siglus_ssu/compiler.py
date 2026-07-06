@@ -24,6 +24,7 @@ from .native_ops import (
     xor_cycle_inplace,
     md5_digest,
     tile_copy,
+    compile_project_native,
 )
 from .common import (
     looks_like_siglus_dat,
@@ -39,6 +40,7 @@ from .common import (
     has_option,
     empty_macro_stat_counts,
     norm_charset,
+    format_scene_name,
     macro_decl_kind,
     merge_macro_stat_counts,
 )
@@ -217,6 +219,95 @@ def _write_md5_cache(path, payload):
         with suppress(OSError):
             os.remove(tmp_path)
         raise
+
+
+def _md5_file_for_cache(p):
+    h = hashlib.md5()
+    with open(p, "rb") as f:
+        while True:
+            b = f.read(1024 * 1024)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
+
+
+def _native_compile_cache_config(
+    *, args, input_dir, tmp_dir, enc, charset, ss, inc, test_shuffle
+):
+    compile_list = list(ss or [])
+    md5_path = os.path.join(tmp_dir, "_md5.json") if tmp_dir else ""
+    cur_inc = {}
+    cur_ss = {}
+    full_compile = True
+    cache_meta = {
+        "schema": 2,
+        "charset": enc,
+        "charset_force": charset,
+        "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
+        "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+    }
+    for f in inc or []:
+        p = os.path.join(input_dir, f)
+        if os.path.isfile(p):
+            cur_inc[str(f).lower()] = _md5_file_for_cache(p)
+    for p in ss or []:
+        if os.path.isfile(p):
+            cur_ss[os.path.basename(p).lower()] = _md5_file_for_cache(p)
+    if getattr(args, "tmp_dir", ""):
+        old = None
+        if md5_path and os.path.isfile(md5_path):
+            try:
+                old = json.loads(read_text_auto(md5_path, force_charset="utf-8"))
+            except Exception:
+                old = None
+        full_compile = False
+        if not isinstance(old, dict):
+            full_compile = True
+        else:
+            old_meta = old.get("meta") or {}
+            if old_meta != cache_meta:
+                full_compile = True
+            else:
+                old_inc = old.get("inc") or {}
+                for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
+                    if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
+                        full_compile = True
+                        break
+        bs_dir = os.path.join(tmp_dir, "bs")
+        if full_compile:
+            compile_list = list(ss or [])
+        else:
+            old_ss = old.get("ss") or {}
+            comp = set()
+            for p in ss or []:
+                b = os.path.basename(p).lower()
+                nm = os.path.splitext(os.path.basename(p))[0]
+                dat_path = os.path.join(bs_dir, nm + ".dat")
+                need = False
+                if not os.path.isfile(dat_path):
+                    need = True
+                elif str(cur_ss.get(b, "")) != str(old_ss.get(b, "")):
+                    need = True
+                if need:
+                    comp.add(p)
+            compile_list = sorted(comp, key=lambda x: os.path.basename(x).lower())
+    pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
+    full_compile_stats = (
+        (not getattr(args, "dat_repack", False))
+        and not getattr(args, "tmp_dir", "")
+        and (not test_shuffle)
+        and bool(ss)
+        and len(compile_list) == len(ss or [])
+    )
+    return {
+        "md5_path": md5_path,
+        "pending_md5_json": json.dumps(pending_md5, ensure_ascii=False, sort_keys=True),
+        "compile_scene_names": [os.path.basename(p) for p in compile_list],
+        "compiled_scene_files": len(compile_list or []),
+        "full_compile": bool(full_compile),
+        "full_compile_stats": bool(full_compile_stats),
+    }
 
 
 def _tmp_incompatible_options(argv, test_shuffle=False):
@@ -759,6 +850,224 @@ def _print_summary(ctx, ok=False):
         print(angou)
 
 
+def _native_compile_constants_config():
+    from .MA import FormTable
+
+    def _const_int(name, default=0):
+        value = getattr(C, name, None)
+        if value is None:
+            return int(default)
+        return int(value)
+
+    form_table = FormTable()
+    form_table.create_system_form_table()
+    system_elements = []
+    selection_command_codes = []
+    for parent, form_info in form_table.form_map_by_name.items():
+        for element in (form_info.get("element_map_by_name") or {}).values():
+            arg_map = []
+            for list_id, arg_list in sorted(
+                (element.get("arg_map") or {}).items(), key=lambda item: int(item[0])
+            ):
+                args_snapshot = []
+                source_args = (
+                    arg_list.get("arg_list") if isinstance(arg_list, dict) else arg_list
+                ) or []
+                for index, arg in enumerate(source_args):
+                    args_snapshot.append(
+                        {
+                            "id": int(arg.get("id", index) or index),
+                            "name": str(arg.get("name", "") or ""),
+                            "form": str(arg.get("form", C.FM_INT) or C.FM_INT),
+                            "def_int": int(arg.get("def_int", 0) or 0),
+                            "def_exist": bool(arg.get("def_exist", False)),
+                        }
+                    )
+                arg_map.append({"id": int(list_id), "args": args_snapshot})
+            element_code = int(element.get("code", 0) or 0)
+            system_elements.append(
+                {
+                    "parent": str(parent),
+                    "kind": int(element.get("type", C.ET_PROPERTY) or 0),
+                    "code": element_code,
+                    "name": str(element.get("name", "") or ""),
+                    "form": str(element.get("form", C.FM_INT) or C.FM_INT),
+                    "arg_map": arg_map,
+                    "origin": str(element.get("origin", "sys") or "sys"),
+                }
+            )
+            if C.is_global_sel_command(parent, element_code):
+                selection_command_codes.append(
+                    [int(C._FORM_CODE.get(parent, 0) or 0), element_code]
+                )
+    return {
+        "form_code": dict(C._FORM_CODE),
+        "form_names": {
+            name: str(getattr(C, name))
+            for name in (
+                "FM___ARGSREF",
+                "FM___ARGS",
+                "FM_LIST",
+                "FM_VOID",
+                "FM_INT",
+                "FM_INTLIST",
+                "FM_INTLISTREF",
+                "FM_INTREF",
+                "FM_LABEL",
+                "FM_CALL",
+                "FM_SCENE",
+                "FM_GLOBAL",
+                "FM_STR",
+                "FM_STRLIST",
+                "FM_STRLISTREF",
+                "FM_STRREF",
+            )
+        },
+        "la_type": {str(name): int(value) for name, value in C.LA_T.items()},
+        "op_code": {
+            name: int(getattr(C, name)) for name in dir(C) if name.startswith("OP_")
+        },
+        "cd_code": {
+            name: int(getattr(C, name)) for name in dir(C) if name.startswith("CD_")
+        },
+        "element_code": {
+            "ELM_ARRAY": _const_int("ELM_ARRAY"),
+            "ELM_GLOBAL_CUR_CALL": _const_int("ELM_GLOBAL_CUR_CALL"),
+            "ELM_GLOBAL_MSG_BLOCK": _const_int("ELM_GLOBAL_MSG_BLOCK"),
+            "ELM_OWNER_CALL_PROP": _const_int("ELM_OWNER_CALL_PROP"),
+            "ELM_OWNER_USER_CMD": _const_int("ELM_OWNER_USER_CMD"),
+            "ELM_OWNER_USER_PROP": _const_int("ELM_OWNER_USER_PROP"),
+        },
+        "element_type": {
+            "ET_COMMAND": _const_int("ET_COMMAND"),
+            "ET_PROPERTY": _const_int("ET_PROPERTY"),
+        },
+        "system_elements": system_elements,
+        "scn_header_fields": list(C.SCN_HDR_FIELDS),
+        "scn_header_size": int(C.SCN_HDR_SIZE),
+        "pack_header_fields": list(C.PACK_HDR_FIELDS),
+        "pack_header_size": int(C.PACK_HDR_SIZE),
+        "z_label_count": int(C.TNM_Z_LABEL_CNT),
+        "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
+        "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
+        "exe_org": bytes(C.EXE_ORG),
+        "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
+        "exe_angou_b_idx": [int(x) for x in C.EXE_ANGOU_B_IDX],
+        "source_angou": dict(C.SOURCE_ANGOU),
+        "message_block_command_codes": [
+            [int(parent), int(code)] for parent, code in C.MESSAGE_BLOCK_COMMAND_CODES
+        ],
+        "read_flag_command_codes": [
+            [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
+        ],
+        "selection_command_codes": selection_command_codes,
+    }
+
+
+def _native_compile_config(
+    *,
+    args,
+    ctx,
+    input_dir,
+    output_dir,
+    scene_pck,
+    tmp_dir,
+    ss,
+    inc,
+    enc,
+    charset_force,
+    test_shuffle,
+    force_serial_compile,
+    angou_content,
+):
+    scene_display_names = {}
+    for scn_name in list(ctx.get("scn_list") or []):
+        scene_display_names[os.path.basename(str(scn_name))] = format_scene_name(
+            scn_name, ctx
+        )
+    return {
+        "input_dir": input_dir,
+        "output_dir": output_dir,
+        "scene_pck": scene_pck,
+        "tmp_dir": tmp_dir,
+        "constants": _native_compile_constants_config(),
+        "cache": _native_compile_cache_config(
+            args=args,
+            input_dir=input_dir,
+            tmp_dir=tmp_dir,
+            enc=enc,
+            charset=charset_force,
+            ss=ss,
+            inc=inc,
+            test_shuffle=test_shuffle,
+        ),
+        "options": {
+            "dat_repack": bool(args.dat_repack),
+            "no_angou": bool(args.no_angou),
+            "serial": bool(args.serial),
+            "max_workers": args.max_workers,
+            "set_shuffle": args.set_shuffle,
+            "tmp_dir": args.tmp_dir,
+            "gei": bool(args.gei),
+            "test_shuffle": bool(test_shuffle),
+            "force_serial_compile": bool(force_serial_compile),
+        },
+        "context": {
+            "gameexe_ini": ctx.get("gameexe_ini"),
+            "scn_list": list(ctx.get("scn_list") or []),
+            "scene_display_names": scene_display_names,
+            "inc_list": list(ctx.get("inc_list") or []),
+            "ini_list": list(ctx.get("ini_list") or []),
+            "utf8": bool(ctx.get("utf8")),
+            "charset_force": ctx.get("charset_force"),
+            "debug_outputs": bool(ctx.get("debug_outputs")),
+            "lzss_mode": bool(ctx.get("lzss_mode")),
+            "exe_angou_mode": bool(ctx.get("exe_angou_mode")),
+            "source_angou_mode": bool(ctx.get("source_angou_mode")),
+            "original_source_mode": bool(ctx.get("original_source_mode")),
+            "easy_link": bool(ctx.get("easy_link")),
+        },
+        "angou_content": angou_content,
+    }
+
+
+def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug, legacy):
+    if legacy:
+        return None
+    result = compile_project_native(config)
+    if not isinstance(result, dict) or not result.get("handled"):
+        return None
+    stats = result.get("stats")
+    if isinstance(stats, dict):
+        ctx.setdefault("stats", {}).update(stats)
+    ok = bool(result.get("ok"))
+    message = str(result.get("message") or "")
+    stdout = result.get("stdout")
+    stderr = result.get("stderr")
+    if stdout is None and stderr is None:
+        stdout = message if ok else ""
+        stderr = "" if ok else message
+    stdout = str(stdout or "")
+    stderr = str(stderr or "")
+    if stdout:
+        sys.stdout.write(stdout)
+        if not stdout.endswith(("\n", "\r")):
+            sys.stdout.write("\n")
+    if stderr:
+        sys.stderr.write(stderr)
+        if not stderr.endswith(("\n", "\r")):
+            sys.stderr.write("\n")
+    _print_summary(ctx, ok=ok)
+    if ok and (not debug) and tmp and tmp_auto:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return 0 if ok else 1
+
+
+def _env_truthy(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return str(value).lower() in {"1", "true", "yes", "on"}
+
+
 def main(argv=None):
     import argparse
 
@@ -852,6 +1161,11 @@ def main(argv=None):
         help="Disable scene LZSS and omit source chunks (official easy link behavior).",
     )
     ap.add_argument(
+        "--legacy",
+        action="store_true",
+        help="Force Python compile backend while keeping native helpers such as LZSS.",
+    )
+    ap.add_argument(
         "--serial",
         action="store_true",
         help="Disable parallel compilation.",
@@ -878,6 +1192,9 @@ def main(argv=None):
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
+    a.legacy = bool(
+        getattr(a, "legacy", False) or _env_truthy("SIGLUS_SSU_LEGACY_COMPILE")
+    )
     charset_arg = getattr(a, "charset", "") or ""
     charset = norm_charset(charset_arg)
     if charset_arg and not charset:
@@ -988,6 +1305,30 @@ def main(argv=None):
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None
     _record_angou(ctx, angou_content)
+    native_rc = _try_native_compile(
+        _native_compile_config(
+            args=a,
+            ctx=ctx,
+            input_dir=inp,
+            output_dir=out,
+            scene_pck=scene_pck,
+            tmp_dir=tmp,
+            ss=ss,
+            inc=inc,
+            enc=enc,
+            charset_force=charset_arg,
+            test_shuffle=test_shuffle,
+            force_serial_compile=force_serial_compile,
+            angou_content=angou_content,
+        ),
+        ctx,
+        tmp=tmp,
+        tmp_auto=tmp_auto,
+        debug=bool(a.debug),
+        legacy=bool(a.legacy),
+    )
+    if native_rc is not None:
+        return native_rc
     ok = False
     compile_stats = {
         "parallel": False,

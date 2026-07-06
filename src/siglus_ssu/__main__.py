@@ -29,11 +29,12 @@ def _usage(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
-        "  --legacy        Force pure Python implementation (disable Rust accel)\n"
+        "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
+        "  --legacy-full   Disable all Rust native acceleration\n"
         "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
         "\n"
         "Modes:\n"
@@ -184,7 +185,7 @@ def _usage_short(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     out.write(text)
@@ -199,6 +200,7 @@ def _drop_const_module():
 
 def _consume_global_options(argv):
     legacy = False
+    legacy_full = False
     const_profile = None
     out = []
     i = 0
@@ -206,6 +208,10 @@ def _consume_global_options(argv):
         arg = argv[i]
         if arg == "--legacy":
             legacy = True
+            i += 1
+            continue
+        if arg == "--legacy-full":
+            legacy_full = True
             i += 1
             continue
         if arg == "--const-profile":
@@ -220,8 +226,11 @@ def _consume_global_options(argv):
             continue
         out.append(arg)
         i += 1
-    if legacy:
+    if legacy_full:
         os.environ["SIGLUS_SSU_LEGACY"] = "1"
+        os.environ["SIGLUS_SSU_LEGACY_COMPILE"] = "1"
+    elif legacy:
+        os.environ["SIGLUS_SSU_LEGACY_COMPILE"] = "1"
     profile = None
     if const_profile is not None:
         value = str(const_profile).strip()

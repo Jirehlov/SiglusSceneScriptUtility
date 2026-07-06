@@ -1,3 +1,4 @@
+mod compile_backend;
 mod lzss;
 mod lzss32;
 mod md5;
@@ -7,6 +8,8 @@ mod xor;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
+use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
 use std::sync::Arc;
@@ -388,6 +391,33 @@ fn find_shuffle_seed_first(
     }
 }
 
+#[pyfunction]
+fn compile_backend_available() -> PyResult<bool> {
+    Ok(compile_backend::available())
+}
+
+#[pyfunction]
+fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
+    compile_backend::compile_project(py, config)
+}
+
+#[pyfunction]
+fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    compile_backend::lsp_build_project(py, config)
+}
+
+#[pyfunction]
+#[pyo3(signature = (project, path, text, run_bs=false))]
+fn lsp_scan_document(
+    py: Python<'_>,
+    project: Bound<'_, PyAny>,
+    path: String,
+    text: String,
+    run_bs: bool,
+) -> PyResult<Py<PyDict>> {
+    compile_backend::lsp_scan_document(py, project, path, text, run_bs)
+}
+
 #[pymodule]
 fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_pack, m)?)?;
@@ -400,5 +430,9 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tile_copy, m)?)?;
     m.add_function(wrap_pyfunction!(msvcrand_shuffle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(find_shuffle_seed_first, m)?)?;
+    m.add_function(wrap_pyfunction!(compile_backend_available, m)?)?;
+    m.add_function(wrap_pyfunction!(compile_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lsp_build_project, m)?)?;
+    m.add_function(wrap_pyfunction!(lsp_scan_document, m)?)?;
     Ok(())
 }

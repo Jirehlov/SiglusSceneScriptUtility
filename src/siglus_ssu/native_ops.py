@@ -25,6 +25,12 @@ try:
     _native_find_shuffle_seed_first = getattr(
         native_accel, "find_shuffle_seed_first", None
     )
+    _native_compile_backend_available = getattr(
+        native_accel, "compile_backend_available", None
+    )
+    _native_compile_project = getattr(native_accel, "compile_project", None)
+    _native_lsp_build_project = getattr(native_accel, "lsp_build_project", None)
+    _native_lsp_scan_document = getattr(native_accel, "lsp_scan_document", None)
     _USE_NATIVE = True
 except (ImportError, AttributeError):
     _USE_NATIVE = False
@@ -32,13 +38,57 @@ except (ImportError, AttributeError):
     _native_lzss32_unpack = None
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
+    _native_compile_backend_available = None
+    _native_compile_project = None
+    _native_lsp_build_project = None
+    _native_lsp_scan_document = None
 HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
     _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
+)
+HAS_NATIVE_COMPILE_BACKEND = bool(
+    _USE_NATIVE
+    and callable(_native_compile_backend_available)
+    and _native_compile_backend_available()
+    and callable(_native_compile_project)
+)
+HAS_NATIVE_LSP_SCAN = bool(
+    HAS_NATIVE_COMPILE_BACKEND
+    and callable(_native_lsp_build_project)
+    and callable(_native_lsp_scan_document)
 )
 
 
 def is_native_available() -> bool:
     return _USE_NATIVE
+
+
+def native_compile_backend_available() -> bool:
+    return HAS_NATIVE_COMPILE_BACKEND
+
+
+def compile_project_native(config):
+    if not HAS_NATIVE_COMPILE_BACKEND:
+        return {
+            "handled": False,
+            "reason": "rust compile backend is not available",
+        }
+    return _native_compile_project(config)
+
+
+def native_lsp_scan_available() -> bool:
+    return HAS_NATIVE_LSP_SCAN
+
+
+def build_lsp_project_native(config):
+    if not HAS_NATIVE_LSP_SCAN:
+        return None
+    return _native_lsp_build_project(config)
+
+
+def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False):
+    if not HAS_NATIVE_LSP_SCAN or project is None:
+        return None
+    return _native_lsp_scan_document(project, path, text, bool(run_bs))
 
 
 class _LzssTree:

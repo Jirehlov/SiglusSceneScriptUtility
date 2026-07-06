@@ -382,7 +382,10 @@ class MA:
                             }
                         )
                 a = n.get("atom") or {}
-                if a.get("type") == C.LA_T["LABEL"] and "node_form" in n:
+                if (
+                    a.get("type") == C.LA_T["LABEL"]
+                    and int(n.get("node_form", 0) or 0) == C.FM_LABEL
+                ):
                     lref.append(
                         {"label": int(a.get("opt", -1)), "id": int(a.get("id", 0))}
                     )
