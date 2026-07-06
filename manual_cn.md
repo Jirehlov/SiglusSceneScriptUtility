@@ -227,6 +227,8 @@ siglus-ssu -lsp [--serial]
 
 默认情况下，编译模式会在 Rust 原生 backend 可用且支持当前选项时优先使用 Rust，否则自动回退到 Python backend。全局 `--legacy` 强制使用 Python 编译 backend，但仍允许 LZSS 等 native helper；`--legacy-full` 会禁用全部 Rust 原生加速。
 
+链接场景写入 `.pck` 时，场景名采用与官方编译器一致的 ASCII-only 小写规则：仅 `A` 至 `Z` 会变为 `a` 至 `z`，非 ASCII 字符不会大小写折叠，包括 `ＥＤ` 这类全角拉丁字母。
+
 也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。
 
 #### 语法
@@ -436,7 +438,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--readall` | 只对 `read.sav` 和 `global.sav` 有意义。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--word`、`--angou` 或 `--gei` 同用；`--disam`、`--decompile` 与 `--payload` 不会改变这个单文件 `.sav` 操作。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，自动创建不覆盖旧文件的 `.bak` 备份，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--decompile`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。可以与 `--angou` 同用。 |
-| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
+| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行“规范化后的解码/解压 `scn_bytes` 语义”比较。当解析出的文本相同而仅有字符串池 `str_id` 不同时，会视为相同。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本场景字节码差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。当 Rust 原生 payload scanner 可用时会自动使用 Rust，否则回退到 Python。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
 | `--angou <path\|angou=text\|key=bytes>` | `.pck`/`.dat` 分析、`.pck` 台词统计、`Gameexe.dat` 分析或单独推导 key 时使用的显式 key 来源。`--angou` 必须是命令中的最后一个选项，必须使用 `--angou VALUE` 的分离写法，且值不能为空。裸值一律视为文件或目录路径；`暗号.dat` 字面量请写成 `angou=text`，16 字节 `exe_el` key 字面量请写成 `key=bytes`，例如 `key=0xA9,0x86,...`。解密时会按顺序尝试候选：显式 `--angou`；输入 `.pck` 内嵌 `暗号.dat`；当前目录；父目录。只有高优先级来源已经解析出 key、但该 key 未通过解密校验时，才会回落到低优先级候选；缺失、格式错误或无法产出 key 的显式来源会作为输入错误报告。若 `--angou` 使用裸路径，则本次请求禁用父目录探测，回落到当前目录后停止。目录探测不递归。每个被探测目录内部顺序为 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt`、`SiglusEngine*.exe`。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。该模式可以使用 `--angou`，但会拒绝其他 analyze 修饰选项，例如 `--disam`、`--decompile`、`--readall`、`--apply`、`--payload` 和 `--word`。 |
 

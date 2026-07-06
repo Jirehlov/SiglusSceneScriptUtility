@@ -3,6 +3,7 @@ mod lzss;
 mod lzss32;
 mod md5;
 mod nwa;
+mod payload;
 mod tile;
 mod xor;
 
@@ -418,6 +419,21 @@ fn lsp_scan_document(
     compile_backend::lsp_scan_document(py, project, path, text, run_bs)
 }
 
+#[pyfunction]
+fn scn_payload_hash_bundles(
+    py: Python<'_>,
+    blob: &[u8],
+    config: Bound<'_, PyAny>,
+    pack_context: Option<Bound<'_, PyAny>>,
+) -> PyResult<Option<Py<PyDict>>> {
+    payload::scn_payload_hash_bundles(py, blob, config, pack_context)
+}
+
+#[pyfunction]
+fn scn_payload_config(config: Bound<'_, PyDict>) -> PyResult<payload::PayloadConfig> {
+    payload::scn_payload_config(config)
+}
+
 #[pymodule]
 fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss_pack, m)?)?;
@@ -434,5 +450,8 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_build_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_scan_document, m)?)?;
+    m.add_class::<payload::PayloadConfig>()?;
+    m.add_function(wrap_pyfunction!(scn_payload_config, m)?)?;
+    m.add_function(wrap_pyfunction!(scn_payload_hash_bundles, m)?)?;
     Ok(())
 }

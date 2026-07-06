@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 ## [v0.3.7] - TBA
 - Better LSP.
 - Added a Rust native compile backend for `siglus-ssu -c`, used automatically when available and supported by the selected compile options, with Python fallback.
+- Added Rust native acceleration for `siglus-ssu -a --payload` semantic scene-bytecode comparison, with automatic Python fallback when native payload scanning is unavailable.
+- Changed compile-mode scene-name packing to mirror the official compiler's ASCII-only lowercase normalization, preserving non-ASCII letters such as fullwidth `ＥＤ` in rebuilt `.pck` scene tables.
 - Changed global `--legacy` to force only the Python compile backend while keeping native helpers such as LZSS enabled.
 - Added global `--legacy-full` to restore the old full-legacy behavior that disables all Rust native acceleration.
 - Changed `.dat` disassembly so `--disam` writes only `.dat.txt`; use `--decompile` to additionally emit reconstructed `decompiled/*.ss` output.

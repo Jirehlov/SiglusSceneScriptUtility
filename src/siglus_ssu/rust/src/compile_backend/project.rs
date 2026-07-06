@@ -402,6 +402,10 @@ fn utf16le(text: &str) -> Vec<u8> {
     out
 }
 
+fn ascii_lowercase(text: &str) -> String {
+    text.chars().map(|ch| ch.to_ascii_lowercase()).collect()
+}
+
 fn source_path(base: &Path, name: &str) -> PathBuf {
     let path = Path::new(name);
     if path.is_absolute() {
@@ -2566,7 +2570,7 @@ fn compile_project_inner(
         if let Some(key) = exe_key.as_deref() {
             crate::xor::cycle_inplace(&mut encoded, key, 0);
         }
-        (scene.stem.to_lowercase(), encoded)
+        (ascii_lowercase(&scene.stem), encoded)
     });
     let (scene_names, scene_data): (Vec<_>, Vec<_>) = encoded_scenes.into_iter().unzip();
     let (original_source_header_size, original_source_chunks) =

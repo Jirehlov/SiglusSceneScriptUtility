@@ -1,3 +1,4 @@
+from functools import lru_cache
 import os
 import struct
 import math
@@ -31,6 +32,10 @@ try:
     _native_compile_project = getattr(native_accel, "compile_project", None)
     _native_lsp_build_project = getattr(native_accel, "lsp_build_project", None)
     _native_lsp_scan_document = getattr(native_accel, "lsp_scan_document", None)
+    _native_scn_payload_config = getattr(native_accel, "scn_payload_config", None)
+    _native_scn_payload_hash_bundles = getattr(
+        native_accel, "scn_payload_hash_bundles", None
+    )
     _USE_NATIVE = True
 except (ImportError, AttributeError):
     _USE_NATIVE = False
@@ -42,6 +47,8 @@ except (ImportError, AttributeError):
     _native_compile_project = None
     _native_lsp_build_project = None
     _native_lsp_scan_document = None
+    _native_scn_payload_config = None
+    _native_scn_payload_hash_bundles = None
 HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
     _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
 )
@@ -56,6 +63,7 @@ HAS_NATIVE_LSP_SCAN = bool(
     and callable(_native_lsp_build_project)
     and callable(_native_lsp_scan_document)
 )
+HAS_NATIVE_PAYLOAD = bool(_USE_NATIVE and callable(_native_scn_payload_hash_bundles))
 
 
 def is_native_available() -> bool:
@@ -89,6 +97,130 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
     if not HAS_NATIVE_LSP_SCAN or project is None:
         return None
     return _native_lsp_scan_document(project, path, text, bool(run_bs))
+
+
+def _payload_native_config():
+    from ._const_manager import get_const_module
+
+    C = get_const_module()
+    return _payload_native_config_cached(
+        getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
+        str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+        str(getattr(C, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
+    )
+
+
+@lru_cache(maxsize=8)
+def _payload_native_config_cached(_profile, _sha512, _source_path):
+    from ._const_manager import get_const_module
+
+    C = get_const_module()
+    fm = dict(C._FORM_CODE or {})
+
+    def form(name):
+        return int(fm[getattr(C, name)])
+
+    def code(name):
+        return int(getattr(C, name))
+
+    elements = []
+    for item in list(C.SYSTEM_ELEMENT_DEFS or []):
+        if not isinstance(item, (list, tuple)) or len(item) < 7:
+            continue
+        tp, parent, ret, name, owner, group, elem_code, *_rest = item
+        if parent not in fm:
+            continue
+        ret_code = int(fm[ret]) if ret in fm else None
+        elements.append(
+            (
+                int(tp),
+                int(fm[parent]),
+                ret_code,
+                int(C.create_elm_code(int(owner), int(group), int(elem_code))),
+                str(name),
+            )
+        )
+    config = {
+        "CD_NONE": code("CD_NONE"),
+        "CD_NL": code("CD_NL"),
+        "CD_PUSH": code("CD_PUSH"),
+        "CD_POP": code("CD_POP"),
+        "CD_COPY": code("CD_COPY"),
+        "CD_PROPERTY": code("CD_PROPERTY"),
+        "CD_COPY_ELM": code("CD_COPY_ELM"),
+        "CD_DEC_PROP": code("CD_DEC_PROP"),
+        "CD_ELM_POINT": code("CD_ELM_POINT"),
+        "CD_ARG": code("CD_ARG"),
+        "CD_GOTO": code("CD_GOTO"),
+        "CD_GOTO_TRUE": code("CD_GOTO_TRUE"),
+        "CD_GOTO_FALSE": code("CD_GOTO_FALSE"),
+        "CD_GOSUB": code("CD_GOSUB"),
+        "CD_GOSUBSTR": code("CD_GOSUBSTR"),
+        "CD_RETURN": code("CD_RETURN"),
+        "CD_EOF": code("CD_EOF"),
+        "CD_ASSIGN": code("CD_ASSIGN"),
+        "CD_OPERATE_1": code("CD_OPERATE_1"),
+        "CD_OPERATE_2": code("CD_OPERATE_2"),
+        "CD_COMMAND": code("CD_COMMAND"),
+        "CD_TEXT": code("CD_TEXT"),
+        "CD_NAME": code("CD_NAME"),
+        "CD_SEL_BLOCK_START": code("CD_SEL_BLOCK_START"),
+        "CD_SEL_BLOCK_END": code("CD_SEL_BLOCK_END"),
+        "OP_PLUS": code("OP_PLUS"),
+        "OP_MULTIPLE": code("OP_MULTIPLE"),
+        "string_cmp_ops": [
+            code("OP_EQUAL"),
+            code("OP_NOT_EQUAL"),
+            code("OP_GREATER"),
+            code("OP_GREATER_EQUAL"),
+            code("OP_LESS"),
+            code("OP_LESS_EQUAL"),
+        ],
+        "FM_VOID": form("FM_VOID"),
+        "FM_INT": form("FM_INT"),
+        "FM_STR": form("FM_STR"),
+        "FM_LABEL": form("FM_LABEL"),
+        "FM_LIST": form("FM_LIST"),
+        "FM_INTLIST": form("FM_INTLIST"),
+        "FM_STRLIST": form("FM_STRLIST"),
+        "FM_CALL": form("FM_CALL"),
+        "FM_GLOBAL": form("FM_GLOBAL"),
+        "FM_INTREF": form("FM_INTREF"),
+        "FM_STRREF": form("FM_STRREF"),
+        "FM_INTLISTREF": form("FM_INTLISTREF"),
+        "FM_STRLISTREF": form("FM_STRLISTREF"),
+        "ELM_ARRAY": code("ELM_ARRAY"),
+        "ELM_OWNER_USER_PROP": code("ELM_OWNER_USER_PROP"),
+        "ELM_OWNER_USER_CMD": code("ELM_OWNER_USER_CMD"),
+        "ELM_OWNER_CALL_PROP": code("ELM_OWNER_CALL_PROP"),
+        "ET_PROPERTY": code("ET_PROPERTY"),
+        "ET_COMMAND": code("ET_COMMAND"),
+        "SCN_HDR_FIELDS": list(C.SCN_HDR_FIELDS),
+        "SCN_HDR_SIZE": int(C.SCN_HDR_SIZE),
+        "system_elements": elements,
+        "read_flag_commands": [
+            (int(parent), int(elem)) for parent, elem in C.READ_FLAG_COMMAND_CODES
+        ],
+    }
+    if callable(_native_scn_payload_config):
+        try:
+            return _native_scn_payload_config(config)
+        except Exception:
+            pass
+    return config
+
+
+def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
+    if not HAS_NATIVE_PAYLOAD:
+        return None
+    try:
+        return _native_scn_payload_hash_bundles(
+            blob if isinstance(blob, bytes) else bytes(blob),
+            _payload_native_config(),
+            pack_context if isinstance(pack_context, dict) else None,
+        )
+    except Exception:
+        return None
 
 
 class _LzssTree:

@@ -575,6 +575,11 @@ def _payload_trace_hash_bundles(trace):
 def scn_payload_hash_bundles(
     blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
 ):
+    from .native_ops import scn_payload_hash_bundles_native
+
+    native = scn_payload_hash_bundles_native(blob, pack_context=pack_context)
+    if native is not None:
+        return native
     bundle = dat_disassembly_bundle(
         blob,
         dat_path=dat_path,
