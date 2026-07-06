@@ -1254,20 +1254,19 @@ def main(argv=None):
             if not dat_files:
                 eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
                 return 1
+            try:
+                exe_el_candidates = list(
+                    pck.iter_exe_el_candidates(
+                        os.path.abspath(dat_path),
+                        explicit_angou=explicit_angou,
+                        with_sources=True,
+                    )
+                )
+            except ValueError as e:
+                eprint(str(e), errors="replace")
+                return 2
             errors = 0
             for file_path in dat_files:
-                base_dir = os.path.dirname(os.path.abspath(file_path)) or "."
-                try:
-                    exe_el_candidates = list(
-                        pck.iter_exe_el_candidates(
-                            base_dir,
-                            explicit_angou=explicit_angou,
-                            with_sources=True,
-                        )
-                    )
-                except ValueError as e:
-                    eprint(str(e), errors="replace")
-                    return 2
                 rc = _process_dat(
                     file_path,
                     disam_apply_mode,

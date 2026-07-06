@@ -393,7 +393,7 @@ def _write_dat_decompiled(
         return None
 
 
-def process_dat_output_items(items, stats=None):
+def process_dat_output_items(items, stats=None, decompile=False):
     bundle_list = []
     ready_items = []
     failed_paths = []
@@ -436,7 +436,7 @@ def process_dat_output_items(items, stats=None):
                 "txt_path": out_path,
             }
         )
-    if bundle_list:
+    if decompile and bundle_list:
         started = time.perf_counter()
         decompile_hints = _build_decompile_hints(bundle_list)
         add_elapsed_seconds(
@@ -454,7 +454,13 @@ def process_dat_output_items(items, stats=None):
 
 
 def _write_dat_disassembly(
-    dat_path, blob, out_dir=None, stats=None, bundle=None, decompile_hints=None
+    dat_path,
+    blob,
+    out_dir=None,
+    stats=None,
+    bundle=None,
+    decompile_hints=None,
+    decompile=False,
 ):
     try:
         name = os.path.basename(str(dat_path))
@@ -469,13 +475,14 @@ def _write_dat_disassembly(
             return None
         out_path = _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
         add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
-        _write_dat_decompiled(
-            dat_path,
-            out_dir=out_dir,
-            bundle=bundle,
-            decompile_hints=decompile_hints,
-            stats=stats,
-        )
+        if decompile:
+            _write_dat_decompiled(
+                dat_path,
+                out_dir=out_dir,
+                bundle=bundle,
+                decompile_hints=decompile_hints,
+                stats=stats,
+            )
         return out_path
     except Exception:
         return None
@@ -739,7 +746,7 @@ def dat_sections(blob):
     return secs, meta
 
 
-def dat(path, blob: bytes, disam_out_dir=None) -> int:
+def dat(path, blob: bytes, disam_out_dir=None, decompile=False) -> int:
     if len(blob) < C.SCN_HDR_SIZE:
         print("too small for dat header")
         return 1
@@ -780,7 +787,11 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
     print_sections(secs, len(blob))
     disam_stats = new_disam_stats()
     out_txt = _write_dat_disassembly(
-        path, blob, out_dir=disam_out_dir, stats=disam_stats
+        path,
+        blob,
+        out_dir=disam_out_dir,
+        stats=disam_stats,
+        decompile=decompile,
     )
     if out_txt:
         print()
@@ -981,6 +992,7 @@ def compare_dat(
     compare_payload=False,
     disam_out_dir=None,
     disam_to_input_dir=False,
+    decompile=False,
 ) -> int:
     s1, m1 = dat_sections(b1)
     s2, m2 = dat_sections(b2)
@@ -1053,8 +1065,12 @@ def compare_dat(
         out2_dir = (
             (os.path.dirname(str(p2)) or ".") if disam_to_input_dir else disam_out_dir
         )
-        out1 = _write_dat_disassembly(p1, b1, out_dir=out1_dir, stats=disam_stats)
-        out2 = _write_dat_disassembly(p2, b2, out_dir=out2_dir, stats=disam_stats)
+        out1 = _write_dat_disassembly(
+            p1, b1, out_dir=out1_dir, stats=disam_stats, decompile=decompile
+        )
+        out2 = _write_dat_disassembly(
+            p2, b2, out_dir=out2_dir, stats=disam_stats, decompile=decompile
+        )
         if out1 or out2:
             print()
         if out1:

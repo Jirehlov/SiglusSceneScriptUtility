@@ -96,6 +96,7 @@ def analyze_file(
     readall=False,
     apply=False,
     dat_disam=False,
+    dat_decompile=False,
     explicit_angou: str = "",
 ):
     if not os.path.exists(path):
@@ -150,6 +151,7 @@ def analyze_file(
             path,
             blob,
             disam_out_dir=(os.path.dirname(str(path)) or ".") if dat_disam else None,
+            decompile=dat_decompile,
         )
     if ftype == "cgm":
         return cgm.cgm(blob)
@@ -207,6 +209,7 @@ def compare_files(
     p2,
     compare_payload=False,
     dat_disam=False,
+    dat_decompile=False,
     explicit_angou: str = "",
 ):
     if not os.path.exists(p1) or not os.path.exists(p2):
@@ -235,10 +238,20 @@ def compare_files(
         print("Different types; structural compare is skipped.")
         print()
         print("--- Analyze file1 ---")
-        analyze_file(p1, dat_disam=dat_disam, explicit_angou=explicit_angou)
+        analyze_file(
+            p1,
+            dat_disam=dat_disam,
+            dat_decompile=dat_decompile,
+            explicit_angou=explicit_angou,
+        )
         print()
         print("--- Analyze file2 ---")
-        analyze_file(p2, dat_disam=dat_disam, explicit_angou=explicit_angou)
+        analyze_file(
+            p2,
+            dat_disam=dat_disam,
+            dat_decompile=dat_decompile,
+            explicit_angou=explicit_angou,
+        )
         return 0
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
@@ -297,6 +310,7 @@ def compare_files(
             b2,
             compare_payload=compare_payload,
             disam_to_input_dir=dat_disam,
+            decompile=dat_decompile,
         )
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
@@ -323,13 +337,15 @@ def main(argv=None):
     if "--word" in args:
         args.remove("--word")
         word = True
-    if word and "--disam" in args:
+    if word and ("--disam" in args or "--decompile" in args):
         return 2
-    args, gei, _disam = parse_gei_disam_args(
+    args, gei, _disam, _decompile = parse_gei_disam_args(
         args,
         allow_gei_disam=True,
+        return_decompile=True,
     )
     dat_disam = bool(_disam)
+    dat_decompile = bool(_decompile)
     readall = False
     if "--readall" in args:
         args.remove("--readall")
@@ -392,6 +408,7 @@ def main(argv=None):
             readall=readall,
             apply=apply,
             dat_disam=dat_disam,
+            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
     if len(args) == 2:
@@ -402,6 +419,7 @@ def main(argv=None):
             args[1],
             compare_payload=compare_payload,
             dat_disam=dat_disam,
+            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
     return 2

@@ -1007,12 +1007,14 @@ def write_disam_totals(out, stats) -> None:
         out.write(
             f"Total disassembly time: {format_elapsed_seconds((stats or {}).get('disassembly_seconds', 0.0))}\n"
         )
-        out.write(
-            f"Total decompile hints time: {format_elapsed_seconds((stats or {}).get('decompile_hints_seconds', 0.0))}\n"
-        )
-        out.write(
-            f"Total decompile time: {format_elapsed_seconds((stats or {}).get('decompile_seconds', 0.0))}\n"
-        )
+        if float((stats or {}).get("decompile_hints_seconds", 0.0) or 0.0) > 0.0:
+            out.write(
+                f"Total decompile hints time: {format_elapsed_seconds((stats or {}).get('decompile_hints_seconds', 0.0))}\n"
+            )
+        if float((stats or {}).get("decompile_seconds", 0.0) or 0.0) > 0.0:
+            out.write(
+                f"Total decompile time: {format_elapsed_seconds((stats or {}).get('decompile_seconds', 0.0))}\n"
+            )
     except Exception:
         return
 
@@ -1655,10 +1657,18 @@ def print_limited_diffs(diffs, title: str, identical_message: str, limit: int = 
     return 0
 
 
-def parse_gei_disam_args(argv, *, disam_action=None, allow_gei_disam: bool = True):
+def parse_gei_disam_args(
+    argv,
+    *,
+    disam_action=None,
+    decompile_action=None,
+    allow_gei_disam: bool = True,
+    return_decompile: bool = False,
+):
     args = list(argv or [])
     gei = False
     disam = False
+    decompile = False
     if "--gei" in args:
         args.remove("--gei")
         gei = True
@@ -1667,8 +1677,20 @@ def parse_gei_disam_args(argv, *, disam_action=None, allow_gei_disam: bool = Tru
         disam = True
         if disam_action is not None:
             disam_action()
+    if "--decompile" in args:
+        if disam:
+            raise ValueError("--disam and --decompile are mutually exclusive")
+        args.remove("--decompile")
+        disam = True
+        decompile = True
+        if decompile_action is not None:
+            decompile_action()
     if gei and disam and (not allow_gei_disam):
+        if decompile:
+            raise ValueError("--decompile is not supported with --gei")
         raise ValueError("--disam is not supported with --gei")
+    if return_decompile:
+        return args, gei, disam, decompile
     return args, gei, disam
 
 

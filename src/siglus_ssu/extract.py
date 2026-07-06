@@ -22,7 +22,7 @@ def _default_output_dir(input_path: str) -> str:
 
 
 def _disassemble_dat_dir(
-    input_dir: str, output_dir: str, explicit_angou: str = ""
+    input_dir: str, output_dir: str, explicit_angou: str = "", decompile: bool = False
 ) -> int:
     from . import dat as D
 
@@ -65,7 +65,7 @@ def _disassemble_dat_dir(
             skip_cnt += 1
             continue
         items.append({"dat_path": dat_path, "blob": blob, "out_dir": output_dir})
-    result = D.process_dat_output_items(items, stats=disam_stats)
+    result = D.process_dat_output_items(items, stats=disam_stats, decompile=decompile)
     written = list((result or {}).get("written") or [])
     failed_paths = list((result or {}).get("failed_paths") or [])
     ok_cnt = len(written)
@@ -98,10 +98,12 @@ def main(argv=None):
         return 2
     dat_txt = False
     try:
-        args, gei, dat_txt = parse_gei_disam_args(
+        args, gei, dat_txt, decompile = parse_gei_disam_args(
             args,
             disam_action=lambda: None,
+            decompile_action=lambda: None,
             allow_gei_disam=False,
+            return_decompile=True,
         )
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
@@ -173,7 +175,12 @@ def main(argv=None):
     else:
         return 2
     if dat_txt and os.path.isdir(in_path):
-        return _disassemble_dat_dir(in_path, out_dir, explicit_angou=explicit_angou)
+        return _disassemble_dat_dir(
+            in_path,
+            out_dir,
+            explicit_angou=explicit_angou,
+            decompile=decompile,
+        )
     if os.path.isdir(in_path):
         sys.stderr.write("Directory input requires --disam or --gei\n")
         return 2
@@ -182,4 +189,5 @@ def main(argv=None):
         out_dir,
         dat_txt,
         explicit_angou=explicit_angou,
+        decompile=decompile,
     )

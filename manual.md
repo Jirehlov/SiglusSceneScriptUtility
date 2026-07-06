@@ -336,10 +336,10 @@ Extracts a `.pck` scene file into a timestamped directory containing decoded sce
 
 ```bash
 # Extract a .pck file
-siglus-ssu -x [--disam] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
+siglus-ssu -x [--disam|--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
 
-# Batch-disassemble and decompile `.dat` files from a directory
-siglus-ssu -x --disam <input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
+# Batch-disassemble or decompile `.dat` files from a directory
+siglus-ssu -x [--disam|--decompile] <input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 
 # Restore Gameexe.ini from Gameexe.dat
 siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
@@ -350,15 +350,16 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | Parameter | Description |
 |---|---|
 | `<input_pck>` | Path to the `.pck` file to extract. |
-| `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
+| `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` or `--decompile` is enabled. Only the immediate `.dat` files in that directory are processed. |
 | `<output_dir>` | Directory where extracted files will be written. Optional for all `-x` modes. If omitted, output defaults to the input file directory, or to the input directory itself when the input is a directory. |
-| `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly plus reconstructed `decompiled/<scene>.ss` files and `decompiled/__decompiled.inc`. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` plus `decompiled/*.ss` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
+| `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
+| `--decompile` | Run the same disassembly pass as `--disam`, and additionally emit reconstructed `decompiled/<scene>.ss` files plus `decompiled/__decompiled.inc`. Cannot be combined with `--gei`. |
 | `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
 
-With `.pck` input, extracted files are written into `output_YYYYMMDD_HHMMSS/`. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run also prints total disassembly, decompile-hints, and decompile timing summaries.
+With `.pck` input, extracted files are written into `output_YYYYMMDD_HHMMSS/`. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
 
-The current decompiler is experimental. Treat `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
+The current decompiler is experimental. Treat `--decompile` output in `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
 
 #### Examples
 
@@ -369,14 +370,20 @@ siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/
 # Extract Scene.pck next to the input file
 siglus-ssu -x /path/to/Scene.pck
 
-# Extract with `.dat` disassembly and decompiled `.ss`
+# Extract with `.dat` disassembly
 siglus-ssu -x --disam /path/to/Scene.pck /path/to/translation_work/
+
+# Extract with `.dat` disassembly and decompiled `.ss`
+siglus-ssu -x --decompile /path/to/Scene.pck /path/to/translation_work/
 
 # Extract encrypted scenes using an explicit key source
 siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/ --angou /path/to/game_dir/
 
-# Batch-disassemble and decompile the `.dat` files in one directory
+# Batch-disassemble the `.dat` files in one directory
 siglus-ssu -x --disam /path/to/scene_dir/
+
+# Batch-disassemble and decompile the `.dat` files in one directory
+siglus-ssu -x --decompile /path/to/scene_dir/
 
 # Restore Gameexe.ini from Gameexe.dat
 siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
@@ -396,7 +403,7 @@ Analyzes the internal structure of a supported binary file and prints a detailed
 
 ```
 # Analyze a .pck or .dat file
-siglus-ssu -a [--disam] <input_file.(pck|dat)> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -a [--disam|--decompile] <input_file.(pck|dat)> [--angou <path|angou=text|key=bytes>]
 
 # Analyze or update other supported files
 siglus-ssu -a [--readall|--apply] <input_file.sav>
@@ -406,10 +413,10 @@ siglus-ssu -a <input_file.(gan|sav|cgm|tcr)>
 siglus-ssu -a --word <input_pck> [output_csv] [--angou <path|angou=text|key=bytes>]
 
 # Compare two .pck or .dat files
-siglus-ssu -a [--payload] [--disam] <input_file_1.(pck|dat)> <input_file_2.(pck|dat)> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -a [--payload] [--disam|--decompile] <input_file_1.(pck|dat)> <input_file_2.(pck|dat)> [--angou <path|angou=text|key=bytes>]
 
 # Compare two files without an explicit key source
-siglus-ssu -a [--payload] [--disam] <input_file_1> <input_file_2>
+siglus-ssu -a [--payload] [--disam|--decompile] <input_file_1> <input_file_2>
 
 # Analyze or derive the exe_el key from a key source
 siglus-ssu -a --angou <path|angou=text|key=bytes>
@@ -424,13 +431,14 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 |---|---|
 | `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. When analyzing or comparing `.pck` files, embedded `SCENE_SCRIPT_ID` values are shown in the existing tables as an `ID` column for embedded `.ss` source chunks; `.pck` comparisons also treat source IDs as comparison data. |
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
-| `--disam` | When analyzing a `.dat` file or comparing two `.dat` files, write human-readable disassembly to `<scene>.dat.txt` alongside each input `.dat`, and also emit reconstructed `decompiled/<scene>.ss` and `decompiled/__decompiled.inc`. Prints total disassembly, decompile-hints, and decompile timing summaries before the command finishes. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
-| `--readall` | Only meaningful for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--word`, `--angou`, or `--gei`; `--disam` and `--payload` do not change this single-file `.sav` operation. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
-| `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
+| `--disam` | When analyzing a `.dat` file or comparing two `.dat` files, write human-readable disassembly to `<scene>.dat.txt` alongside each input `.dat`. Prints total disassembly timing before the command finishes. |
+| `--decompile` | Run the same disassembly pass as `--disam`, and additionally emit reconstructed `decompiled/<scene>.ss` plus `decompiled/__decompiled.inc`. Prints disassembly, decompile-hints, and decompile timing summaries. The decompiler output is still experimental and should not be treated as a reliable source-of-truth. |
+| `--readall` | Only meaningful for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--word`, `--angou`, or `--gei`; `--disam`, `--decompile`, and `--payload` do not change this single-file `.sav` operation. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
+| `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--decompile`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. Can be combined with `--angou`. |
 | `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized decoded/decompressed `scn_bytes` semantics. This ignores string-pool `str_id` differences when the resolved text is the same. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text scene-bytecode differences, and `-` when payload comparison is unavailable; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
 | `--angou <path\|angou=text\|key=bytes>` | Explicit key source for `.pck`/`.dat` analysis, `.pck` word count, `Gameexe.dat` analysis, or standalone key derivation. `--angou` must be the final option in the command, must use the separated form `--angou VALUE`, and its value cannot be empty. A bare value is always treated as a path to a file or directory. Use `angou=text` for a literal `暗号.dat` first line, and `key=bytes` for a literal 16-byte `exe_el` key such as `key=0xA9,0x86,...`. During decryption, candidates are tried in order: explicit `--angou`; embedded `暗号.dat` inside the input `.pck`; current directory; parent directory. Lower-priority candidates are used only after a higher-priority source produced a key and that key failed validation; a missing, malformed, or keyless explicit source is reported as an input error. If `--angou` is a bare path, parent-directory probing is disabled for that request, so fallback stops after the current directory. Directory probing is not recursive. Inside each probed directory, the order is `Scene.pck`, then `Scene*.pck`, then `暗号.dat`, then `key.txt`, then `SiglusEngine*.exe`. |
-| `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode can use `--angou`, but rejects other analyze modifiers such as `--disam`, `--readall`, `--apply`, `--payload`, and `--word`. |
+| `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode can use `--angou`, but rejects other analyze modifiers such as `--disam`, `--decompile`, `--readall`, `--apply`, `--payload`, and `--word`. |
 
 Key-source diagnostics are printed to stderr whenever a decryption candidate is tried: each line includes the source, kind, path or inner file when applicable, the concrete `exe_el` value, and whether that candidate was accepted or rejected before falling back.
 
@@ -799,7 +807,7 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 | `--apply`, `-a` | Apply a `.ss.csv` text map back to the corresponding `.ss` file in-place. The `.ss.csv` must already exist alongside the `.ss` file. |
 | `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `.dat` files are recursively scanned, and `Gameexe.dat` and `暗号.dat` are automatically excluded. |
 | `--disam-apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. `--apply`, `--disam`, and `--disam-apply` are mutually exclusive. |
-| `--angou <path\|angou=text\|key=bytes>` | Key source for `--disam` / `--disam-apply` on encrypted compiled `.dat` files. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). Not valid for `.ss` text-map export/apply. |
+| `--angou <path\|angou=text\|key=bytes>` | Key source for `--disam` / `--disam-apply` on encrypted compiled `.dat` files. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). When the input is a directory, key candidates are resolved once for that directory and reused for every `.dat` file in the scan. Not valid for `.ss` text-map export/apply. |
 
 #### Workflow: `.ss` Files
 

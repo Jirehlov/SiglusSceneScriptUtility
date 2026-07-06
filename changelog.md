@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
 - Added a Rust native compile backend for `siglus-ssu -c`, used automatically when available and supported by the selected compile options, with Python fallback.
 - Changed global `--legacy` to force only the Python compile backend while keeping native helpers such as LZSS enabled.
 - Added global `--legacy-full` to restore the old full-legacy behavior that disables all Rust native acceleration.
+- Changed `.dat` disassembly so `--disam` writes only `.dat.txt`; use `--decompile` to additionally emit reconstructed `decompiled/*.ss` output.
+- Changed `siglus-ssu -m --disam <dir>` and `--disam-apply <dir>` to resolve the scene key candidates once for the input directory and reuse them for every `.dat` file in the scan.
 
 
 ## [v0.3.6] - 2026-06-14

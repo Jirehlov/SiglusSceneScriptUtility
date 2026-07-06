@@ -1748,6 +1748,7 @@ def extract_pck(
     output_dir: str,
     dat_txt: bool = False,
     explicit_angou: str = "",
+    decompile: bool = False,
 ) -> int:
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
@@ -1859,6 +1860,7 @@ def extract_pck(
                 for dat_path, blob, item in dat_items
             ],
             stats=disam_stats,
+            decompile=decompile,
         )
         failed_paths = list((result or {}).get("failed_paths") or [])
         disam_fail_cnt = len(failed_paths)
