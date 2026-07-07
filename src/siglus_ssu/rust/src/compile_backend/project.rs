@@ -806,61 +806,37 @@ fn finalize_source_stats(stats: &mut SourceStats, ia_data: &IaData) {
 }
 
 fn operator_symbol(codes: &RuntimeCodes, operator: i32, unary: bool) -> String {
-    let pairs = if unary {
-        [
-            (codes.op.plus, "+"),
-            (codes.op.minus, "-"),
-            (codes.op.tilde, "~"),
-            (i32::MIN, ""),
-            (i32::MIN + 1, ""),
-            (i32::MIN + 2, ""),
-            (i32::MIN + 3, ""),
-            (i32::MIN + 4, ""),
-            (i32::MIN + 5, ""),
-            (i32::MIN + 6, ""),
-            (i32::MIN + 7, ""),
-            (i32::MIN + 8, ""),
-            (i32::MIN + 9, ""),
-            (i32::MIN + 10, ""),
-            (i32::MIN + 11, ""),
-            (i32::MIN + 12, ""),
-            (i32::MIN + 13, ""),
-        ]
-    } else {
-        [
-            (codes.op.plus, "+"),
-            (codes.op.minus, "-"),
-            (codes.op.multiple, "*"),
-            (codes.op.divide, "/"),
-            (codes.op.remainder, "%"),
-            (codes.op.equal, "=="),
-            (codes.op.not_equal, "!="),
-            (codes.op.greater, ">"),
-            (codes.op.greater_equal, ">="),
-            (codes.op.less, "<"),
-            (codes.op.less_equal, "<="),
-            (codes.op.logical_and, "&&"),
-            (codes.op.logical_or, "||"),
-            (codes.op.and, "&"),
-            (codes.op.or, "|"),
-            (codes.op.hat, "^"),
-            (codes.op.sl, "<<"),
-        ]
-    };
+    let unary_pairs = [
+        (codes.op.plus, "+"),
+        (codes.op.minus, "-"),
+        (codes.op.tilde, "~"),
+    ];
+    let binary_pairs = [
+        (codes.op.plus, "+"),
+        (codes.op.minus, "-"),
+        (codes.op.multiple, "*"),
+        (codes.op.divide, "/"),
+        (codes.op.remainder, "%"),
+        (codes.op.equal, "=="),
+        (codes.op.not_equal, "!="),
+        (codes.op.greater, ">"),
+        (codes.op.greater_equal, ">="),
+        (codes.op.less, "<"),
+        (codes.op.less_equal, "<="),
+        (codes.op.logical_and, "&&"),
+        (codes.op.logical_or, "||"),
+        (codes.op.and, "&"),
+        (codes.op.or, "|"),
+        (codes.op.hat, "^"),
+        (codes.op.sl, "<<"),
+        (codes.op.sr, ">>"),
+        (codes.op.sr3, ">>>"),
+        (codes.op.tilde, "~"),
+    ];
+    let pairs: &[(i32, &str)] = if unary { &unary_pairs } else { &binary_pairs };
     for (code, symbol) in pairs {
-        if operator == code && !symbol.is_empty() {
+        if operator == *code {
             return symbol.to_string();
-        }
-    }
-    if !unary {
-        for (code, symbol) in [
-            (codes.op.sr, ">>"),
-            (codes.op.sr3, ">>>"),
-            (codes.op.tilde, "~"),
-        ] {
-            if operator == code {
-                return symbol.to_string();
-            }
         }
     }
     format!("op{operator}")

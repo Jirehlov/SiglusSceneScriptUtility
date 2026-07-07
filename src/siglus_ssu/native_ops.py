@@ -167,7 +167,9 @@ def _payload_native_config_cached(_profile, _sha512, _source_path):
         "CD_SEL_BLOCK_START": code("CD_SEL_BLOCK_START"),
         "CD_SEL_BLOCK_END": code("CD_SEL_BLOCK_END"),
         "OP_PLUS": code("OP_PLUS"),
+        "OP_MINUS": code("OP_MINUS"),
         "OP_MULTIPLE": code("OP_MULTIPLE"),
+        "OP_TILDE": code("OP_TILDE"),
         "string_cmp_ops": [
             code("OP_EQUAL"),
             code("OP_NOT_EQUAL"),

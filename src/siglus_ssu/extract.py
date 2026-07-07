@@ -182,7 +182,7 @@ def main(argv=None):
             decompile=decompile,
         )
     if os.path.isdir(in_path):
-        sys.stderr.write("Directory input requires --disam or --gei\n")
+        sys.stderr.write("Directory input requires --disam, --decompile, or --gei\n")
         return 2
     return pck.extract_pck(
         in_path,

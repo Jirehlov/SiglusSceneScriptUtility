@@ -11,9 +11,14 @@ use super::ma::SemanticAnalyzer;
 use super::sa::SyntaxAnalyzer;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList};
+use pyo3::types::{PyAny, PyDict, PyList, PyString};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+
+thread_local! {
+    static CASEFOLD_CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Debug, Clone)]
 struct LspDefinition {
@@ -59,15 +64,29 @@ pub struct NativeLspProject {
 }
 
 fn key(text: &str) -> String {
-    text.to_lowercase()
+    CASEFOLD_CACHE.with(|cache| {
+        if let Some(value) = cache.borrow().get(text).cloned() {
+            return value;
+        }
+        let folded = Python::attach(|py| {
+            let value = PyString::new(py, text);
+            value
+                .call_method0("casefold")
+                .and_then(|value| value.extract::<String>())
+                .unwrap_or_else(|_| text.to_lowercase())
+        });
+        cache.borrow_mut().insert(text.to_string(), folded.clone());
+        folded
+    })
 }
 
 fn path_key(path: &str) -> String {
-    PathBuf::from(path)
+    let path = PathBuf::from(path)
         .components()
         .as_path()
         .to_string_lossy()
-        .to_lowercase()
+        .to_string();
+    key(&path)
 }
 
 fn get_dict_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {

@@ -32,7 +32,9 @@ struct Codes {
     cd_sel_block_start: u8,
     cd_sel_block_end: u8,
     op_plus: u8,
+    op_minus: u8,
     op_multiple: u8,
+    op_tilde: u8,
     fm_void: i32,
     fm_int: i32,
     fm_str: i32,
@@ -180,7 +182,9 @@ impl Config {
             cd_sel_block_start: get_u8(&config, "CD_SEL_BLOCK_START")?,
             cd_sel_block_end: get_u8(&config, "CD_SEL_BLOCK_END")?,
             op_plus: get_u8(&config, "OP_PLUS")?,
+            op_minus: get_u8(&config, "OP_MINUS")?,
             op_multiple: get_u8(&config, "OP_MULTIPLE")?,
+            op_tilde: get_u8(&config, "OP_TILDE")?,
             fm_void: get_i32(&config, "FM_VOID")?,
             fm_int: get_i32(&config, "FM_INT")?,
             fm_str: get_i32(&config, "FM_STR")?,
@@ -839,7 +843,8 @@ impl<'a> Scanner<'a> {
                     fields: vec![Field::Form(form), Field::Opr(opr as i32)],
                 });
                 self.pop_stack();
-                if form == c.fm_int && (opr == c.op_plus || opr == 2 || opr == 48) {
+                if form == c.fm_int && (opr == c.op_plus || opr == c.op_minus || opr == c.op_tilde)
+                {
                     self.push_stack(c.fm_int, None, false);
                 }
                 continue;
