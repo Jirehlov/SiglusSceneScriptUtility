@@ -819,7 +819,7 @@ fn append_macro_use_occurrences(
 ) {
     for token in tokens {
         let rng = (token.line, token.start_char, token.end_char);
-        if used_ranges.overlaps(rng) || !token_matches_text(source_text, &token) {
+        if used_ranges.contains_exact(rng) || !token_matches_text(source_text, &token) {
             continue;
         }
         let token_key = key(&token.text);
