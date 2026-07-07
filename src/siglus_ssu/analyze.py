@@ -96,7 +96,6 @@ def analyze_file(
     readall=False,
     apply=False,
     dat_disam=False,
-    dat_decompile=False,
     explicit_angou: str = "",
 ):
     if not os.path.exists(path):
@@ -104,6 +103,9 @@ def analyze_file(
         return 2
     blob = read_bytes(path)
     ftype = _detect_type(path, blob)
+    if dat_disam and ftype != "dat":
+        sys.stderr.write("analyze: --disam is only valid for .dat inputs\n")
+        return 2
     st = os.stat(path)
     print("==== Analyze ====")
     print(f"file: {path}")
@@ -151,7 +153,6 @@ def analyze_file(
             path,
             blob,
             disam_out_dir=(os.path.dirname(str(path)) or ".") if dat_disam else None,
-            decompile=dat_decompile,
         )
     if ftype == "cgm":
         return cgm.cgm(blob)
@@ -209,7 +210,6 @@ def compare_files(
     p2,
     compare_payload=False,
     dat_disam=False,
-    dat_decompile=False,
     explicit_angou: str = "",
 ):
     if not os.path.exists(p1) or not os.path.exists(p2):
@@ -219,6 +219,9 @@ def compare_files(
     b2 = read_bytes(p2)
     t1 = _detect_type(p1, b1)
     t2 = _detect_type(p2, b2)
+    if dat_disam and (t1 != "dat" or t2 != "dat"):
+        sys.stderr.write("analyze: --disam is only valid for .dat comparisons\n")
+        return 2
     print("==== Compare ====")
     print(f"file1: {p1}")
     print(f"file2: {p2}")
@@ -241,7 +244,6 @@ def compare_files(
         analyze_file(
             p1,
             dat_disam=dat_disam,
-            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
         print()
@@ -249,7 +251,6 @@ def compare_files(
         analyze_file(
             p2,
             dat_disam=dat_disam,
-            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
         return 0
@@ -310,7 +311,6 @@ def compare_files(
             b2,
             compare_payload=compare_payload,
             disam_to_input_dir=dat_disam,
-            decompile=dat_decompile,
         )
     if t1 == "sav":
         return sav.compare_sav(b1, b2)
@@ -345,7 +345,11 @@ def main(argv=None):
         return_decompile=True,
     )
     dat_disam = bool(_disam)
-    dat_decompile = bool(_decompile)
+    if _decompile:
+        sys.stderr.write(
+            "analyze: --decompile requires extract mode on a complete .pck input\n"
+        )
+        return 2
     readall = False
     if "--readall" in args:
         args.remove("--readall")
@@ -408,7 +412,6 @@ def main(argv=None):
             readall=readall,
             apply=apply,
             dat_disam=dat_disam,
-            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
     if len(args) == 2:
@@ -419,7 +422,6 @@ def main(argv=None):
             args[1],
             compare_payload=compare_payload,
             dat_disam=dat_disam,
-            dat_decompile=dat_decompile,
             explicit_angou=explicit_angou,
         )
     return 2

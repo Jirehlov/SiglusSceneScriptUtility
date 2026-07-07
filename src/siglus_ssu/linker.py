@@ -27,7 +27,9 @@ from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
 
 C = get_const_module()
-_ASCII_LOWER_TRANS = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_ASCII_LOWER_TRANS = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
 
 
 def _ascii_lower(value):

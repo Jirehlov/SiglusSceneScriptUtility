@@ -22,7 +22,7 @@ def _default_output_dir(input_path: str) -> str:
 
 
 def _disassemble_dat_dir(
-    input_dir: str, output_dir: str, explicit_angou: str = "", decompile: bool = False
+    input_dir: str, output_dir: str, explicit_angou: str = ""
 ) -> int:
     from . import dat as D
 
@@ -65,7 +65,7 @@ def _disassemble_dat_dir(
             skip_cnt += 1
             continue
         items.append({"dat_path": dat_path, "blob": blob, "out_dir": output_dir})
-    result = D.process_dat_output_items(items, stats=disam_stats, decompile=decompile)
+    result = D.process_dat_output_items(items, stats=disam_stats)
     written = list((result or {}).get("written") or [])
     failed_paths = list((result or {}).get("failed_paths") or [])
     ok_cnt = len(written)
@@ -175,14 +175,21 @@ def main(argv=None):
     else:
         return 2
     if dat_txt and os.path.isdir(in_path):
+        if decompile:
+            sys.stderr.write(
+                "--decompile requires extract mode on a complete .pck input\n"
+            )
+            return 2
         return _disassemble_dat_dir(
             in_path,
             out_dir,
             explicit_angou=explicit_angou,
-            decompile=decompile,
         )
+    if decompile and os.path.isfile(in_path) and in_path.lower().endswith(".dat"):
+        sys.stderr.write("--decompile requires extract mode on a complete .pck input\n")
+        return 2
     if os.path.isdir(in_path):
-        sys.stderr.write("Directory input requires --disam, --decompile, or --gei\n")
+        sys.stderr.write("Directory input requires --disam or --gei\n")
         return 2
     return pck.extract_pck(
         in_path,

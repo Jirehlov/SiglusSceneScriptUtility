@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - Changed compile-mode scene-name packing to mirror the official compiler's ASCII-only lowercase normalization, preserving non-ASCII letters such as fullwidth `ＥＤ` in rebuilt `.pck` scene tables.
 - Changed global `--legacy` to force only the Python compile backend while keeping native helpers such as LZSS enabled.
 - Added global `--legacy-full` to restore the old full-legacy behavior that disables all Rust native acceleration.
-- Changed `.dat` disassembly so `--disam` writes only `.dat.txt`; use `--decompile` to additionally emit reconstructed `decompiled/*.ss` output.
+- Changed `.dat` disassembly so `--disam` writes only `.dat.txt`; use `siglus-ssu -x --decompile <input_pck>` to additionally emit reconstructed `decompiled/*.ss` output from a complete `.pck`.
 - Changed `siglus-ssu -m --disam <dir>` and `--disam-apply <dir>` to resolve the scene key candidates once for the input directory and reuse them for every `.dat` file in the scan.
 
 
