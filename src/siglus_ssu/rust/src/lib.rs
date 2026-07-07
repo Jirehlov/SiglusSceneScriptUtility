@@ -7,12 +7,13 @@ mod payload;
 mod tile;
 mod xor;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::types::{PyByteArray, PyBytes};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -219,6 +220,29 @@ fn fmt_hms(secs: f64) -> String {
     format!("{h:02}:{m:02}:{ss:02}")
 }
 
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown Rust panic".to_string()
+    }
+}
+
+fn catch_native_panic<T, F>(f: F) -> PyResult<T>
+where
+    F: FnOnce() -> PyResult<T>,
+{
+    match catch_unwind(AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => Err(PyRuntimeError::new_err(format!(
+            "Rust native backend panicked: {}",
+            panic_message(payload)
+        ))),
+    }
+}
+
 #[pyfunction]
 fn find_shuffle_seed_first(
     py: Python<'_>,
@@ -399,12 +423,28 @@ fn compile_backend_available() -> PyResult<bool> {
 
 #[pyfunction]
 fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
-    compile_backend::compile_project(py, config)
+    match catch_unwind(AssertUnwindSafe(|| {
+        compile_backend::compile_project(py, config)
+    })) {
+        Ok(result) => result,
+        Err(payload) => {
+            let out = PyDict::new(py);
+            out.set_item("handled", false)?;
+            out.set_item(
+                "reason",
+                format!(
+                    "Rust compile backend panicked: {}; falling back to Python",
+                    panic_message(payload)
+                ),
+            )?;
+            Ok(out.unbind())
+        }
+    }
 }
 
 #[pyfunction]
 fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    compile_backend::lsp_build_project(py, config)
+    catch_native_panic(|| compile_backend::lsp_build_project(py, config))
 }
 
 #[pyfunction]
@@ -416,7 +456,7 @@ fn lsp_scan_document(
     text: String,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
-    compile_backend::lsp_scan_document(py, project, path, text, run_bs)
+    catch_native_panic(|| compile_backend::lsp_scan_document(py, project, path, text, run_bs))
 }
 
 #[pyfunction]
@@ -426,12 +466,12 @@ fn scn_payload_hash_bundles(
     config: Bound<'_, PyAny>,
     pack_context: Option<Bound<'_, PyAny>>,
 ) -> PyResult<Option<Py<PyDict>>> {
-    payload::scn_payload_hash_bundles(py, blob, config, pack_context)
+    catch_native_panic(|| payload::scn_payload_hash_bundles(py, blob, config, pack_context))
 }
 
 #[pyfunction]
 fn scn_payload_config(config: Bound<'_, PyDict>) -> PyResult<payload::PayloadConfig> {
-    payload::scn_payload_config(config)
+    catch_native_panic(|| payload::scn_payload_config(config))
 }
 
 #[pymodule]

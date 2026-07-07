@@ -117,6 +117,7 @@ struct ReplacementEdit {
     replacement: Replacement,
     removed_len: usize,
     inserted_len: usize,
+    changed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +461,19 @@ impl CharacterAnalyzer {
         length
     }
 
+    fn range_equals(text: &[char], start: usize, end: usize, replacement: &str) -> bool {
+        if end > text.len() {
+            return false;
+        }
+        let mut chars = replacement.chars();
+        for ch in &text[start..end] {
+            if chars.next() != Some(*ch) {
+                return false;
+            }
+        }
+        chars.next().is_none()
+    }
+
     fn expand_macro(
         &mut self,
         text: &[char],
@@ -613,6 +627,7 @@ impl CharacterAnalyzer {
         let name_len = replacement.name.chars().count();
         match replacement.kind {
             ReplaceKind::Replace => {
+                let changed = !Self::range_equals(&text, pos, pos + name_len, &replacement.after);
                 let after_len =
                     Self::replace_range(&mut text, pos, pos + name_len, &replacement.after);
                 Ok((
@@ -622,10 +637,12 @@ impl CharacterAnalyzer {
                         replacement,
                         removed_len: name_len,
                         inserted_len: after_len,
+                        changed,
                     }),
                 ))
             }
             ReplaceKind::Define => {
+                let changed = !Self::range_equals(&text, pos, pos + name_len, &replacement.after);
                 let after_len =
                     Self::replace_range(&mut text, pos, pos + name_len, &replacement.after);
                 Ok((
@@ -635,6 +652,7 @@ impl CharacterAnalyzer {
                         replacement,
                         removed_len: name_len,
                         inserted_len: after_len,
+                        changed,
                     }),
                 ))
             }
@@ -646,6 +664,7 @@ impl CharacterAnalyzer {
                     default_tree,
                     added_tree,
                 )?;
+                let changed = !Self::range_equals(&text, pos, end, &expanded);
                 let expanded_len = Self::replace_range(&mut text, pos, end, &expanded);
                 Ok((
                     text,
@@ -654,6 +673,7 @@ impl CharacterAnalyzer {
                         replacement,
                         removed_len: end.saturating_sub(pos),
                         inserted_len: expanded_len,
+                        changed,
                     }),
                 ))
             }
@@ -708,7 +728,8 @@ impl CharacterAnalyzer {
 
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {
         self.current_line = 1;
-        self.expand_all(input, replace_tree, &ReplaceTree::new())
+        let empty_tree = ReplaceTree::new();
+        self.expand_all(input, replace_tree, &empty_tree)
     }
 
     pub fn analyze_scene_line_with_map(
@@ -725,19 +746,19 @@ impl CharacterAnalyzer {
         let mut pos = 0usize;
         let mut loop_count = 0usize;
         let mut rest_min = text.len();
+        let empty_tree = ReplaceTree::new();
         while text.get(pos) != Some(&'\0') {
             if text[pos] == '\n' {
                 self.current_line += 1;
                 pos += 1;
             } else {
-                let old_text = text.clone();
                 let old_pos = pos;
                 let (new_text, next_pos, detail) =
-                    self.replace_one_detail(text, pos, replace_tree, &ReplaceTree::new())?;
+                    self.replace_one_detail(text, pos, replace_tree, &empty_tree)?;
                 text = new_text;
                 pos = next_pos;
                 if let Some(edit) = detail
-                    && text != old_text
+                    && edit.changed
                 {
                     let name_len = edit.replacement.name.chars().count();
                     let points: Vec<SourcePoint> = source_map

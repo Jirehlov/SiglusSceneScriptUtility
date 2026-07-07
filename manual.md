@@ -208,11 +208,11 @@ siglus-ssu -lsp [--serial]
 
 #### Parameters
 
-- `--serial`: Disable the default parallel workspace scanning and use serial scanning instead.
+- `--serial`: Disable default parallel LSP workspace scanning and force serial scanning.
 
 #### Notes
 
-- Workspace-wide symbol and link scans run in parallel by default. With `--serial`, they run serially. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
+- Workspace-wide symbol and link scans run in parallel by default, using half of the available CPU count as the default worker count. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
 - When the Rust native scanner is available, LSP workspace scans and document symbols use it automatically and fall back to the Python pipeline if native scanning is unavailable or cannot handle the document.
 - Workspace indexes persist across sessions. Cache compatibility includes the directory, `.inc` MD5 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's MD5 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Capabilities include semantic tokens, publish/pull diagnostics, completion, hover, go to definition, references, rename and conditional prepare-rename support, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis. Pull diagnostics are advertised only when the client supports `textDocument/diagnostic`. Semantic token categories include dialogue text, system elements, speaker names, and used/unused macro declarations.

@@ -18,6 +18,7 @@ use super::source_angou::{encrypt_source, exe_angou_element};
 use encoding_rs::{SHIFT_JIS, UTF_8};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 use std::time::Instant;
@@ -274,6 +275,44 @@ fn format_path_error(path: &Path, error: std::io::Error) -> String {
     } else {
         error.to_string()
     }
+}
+
+#[cfg(windows)]
+fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            lp_existing_file_name: *const u16,
+            lp_new_file_name: *const u16,
+            dw_flags: u32,
+        ) -> i32;
+    }
+
+    let from_w = from
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let to_w = to
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+    if ok == 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
 }
 
 fn read_source(path: &Path, force_charset: &str) -> Result<String, String> {
@@ -2082,13 +2121,7 @@ fn write_md5_cache(config: &CompileConfig) -> Result<(), String> {
     let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
     fs::write(&tmp_path, config.cache.pending_md5_json.as_bytes())
         .map_err(|error| format_path_error(&tmp_path, error))?;
-    if path.is_file() {
-        fs::remove_file(path).map_err(|error| {
-            let _ = fs::remove_file(&tmp_path);
-            format_path_error(path, error)
-        })?;
-    }
-    fs::rename(&tmp_path, path).map_err(|error| {
+    replace_file(&tmp_path, path).map_err(|error| {
         let _ = fs::remove_file(&tmp_path);
         format_path_error(path, error)
     })

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from contextlib import redirect_stdout
+from functools import lru_cache
 import hashlib
 import io
 import json
@@ -649,8 +650,13 @@ def _text_document_uri_from_params(params: dict[str, Any]) -> str | None:
     return _valid_document_uri(raw.get("uri"))
 
 
+@lru_cache(maxsize=16)
+def _split_lines_cached(text: str) -> tuple[str, ...]:
+    return tuple(text.split("\n"))
+
+
 def _line_text_at(text: str, line: int) -> str:
-    lines = text.split("\n")
+    lines = _split_lines_cached(text)
     if line < 0 or line >= len(lines):
         return ""
     return lines[line]
@@ -1345,9 +1351,11 @@ _SCAN_WORKER_NATIVE_PROJECT: Any = None
 
 
 def _scan_worker_count() -> int:
-    from .parallel import get_max_workers
-
-    return get_max_workers(None)
+    try:
+        cpu_count = os.process_cpu_count()
+    except AttributeError:
+        cpu_count = os.cpu_count()
+    return max(1, int(cpu_count or 2) // 2)
 
 
 def _init_scan_worker(
@@ -3538,6 +3546,7 @@ class SSLanguageServer:
         self.current_work_done_token: Any = None
         self.current_work_done_started = False
         self.current_work_done_finished = False
+        self.current_work_done_percentage = 0
         self.draining_control_messages = False
 
     def log_stderr(self, message: str) -> None:
@@ -3815,6 +3824,13 @@ class SSLanguageServer:
             if kind == "begin":
                 self.current_work_done_started = True
                 self.current_work_done_finished = False
+                percentage = value.get("percentage")
+                if isinstance(percentage, (int, float)) and not isinstance(
+                    percentage, bool
+                ):
+                    self.current_work_done_percentage = min(
+                        100, max(0, int(percentage))
+                    )
             elif kind == "end":
                 self.current_work_done_finished = True
         self.write_message(
@@ -3825,32 +3841,74 @@ class SSLanguageServer:
             }
         )
 
+    def begin_work_done_progress(
+        self,
+        title: str,
+        message: str = "",
+        percentage: int = 0,
+        *,
+        cancellable: bool = True,
+    ) -> bool:
+        self.raise_if_request_cancelled()
+        token = self.current_work_done_token
+        if token is None or self.current_work_done_finished:
+            return False
+        percentage = min(100, max(0, int(percentage)))
+        if self.current_work_done_started:
+            self.report_work_done_progress(message, percentage)
+            return True
+        value: dict[str, Any] = {
+            "kind": "begin",
+            "title": title,
+            "cancellable": cancellable,
+            "percentage": percentage,
+        }
+        if message:
+            value["message"] = message
+        self.send_progress(token, value)
+        return True
+
+    def report_work_done_progress(
+        self, message: str = "", percentage: int | None = None
+    ) -> None:
+        self.raise_if_request_cancelled()
+        token = self.current_work_done_token
+        if (
+            token is None
+            or not self.current_work_done_started
+            or self.current_work_done_finished
+        ):
+            return
+        value: dict[str, Any] = {"kind": "report"}
+        if message:
+            value["message"] = message
+        if percentage is not None:
+            percentage = min(
+                100, max(self.current_work_done_percentage, int(percentage))
+            )
+            self.current_work_done_percentage = percentage
+            value["percentage"] = percentage
+        self.send_progress(token, value)
+
     def begin_scan_progress(
         self,
         title: str,
         total: int,
     ) -> ScanProgressState | None:
-        self.raise_if_request_cancelled()
         token = self.current_work_done_token
-        if total <= 1:
-            return None
-        if token is None:
+        if token is None or total <= 0:
             return None
         state = ScanProgressState(
             title=title,
             total=total,
             token=token,
         )
-        self.send_progress(
-            token,
-            {
-                "kind": "begin",
-                "title": state.title,
-                "cancellable": True,
-                "message": f"0/{state.total}",
-                "percentage": 0,
-            },
-        )
+        if not self.begin_work_done_progress(
+            state.title,
+            f"0/{state.total}",
+            0,
+        ):
+            return None
         return state
 
     def finish_work_done_progress(self) -> None:
@@ -4049,9 +4107,15 @@ class SSLanguageServer:
         project_entry: ProjectCacheEntry,
         paths: list[str],
     ) -> DirectoryLinkDiagnosticsEntry | None:
+        self.begin_work_done_progress(
+            "SiglusSS: Loading workspace index",
+            "Checking workspace index cache...",
+            5,
+        )
         inputs = self.persistent_index_inputs(directory)
         if inputs is None:
             return None
+        self.report_work_done_progress("Reading cached workspace symbols...", 10)
         data = _read_lsp_index_cache_header(directory, inputs)
         if data is None:
             return None
@@ -4165,6 +4229,7 @@ class SSLanguageServer:
             revision = payload.get("revision")
             if isinstance(revision, bool) or not isinstance(revision, int):
                 return None
+            self.report_work_done_progress("Loaded cached workspace symbols.", 95)
             return DirectoryLinkDiagnosticsEntry(
                 project_signature=project_entry.signature,
                 file_signatures=file_signatures,
@@ -4234,12 +4299,19 @@ class SSLanguageServer:
         signature = _project_input_signature(directory, overlays)
         entry = self.project_cache.get(directory)
         if entry is not None and entry.signature == signature:
+            self.report_work_done_progress("Using cached .inc context.", 15)
             return entry
+        self.begin_work_done_progress(
+            "SiglusSS: Preparing project",
+            "Loading .inc context...",
+            5,
+        )
         entry = ProjectCacheEntry(
             signature=signature,
             project=_silent_stdout_call(_build_project_context, directory, overlays),
         )
         self.project_cache[directory] = entry
+        self.report_work_done_progress("Loaded .inc context.", 20)
         return entry
 
     def native_lsp_project_for_directory(
@@ -4248,7 +4320,9 @@ class SSLanguageServer:
         directory = os.path.abspath(directory or ".")
         cached = self.native_lsp_project_cache.get(directory)
         if cached is not None and cached[0] == project_entry.signature:
+            self.report_work_done_progress("Using cached Rust scanner context.", 25)
             return cached[1], cached[2]
+        self.report_work_done_progress("Preparing Rust scanner context...", 25)
         overlays = self.overlays_for_dir(directory, ".inc")
         native_config = _native_lsp_project_config(
             directory,
@@ -4261,6 +4335,7 @@ class SSLanguageServer:
             native_project,
             native_config,
         )
+        self.report_work_done_progress("Rust scanner context ready.", 30)
         return native_project, native_config
 
     def scene_paths(self, directory: str) -> list[str]:
@@ -4276,7 +4351,9 @@ class SSLanguageServer:
             and not force
             and doc.base_analysis_signature == signature
         ):
+            self.report_work_done_progress("Using cached current-file analysis.", 55)
             return doc.base_analysis
+        self.report_work_done_progress("Analyzing current file...", 50)
         overlays = self.overlays_for_dir(directory)
         doc.base_analysis = _silent_stdout_call(
             analyze_document, doc.path, doc.text, overlays, project_entry.project
@@ -4284,32 +4361,45 @@ class SSLanguageServer:
         doc.base_analysis_signature = signature
         doc.analysis = None
         doc.analysis_signature = None
+        self.report_work_done_progress("Current-file analysis ready.", 70)
         return doc.base_analysis
 
-    def parallel_scan_documents(
+    def scan_one_document(
+        self,
+        native_project: Any,
+        project_entry: ProjectCacheEntry,
+        doc: DocumentState,
+    ) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
+        return _native_link_scan_result(
+            native_project,
+            doc.path,
+            doc.text,
+        ) or _link_scan_result(
+            _silent_stdout_call(
+                analyze_document,
+                doc.path,
+                doc.text,
+                project=project_entry.project,
+                run_bs=False,
+            )
+        )
+
+    def scan_documents(
         self,
         project_entry: ProjectCacheEntry,
         native_project: Any,
         native_config: dict[str, Any] | None,
         docs: list[tuple[str, DocumentState]],
         progress: ScanProgressState | None,
-        scan_one: Any,
     ) -> dict[str, Any]:
         if not docs:
             return {}
-        if self.serial:
-            out: dict[str, Any] = {}
-            for path, doc in docs:
-                self.raise_if_request_cancelled()
-                out[path] = scan_one(doc, native_project)
-                self.report_scan_progress(progress)
-            return out
-        worker_count = min(len(docs), _scan_worker_count())
+        worker_count = 1 if self.serial else min(len(docs), _scan_worker_count())
         if worker_count <= 1:
             out: dict[str, Any] = {}
             for path, doc in docs:
                 self.raise_if_request_cancelled()
-                out[path] = scan_one(doc, native_project)
+                out[path] = self.scan_one_document(native_project, project_entry, doc)
                 self.report_scan_progress(progress)
             return out
         from .parallel import parallel_process_completed_map
@@ -4410,28 +4500,12 @@ class SSLanguageServer:
                     self.report_scan_progress(progress)
                     continue
                 scan_docs.append((path, doc))
-            scan_results = self.parallel_scan_documents(
+            scan_results = self.scan_documents(
                 project_entry,
                 native_project,
                 native_config,
                 scan_docs,
                 progress,
-                lambda doc, native_project: (
-                    _native_link_scan_result(
-                        native_project,
-                        doc.path,
-                        doc.text,
-                    )
-                    or _link_scan_result(
-                        _silent_stdout_call(
-                            analyze_document,
-                            doc.path,
-                            doc.text,
-                            project=project_entry.project,
-                            run_bs=False,
-                        )
-                    )
-                ),
             )
             for path, doc in scan_docs:
                 self.raise_if_request_cancelled()
@@ -4659,9 +4733,12 @@ class SSLanguageServer:
         native_project, _native_config = self.native_lsp_project_for_directory(
             directory, project_entry
         )
+        self.report_work_done_progress("Loading current-file symbols with Rust...", 50)
         symbols = _native_document_symbols_result(native_project, doc.path, doc.text)
         if symbols is None:
+            self.report_work_done_progress("Falling back to Python symbols...", 55)
             return None
+        self.report_work_done_progress("Current-file symbols ready.", 90)
         return AnalysisResult(
             path=doc.path,
             text=doc.text,
@@ -4753,6 +4830,7 @@ class SSLanguageServer:
         self.pull_diagnostics_enabled = self.client_supports_pull_diagnostics()
         work_done_progress = self.client_supports_work_done_progress()
         definition_provider: bool | dict[str, bool] = True
+        document_symbol_provider: bool | dict[str, bool] = True
         references_provider: bool | dict[str, bool] = True
         rename_provider: bool | dict[str, bool] = True
         semantic_tokens_provider: dict[str, Any] = {
@@ -4764,6 +4842,7 @@ class SSLanguageServer:
         }
         if work_done_progress:
             definition_provider = {"workDoneProgress": True}
+            document_symbol_provider = {"workDoneProgress": True}
             references_provider = {"workDoneProgress": True}
             semantic_tokens_provider["workDoneProgress"] = True
         if self.client_supports_prepare_rename():
@@ -4787,7 +4866,7 @@ class SSLanguageServer:
                 "referencesProvider": references_provider,
                 "renameProvider": rename_provider,
                 "semanticTokensProvider": semantic_tokens_provider,
-                "documentSymbolProvider": True,
+                "documentSymbolProvider": document_symbol_provider,
             },
             "serverInfo": {
                 "name": "siglus-ssu",
@@ -4962,10 +5041,16 @@ class SSLanguageServer:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Loading diagnostics",
+            "Opening current file...",
+            0,
+        )
         doc = self.get_or_load_document(uri)
         if doc is None:
             self.respond(msg_id, result={"kind": "full", "items": []})
             return
+        self.report_work_done_progress("Preparing diagnostics...", 10)
         self.respond(msg_id, result=self.document_diagnostic_report(doc))
 
     def handle_completion(self, msg_id: Any, params: dict[str, Any]) -> None:
@@ -5015,6 +5100,11 @@ class SSLanguageServer:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Finding definition",
+            "Opening current file...",
+            0,
+        )
         position = self.position_from_params(msg_id, params)
         if position is None:
             return
@@ -5023,6 +5113,7 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         line, character = position
+        self.report_work_done_progress("Analyzing symbol at cursor...", 20)
         result = self.analyze_base(doc)
         occurrence = occurrence_at_position(
             result, line, character, self.position_encoding
@@ -5031,12 +5122,17 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         if occurrence.symbol_id.startswith("cmd:"):
+            self.report_work_done_progress(
+                "Searching workspace command definitions...", 75
+            )
             defs = self.command_implementation_locations(
                 os.path.dirname(doc.path) or ".", occurrence.name
             )
             if defs:
+                self.report_work_done_progress("Definition ready.", 95)
                 self.respond(msg_id, result=defs)
                 return
+        self.report_work_done_progress("Resolving definition location...", 85)
         defs = definition_locations_for_occurrence(
             result,
             occurrence,
@@ -5044,12 +5140,18 @@ class SSLanguageServer:
             self.text_for_path,
             self.uri_for_path,
         )
+        self.report_work_done_progress("Definition ready.", 95)
         self.respond(msg_id, result=defs)
 
     def handle_references(self, msg_id: Any, params: dict[str, Any]) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Finding references",
+            "Opening current file...",
+            0,
+        )
         position = self.position_from_params(msg_id, params)
         if position is None:
             return
@@ -5080,6 +5182,7 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         line, character = position
+        self.report_work_done_progress("Analyzing symbol at cursor...", 20)
         result = self.analyze_base(doc)
         occurrence = occurrence_at_position(
             result,
@@ -5090,11 +5193,13 @@ class SSLanguageServer:
         if occurrence is None:
             self.respond(msg_id, result=[])
             return
+        self.report_work_done_progress("Loading workspace references...", 75)
         refs = self.symbol_occurrences(
             os.path.dirname(doc.path) or ".", occurrence.symbol_id
         )
         if not include_declaration:
             refs = [item for item in refs if not item.definition]
+        self.report_work_done_progress("References ready.", 95)
         self.respond(
             msg_id,
             result=_occurrence_locations(
@@ -5142,6 +5247,11 @@ class SSLanguageServer:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Preparing rename",
+            "Opening current file...",
+            0,
+        )
         position = self.position_from_params(msg_id, params)
         if position is None:
             return
@@ -5160,6 +5270,7 @@ class SSLanguageServer:
             self.respond(msg_id, result=None)
             return
         line, character = position
+        self.report_work_done_progress("Analyzing symbol at cursor...", 20)
         result = self.analyze_base(doc)
         occurrence = occurrence_at_position(
             result,
@@ -5177,6 +5288,7 @@ class SSLanguageServer:
                 },
             )
             return
+        self.report_work_done_progress("Loading rename locations...", 75)
         matches = self.symbol_occurrences(
             os.path.dirname(doc.path) or ".", occurrence.symbol_id
         )
@@ -5189,6 +5301,7 @@ class SSLanguageServer:
                 },
             )
             return
+        self.report_work_done_progress("Building workspace edit...", 85)
         changes: dict[str, list[dict[str, Any]]] = {}
         seen: set[tuple[str, int, int, int]] = set()
         for item in matches:
@@ -5214,21 +5327,30 @@ class SSLanguageServer:
                     "newText": new_name,
                 }
             )
+        self.report_work_done_progress("Rename edit ready.", 95)
         self.respond(msg_id, result={"changes": changes})
 
     def handle_semantic_tokens_full(self, msg_id: Any, params: dict[str, Any]) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Loading semantic highlighting",
+            "Opening current file...",
+            0,
+        )
         doc = self.get_or_load_document(uri)
         if doc is None:
             self.respond(msg_id, result={"data": []})
             return
+        self.report_work_done_progress("Analyzing current file for highlighting...", 10)
         result = self.analyze_base(doc)
         unused_macro_symbol_ids = set()
+        self.report_work_done_progress("Collecting semantic ranges...", 75)
         doc_occurrences = occurrences_for_result(result)
         if any(item.definition and item.kind == "macro" for item in doc_occurrences):
             directory = os.path.dirname(doc.path) or "."
+            self.report_work_done_progress("Checking workspace macro usage...", 80)
             entry = self.link_diagnostics_for_directory(directory)
             for symbol_id, occurrences in entry.occurrences.items():
                 symbol_text = str(symbol_id)
@@ -5248,6 +5370,7 @@ class SSLanguageServer:
                         break
                 if has_definition and not has_reference:
                     unused_macro_symbol_ids.add(symbol_id)
+        self.report_work_done_progress("Publishing semantic highlighting...", 95)
         self.respond(
             msg_id,
             result={
@@ -5263,11 +5386,17 @@ class SSLanguageServer:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
+        self.begin_work_done_progress(
+            "SiglusSS: Loading document symbols",
+            "Opening current file...",
+            0,
+        )
         doc = self.get_or_load_document(uri)
         if doc is None:
             self.respond(msg_id, result=[])
             return
         result = self.native_document_symbols(doc) or self.analyze_base(doc)
+        self.report_work_done_progress("Publishing current-file symbols...", 95)
         self.respond(
             msg_id,
             result=document_symbols_to_lsp(result, self.position_encoding),
@@ -5281,6 +5410,7 @@ class SSLanguageServer:
         previous_work_done_token = self.current_work_done_token
         previous_work_done_started = self.current_work_done_started
         previous_work_done_finished = self.current_work_done_finished
+        previous_work_done_percentage = self.current_work_done_percentage
         if key is not None:
             self.pending_request_ids.discard(key)
             self.pending_request_progress_tokens.pop(key, None)
@@ -5289,6 +5419,7 @@ class SSLanguageServer:
         self.current_work_done_token = self.progress_token_from_params(params)
         self.current_work_done_started = False
         self.current_work_done_finished = False
+        self.current_work_done_percentage = 0
         try:
             self.raise_if_request_cancelled()
             handler()
@@ -5312,6 +5443,7 @@ class SSLanguageServer:
             self.current_work_done_token = previous_work_done_token
             self.current_work_done_started = previous_work_done_started
             self.current_work_done_finished = previous_work_done_finished
+            self.current_work_done_percentage = previous_work_done_percentage
 
     def handle_message(self, message: dict[str, Any]) -> None:
         method = message.get("method")

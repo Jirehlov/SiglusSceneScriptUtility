@@ -80,7 +80,13 @@ def compile_project_native(config):
             "handled": False,
             "reason": "rust compile backend is not available",
         }
-    return _native_compile_project(config)
+    try:
+        return _native_compile_project(config)
+    except Exception as exc:
+        return {
+            "handled": False,
+            "reason": f"rust compile backend failed: {exc}",
+        }
 
 
 def native_lsp_scan_available() -> bool:

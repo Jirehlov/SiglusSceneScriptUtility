@@ -208,11 +208,11 @@ siglus-ssu -lsp [--serial]
 
 #### 参数
 
-- `--serial`：关闭默认的并行工作区扫描，改用串行扫描。
+- `--serial`：禁用默认的 LSP 工作区并行扫描，并强制按串行方式扫描。
 
 #### 说明
 
-- 工作区级别的符号扫描与链接扫描默认并行执行；使用 `--serial` 时改为串行。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
+- 工作区级别的符号扫描与链接扫描默认并行执行，默认 worker 数为可用 CPU 数的一半。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
 - 当 Rust 原生扫描器可用时，LSP 工作区扫描与文档符号会自动优先使用 Rust；若原生扫描不可用或不能处理该文档，则回退到 Python 流程。
 - 工作区索引会持久化到磁盘并跨会话复用。缓存兼容条件包括目录、`.inc` MD5 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 MD5 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 支持语义 token、push/pull 诊断、自动补全、悬停说明、跳转到定义、查找引用、改名、客户端支持时的准备改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新。只有客户端支持 `textDocument/diagnostic` 时才声明 pull 诊断。语义 token 分类包括台词文本、system element（系统指令）、角色名，以及已使用/未使用的宏声明。

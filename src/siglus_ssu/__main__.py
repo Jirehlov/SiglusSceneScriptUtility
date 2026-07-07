@@ -61,7 +61,7 @@ def _usage(out=None):
         "\n"
         "LSP mode:\n"
         f"  {p} -lsp [--serial]\n"
-        "    --serial       Disable default parallel workspace scanning\n"
+        "    --serial       Disable default parallel LSP workspace scanning\n"
         "\n"
         "Compile mode:\n"
         f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] [--csv <seed_csv>] <input_dir> <output_pck|output_dir>\n"

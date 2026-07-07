@@ -729,10 +729,36 @@ fn unique_macro_definitions(
     out
 }
 
-fn range_overlaps(ranges: &HashSet<(usize, usize, usize)>, rng: (usize, usize, usize)) -> bool {
-    ranges
-        .iter()
-        .any(|used| used.0 == rng.0 && rng.1 < used.2 && rng.2 > used.1)
+struct UsedRanges {
+    ranges: HashSet<(usize, usize, usize)>,
+    by_line: HashMap<usize, Vec<(usize, usize)>>,
+}
+
+impl UsedRanges {
+    fn new() -> Self {
+        Self {
+            ranges: HashSet::new(),
+            by_line: HashMap::new(),
+        }
+    }
+
+    fn contains_exact(&self, rng: (usize, usize, usize)) -> bool {
+        self.ranges.contains(&rng)
+    }
+
+    fn overlaps(&self, rng: (usize, usize, usize)) -> bool {
+        self.by_line
+            .get(&rng.0)
+            .is_some_and(|items| items.iter().any(|used| rng.1 < used.1 && rng.2 > used.0))
+    }
+
+    fn insert(&mut self, rng: (usize, usize, usize)) -> bool {
+        if !self.ranges.insert(rng) {
+            return false;
+        }
+        self.by_line.entry(rng.0).or_default().push((rng.1, rng.2));
+        true
+    }
 }
 
 fn append_occurrence_from_definition(
@@ -741,7 +767,7 @@ fn append_occurrence_from_definition(
     path: &str,
     token: Option<SourceToken>,
     record: Option<&LspDefinition>,
-    used_ranges: &mut HashSet<(usize, usize, usize)>,
+    used_ranges: &mut UsedRanges,
 ) -> bool {
     let Some(token) = token else {
         return false;
@@ -757,7 +783,7 @@ fn append_occurrence_from_definition(
         return false;
     }
     let rng = (token.line, token.start_char, token.end_char);
-    if range_overlaps(used_ranges, rng) {
+    if used_ranges.overlaps(rng) {
         return false;
     }
     let (kind, semantic_type) = match record.kind.as_str() {
@@ -787,13 +813,13 @@ fn append_macro_use_occurrences(
     source_text: &str,
     path: &str,
     tokens: Vec<SourceToken>,
-    used_ranges: &mut HashSet<(usize, usize, usize)>,
+    used_ranges: &mut UsedRanges,
     macro_maps: &[HashMap<String, LspDefinition>],
     mark_used_ranges: bool,
 ) {
     for token in tokens {
         let rng = (token.line, token.start_char, token.end_char);
-        if range_overlaps(used_ranges, rng) || !token_matches_text(source_text, &token) {
+        if used_ranges.overlaps(rng) || !token_matches_text(source_text, &token) {
             continue;
         }
         let token_key = key(&token.text);
@@ -881,7 +907,7 @@ impl<'a> OccurrenceContext<'a> {
     fn add_request(
         &self,
         out: &mut Vec<LspOccurrence>,
-        used_ranges: &mut HashSet<(usize, usize, usize)>,
+        used_ranges: &mut UsedRanges,
         spec: RequestSpec<'_>,
     ) {
         let RequestSpec {
@@ -900,7 +926,7 @@ impl<'a> OccurrenceContext<'a> {
             return;
         };
         let rng = (token.line, token.start_char, token.end_char);
-        if range_overlaps(used_ranges, rng) {
+        if used_ranges.overlaps(rng) {
             return;
         }
         used_ranges.insert(rng);
@@ -924,7 +950,7 @@ fn walk_argument_list(
     current_command: &str,
     ctx: &OccurrenceContext<'_>,
     out: &mut Vec<LspOccurrence>,
-    used_ranges: &mut HashSet<(usize, usize, usize)>,
+    used_ranges: &mut UsedRanges,
 ) {
     for argument in &args.args {
         walk_occurrences(&argument.value, current_command, ctx, out, used_ranges);
@@ -936,7 +962,7 @@ fn walk_element(
     current_command: &str,
     ctx: &OccurrenceContext<'_>,
     out: &mut Vec<LspOccurrence>,
-    used_ranges: &mut HashSet<(usize, usize, usize)>,
+    used_ranges: &mut UsedRanges,
 ) {
     if let (Some(name), Some(atom)) = (&element.name, &element.name_atom) {
         let key_name = key(name);
@@ -1015,7 +1041,7 @@ fn walk_occurrences(
     current_command: &str,
     ctx: &OccurrenceContext<'_>,
     out: &mut Vec<LspOccurrence>,
-    used_ranges: &mut HashSet<(usize, usize, usize)>,
+    used_ranges: &mut UsedRanges,
 ) {
     match &node.payload {
         AstPayload::Root(items) => {
@@ -1279,7 +1305,7 @@ struct BodyOccurrenceContext<'a, 'b> {
     ia_data: &'a IaData,
     local_defs: &'a HashMap<String, Vec<LspDefinition>>,
     project_defs: &'a HashMap<String, Vec<LspDefinition>>,
-    used_ranges: &'b mut HashSet<(usize, usize, usize)>,
+    used_ranges: &'b mut UsedRanges,
     macro_maps: Vec<HashMap<String, LspDefinition>>,
 }
 
@@ -1381,7 +1407,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         sidecar,
         ia_data,
     } = input;
-    let mut used_ranges = HashSet::new();
+    let mut used_ranges = UsedRanges::new();
     let mut out = Vec::new();
     let local_command_keys = local_defs
         .iter()
@@ -1478,7 +1504,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         }
         let line = record.line.saturating_sub(1);
         let rng = (line, record.start_char as usize, record.end_char as usize);
-        if used_ranges.contains(&rng) {
+        if used_ranges.contains_exact(rng) {
             continue;
         }
         used_ranges.insert(rng);
