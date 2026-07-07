@@ -27,6 +27,7 @@ from .native_ops import (
     compile_project_native,
 )
 from .common import (
+    ascii_lower,
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
@@ -250,10 +251,10 @@ def _native_compile_cache_config(
     for f in inc or []:
         p = os.path.join(input_dir, f)
         if os.path.isfile(p):
-            cur_inc[str(f).lower()] = _md5_file_for_cache(p)
+            cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
     for p in ss or []:
         if os.path.isfile(p):
-            cur_ss[os.path.basename(p).lower()] = _md5_file_for_cache(p)
+            cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
     if getattr(args, "tmp_dir", ""):
         old = None
         if md5_path and os.path.isfile(md5_path):
@@ -281,7 +282,7 @@ def _native_compile_cache_config(
             old_ss = old.get("ss") or {}
             comp = set()
             for p in ss or []:
-                b = os.path.basename(p).lower()
+                b = ascii_lower(os.path.basename(p))
                 nm = os.path.splitext(os.path.basename(p))[0]
                 dat_path = os.path.join(bs_dir, nm + ".dat")
                 need = False
@@ -291,7 +292,7 @@ def _native_compile_cache_config(
                     need = True
                 if need:
                     comp.add(p)
-            compile_list = sorted(comp, key=lambda x: os.path.basename(x).lower())
+            compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
     pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
     full_compile_stats = (
         (not getattr(args, "dat_repack", False))
@@ -454,19 +455,19 @@ def _read_scene_ssid(path):
 
 def _scan_dir(p):
     fs = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
-    fs.sort(key=lambda x: x.lower())
-    ini = [f for f in fs if os.path.splitext(f)[1].lower() in (".ini", ".dat")]
-    inc = [f for f in fs if f.lower().endswith(".inc")]
+    fs.sort(key=ascii_lower)
+    ini = [f for f in fs if ascii_lower(os.path.splitext(f)[1]) in (".ini", ".dat")]
+    inc = [f for f in fs if ascii_lower(f).endswith(".inc")]
     ss = []
     scn_ssid_map = {}
     for f in fs:
-        if not f.lower().endswith(".ss"):
+        if not ascii_lower(f).endswith(".ss"):
             continue
         fp = os.path.join(p, f)
         ss.append(fp)
         ssid = _read_scene_ssid(fp)
-        scn_ssid_map[f.casefold()] = ssid
-        scn_ssid_map[os.path.splitext(f)[0].casefold()] = ssid
+        scn_ssid_map[ascii_lower(f)] = ssid
+        scn_ssid_map[ascii_lower(os.path.splitext(f)[0])] = ssid
     return ini, inc, ss, scn_ssid_map
 
 
@@ -602,7 +603,7 @@ def _collect_read_flag_stats(bs_dir, scene_paths):
         if cnt > 0:
             scene_total += 1
             scene_counts.append((nm, cnt))
-    scene_counts.sort(key=lambda item: (-item[1], item[0].casefold(), item[0]))
+    scene_counts.sort(key=lambda item: (-item[1], ascii_lower(item[0]), item[0]))
     return total, scene_total, scene_counts[:5]
 
 
@@ -651,7 +652,7 @@ def _top_scene_text(items, value_key, extra_key=None, limit=5):
         [x for x in items if isinstance(x, dict)],
         key=lambda item: (
             -int(item.get(value_key, 0) or 0),
-            str(item.get("name", "")).casefold(),
+            ascii_lower(item.get("name", "")),
             str(item.get("name", "")),
         ),
     )
@@ -1369,10 +1370,10 @@ def main(argv=None):
                 for f in inc or []:
                     p = os.path.join(inp, f)
                     if os.path.isfile(p):
-                        cur_inc[str(f).lower()] = _md5_file(p)
+                        cur_inc[ascii_lower(f)] = _md5_file(p)
                 for p in ss or []:
                     if os.path.isfile(p):
-                        cur_ss[os.path.basename(p).lower()] = _md5_file(p)
+                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file(p)
                 old = None
                 if os.path.isfile(md5_path):
                     try:
@@ -1406,7 +1407,7 @@ def main(argv=None):
                     old_ss = old.get("ss") or {}
                     comp = set()
                     for p in ss or []:
-                        b = os.path.basename(p).lower()
+                        b = ascii_lower(os.path.basename(p))
                         nm = os.path.splitext(os.path.basename(p))[0]
                         dat_path = os.path.join(bs_dir, nm + ".dat")
                         need = False
@@ -1417,7 +1418,7 @@ def main(argv=None):
                         if need:
                             comp.add(p)
                     compile_list = sorted(
-                        comp, key=lambda x: os.path.basename(x).lower()
+                        comp, key=lambda x: ascii_lower(os.path.basename(x))
                     )
                     if (not a.no_angou) and os.path.isdir(bs_dir):
                         for p in compile_list or []:
@@ -1430,10 +1431,10 @@ def main(argv=None):
                 for f in inc or []:
                     p = os.path.join(inp, f)
                     if os.path.isfile(p):
-                        cur_inc[str(f).lower()] = _md5_file(p)
+                        cur_inc[ascii_lower(f)] = _md5_file(p)
                 for p in ss or []:
                     if os.path.isfile(p):
-                        cur_ss[os.path.basename(p).lower()] = _md5_file(p)
+                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file(p)
             pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
             if getattr(a, "dat_repack", False):
                 bs_dir = os.path.join(tmp, "bs")
@@ -1451,7 +1452,7 @@ def main(argv=None):
                         continue
                     if looks_like_siglus_dat(b):
                         dats.append(fp)
-                dats.sort(key=lambda x: os.path.basename(x).lower())
+                dats.sort(key=lambda x: ascii_lower(os.path.basename(x)))
                 if not dats:
                     raise RuntimeError("--dat-repack: no scene .dat found")
                 ctx["scn_list"] = [os.path.basename(x) for x in dats]

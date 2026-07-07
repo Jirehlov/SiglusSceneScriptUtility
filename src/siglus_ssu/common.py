@@ -9,6 +9,13 @@ C = get_const_module()
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
+_ASCII_LOWER_TRANS = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
+)
+
+
+def ascii_lower(value):
+    return str(value or "").translate(_ASCII_LOWER_TRANS)
 
 
 def macro_decl_kind(rep):
@@ -1465,7 +1472,7 @@ def _scene_name_keys(file_path):
     name = os.path.basename(str(file_path or ""))
     if not name:
         return "", ""
-    return name.casefold(), os.path.splitext(name)[0].casefold()
+    return ascii_lower(name), ascii_lower(os.path.splitext(name)[0])
 
 
 def get_scene_ssid(ctx, file_path):
@@ -1475,7 +1482,7 @@ def get_scene_ssid(ctx, file_path):
     if not isinstance(ssid_map, dict):
         return None
     name = os.path.basename(str(file_path or ""))
-    ext = os.path.splitext(name)[1].casefold()
+    ext = ascii_lower(os.path.splitext(name)[1])
     name_key, stem_key = _scene_name_keys(name)
     if name_key and name_key in ssid_map:
         return ssid_map.get(name_key)
@@ -1493,7 +1500,7 @@ def format_scene_name(file_path, ctx=None):
     ssid_map = ctx.get("scn_ssid_map")
     if not isinstance(ssid_map, dict):
         return name
-    ext = os.path.splitext(name)[1].casefold()
+    ext = ascii_lower(os.path.splitext(name)[1])
     name_key, stem_key = _scene_name_keys(name)
     has_name = name_key in ssid_map
     has_stem = ext in ("", ".ss", ".dat", ".lzss") and stem_key in ssid_map

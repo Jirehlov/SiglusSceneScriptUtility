@@ -416,7 +416,7 @@ fn source_path(base: &Path, name: &str) -> PathBuf {
 }
 
 fn find_named_file(base: &Path, target_name: &str) -> Option<PathBuf> {
-    let target = target_name.to_lowercase();
+    let target = ascii_lowercase(target_name);
     let mut hits = Vec::new();
     if let Ok(entries) = fs::read_dir(base) {
         for entry in entries.flatten() {
@@ -427,7 +427,7 @@ fn find_named_file(base: &Path, target_name: &str) -> Option<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if name.to_lowercase() == target {
+            if ascii_lowercase(name) == target {
                 hits.push(path);
             }
         }
@@ -437,12 +437,12 @@ fn find_named_file(base: &Path, target_name: &str) -> Option<PathBuf> {
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or_default()
-            .to_lowercase();
+            .to_ascii_lowercase();
         let right_name = right
             .file_name()
             .and_then(|value| value.to_str())
             .unwrap_or_default()
-            .to_lowercase();
+            .to_ascii_lowercase();
         left_name.cmp(&right_name)
     });
     hits.into_iter().next()
@@ -484,11 +484,12 @@ fn file_name(path: &Path) -> String {
 }
 
 fn lower_file_name(name: &str) -> String {
-    Path::new(name)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(name)
-        .to_lowercase()
+    ascii_lowercase(
+        Path::new(name)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or(name),
+    )
 }
 
 fn scene_stem(name: &str) -> String {
@@ -2383,7 +2384,7 @@ fn compile_project_inner(
         right
             .value
             .cmp(&left.value)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| ascii_lowercase(&left.name).cmp(&ascii_lowercase(&right.name)))
             .then_with(|| left.name.cmp(&right.name))
     });
     read_flag_stats.top_scenes.truncate(5);
@@ -2533,7 +2534,7 @@ fn compile_project_inner(
         right
             .value
             .cmp(&left.value)
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| ascii_lowercase(&left.name).cmp(&ascii_lowercase(&right.name)))
             .then_with(|| left.name.cmp(&right.name))
     });
     binary_size_stats.top_dat_scenes.truncate(5);

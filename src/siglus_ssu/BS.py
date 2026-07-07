@@ -1,5 +1,4 @@
 import os
-import glob
 import struct
 import copy
 import time
@@ -11,6 +10,7 @@ from .LA import la_analize
 from .SA import SA
 from .MA import MA
 from .common import (
+    ascii_lower,
     build_empty_ia_data,
     build_operator_render_tables,
     empty_macro_stat_counts,
@@ -654,9 +654,10 @@ def build_ia_data(ctx):
             [
                 f
                 for f in os.listdir(sp)
-                if os.path.isfile(os.path.join(sp, f)) and f.lower().endswith(".inc")
+                if os.path.isfile(os.path.join(sp, f))
+                and ascii_lower(f).endswith(".inc")
             ],
-            key=lambda x: x.lower(),
+            key=ascii_lower,
         )
         if isinstance(ctx, dict):
             ctx["inc_list"] = inc_list
@@ -1930,7 +1931,14 @@ def find_ss(ctx, only=None):
     if only:
         return [absp(x) for x in only]
     sp = ctx.get("scn_path")
-    return sorted(glob.glob(os.path.join(sp, "*.ss"))) if sp else []
+    if (not sp) or (not os.path.isdir(sp)):
+        return []
+    ss_files = []
+    for name in os.listdir(sp):
+        path = os.path.join(sp, name)
+        if os.path.isfile(path) and ascii_lower(name).endswith(".ss"):
+            ss_files.append(path)
+    return sorted(ss_files, key=lambda x: ascii_lower(os.path.basename(x)))
 
 
 def compile_one_pipeline(

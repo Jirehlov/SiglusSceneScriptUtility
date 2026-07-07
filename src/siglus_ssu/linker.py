@@ -5,6 +5,7 @@ import glob
 from ._const_manager import get_const_module
 from .CA import new_replace_tree
 from .common import (
+    ascii_lower,
     build_empty_ia_data,
     log_stage,
     record_stage_time,
@@ -27,13 +28,6 @@ from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
 
 C = get_const_module()
-_ASCII_LOWER_TRANS = str.maketrans(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
-)
-
-
-def _ascii_lower(value):
-    return str(value or "").translate(_ASCII_LOWER_TRANS)
 
 
 def _glob_sorted_rel(base, pattern):
@@ -42,7 +36,7 @@ def _glob_sorted_rel(base, pattern):
     for p in hits:
         if os.path.isfile(p):
             rels.append(os.path.relpath(p, base).replace("/", "\\"))
-    rels.sort(key=_ascii_lower)
+    rels.sort(key=ascii_lower)
     return rels
 
 
@@ -175,7 +169,7 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
     dat_rows.sort(
         key=lambda x: (
             -int(x.get("dat_bytes", 0) or 0),
-            x["name"].casefold(),
+            ascii_lower(x["name"]),
             x["name"],
         )
     )
@@ -381,7 +375,7 @@ def link_pack(ctx):
     scn_names_in = _get_scene_names(ctx)
     scn_names, dat_list, lzss_list = _load_scene_data(ctx, scn_names_in, lzss_mode)
     _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode)
-    scn_name_list = [_ascii_lower(nm) for nm in scn_names]
+    scn_name_list = [ascii_lower(nm) for nm in scn_names]
     inc_prop_name_list = [str(p.get("name", "")) for p in inc_props]
     inc_cmd_name_list = [str(c.get("name", "")) for c in inc_cmds]
     inc_cmd_list = [(0, 0) for _ in range(len(inc_cmds))]
