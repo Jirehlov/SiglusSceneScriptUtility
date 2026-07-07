@@ -3,7 +3,7 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.3.7] - TBA
+## [v0.3.7] - 2026-07-07
 - Better LSP.
 - Added a Rust native compile backend for `siglus-ssu -c`, used automatically when available and supported by the selected compile options, with Python fallback.
 - Added Rust native acceleration for `siglus-ssu -a --payload` semantic scene-bytecode comparison, with automatic Python fallback when native payload scanning is unavailable.
