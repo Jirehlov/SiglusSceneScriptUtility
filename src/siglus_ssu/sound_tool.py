@@ -630,8 +630,20 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
         play_path = src_path
         if ext == ".owp":
             tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
-            play_path = os.path.join(tmp_dir, base_name + ".ogg")
-            write_bytes(play_path, ogg)
+            try:
+                play_path = os.path.join(tmp_dir, base_name + ".ogg")
+                write_bytes(play_path, ogg)
+                return _PreparedPlaybackInput(
+                    base_name=base_name,
+                    play_path=play_path,
+                    tmp_dir=tmp_dir,
+                    total_sample_cnt=total_sample_cnt,
+                    sample_rate=_get_ogg_sample_rate(ogg, total_sample_cnt),
+                    channel_layout="",
+                )
+            except Exception:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+                raise
         return _PreparedPlaybackInput(
             base_name=base_name,
             play_path=play_path,
@@ -652,24 +664,28 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
         if header.samples_per_sec <= 0:
             raise RuntimeError("failed to determine audio sample rate")
         tmp_dir = tempfile.mkdtemp(prefix="siglus_ffplay_")
-        play_path = os.path.join(tmp_dir, base_name + ".wav")
-        write_bytes(
-            play_path,
-            sound._build_wav(
-                pcm,
-                header.channels,
-                header.bits_per_sample,
-                header.samples_per_sec,
-            ),
-        )
-        return _PreparedPlaybackInput(
-            base_name=base_name,
-            play_path=play_path,
-            tmp_dir=tmp_dir,
-            total_sample_cnt=total_sample_cnt,
-            sample_rate=int(header.samples_per_sec),
-            channel_layout=_channel_layout_for_channels(int(header.channels)),
-        )
+        try:
+            play_path = os.path.join(tmp_dir, base_name + ".wav")
+            write_bytes(
+                play_path,
+                sound._build_wav(
+                    pcm,
+                    header.channels,
+                    header.bits_per_sample,
+                    header.samples_per_sec,
+                ),
+            )
+            return _PreparedPlaybackInput(
+                base_name=base_name,
+                play_path=play_path,
+                tmp_dir=tmp_dir,
+                total_sample_cnt=total_sample_cnt,
+                sample_rate=int(header.samples_per_sec),
+                channel_layout=_channel_layout_for_channels(int(header.channels)),
+            )
+        except Exception:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            raise
     raise RuntimeError("unsupported file type (expected .nwa, .owp, or .ogg)")
 
 
@@ -996,32 +1012,37 @@ def _resolve_play_gameexe_path(inp: str, trim_path: str = "") -> str:
 
 def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
     prepared = _prepare_playback_input(entry.path)
-    bgm_entry = _resolve_bgm_entry(trim_table, prepared.base_name)
-    start_pos = bgm_entry.start_sample
-    end_pos = bgm_entry.end_sample
-    rep_pos = bgm_entry.repeat_sample
-    start_pos, end_pos, rep_pos = _normalize_playback_range(
-        prepared.total_sample_cnt,
-        start_sample=start_pos,
-        end_sample=end_pos,
-        repeat_sample=rep_pos,
-    )
-    return _PlaybackPlan(
-        entry=entry,
-        bgm_name=bgm_entry.name,
-        play_path=prepared.play_path,
-        tmp_dir=prepared.tmp_dir,
-        start_sample=start_pos,
-        end_sample=end_pos,
-        repeat_sample=rep_pos,
-        sample_rate=prepared.sample_rate,
-        audio_filter=_build_ffplay_audio_filter(
+    try:
+        bgm_entry = _resolve_bgm_entry(trim_table, prepared.base_name)
+        start_pos = bgm_entry.start_sample
+        end_pos = bgm_entry.end_sample
+        rep_pos = bgm_entry.repeat_sample
+        start_pos, end_pos, rep_pos = _normalize_playback_range(
+            prepared.total_sample_cnt,
             start_sample=start_pos,
             end_sample=end_pos,
             repeat_sample=rep_pos,
-            channel_layout=prepared.channel_layout,
-        ),
-    )
+        )
+        return _PlaybackPlan(
+            entry=entry,
+            bgm_name=bgm_entry.name,
+            play_path=prepared.play_path,
+            tmp_dir=prepared.tmp_dir,
+            start_sample=start_pos,
+            end_sample=end_pos,
+            repeat_sample=rep_pos,
+            sample_rate=prepared.sample_rate,
+            audio_filter=_build_ffplay_audio_filter(
+                start_sample=start_pos,
+                end_sample=end_pos,
+                repeat_sample=rep_pos,
+                channel_layout=prepared.channel_layout,
+            ),
+        )
+    except Exception:
+        if prepared.tmp_dir:
+            shutil.rmtree(prepared.tmp_dir, ignore_errors=True)
+        raise
 
 
 def _start_playback_process(plan: _PlaybackPlan, ffplay_path: str) -> _RunningPlayback:
@@ -1139,8 +1160,10 @@ class _PlayerScreen:
                 self._stdin_fd = sys.stdin.fileno()
                 self._term_state = termios.tcgetattr(self._stdin_fd)
                 tty.setraw(self._stdin_fd)
-            except Exception:
-                raise RuntimeError("interactive --play requires raw terminal input")
+            except Exception as exc:
+                raise RuntimeError(
+                    "interactive --play requires raw terminal input"
+                ) from exc
         self._stream.write("\x1b[?1049h\x1b[2J\x1b[H")
         self._stream.flush()
         return self

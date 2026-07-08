@@ -274,7 +274,7 @@ pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
             .map_err(|_| "lzss32 short".to_string())?,
     ) as usize;
     let mut p = 8usize;
-    let mut out = Vec::with_capacity(org);
+    let mut out = Vec::new();
     while out.len() < org {
         if p >= src.len() {
             return Err("lzss32 eof".to_string());

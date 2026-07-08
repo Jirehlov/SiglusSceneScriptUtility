@@ -31,7 +31,7 @@ fn lzss_pack(
 
 #[pyfunction]
 fn lzss_unpack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result = lzss::unpack(data);
+    let result = lzss::unpack(data).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &result).into())
 }
 

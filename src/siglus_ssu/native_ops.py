@@ -70,10 +70,6 @@ def is_native_available() -> bool:
     return _USE_NATIVE
 
 
-def native_compile_backend_available() -> bool:
-    return HAS_NATIVE_COMPILE_BACKEND
-
-
 def compile_project_native(config):
     if not HAS_NATIVE_COMPILE_BACKEND:
         return {
@@ -526,31 +522,45 @@ def _py_lzss32_unpack(src: bytes) -> bytes:
 
 
 def _py_lzss_unpack(src: bytes) -> bytes:
-    if not src or len(src) < 8:
+    if not src:
         return b""
+    if len(src) < 8:
+        raise ValueError("lzss short")
     _, org = struct.unpack_from("<II", src, 0)
     if org == 0:
         return b""
     si = 8
     out = bytearray()
-    while len(out) < org and si < len(src):
+    while len(out) < org:
+        if si >= len(src):
+            raise ValueError("lzss eof")
         fl = src[si]
         si += 1
         for _ in range(8):
             if len(out) >= org:
                 break
             if fl & 1:
+                if si >= len(src):
+                    raise ValueError("lzss eof")
                 out.append(src[si])
                 si += 1
             else:
+                if si + 2 > len(src):
+                    raise ValueError("lzss eof")
                 tok = src[si] | (src[si + 1] << 8)
                 si += 2
                 off = tok >> 4
                 ln = (tok & 0xF) + 2
+                if off == 0:
+                    raise ValueError("lzss off0")
                 st = len(out) - off
+                if st < 0:
+                    raise ValueError("lzss back")
                 for j in range(ln):
                     if len(out) >= org:
                         break
+                    if st + j >= len(out):
+                        raise ValueError("lzss back")
                     out.append(out[st + j])
             fl >>= 1
     return bytes(out)

@@ -265,20 +265,26 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
     pack_buf
 }
 
-pub fn unpack(src: &[u8]) -> Vec<u8> {
+pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
+    if src.is_empty() {
+        return Ok(Vec::new());
+    }
     if src.len() < 8 {
-        return Vec::new();
+        return Err("lzss short".to_string());
     }
 
     let org = u32::from_le_bytes([src[4], src[5], src[6], src[7]]) as usize;
     if org == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let mut out = Vec::with_capacity(org);
+    let mut out = Vec::new();
     let mut si = 8;
 
-    while out.len() < org && si < src.len() {
+    while out.len() < org {
+        if si >= src.len() {
+            return Err("lzss eof".to_string());
+        }
         let mut fl = src[si];
         si += 1;
 
@@ -288,33 +294,41 @@ pub fn unpack(src: &[u8]) -> Vec<u8> {
             }
 
             if fl & 1 != 0 {
-                if si < src.len() {
-                    out.push(src[si]);
-                    si += 1;
+                if si >= src.len() {
+                    return Err("lzss eof".to_string());
                 }
+                out.push(src[si]);
+                si += 1;
             } else {
-                if si + 1 >= src.len() {
-                    break;
+                if si + 2 > src.len() {
+                    return Err("lzss eof".to_string());
                 }
                 let tok = (src[si] as usize) | ((src[si + 1] as usize) << 8);
                 si += 2;
                 let off = tok >> 4;
                 let ln = (tok & 0xF) + 2;
-                let st = out.len().wrapping_sub(off);
+                if off == 0 {
+                    return Err("lzss off0".to_string());
+                }
+                if off > out.len() {
+                    return Err("lzss back".to_string());
+                }
+                let st = out.len() - off;
 
                 for j in 0..ln {
                     if out.len() >= org {
                         break;
                     }
-                    let idx = st.wrapping_add(j);
-                    if idx < out.len() {
-                        out.push(out[idx]);
+                    let idx = st + j;
+                    if idx >= out.len() {
+                        return Err("lzss back".to_string());
                     }
+                    out.push(out[idx]);
                 }
             }
             fl >>= 1;
         }
     }
 
-    out
+    Ok(out)
 }

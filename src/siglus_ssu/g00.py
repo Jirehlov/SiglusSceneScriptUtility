@@ -494,6 +494,26 @@ def _load_image_bgra(p: Path):
     return bgra, w, h
 
 
+def _force_bgra_opaque(bgra: bytes):
+    if not bgra:
+        return bgra, False
+    buf = bytearray(bgra)
+    changed = False
+    for i in range(3, len(buf), 4):
+        if buf[i] != 255:
+            buf[i] = 255
+            changed = True
+    return bytes(buf), changed
+
+
+def _load_type0_image_bgra(p: Path):
+    bgra, w, h = _load_image_bgra(p)
+    bgra, changed = _force_bgra_opaque(bgra)
+    if changed:
+        print(f"[WARN] type0 G00 ignores alpha; forced opaque: {p}", file=sys.stderr)
+    return bgra, w, h
+
+
 def _parse_cut_block(blk: bytes, strict: bool = False):
     if len(blk) < C.G00_CUT_SZ:
         raise ValueError("cut block short")
@@ -917,8 +937,8 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     )
     try:
         obj = json.loads(text)
-    except Exception as e:
-        raise ValueError(f"invalid type2 layout json: {config_path}: {e}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid type2 layout json: {config_path}: {exc}") from exc
     if not isinstance(obj, dict):
         raise ValueError("type2 layout root must be a JSON object")
     if "type" in obj and int(obj["type"]) != 2:
@@ -1111,7 +1131,7 @@ def _report_single_update(report, img_p: Path, wh: tuple[int, int], changed: boo
 
 def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
     if g00_type == 0:
-        bgra, w, h = _load_image_bgra(img_p)
+        bgra, w, h = _load_type0_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
     if g00_type == 3:
         if not _is_jpeg_file(img_p):
@@ -1195,7 +1215,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             raise ValueError("this g00 type expects a single image (no _cut###)")
     if t == 0:
         img_p, _ = updates[0]
-        bgra, w, h = _load_image_bgra(img_p)
+        bgra, w, h = _load_type0_image_bgra(img_p)
         bw, bh = struct.unpack_from("<HH", base_bytes, 1)
         if (w, h) != (bw, bh):
             raise ValueError(f"size mismatch: image={w}x{h} base={bw}x{bh}")

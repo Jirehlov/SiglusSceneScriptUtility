@@ -254,8 +254,8 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         if not only1 and not only2:
             print("  (same set, different order)")
     if c1 != c2:
-        map1 = {cn: dt for cn, dt in c1}
-        map2 = {cn: dt for cn, dt in c2}
+        map1 = dict(c1)
+        map2 = dict(c2)
         only1 = sorted(list(set(map1.keys()) - set(map2.keys())))[: C.MAX_LIST_PREVIEW]
         only2 = sorted(list(set(map2.keys()) - set(map1.keys())))[: C.MAX_LIST_PREVIEW]
         common = sorted(list(set(map1.keys()) & set(map2.keys())))
@@ -393,7 +393,7 @@ def _wtoi_prefix(s):
 
 def _read_official_csv(csv_path: str):
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        rows = [row for row in csv.reader(f)]
+        rows = list(csv.reader(f))
     datano_i = None
     datatype_i = None
     for i, row in enumerate(rows):

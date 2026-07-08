@@ -19,8 +19,11 @@ def get_max_workers(max_workers: int | None = None) -> int:
 
 
 def _env_or(name, parse, default):
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return default
     try:
-        return parse(os.environ.get(name, "") or 0)
+        return parse(value)
     except Exception:
         return default
 
@@ -124,10 +127,7 @@ def parallel_process_completed_map(
                     if not done:
                         continue
                 for future in done:
-                    if on_poll is None:
-                        pending.discard(future)
-                    else:
-                        pending.discard(future)
+                    pending.discard(future)
                     index = futures.pop(future)
                     item = item_list[index]
                     result = future.result()

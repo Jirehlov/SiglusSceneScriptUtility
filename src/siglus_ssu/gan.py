@@ -116,7 +116,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 out["ok"] = False
                 out["errors"].append(f"invalid set_cnt {set_cnt!r} at {hx(ofs0)}")
                 break
-            for si in range(set_cnt):
+            for _si in range(set_cnt):
                 ofs1 = ofs
                 c2, ofs = _gan_read_i32(blob, ofs)
                 if c2 is None:
@@ -137,7 +137,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 _add_ins(ofs1, c2, pat_cnt)
                 s = {"pat_cnt": pat_cnt, "total_time": 0, "pats": []}
                 keika = 0
-                for pi in range(max(0, pat_cnt)):
+                for _pi in range(max(0, pat_cnt)):
                     pat = {
                         "pat_no": 0,
                         "x": 0,

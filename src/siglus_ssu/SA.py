@@ -319,10 +319,10 @@ class SA:
             ft = s.piad.get("form_table")
             if ft and hasattr(ft, "add"):
                 al0 = []
-                for i, a in enumerate(n.get("prop_list", [])):
+                for arg_index, a in enumerate(n.get("prop_list", [])):
                     al0.append(
                         {
-                            "id": i,
+                            "id": arg_index,
                             "name": "",
                             "form": a.get("form_code", C.FM_INT),
                             "def_int": 0,

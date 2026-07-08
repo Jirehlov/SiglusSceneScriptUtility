@@ -250,20 +250,74 @@ def _compare_payload(original_pck: str, rebuilt_pck: str, original_blob: bytes):
         True,
     )
     if rc != 0:
-        return False, "compare failed", out, err
+        return False, "compare failed", out, err, None
     match = _PAYLOAD_SUMMARY_RE.search(out)
     if not match:
-        return True, "no differing scene_data payload rows", out, err
+        counts = {
+            "same": 0,
+            "text_only": 0,
+            "real_diff": 0,
+            "unavailable": 0,
+        }
+        return True, "no differing scene_data payload rows", out, err, counts
     same, text_only, real_diff, unavailable = (int(x) for x in match.groups())
     detail = (
         f"same={same:d} text_only={text_only:d} "
         f"real_diff={real_diff:d} unavailable={unavailable:d}"
     )
     ok = text_only == 0 and real_diff == 0 and unavailable == 0
-    return ok, detail, out, err
+    counts = {
+        "same": same,
+        "text_only": text_only,
+        "real_diff": real_diff,
+        "unavailable": unavailable,
+    }
+    return ok, detail, out, err, counts
 
 
-def _compile_with_profile_fallback(extract_dir: str, rebuilt_pck: str, serial=False):
+def _payload_rank(attempt) -> tuple:
+    counts = (attempt or {}).get("payload_counts")
+    if not isinstance(counts, dict):
+        return (2, sys.maxsize, sys.maxsize, sys.maxsize, sys.maxsize, 0)
+    same = int(counts.get("same", 0) or 0)
+    text_only = int(counts.get("text_only", 0) or 0)
+    real_diff = int(counts.get("real_diff", 0) or 0)
+    unavailable = int(counts.get("unavailable", 0) or 0)
+    bad = text_only + real_diff + unavailable
+    return (
+        0 if bool((attempt or {}).get("payload_ok")) else 1,
+        bad,
+        real_diff,
+        unavailable,
+        text_only,
+        -same,
+    )
+
+
+def _best_payload_attempt(attempts):
+    compared = [
+        attempt
+        for attempt in attempts or ()
+        if bool((attempt or {}).get("payload_compared"))
+    ]
+    if not compared:
+        return None
+    return min(
+        compared,
+        key=lambda attempt: (
+            _payload_rank(attempt),
+            int((attempt or {}).get("profile", 0) or 0),
+        ),
+    )
+
+
+def _compile_payload_with_profile_fallback(
+    original_pck: str,
+    original_blob: bytes,
+    extract_dir: str,
+    rebuilt_pck: str,
+    serial=False,
+):
     attempts = []
     for profile in _const_profiles():
         _set_const_profile(profile)
@@ -290,20 +344,52 @@ def _compile_with_profile_fallback(extract_dir: str, rebuilt_pck: str, serial=Fa
                 "elapsed": elapsed,
             }
         )
-        if ok:
-            return True, profile, attempts
-    return False, None, attempts
+        attempt = attempts[-1]
+        if not ok:
+            continue
+        payload_started = time.perf_counter()
+        payload_ok, detail, payload_out, payload_err, counts = _compare_payload(
+            original_pck,
+            rebuilt_pck,
+            original_blob,
+        )
+        payload_elapsed = max(0.0, time.perf_counter() - payload_started)
+        attempt.update(
+            {
+                "payload_compared": True,
+                "payload_ok": payload_ok,
+                "payload_detail": detail,
+                "payload_stdout": payload_out,
+                "payload_stderr": payload_err,
+                "payload_counts": counts,
+                "payload_elapsed": payload_elapsed,
+            }
+        )
+        if payload_ok:
+            return True, profile, attempts, attempt
+    best = _best_payload_attempt(attempts)
+    return (
+        bool(best and best.get("payload_ok")),
+        (int(best["profile"]) if best else None),
+        attempts,
+        best,
+    )
 
 
 def _format_compile_attempts(attempts) -> str:
-    return ", ".join(
-        "profile=%d rc=%d"
-        % (
-            int((attempt or {}).get("profile", 0) or 0),
-            int((attempt or {}).get("rc", 0) or 0),
-        )
-        for attempt in attempts or ()
-    )
+    parts = []
+    for attempt in attempts or ():
+        profile = int((attempt or {}).get("profile", 0) or 0)
+        rc = int((attempt or {}).get("rc", 0) or 0)
+        text = f"profile={profile:d} rc={rc:d}"
+        if bool((attempt or {}).get("payload_compared")):
+            payload_status = "ok" if bool((attempt or {}).get("payload_ok")) else "diff"
+            detail = str((attempt or {}).get("payload_detail") or "")
+            text += f" payload={payload_status}"
+            if detail:
+                text += f" ({detail})"
+        parts.append(text)
+    return ", ".join(parts)
 
 
 def _print_compile_errors(attempts) -> None:
@@ -381,17 +467,32 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
 
         if status == "PENDING":
             rebuilt_pck = os.path.join(extract_dir, os.path.basename(path))
-            compile_ok, compile_profile, attempts = _compile_with_profile_fallback(
-                extract_dir, rebuilt_pck, serial=serial
+            payload_ok, selected_profile, attempts, selected_attempt = (
+                _compile_payload_with_profile_fallback(
+                    path,
+                    original_blob,
+                    extract_dir,
+                    rebuilt_pck,
+                    serial=serial,
+                )
             )
-            final_attempt = attempts[-1] if attempts else {}
+            compile_elapsed = sum(
+                float((attempt or {}).get("elapsed", 0.0) or 0.0)
+                for attempt in attempts or ()
+            )
             _append_timing(
                 timings,
                 "compile",
-                float((final_attempt or {}).get("elapsed", 0.0) or 0.0),
+                compile_elapsed,
             )
+            payload_elapsed = sum(
+                float((attempt or {}).get("payload_elapsed", 0.0) or 0.0)
+                for attempt in attempts or ()
+            )
+            if payload_elapsed > 0.0:
+                _append_timing(timings, "payload", payload_elapsed)
             attempt_text = _format_compile_attempts(attempts)
-            if not compile_ok:
+            if selected_attempt is None:
                 print(f"  compile: failed attempts={attempt_text}")
                 _print_compile_errors(attempts)
                 status = "FAIL"
@@ -399,24 +500,29 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
             else:
                 print(
                     f"  compile: ok {os.path.basename(rebuilt_pck)} "
-                    f"profile={int(compile_profile):d} attempts={attempt_text}"
+                    f"profile={int(selected_profile):d} attempts={attempt_text}"
                 )
-
-        if status == "PENDING":
-            step_started = time.perf_counter()
-            ok, detail_text, out, err_text = _compare_payload(
-                path, rebuilt_pck, original_blob
-            )
-            _record_timing(timings, "payload", step_started)
-            if not ok:
-                print(f"  payload: failed {detail_text}")
-                _print_tail("compare", _payload_stdout(out), err_text)
-                status = "FAIL"
-                detail = detail_text
-            else:
-                print(f"  payload: ok {detail_text}")
-                status = "PASS"
-                detail = detail_text
+                detail_text = str(selected_attempt.get("payload_detail") or "")
+                if not payload_ok:
+                    print(
+                        f"  payload: failed profile={int(selected_profile):d} "
+                        f"{detail_text}"
+                    )
+                    _print_tail(
+                        f"compare profile={int(selected_profile):d}",
+                        _payload_stdout(
+                            str(selected_attempt.get("payload_stdout") or "")
+                        ),
+                        str(selected_attempt.get("payload_stderr") or ""),
+                    )
+                    status = "FAIL"
+                    detail = f"profile={int(selected_profile):d} {detail_text}".strip()
+                else:
+                    print(
+                        f"  payload: ok profile={int(selected_profile):d} {detail_text}"
+                    )
+                    status = "PASS"
+                    detail = f"profile={int(selected_profile):d} {detail_text}".strip()
     finally:
         if tmp_root:
             step_started = time.perf_counter()

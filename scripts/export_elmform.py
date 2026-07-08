@@ -336,9 +336,8 @@ def extract_elements(pe: pefile.PE) -> list[ElementDef]:
     disasm = _make_disassembler()
     elements: list[ElementDef] = []
     for index, start in enumerate(starts):
-        next_offset = (
-            starts[index + 1].raw_offset if index + 1 < len(starts) else len(text)
-        )
+        next_start = starts[index + 1] if index + 1 < len(starts) else None
+        next_offset = next_start.raw_offset if next_start is not None else len(text)
         chunk = text[start.raw_offset : min(next_offset, start.raw_offset + 0x180)]
         chunk_va = text_va + start.raw_offset
         element = _parse_element_chunk(pe, chunk, chunk_va, start, disasm)
