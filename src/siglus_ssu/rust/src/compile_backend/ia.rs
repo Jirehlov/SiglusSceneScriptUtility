@@ -138,13 +138,17 @@ impl IaData {
         self.macro_defs.push(replacement);
     }
 
+    pub fn record_named_usage(&mut self, name: &str) {
+        if let Some(index) = self.macro_map.get(name).copied()
+            && let Some(replacement) = self.macro_defs.get_mut(index)
+        {
+            replacement.used_count += 1;
+        }
+    }
+
     pub fn record_replacement_usage(&mut self, names: &[String]) {
         for name in names {
-            if let Some(index) = self.macro_map.get(name).copied()
-                && let Some(replacement) = self.macro_defs.get_mut(index)
-            {
-                replacement.used_count += 1;
-            }
+            self.record_named_usage(name);
         }
     }
 }
@@ -651,7 +655,7 @@ impl IncAnalyzer {
         &mut self,
         mut pos: usize,
         mut line: usize,
-        name_set: &HashSet<String>,
+        iad: &mut IaData,
     ) -> Result<(String, usize, usize), ()> {
         let (i, line2, ok) = self.skip(pos, line);
         pos = i;
@@ -689,7 +693,9 @@ impl IncAnalyzer {
                 if depth >= ifs.len() {
                     return self.err(line2, "if depth overflow");
                 }
-                ifs[depth] = if name_set.contains(&word) { 1 } else { 2 };
+                let matched = iad.name_set.contains(&word);
+                iad.record_named_usage(&word);
+                ifs[depth] = if matched { 1 } else { 2 };
                 pos = after_word;
                 line = line2;
                 continue;
@@ -706,7 +712,9 @@ impl IncAnalyzer {
                 let Some((after_word, word)) = self.word_ex(next) else {
                     return self.err(line2, "Missing word after #elseifdef.");
                 };
-                ifs[depth] = next_elseif_ifdef_state(ifs[depth], name_set.contains(&word));
+                let matched = iad.name_set.contains(&word);
+                iad.record_named_usage(&word);
+                ifs[depth] = next_elseif_ifdef_state(ifs[depth], matched);
                 pos = after_word;
                 line = line2;
                 continue;
@@ -890,7 +898,7 @@ impl IncAnalyzer {
             let (name, next, line2, name_start, name_end) = self.name_until(i, line, &stopset)?;
             i = next;
             line = line2;
-            let (after, next, line2) = self.after(i, line, &iad.name_set)?;
+            let (after, next, line2) = self.after(i, line, iad)?;
             if name.is_empty() {
                 return self.err(
                     line2,
@@ -941,7 +949,7 @@ impl IncAnalyzer {
             let (args, next, line2) = self.macro_arg_list(i, line)?;
             i = next;
             line = line2;
-            let (after, next, line2) = self.after(i, line, &iad.name_set)?;
+            let (after, next, line2) = self.after(i, line, iad)?;
             if name.is_empty() {
                 return self.err(line2, "#macro name must contain at least one character.");
             }
@@ -981,7 +989,7 @@ impl IncAnalyzer {
             return Ok((next, line2));
         }
         if kind == "expand" {
-            let (after, next, line2) = self.after(i, line, &iad.name_set)?;
+            let (after, next, line2) = self.after(i, line, iad)?;
             let mut ca = super::ca::CharacterAnalyzer::new();
             let expanded = ca.analyze_line(&after, &iad.replace_tree).map_err(|_| {
                 self.error_line = line2;

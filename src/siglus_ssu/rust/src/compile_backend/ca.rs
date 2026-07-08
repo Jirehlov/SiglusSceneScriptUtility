@@ -321,7 +321,9 @@ impl CharacterAnalyzer {
                         return self.error(self.current_line, "if depth overflow");
                     }
                     stats.max_ifdef_depth = stats.max_ifdef_depth.max(depth);
-                    ifs[depth] = if name_set.contains(&word) { 1 } else { 2 };
+                    let matched = name_set.contains(&word);
+                    self.used_replacements.push(word);
+                    ifs[depth] = if matched { 1 } else { 2 };
                     i = next;
                     continue;
                 }
@@ -336,7 +338,9 @@ impl CharacterAnalyzer {
                         return self.error(self.current_line, "Missing word after #elseifdef.");
                     };
                     stats.elseifdef += 1;
-                    ifs[depth] = next_elseif_ifdef_state(ifs[depth], name_set.contains(&word));
+                    let matched = name_set.contains(&word);
+                    self.used_replacements.push(word);
+                    ifs[depth] = next_elseif_ifdef_state(ifs[depth], matched);
                     i = next;
                     continue;
                 }
