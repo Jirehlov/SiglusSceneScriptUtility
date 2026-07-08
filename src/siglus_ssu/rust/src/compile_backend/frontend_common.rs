@@ -123,7 +123,8 @@ pub fn scan_text_comments(
     text: &str,
     options: &TextCommentOptions,
 ) -> Result<TextCommentResult, TextCommentError> {
-    let chars: Vec<char> = text.chars().collect();
+    let mut chars: Vec<char> = text.chars().collect();
+    chars.extend(std::iter::repeat_n('\0', 256));
     let mut out = String::with_capacity(text.len());
     let mut state = 0i32;
     let mut line = 1usize;
@@ -131,7 +132,7 @@ pub fn scan_text_comments(
     let mut block_line = 1usize;
     let mut source_map = options.with_map.then(Vec::new);
     let mut i = 0usize;
-    while i < chars.len() {
+    while chars[i] != '\0' {
         let ch = chars[i];
         let mut out_ch = ch;
         let source_line = line;

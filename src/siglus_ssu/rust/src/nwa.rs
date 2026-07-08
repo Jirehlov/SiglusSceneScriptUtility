@@ -185,24 +185,29 @@ fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
 }
 
 #[inline]
-fn remap_pack_mod(pack_mod: i32) -> u8 {
+fn remap_pack_mod(pack_mod: i32) -> Result<u8, String> {
     match pack_mod {
-        0 => 2,
-        1 => 1,
-        2 => 0,
-        v if v < 0 => 0,
-        v => v as u8,
+        0 => Ok(2),
+        1 => Ok(1),
+        2 => Ok(0),
+        3..=5 => Ok(pack_mod as u8),
+        _ => Err(format!("Unsupported NWA pack_mod: {}", pack_mod)),
     }
 }
 
-fn unpack_unit_16_into(chunk: &[u8], src_smp_cnt: usize, header: &NwaHeader, dst: &mut [u8]) {
+fn unpack_unit_16_into(
+    chunk: &[u8],
+    src_smp_cnt: usize,
+    header: &NwaHeader,
+    pack_mod: u8,
+    dst: &mut [u8],
+) {
     let write_cnt = dst.len().min(src_smp_cnt.saturating_mul(2));
     if write_cnt == 0 {
         return;
     }
     let mut out_i = 0usize;
 
-    let pack_mod = remap_pack_mod(header.pack_mod);
     let m = 3u8 + pack_mod;
 
     if header.channels == 1 {
@@ -346,6 +351,7 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
         }
         return Ok(data[start..end].to_vec());
     }
+    let pack_mod = remap_pack_mod(h.pack_mod)?;
 
     let unit_cnt = h.unit_cnt as usize;
     let table_off = NWA_HEADER_SIZE;
@@ -397,7 +403,13 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
         }
 
         let chunk = &data[start..end];
-        unpack_unit_16_into(chunk, unit_smp_cnt, &h, &mut out[dst..dst + write_len]);
+        unpack_unit_16_into(
+            chunk,
+            unit_smp_cnt,
+            &h,
+            pack_mod,
+            &mut out[dst..dst + write_len],
+        );
         dst += write_len;
     }
 

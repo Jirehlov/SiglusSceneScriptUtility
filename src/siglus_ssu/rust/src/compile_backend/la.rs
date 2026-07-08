@@ -179,8 +179,10 @@ pub fn lex_scene_text_with_source_map(
     codes: &LexCodes,
     source_map: Option<&[Option<SourcePoint>]>,
 ) -> Result<LexResult, LexError> {
-    let chars: Vec<char> = text.chars().collect();
+    let mut chars: Vec<char> = text.chars().collect();
+    let original_len = chars.len();
     let starts = line_starts(&chars);
+    chars.extend(std::iter::repeat_n('\0', 256));
     let symbol_defs = symbols(codes);
     let mut cur_id = 0i32;
     let mut cur_line = 1usize;
@@ -192,12 +194,12 @@ pub fn lex_scene_text_with_source_map(
     let mut atom_span_list = Vec::new();
     let mut i = 0usize;
 
-    while i < chars.len() {
+    while chars[i] != '\0' {
         loop {
-            let Some(ch) = chars.get(i).copied() else {
+            let ch = chars[i];
+            if ch == '\0' {
                 break;
-            };
-            if ch == '\n' {
+            } else if ch == '\n' {
                 cur_line += 1;
                 i += 1;
             } else if ch == ' ' || ch == '\t' {
@@ -206,7 +208,7 @@ pub fn lex_scene_text_with_source_map(
                 break;
             }
         }
-        if i >= chars.len() {
+        if chars[i] == '\0' {
             break;
         }
         let mut atom = Atom {
@@ -370,7 +372,7 @@ pub fn lex_scene_text_with_source_map(
         opt: 0,
         subopt: 0,
     });
-    atom_span_list.push(fallback_span(&starts, chars.len(), chars.len(), cur_line));
+    atom_span_list.push(fallback_span(&starts, original_len, original_len, cur_line));
     str_list.push("dummy".to_string());
     Ok(LexResult {
         atom_list,

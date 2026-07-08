@@ -326,12 +326,14 @@ def _nwa_s16(v: int) -> int:
 
 def _nwa_pack_mod(pack_mod: int) -> int:
     if pack_mod == 0:
-        pack_mod = 2
-    elif pack_mod == 1:
-        pack_mod = 1
-    elif pack_mod == 2:
-        pack_mod = 0
-    return 3 + pack_mod
+        return 5
+    if pack_mod == 1:
+        return 4
+    if pack_mod == 2:
+        return 3
+    if 3 <= pack_mod <= 5:
+        return 3 + pack_mod
+    raise ValueError(f"Unsupported NWA pack_mod: {pack_mod}")
 
 
 def _nwa_decode_sample(br, header: NWAHeader, mod: int, zero_cnt: int, nowsmp: int):
@@ -462,6 +464,7 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
         if len(pcm) != h.original_size:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
+    _nwa_pack_mod(h.pack_mod)
     if _USE_NATIVE_NWA and _native_nwa_decode_pcm is not None:
         pcm = _native_nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):

@@ -226,7 +226,7 @@ impl CharacterAnalyzer {
         input: &File1Result,
         name_set: &HashSet<String>,
     ) -> Result<File2Result, ()> {
-        let chars: Vec<char> = input.text.chars().collect();
+        let chars: Vec<char> = input.text.chars().chain(std::iter::once('\0')).collect();
         let mut out = String::new();
         let mut inc = String::new();
         let mut out_source_map = Vec::new();
@@ -242,7 +242,7 @@ impl CharacterAnalyzer {
         let mut excluded_line = false;
         let source_at = |pos: usize| source_map.get(pos).copied().flatten();
 
-        while i < chars.len() {
+        while chars[i] != '\0' {
             let ch = chars[i];
             if ch == '\n' {
                 if excluded_line {
@@ -722,7 +722,7 @@ impl CharacterAnalyzer {
                 loop_count = 0;
             }
         }
-        text.pop();
+        text.truncate(pos);
         Ok(text.into_iter().collect())
     }
 
@@ -812,7 +812,8 @@ impl CharacterAnalyzer {
                 loop_count = 0;
             }
         }
-        text.pop();
+        text.truncate(pos);
+        source_map.truncate(pos);
         let output: String = text.into_iter().collect();
         source_map.truncate(output.chars().count());
         Ok(SceneExpansion {
