@@ -13,6 +13,7 @@ from . import compiler
 from . import pck
 from ._const_manager import get_const_module, load_const_module
 from .common import (
+    format_elapsed_seconds as _format_seconds,
     iter_files_by_ext,
     looks_like_siglus_pck,
     parse_i32_header,
@@ -60,13 +61,6 @@ def _capture(callable_obj, *args):
     except Exception:
         rc = 1
     return rc, out.getvalue(), err.getvalue()
-
-
-def _format_seconds(seconds) -> str:
-    try:
-        return f"{float(seconds):.3f}s"
-    except Exception:
-        return "0.000s"
 
 
 def _record_timing(timings, stage: str, started: float) -> float:

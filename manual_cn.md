@@ -114,7 +114,7 @@ siglus-ssu init
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--legacy-full] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [参数]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
 ```
 
 ### 全局选项
@@ -191,7 +191,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.3.7
+siglus-ssu init --force --ref v0.4.0
 ```
 
 ---

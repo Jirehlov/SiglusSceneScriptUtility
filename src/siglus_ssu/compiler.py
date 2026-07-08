@@ -1355,25 +1355,17 @@ def main(argv=None):
                 "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
             }
 
-            def _md5_file(p):
-                h = hashlib.md5()
-                with open(p, "rb") as f:
-                    while True:
-                        b = f.read(1024 * 1024)
-                        if not b:
-                            break
-                        h.update(b)
-                return h.hexdigest()
-
             if getattr(a, "tmp_dir", ""):
                 md5_path = os.path.join(tmp, "_md5.json")
                 for f in inc or []:
                     p = os.path.join(inp, f)
                     if os.path.isfile(p):
-                        cur_inc[ascii_lower(f)] = _md5_file(p)
+                        cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
                 for p in ss or []:
                     if os.path.isfile(p):
-                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file(p)
+                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(
+                            p
+                        )
                 old = None
                 if os.path.isfile(md5_path):
                     try:
@@ -1431,10 +1423,12 @@ def main(argv=None):
                 for f in inc or []:
                     p = os.path.join(inp, f)
                     if os.path.isfile(p):
-                        cur_inc[ascii_lower(f)] = _md5_file(p)
+                        cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
                 for p in ss or []:
                     if os.path.isfile(p):
-                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file(p)
+                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(
+                            p
+                        )
             pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
             if getattr(a, "dat_repack", False):
                 bs_dir = os.path.join(tmp, "bs")

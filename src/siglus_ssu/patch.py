@@ -971,7 +971,9 @@ def _summarize_changes(changes):
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    ap = argparse.ArgumentParser(description="Patch SiglusEngine.exe.")
+    ap = argparse.ArgumentParser(
+        prog="siglus-ssu -p", description="Patch SiglusEngine.exe."
+    )
     ap.add_argument("input", help="input exe path")
     ap.add_argument("key", nargs="?", help="key file, key=bytes, or angou=text")
     ap.add_argument("-o", "--output", help="output exe path")

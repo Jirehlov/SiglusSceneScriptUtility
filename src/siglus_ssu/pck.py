@@ -1800,7 +1800,7 @@ def extract_pck(
                 out_path = _unique_outpath(os_dir, out_name)
                 write_bytes(out_path, raw)
         except Exception as e:
-            sys.stderr.write(f"Warning: failed to extract original sources: {e}\n")
+            sys.stderr.write(f"warning: failed to extract original sources: {e}\n")
     if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0:
         _, scn_data_for_key = _read_pck_scene_lists(dat, hdr=hdr)
         exe_el = _resolve_pck_scene_exe_el(
@@ -1813,7 +1813,7 @@ def extract_pck(
         )
         if not exe_el:
             sys.stderr.write(
-                "Warning: scn_data_exe_angou_mod=1 but no valid exe_el key source was found; scene data may remain encrypted.\n"
+                "warning: scn_data_exe_angou_mod=1 but no valid exe_el key source was found; scene data may remain encrypted.\n"
             )
     D = None
     disam_stats = None

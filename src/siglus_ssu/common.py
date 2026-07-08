@@ -2101,13 +2101,15 @@ def print_sections(secs, total, section_ids=None):
 
 
 def hint_help(out=None) -> None:
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-tool"
+    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
+    if not p or p in {"__main__.py", "__main__"}:
+        p = "siglus-ssu"
     msg = f"hint: run '{p} --help' for command help"
     if out is None:
         eprint(msg)
         return
     try:
-        out.write(msg)
+        out.write(msg + "\n")
     except Exception:
         eprint(msg)
 

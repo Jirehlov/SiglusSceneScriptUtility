@@ -576,10 +576,10 @@ def main(argv=None):
         eprint(str(e))
         return 2
     usage_normal = (
-        "Usage: koe_collector [--stats-only] <scene_input> <voice_dir> <output_dir>"
+        "usage: siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir>"
     )
     usage_single = (
-        "Usage: koe_collector [--stats-only] --single KOE_NO <voice_dir> <output_dir>"
+        "usage: siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>"
     )
     stats_only = False
     single_koe_no = None

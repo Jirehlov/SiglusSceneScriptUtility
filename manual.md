@@ -114,7 +114,7 @@ siglus-ssu init
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V | --version] [--legacy] [--legacy-full] [--const-profile N] (-lsp | init | -c | -x | -a | -d | -k | -e | -m | -g | -s | -v | -p | -t | test) [args]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
 ```
 
 ### Global Options
@@ -191,7 +191,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.3.7
+siglus-ssu init --force --ref v0.4.0
 ```
 
 ---

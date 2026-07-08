@@ -96,7 +96,6 @@ def main(argv=None):
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
-    dat_txt = False
     try:
         args, gei, dat_txt, decompile = parse_gei_disam_args(
             args,

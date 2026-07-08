@@ -66,7 +66,9 @@ def xor_cycle_inplace(b, code, st=0):
     _xor_cycle_inplace(b, code, st)
 
 
-def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b"", base: bytes = None):
+def read_gameexe_dat(
+    gameexe_dat_path: str, exe_el: bytes = b"", base: bytes | None = None
+):
     dat = read_bytes(gameexe_dat_path)
     if not dat or len(dat) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
@@ -124,7 +126,7 @@ def restore_gameexe_ini(
     gameexe_dat_path: str,
     output_dir: str,
     exe_el: bytes = b"",
-    base: bytes = None,
+    base: bytes | None = None,
     output_name: str = "Gameexe.ini",
 ) -> str:
     info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el, base=base)
