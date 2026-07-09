@@ -21,3 +21,8 @@ siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
 ```
 
 See the manuals for more modes, options, and troubleshooting tips.
+
+## License
+
+This project is dual-licensed under the **Unlicense** or **BSD Zero Clause
+License (0BSD)**. You may choose either license.

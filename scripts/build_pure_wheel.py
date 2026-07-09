@@ -31,6 +31,7 @@ for src in pkg_src.rglob("*"):
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 shutil.copy2(root / "README.md", temp / "README.md")
+shutil.copy2(root / "LICENSE", temp / "LICENSE")
 pyproject = (
     textwrap.dedent(
         """
@@ -43,6 +44,8 @@ pyproject = (
     description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
     readme = "README.md"
     requires-python = ">=3.12"
+    license = "Unlicense OR 0BSD"
+    license-files = ["LICENSE"]
     authors = [{ name = "Jirehlov" }]
     dependencies = []
     [project.scripts]

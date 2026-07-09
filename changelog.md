@@ -3,8 +3,9 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.4.0] - 2026-07-08
+## [v0.4.0] - TBA
 - Reviewed by Fable 5.
+- Added LICENSE.
 
 
 ## [v0.3.7] - 2026-07-07

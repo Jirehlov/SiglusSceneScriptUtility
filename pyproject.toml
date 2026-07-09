@@ -8,6 +8,8 @@ version = "0.4.0"
 description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Unlicense OR 0BSD"
+license-files = ["LICENSE"]
 authors = [
     { name = "Jirehlov" }
 ]
