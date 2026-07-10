@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -15,9 +16,13 @@ from urllib.request import Request, urlopen
 
 DEFAULT_REPO = "Jirehlov/pck-samples"
 DEFAULT_REF = "main"
-DEFAULT_SUBDIR = "1"
+DEFAULT_SUBDIR = "0"
 DEFAULT_WORK_DIR = ".cache/pck-samples"
 CHUNK_SIZE = 1024 * 1024
+
+_TEST_SUMMARY_RE = re.compile(
+    r"(?m)^total=(\d+)\s+exact=(\d+)\s+payload_same=(\d+)\s+skipped=(\d+)\s+failed=(\d+)\s*$"
+)
 
 
 def _token() -> str:
@@ -206,7 +211,9 @@ def _command_prefix(command: str | None) -> list[str]:
     return [sys.executable, "-m", "siglus_ssu"]
 
 
-def _run_siglus_test(samples_dir: Path, command: str | None, serial: bool) -> int:
+def _run_siglus_test(
+    samples_dir: Path, command: str | None, serial: bool, exact_only=False
+) -> int:
     pcks = _find_pcks(samples_dir)
     if not pcks:
         raise RuntimeError(f"No .pck files found in {samples_dir}")
@@ -215,12 +222,41 @@ def _run_siglus_test(samples_dir: Path, command: str | None, serial: bool) -> in
         cmd.append("--serial")
     cmd.append(str(samples_dir))
     print(f"running: {' '.join(cmd)}")
-    return subprocess.call(cmd)
+    completed = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
+    if completed.stdout:
+        sys.stdout.write(completed.stdout)
+    if completed.stderr:
+        sys.stderr.write(completed.stderr)
+    if completed.returncode != 0:
+        return int(completed.returncode)
+    if not exact_only:
+        return 0
+    matches = list(_TEST_SUMMARY_RE.finditer(completed.stdout))
+    if not matches:
+        sys.stderr.write("exact-only: test summary not found\n")
+        return 1
+    total, exact, payload_same, skipped, failed = (
+        int(value) for value in matches[-1].groups()
+    )
+    if (
+        total != len(pcks)
+        or exact != total
+        or payload_same != 0
+        or skipped != 0
+        or failed != 0
+    ):
+        sys.stderr.write(
+            "exact-only: expected every sample to be EXACT "
+            f"(total={total:d} exact={exact:d} payload_same={payload_same:d} "
+            f"skipped={skipped:d} failed={failed:d})\n"
+        )
+        return 1
+    return 0
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Download pck-samples/1 and run siglus-ssu test on all .pck files."
+        description="Download pck-samples/0 and run siglus-ssu test on all .pck files."
     )
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--ref", default=DEFAULT_REF)
@@ -229,6 +265,7 @@ def main(argv=None) -> int:
     parser.add_argument("--samples-dir", default="")
     parser.add_argument("--command", default="")
     parser.add_argument("--serial", action="store_true")
+    parser.add_argument("--exact-only", action="store_true")
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args(argv)
@@ -254,7 +291,12 @@ def main(argv=None) -> int:
     print(f"ready: {samples_dir} pck={len(pcks)}")
     if args.download_only:
         return 0
-    return _run_siglus_test(samples_dir, args.command or None, bool(args.serial))
+    return _run_siglus_test(
+        samples_dir,
+        args.command or None,
+        bool(args.serial),
+        bool(args.exact_only),
+    )
 
 
 if __name__ == "__main__":

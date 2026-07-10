@@ -52,7 +52,7 @@ def _usage(out=None):
         "  -v, --video     Extract/analyze .omv videos\n"
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
         "  -t, --tutorial  Generate static tutorial graph JSON from a .pck\n"
-        "  test            Round-trip compile-test .pck files with embedded original sources and summary timings\n"
+        "  test            Round-trip compile-test .pck files with embedded original sources; reports EXACT or PAYLOAD_SAME\n"
         "\n"
         "Init mode:\n"
         f"  {p} init [--force|-f] [--ref <git-ref>]\n"
@@ -177,7 +177,7 @@ def _usage(out=None):
         f"  {p} test [--serial] <input_pck|input_dir>\n"
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --serial       Disable parallel compilation during rebuild\n"
-        "    output         Prints total/summary timings for analyze/extract/compile/payload/cleanup\n"
+        "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
         "    const-profile  Compile tries profiles 0, 1, then 2 before reporting failure\n"
     )
     out.write(text)

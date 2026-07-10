@@ -233,8 +233,11 @@ def _count_files_with_ext(path: str, ext: str) -> int:
         return 0
 
 
-def _compare_payload(original_pck: str, rebuilt_pck: str, original_blob: bytes):
-    rebuilt_blob = read_bytes(rebuilt_pck)
+def _compare_payload(
+    original_pck: str, rebuilt_pck: str, original_blob: bytes, rebuilt_blob=None
+):
+    if rebuilt_blob is None:
+        rebuilt_blob = read_bytes(rebuilt_pck)
     rc, out, err = _capture(
         pck.compare_pck,
         original_pck,
@@ -267,6 +270,19 @@ def _compare_payload(original_pck: str, rebuilt_pck: str, original_blob: bytes):
         "unavailable": unavailable,
     }
     return ok, detail, out, err, counts
+
+
+def _compare_rebuilt_pck(original_pck: str, rebuilt_pck: str, original_blob: bytes):
+    rebuilt_blob = read_bytes(rebuilt_pck)
+    if original_blob == rebuilt_blob:
+        return "EXACT", "pck bytes identical", "", "", None
+    payload_ok, detail, out, err, counts = _compare_payload(
+        original_pck,
+        rebuilt_pck,
+        original_blob,
+        rebuilt_blob,
+    )
+    return "PAYLOAD_SAME" if payload_ok else "FAIL", detail, out, err, counts
 
 
 def _payload_rank(attempt) -> tuple:
@@ -342,16 +358,18 @@ def _compile_payload_with_profile_fallback(
         if not ok:
             continue
         payload_started = time.perf_counter()
-        payload_ok, detail, payload_out, payload_err, counts = _compare_payload(
+        result, detail, payload_out, payload_err, counts = _compare_rebuilt_pck(
             original_pck,
             rebuilt_pck,
             original_blob,
         )
+        payload_ok = result != "FAIL"
         payload_elapsed = max(0.0, time.perf_counter() - payload_started)
         attempt.update(
             {
                 "payload_compared": True,
                 "payload_ok": payload_ok,
+                "result": result,
                 "payload_detail": detail,
                 "payload_stdout": payload_out,
                 "payload_stderr": payload_err,
@@ -377,9 +395,9 @@ def _format_compile_attempts(attempts) -> str:
         rc = int((attempt or {}).get("rc", 0) or 0)
         text = f"profile={profile:d} rc={rc:d}"
         if bool((attempt or {}).get("payload_compared")):
-            payload_status = "ok" if bool((attempt or {}).get("payload_ok")) else "diff"
+            result = str((attempt or {}).get("result") or "FAIL")
             detail = str((attempt or {}).get("payload_detail") or "")
-            text += f" payload={payload_status}"
+            text += f" result={result}"
             if detail:
                 text += f" ({detail})"
         parts.append(text)
@@ -512,10 +530,11 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                     status = "FAIL"
                     detail = f"profile={int(selected_profile):d} {detail_text}".strip()
                 else:
+                    result = str(selected_attempt.get("result") or "PAYLOAD_SAME")
                     print(
-                        f"  payload: ok profile={int(selected_profile):d} {detail_text}"
+                        f"  result: {result} profile={int(selected_profile):d} {detail_text}"
                     )
-                    status = "PASS"
+                    status = result
                     detail = f"profile={int(selected_profile):d} {detail_text}".strip()
     finally:
         if tmp_root:
@@ -563,14 +582,16 @@ def main(argv=None):
     results = []
     for i, path in enumerate(paths, 1):
         results.append(_test_one(path, i, len(paths), serial=serial))
-    passed = sum(1 for r in results if r.status == "PASS")
+    exact = sum(1 for r in results if r.status == "EXACT")
+    payload_same = sum(1 for r in results if r.status == "PAYLOAD_SAME")
     skipped = sum(1 for r in results if r.status == "SKIP")
     failed = sum(1 for r in results if r.status == "FAIL")
     print()
     print("=== Test Summary ===")
     print(
         f"total={len(results):d} "
-        f"passed={passed:d} skipped={skipped:d} failed={failed:d}"
+        f"exact={exact:d} payload_same={payload_same:d} "
+        f"skipped={skipped:d} failed={failed:d}"
     )
     for r in results:
         if r.status == "FAIL":
@@ -584,7 +605,7 @@ def main(argv=None):
                     _format_timings(r.timings),
                 )
             )
-    return 1 if failed or passed == 0 else 0
+    return 1 if failed or exact + payload_same == 0 else 0
 
 
 if __name__ == "__main__":

@@ -1399,7 +1399,7 @@ siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
 
 ### `test` — 回编测试
 
-测试一个 `.pck`，或某个目录正下方的所有 `.pck`，能否在提取后原地回编，并保持规范化场景 payload 语义不变。
+测试一个 `.pck`，或某个目录正下方的所有 `.pck`，能否在提取后原地回编。回编后的 `.pck` 字节完全一致时为 `EXACT`；`.pck` 不完全一致但规范化场景 payload 语义一致时为 `PAYLOAD_SAME`。
 
 本模式面向带有内嵌原始源码数据的 `.pck`。如果某个 `.pck` 没有 OS 区段，就会跳过，因为没有可用于回编的原始 `.ss` 源码。
 
@@ -1417,19 +1417,19 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 
 1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
 2. 将 archive 解压到临时测试目录；
-3. 对解压出的源码进行原地回编，并依次尝试 `const-profile` 0、1、2，直到某个 profile 编译成功；
-4. 比较回编 `.pck` 与原始 `.pck`，采用规范化的 `-a --payload` 语义；
+3. 对解压出的源码进行原地回编，并依次尝试 `const-profile` 0、1、2，直到某个 profile 得到 `EXACT` 或 `PAYLOAD_SAME`；
+4. 先检查回编 `.pck` 是否与原始 `.pck` 字节完全一致；若不一致，再采用规范化的 `-a --payload` 语义比较；
 5. 删除所有测试产生的临时文件。
 
 #### 输出
 
-分步骤日志只显示状态。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。如果编译经历 profile 回退，`compile` 耗时只记录最终尝试的 profile，不计入前面失败的 profile。
+分步骤日志只显示状态。原始与回编 `.pck` 字节完全一致时为 `EXACT`；字节不一致但规范化 payload 比较成功时为 `PAYLOAD_SAME`。不再使用 `PASS` 分类。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。如果编译经历 profile 回退，`compile` 耗时会包括所有尝试过的 profile。
 
 只要还有 fallback profile 未尝试，编译错误会先静默捕获，不立即打印。只有所有 profile 都失败时，命令才会打印这些失败尝试的编译输出，并将该文件标记为 `FAIL`。
 
 最终汇总会输出总计数，并且只列出失败文件的总耗时与步骤耗时。
 
-当至少一个文件通过且没有文件失败时，命令返回 `0`。只要有文件失败，或发现的文件全部被跳过，命令返回 `1`。
+当至少一个文件为 `EXACT` 或 `PAYLOAD_SAME`，且没有文件失败时，命令返回 `0`。只要有文件失败，或发现的文件全部被跳过，命令返回 `1`。
 
 #### 示例
 

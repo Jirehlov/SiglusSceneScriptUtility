@@ -1399,7 +1399,7 @@ siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
 
 ### `test` — Round-Trip Compile Test
 
-Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back without changing normalized scene payload semantics.
+Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
 
 This mode is intended for `.pck` archives that contain embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
 
@@ -1417,19 +1417,19 @@ For each `.pck`, the command:
 
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
-3. recompiles the extracted source in place, trying `const-profile` 0, then 1, then 2 until one profile succeeds;
-4. compares the rebuilt `.pck` against the original `.pck` with normalized `-a --payload` semantics;
+3. recompiles the extracted source in place, trying `const-profile` 0, then 1, then 2 until one profile produces `EXACT` or `PAYLOAD_SAME`;
+4. checks whether the rebuilt `.pck` is byte-identical to the original, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 
 #### Output
 
-Step log lines report status only. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. If compile falls back across profiles, the `compile` timing records only the final attempted profile, not earlier failed profiles.
+Step log lines report status only. A completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. If compilation falls back across profiles, the `compile` timing includes every attempted profile.
 
 Compile errors are kept quiet while fallback profiles remain. If every profile fails, the command prints the captured compile output for the failed attempts and marks that file as `FAIL`.
 
 The final summary reports total counts, and lists only failed files with their total time and step timings.
 
-The command exits with `0` when at least one file passes and no file fails. It exits with `1` when any file fails, or when all discovered files are skipped.
+The command exits with `0` when at least one file is `EXACT` or `PAYLOAD_SAME` and no file fails. It exits with `1` when any file fails, or when all discovered files are skipped.
 
 #### Example
 
