@@ -20,7 +20,7 @@ try:
     _native_lzss32_pack = getattr(native_accel, "lzss32_pack", None)
     _native_lzss32_unpack = getattr(native_accel, "lzss32_unpack", None)
     _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
-    _native_md5_digest = native_accel.md5_digest
+    _native_smd5_digest = native_accel.smd5_digest
     _native_tile_copy = native_accel.tile_copy
     _native_msvcrand_shuffle_inplace = native_accel.msvcrand_shuffle_inplace
     _native_find_shuffle_seed_first = getattr(
@@ -74,14 +74,16 @@ def compile_project_native(config):
     if not HAS_NATIVE_COMPILE_BACKEND:
         return {
             "handled": False,
-            "reason": "rust compile backend is not available",
+            "fallback_kind": "unavailable",
+            "reason": "native extension is not available",
         }
     try:
         return _native_compile_project(config)
     except Exception as exc:
         return {
             "handled": False,
-            "reason": f"rust compile backend failed: {exc}",
+            "fallback_kind": "error",
+            "reason": str(exc),
         }
 
 
@@ -573,13 +575,13 @@ def _py_xor_cycle_inplace(b, code, st=0):
         b[i] ^= code[(st + i) % n]
 
 
-_MD5_S = tuple(
+_SMD5_S = tuple(
     [7, 12, 17, 22] * 4 + [5, 9, 14, 20] * 4 + [4, 11, 16, 23] * 4 + [6, 10, 15, 21] * 4
 )
-_MD5_K = tuple(int(abs(math.sin(i + 1)) * (1 << 32)) & 0xFFFFFFFF for i in range(64))
+_SMD5_K = tuple(int(abs(math.sin(i + 1)) * (1 << 32)) & 0xFFFFFFFF for i in range(64))
 
 
-def _py_md5_digest(data: bytes) -> bytes:
+def _py_smd5_digest(data: bytes) -> bytes:
     if data is None:
         data = b""
     total = len(data)
@@ -623,12 +625,12 @@ def _py_md5_digest(data: bytes) -> bytes:
             else:
                 f = c ^ (b | ~d)
                 g = (7 * i) % 16
-            tmp = (a + f + _MD5_K[i] + X[g]) & 0xFFFFFFFF
+            tmp = (a + f + _SMD5_K[i] + X[g]) & 0xFFFFFFFF
             a, d, c, b = (
                 d,
                 c,
                 b,
-                (b + (((tmp << _MD5_S[i]) & 0xFFFFFFFF) | (tmp >> (32 - _MD5_S[i]))))
+                (b + (((tmp << _SMD5_S[i]) & 0xFFFFFFFF) | (tmp >> (32 - _SMD5_S[i]))))
                 & 0xFFFFFFFF,
             )
         st = [
@@ -695,10 +697,10 @@ def xor_cycle_inplace(b, code, st=0):
         _py_xor_cycle_inplace(b, code, st)
 
 
-def md5_digest(data: bytes) -> bytes:
+def smd5_digest(data: bytes) -> bytes:
     if _USE_NATIVE:
-        return _native_md5_digest(data if data else b"")
-    return _py_md5_digest(data)
+        return _native_smd5_digest(data if data else b"")
+    return _py_smd5_digest(data)
 
 
 def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):

@@ -1616,7 +1616,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
         raise RuntimeError("source_angou: bad version")
-    md5_code = dec[4:hs]
+    smd5_code = dec[4:hs]
     name_len = struct.unpack_from("<I", dec, hs)[0]
     p = hs + 4
     nameb = bytearray(dec[p : p + name_len])
@@ -1627,9 +1627,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     except Exception:
         name = ""
     p += name_len
-    lzsz = read_u32_le(md5_code, 64, default=0)
+    lzsz = read_u32_le(smd5_code, 64, default=0)
     mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
-        md5_code, sa, mg, lzsz
+        smd5_code, sa, mg, lzsz
     )
     dp1 = dec[p : p + mapt]
     dp2 = dec[p + mapt : p + mapt * 2]

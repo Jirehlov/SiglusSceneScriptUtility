@@ -2149,13 +2149,13 @@ def diff_kv(k, a, b):
     return f"{k}: {a!r} -> {b!r}"
 
 
-def build_source_angou_layout(md5_code, sa, mask_code, lzsz):
+def build_source_angou_layout(smd5_code, sa, mask_code, lzsz):
     mw = (
-        read_u32_le(md5_code, int(sa["mask_w_md5_i"]), default=0)
+        read_u32_le(smd5_code, int(sa["mask_w_md5_i"]), default=0)
         % int(sa["mask_w_sur"])
     ) + int(sa["mask_w_add"])
     mh = (
-        read_u32_le(md5_code, int(sa["mask_h_md5_i"]), default=0)
+        read_u32_le(smd5_code, int(sa["mask_h_md5_i"]), default=0)
         % int(sa["mask_h_sur"])
     ) + int(sa["mask_h_add"])
     mask = bytearray(mw * mh)
@@ -2163,11 +2163,11 @@ def build_source_angou_layout(md5_code, sa, mask_code, lzsz):
     mi = int(sa.get("mask_md5_index", 0))
     mask_len = len(mask_code)
     for i in range(len(mask)):
-        mask[i] = mask_code[ind % mask_len] ^ md5_code[(mi % 16) * 4]
+        mask[i] = mask_code[ind % mask_len] ^ smd5_code[(mi % 16) * 4]
         ind += 1
         mi = (mi + 1) % 16
     mapw = (
-        read_u32_le(md5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
+        read_u32_le(smd5_code, int(sa["map_w_md5_i"]), default=0) % int(sa["map_w_sur"])
     ) + int(sa["map_w_add"])
     bh = (int(lzsz) + 1) // 2
     dh = (bh + 3) // 4

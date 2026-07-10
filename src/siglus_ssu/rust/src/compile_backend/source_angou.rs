@@ -51,30 +51,31 @@ pub fn encrypt_source(
     let mut packed = crate::lzss::pack(data, false);
     let packed_size = packed.len();
     crate::xor::cycle_inplace(&mut packed, &config.easy_code, config.easy_index);
-    let digest = crate::md5::digest(&packed);
-    let mut md5_code = vec![0u8; 68];
-    md5_code[..digest.len().min(68)].copy_from_slice(&digest[..digest.len().min(68)]);
+    let digest = crate::smd5::digest(&packed);
+    let mut smd5_code = vec![0u8; 68];
+    smd5_code[..digest.len().min(68)].copy_from_slice(&digest[..digest.len().min(68)]);
     let n0x40 = packed_size as u32;
-    write_u32(&mut md5_code, 64, n0x40);
+    write_u32(&mut smd5_code, 64, n0x40);
 
     let mut name_bytes = utf16le(name);
     crate::xor::cycle_inplace(&mut name_bytes, &config.name_code, config.name_index);
 
-    let mask_width = (read_u32(&md5_code, config.mask_w_md5_i) as usize % config.mask_w_sur.max(1))
+    let mask_width = (read_u32(&smd5_code, config.mask_w_smd5_i) as usize
+        % config.mask_w_sur.max(1))
         + config.mask_w_add;
-    let mask_height = (read_u32(&md5_code, config.mask_h_md5_i) as usize
+    let mask_height = (read_u32(&smd5_code, config.mask_h_smd5_i) as usize
         % config.mask_h_sur.max(1))
         + config.mask_h_add;
     let mut mask = vec![0u8; mask_width.saturating_mul(mask_height)];
     let mut mask_index = config.mask_index;
-    let mut md5_index = config.mask_md5_index;
+    let mut smd5_index = config.mask_smd5_index;
     for value in &mut mask {
-        *value =
-            config.mask_code[mask_index % config.mask_code.len()] ^ md5_code[(md5_index % 16) * 4];
+        *value = config.mask_code[mask_index % config.mask_code.len()]
+            ^ smd5_code[(smd5_index % 16) * 4];
         mask_index += 1;
-        md5_index = (md5_index + 1) % 16;
+        smd5_index = (smd5_index + 1) % 16;
     }
-    let map_width = (read_u32(&md5_code, config.map_w_md5_i) as usize % config.map_w_sur.max(1))
+    let map_width = (read_u32(&smd5_code, config.map_w_smd5_i) as usize % config.map_w_sur.max(1))
         + config.map_w_add;
     let half_bytes = packed_size.div_ceil(2);
     let data_height = half_bytes.div_ceil(4);
@@ -84,18 +85,18 @@ pub fn encrypt_source(
     padded.resize(map_bytes.saturating_mul(2), 0);
     let garbage_count = padded.len().saturating_sub(packed_size);
     let mut garbage_index = config.gomi_index;
-    let mut garbage_md5_index = config.gomi_md5_index;
+    let mut garbage_smd5_index = config.gomi_smd5_index;
     for index in 0..garbage_count {
-        let md5_offset = (garbage_md5_index % 16) * 4;
+        let smd5_offset = (garbage_smd5_index % 16) * 4;
         padded[packed_size + index] =
-            config.gomi_code[garbage_index % config.gomi_code.len()] ^ md5_code[md5_offset];
+            config.gomi_code[garbage_index % config.gomi_code.len()] ^ smd5_code[smd5_offset];
         garbage_index += 1;
-        garbage_md5_index = (garbage_md5_index + 1) % 16;
+        garbage_smd5_index = (garbage_smd5_index + 1) % 16;
     }
 
     let mut output = vec![0u8; config.header_size + 4 + name_bytes.len() + map_bytes * 2];
     write_u32(&mut output, 0, 1);
-    output[4..config.header_size].copy_from_slice(&md5_code[..config.header_size - 4]);
+    output[4..config.header_size].copy_from_slice(&smd5_code[..config.header_size - 4]);
     write_u32(&mut output, config.header_size, name_bytes.len() as u32);
     let name_offset = config.header_size + 4;
     output[name_offset..name_offset + name_bytes.len()].copy_from_slice(&name_bytes);

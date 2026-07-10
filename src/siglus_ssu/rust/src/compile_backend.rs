@@ -155,10 +155,8 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
     let out = PyDict::new(py);
     if !project::supported(&parsed) {
         out.set_item("handled", false)?;
-        out.set_item(
-            "reason",
-            "Rust backend does not support this compile mode; falling back to Python",
-        )?;
+        out.set_item("fallback_kind", "unsupported")?;
+        out.set_item("reason", "current compile options")?;
         return Ok(out.unbind());
     }
     out.set_item("handled", true)?;

@@ -1,10 +1,10 @@
-const MD5_S: [u32; 64] = [
+const SMD5_S: [u32; 64] = [
     7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9,
     14, 20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15,
     21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21,
 ];
 
-const MD5_K: [u32; 64] = [
+const SMD5_K: [u32; 64] = [
     0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
     0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
     0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
@@ -91,8 +91,8 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
                 (c ^ (b | !d), (7 * i) % 16)
             };
 
-            let tmp = a.wrapping_add(f).wrapping_add(MD5_K[i]).wrapping_add(x[g]);
-            let new_b = b.wrapping_add(left_rotate(tmp, MD5_S[i]));
+            let tmp = a.wrapping_add(f).wrapping_add(SMD5_K[i]).wrapping_add(x[g]);
+            let new_b = b.wrapping_add(left_rotate(tmp, SMD5_S[i]));
 
             a = d;
             d = c;

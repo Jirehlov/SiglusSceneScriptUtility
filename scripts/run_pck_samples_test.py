@@ -217,7 +217,15 @@ def _find_pcks(samples_dir: Path) -> list[Path]:
 
 def _command_prefix(command: str | None) -> list[str]:
     if command:
-        return shlex.split(command)
+        parts = shlex.split(command, posix=os.name != "nt")
+        if os.name == "nt":
+            parts = [
+                part[1:-1]
+                if len(part) >= 2 and part[0] == part[-1] and part[0] in "\"'"
+                else part
+                for part in parts
+            ]
+        return parts
     return [sys.executable, "-m", "siglus_ssu"]
 
 

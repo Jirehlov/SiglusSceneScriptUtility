@@ -1,9 +1,9 @@
 mod compile_backend;
 mod lzss;
 mod lzss32;
-mod md5;
 mod nwa;
 mod payload;
+mod smd5;
 mod tile;
 mod xor;
 
@@ -55,8 +55,8 @@ fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) ->
 }
 
 #[pyfunction]
-fn md5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
-    let result = md5::digest(data);
+fn smd5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let result = smd5::digest(data);
     Ok(PyBytes::new(py, &result).into())
 }
 
@@ -430,12 +430,10 @@ fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDi
         Err(payload) => {
             let out = PyDict::new(py);
             out.set_item("handled", false)?;
+            out.set_item("fallback_kind", "error")?;
             out.set_item(
                 "reason",
-                format!(
-                    "Rust compile backend panicked: {}; falling back to Python",
-                    panic_message(payload)
-                ),
+                format!("Rust compile backend panicked: {}", panic_message(payload)),
             )?;
             Ok(out.unbind())
         }
@@ -481,7 +479,7 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(lzss32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(lzss32_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(xor_cycle_inplace, m)?)?;
-    m.add_function(wrap_pyfunction!(md5_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(smd5_digest, m)?)?;
     m.add_function(wrap_pyfunction!(nwa_decode_pcm, m)?)?;
     m.add_function(wrap_pyfunction!(tile_copy, m)?)?;
     m.add_function(wrap_pyfunction!(msvcrand_shuffle_inplace, m)?)?;

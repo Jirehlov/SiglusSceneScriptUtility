@@ -23,7 +23,7 @@ from .linker import link_pack
 from .native_ops import (
     lzss_pack,
     xor_cycle_inplace,
-    md5_digest,
+    smd5_digest,
     tile_copy,
     compile_project_native,
 )
@@ -91,15 +91,15 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     b = bytearray(lz)
     xor_cycle_inplace(b, eg, int(sa.get("easy_index", 0)))
     lz = bytes(b)
-    md5 = md5_digest(lz)
-    md5_code = bytearray(68)
-    md5_code[: len(md5)] = md5
+    smd5 = smd5_digest(lz)
+    smd5_code = bytearray(68)
+    smd5_code[: len(smd5)] = smd5
     n0x40 = lzsz
-    struct.pack_into("<I", md5_code, 64, n0x40)
+    struct.pack_into("<I", smd5_code, 64, n0x40)
     nameb = bytearray((name or "").encode("utf-16le"))
     xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
     mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
-        md5_code, sa, mg, lzsz
+        smd5_code, sa, mg, lzsz
     )
     lzb = bytearray(lz) + bytearray(mapt * 2 - lzsz)
     cnt = len(lzb) - lzsz
@@ -107,13 +107,13 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
         ind = int(sa.get("gomi_index", 0))
         mi = int(sa.get("gomi_md5_index", 0))
         for i in range(cnt):
-            gomi_md5_ofs = (mi % 16) * 4
-            lzb[lzsz + i] = gg[ind % len(gg)] ^ md5_code[gomi_md5_ofs]
+            gomi_smd5_ofs = (mi % 16) * 4
+            lzb[lzsz + i] = gg[ind % len(gg)] ^ smd5_code[gomi_smd5_ofs]
             ind += 1
             mi = (mi + 1) % 16
     header = bytearray(hs)
     struct.pack_into("<I", header, 0, 1)
-    header[4:hs] = md5_code
+    header[4:hs] = smd5_code
     out = bytearray(hs + 4 + len(nameb) + mapt * 2)
     out[0:hs] = header
     struct.pack_into("<I", out, hs, len(nameb))
@@ -1034,7 +1034,17 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug, legacy):
     if legacy:
         return None
     result = compile_project_native(config)
-    if not isinstance(result, dict) or not result.get("handled"):
+    if not isinstance(result, dict):
+        sys.stderr.write(
+            "warning: Rust compile backend error: invalid native result; falling back to Python\n"
+        )
+        return None
+    if not result.get("handled"):
+        fallback_kind = str(result.get("fallback_kind") or "error")
+        reason = str(result.get("reason") or "unknown failure")
+        sys.stderr.write(
+            f"warning: Rust compile backend {fallback_kind}: {reason}; falling back to Python\n"
+        )
         return None
     stats = result.get("stats")
     if isinstance(stats, dict):

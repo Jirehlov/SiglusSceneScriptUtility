@@ -954,8 +954,6 @@ def new_expression_state(
         state.elm_point_pending_idx = None
 
     state.stack_int_value = _stack_int_value
-    state.array_element_info = _array_element_info
-    state.element_info = _element_info
     state.receiver_value_form = _receiver_value_form
     state.drop_stack_tail = _drop_stack_tail
     state.pop_stack_top = _pop_stack_top
@@ -966,8 +964,6 @@ def new_expression_state(
     state.copy_element = _copy_element
     state.consume_element = _consume_element
     state.consume_arg_value = _consume_arg_value
-    state.item_expr = _item_expr
-    state.pop_scalar_expr = _pop_scalar_expr
     state.format_unary_expr = _format_unary_expr
     state.format_binary_expr = _format_binary_expr
     state.render_property_expr_items = _render_property_expr_items
