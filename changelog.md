@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - Fixed disassembly table isolation across const profiles, removed the duplicate decompiler element cache, and made automatic compile temporary directories unique across concurrent runs.
 - Changed language patch presets to verify complete changes on a working copy and write atomically, with explicit `--allow-partial` recovery behavior and symbolic-link rejection.
 - Changed DBS creation to reject unencodable strings, fixed TCR type-zero parsing and expected CLI format errors, and made PCK sample caches verify Git blob hashes without obsolete sidecar metadata.
+- Documented case-insensitive scene lookup and case-preserving embedded source metadata, and added compile warnings for input filenames that collide under the official ASCII lowercase rule.
 
 
 ## [v0.3.7] - 2026-07-07

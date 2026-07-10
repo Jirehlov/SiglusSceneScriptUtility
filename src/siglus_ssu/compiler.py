@@ -469,6 +469,30 @@ def _scan_dir(p):
     return ini, inc, ss, scn_ssid_map
 
 
+def _ascii_case_collision_groups(paths):
+    groups = {}
+    for path in paths or []:
+        name = os.path.basename(str(path or ""))
+        if not name:
+            continue
+        groups.setdefault(ascii_lower(name), []).append(name)
+    collisions = []
+    for names in groups.values():
+        unique_names = sorted(set(names), key=lambda name: (ascii_lower(name), name))
+        if len(unique_names) > 1:
+            collisions.append(unique_names)
+    collisions.sort(key=lambda names: (ascii_lower(names[0]), names[0]))
+    return collisions
+
+
+def _warn_ascii_case_collisions(paths, prog):
+    for names in _ascii_case_collision_groups(paths):
+        display = ", ".join(repr(name) for name in names)
+        sys.stderr.write(
+            f"{prog}: warning: filenames differ only by ASCII case and are not distinct in the official compiler: {display}\n"
+        )
+
+
 def _is_jp_char(ch):
     o = ord(ch)
     return (0x3040 <= o <= 0x30FF) or (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
@@ -1266,6 +1290,7 @@ def main(argv=None):
             tmp_auto = True
             tmp = _create_auto_tmp_dir(out)
     ini, inc, ss, scn_ssid_map = _scan_dir(inp)
+    _warn_ascii_case_collisions([*ini, *inc, *ss], prog)
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False
     ctx = {
