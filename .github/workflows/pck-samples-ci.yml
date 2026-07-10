@@ -32,14 +32,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/pck-samples
-          key: pck-samples-0-main-v1
+          key: pck-samples-0-1-main-v1
           restore-keys: |
-            pck-samples-0-main-
+            pck-samples-0-1-main-
 
       - name: Install dependencies
         run: uv sync
 
-      - name: Run pck samples
+      - name: Run exact pck samples
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --exact-only --command siglus-ssu
+        run: uv run python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --expected-status EXACT --command siglus-ssu
+
+      - name: Run payload-same pck samples
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --expected-status PAYLOAD_SAME --command siglus-ssu

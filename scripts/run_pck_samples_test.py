@@ -212,7 +212,7 @@ def _command_prefix(command: str | None) -> list[str]:
 
 
 def _run_siglus_test(
-    samples_dir: Path, command: str | None, serial: bool, exact_only=False
+    samples_dir: Path, command: str | None, serial: bool, expected_status=""
 ) -> int:
     pcks = _find_pcks(samples_dir)
     if not pcks:
@@ -229,24 +229,31 @@ def _run_siglus_test(
         sys.stderr.write(completed.stderr)
     if completed.returncode != 0:
         return int(completed.returncode)
-    if not exact_only:
+    expected_status = str(expected_status or "")
+    if not expected_status:
         return 0
     matches = list(_TEST_SUMMARY_RE.finditer(completed.stdout))
     if not matches:
-        sys.stderr.write("exact-only: test summary not found\n")
+        sys.stderr.write("expected-status: test summary not found\n")
         return 1
     total, exact, payload_same, skipped, failed = (
         int(value) for value in matches[-1].groups()
     )
+    counts = {
+        "EXACT": exact,
+        "PAYLOAD_SAME": payload_same,
+        "SKIP": skipped,
+        "FAIL": failed,
+    }
+    if expected_status not in counts:
+        raise ValueError(f"unsupported expected status: {expected_status}")
     if (
         total != len(pcks)
-        or exact != total
-        or payload_same != 0
-        or skipped != 0
-        or failed != 0
+        or counts[expected_status] != total
+        or any(count for status, count in counts.items() if status != expected_status)
     ):
         sys.stderr.write(
-            "exact-only: expected every sample to be EXACT "
+            f"expected-status: expected every sample to be {expected_status} "
             f"(total={total:d} exact={exact:d} payload_same={payload_same:d} "
             f"skipped={skipped:d} failed={failed:d})\n"
         )
@@ -256,7 +263,7 @@ def _run_siglus_test(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Download pck-samples/0 and run siglus-ssu test on all .pck files."
+        description="Download pck-samples files and run siglus-ssu test on all .pck files."
     )
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--ref", default=DEFAULT_REF)
@@ -265,7 +272,9 @@ def main(argv=None) -> int:
     parser.add_argument("--samples-dir", default="")
     parser.add_argument("--command", default="")
     parser.add_argument("--serial", action="store_true")
-    parser.add_argument("--exact-only", action="store_true")
+    parser.add_argument(
+        "--expected-status", choices=("EXACT", "PAYLOAD_SAME"), default=""
+    )
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args(argv)
@@ -295,7 +304,7 @@ def main(argv=None) -> int:
         samples_dir,
         args.command or None,
         bool(args.serial),
-        bool(args.exact_only),
+        args.expected_status,
     )
 
 
