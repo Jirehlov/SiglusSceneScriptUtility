@@ -98,7 +98,7 @@ def _usage(out=None):
         f"  {p} -a <input_file.(gan|sav|cgm|tcr)>\n"
         f"  {p} -a [--payload] <input_file_1.pck> <input_file_2.pck> [--angou VALUE]\n"
         f"  {p} -a [--payload] [--disam] <input_file_1.dat> <input_file_2.dat> [--angou VALUE]\n"
-        f"  {p} -a [--payload] <input_file_1> <input_file_2>\n"
+        f"  {p} -a <input_file_1> <input_file_2>\n"
         f"  {p} -a --word <input_pck> [output_csv] [--angou VALUE]\n"
         f"  {p} -a --angou <path|angou=text|key=bytes>\n"
         f"  {p} -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]\n"

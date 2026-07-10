@@ -152,6 +152,7 @@ def main(argv=None):
             return 2
         del argv[i : i + 2]
     opt_seed = 1
+    opt_seed_given = False
     if "--set-shuffle" in argv:
         i = argv.index("--set-shuffle")
         if i + 1 >= len(argv):
@@ -164,6 +165,7 @@ def main(argv=None):
             eprint("error: invalid --set-shuffle value")
             hint_help()
             return 2
+        opt_seed_given = True
         del argv[i : i + 2]
     test_shuffle = False
     test_skip0 = 0
@@ -179,6 +181,20 @@ def main(argv=None):
                 test_skip0 = 0
             test_skip0_given = True
             argv.pop(i)
+    if mode != "c":
+        invalid_options = []
+        if opt_type is not None:
+            invalid_options.append("--type")
+        if opt_seed_given:
+            invalid_options.append("--set-shuffle")
+        if test_shuffle:
+            invalid_options.append("--test-shuffle")
+        if invalid_options:
+            eprint(
+                "error: " + ", ".join(invalid_options) + " can only be used with --c"
+            )
+            hint_help()
+            return 2
     if mode == "a":
         if len(argv) not in (1, 2):
             eprint("error: expected 1 or 2 input files for --a")

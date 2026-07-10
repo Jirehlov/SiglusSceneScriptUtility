@@ -104,6 +104,12 @@ def analyze_file(
         return 2
     blob = read_bytes(path)
     ftype = _detect_type(path, blob)
+    if readall and ftype != "sav":
+        sys.stderr.write("analyze: --readall is only valid for .sav inputs\n")
+        return 2
+    if apply and ftype != "sav":
+        sys.stderr.write("analyze: --apply is only valid for .sav inputs\n")
+        return 2
     if dat_disam and ftype != "dat":
         sys.stderr.write("analyze: --disam is only valid for .dat inputs\n")
         return 2
@@ -122,9 +128,6 @@ def analyze_file(
     if explicit_angou and ftype not in ("pck", "dat"):
         sys.stderr.write("analyze: --angou is only valid for .pck/.dat in this mode\n")
         return 2
-    if apply and ftype != "sav":
-        print("--apply supports global.sav only.")
-        return 1
     if ftype == "gan":
         return gan.gan(blob)
     if ftype == "pck":
@@ -224,6 +227,11 @@ def compare_files(
     b2 = read_bytes(p2)
     t1 = _detect_type(p1, b1)
     t2 = _detect_type(p2, b2)
+    if compare_payload and (t1 != t2 or t1 not in ("pck", "dat")):
+        sys.stderr.write(
+            "analyze: --payload requires two .pck files or two .dat files\n"
+        )
+        return 2
     if dat_disam and (t1 != "dat" or t2 != "dat"):
         sys.stderr.write("analyze: --disam is only valid for .dat comparisons\n")
         return 2
@@ -411,6 +419,11 @@ def main(argv=None):
         return 2
     if len(args) == 1:
         if readall and apply:
+            return 2
+        if compare_payload:
+            sys.stderr.write(
+                "analyze: --payload requires two .pck files or two .dat files\n"
+            )
             return 2
         return analyze_file(
             args[0],
