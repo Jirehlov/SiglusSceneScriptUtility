@@ -816,12 +816,50 @@ _LAYOUT_SIDECAR_SUFFIXES = (
 
 
 def _strip_json_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
     out = []
-    for line in text.splitlines():
-        line = re.sub(r"(^|[^:])//.*$", r"\1", line)
-        out.append(line)
-    return "\n".join(out)
+    i = 0
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "/":
+            out.extend((" ", " "))
+            i += 2
+            while i < len(text) and text[i] not in "\r\n":
+                out.append(" ")
+                i += 1
+            continue
+        if ch == "/" and i + 1 < len(text) and text[i + 1] == "*":
+            out.extend((" ", " "))
+            i += 2
+            while i < len(text):
+                if text[i] == "*" and i + 1 < len(text) and text[i + 1] == "/":
+                    out.extend((" ", " "))
+                    i += 2
+                    break
+                out.append(text[i] if text[i] in "\r\n" else " ")
+                i += 1
+            else:
+                raise ValueError("unterminated JSON block comment")
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def _is_layout_file(p: Path) -> bool:
@@ -931,12 +969,12 @@ def _build_create_bytes(inp_p: Path, type_opt):
 
 
 def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None = None):
-    text = _strip_json_comments(
-        config_path.read_text(encoding="utf-8", errors="replace")
-    )
     try:
+        text = _strip_json_comments(
+            config_path.read_text(encoding="utf-8", errors="replace")
+        )
         obj = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
         raise ValueError(f"invalid type2 layout json: {config_path}: {exc}") from exc
     if not isinstance(obj, dict):
         raise ValueError("type2 layout root must be a JSON object")
