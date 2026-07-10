@@ -28,12 +28,48 @@ _VOICE_CALL_NAMES = frozenset(
 )
 _INLINE_VOICE_META_CALL_NAMES = frozenset({"$$add_msgback", "add_msgback"})
 _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
+_WINDOWS_RESERVED_DIR_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+    | {f"COM{i}" for i in "¹²³"}
+    | {f"LPT{i}" for i in "¹²³"}
+)
+_KOE_RESERVED_DIR_NAMES = frozenset({"unreferenced", "koe_master.csv"})
 _TEXT_QUOTE_PAIRS = (
     ("\u300c", "\u300d"),
     ("\u300e", "\u300f"),
     ("\uff08", "\uff09"),
     ('"', '"'),
 )
+
+
+def _safe_role_dir_name(value) -> str:
+    raw = "" if value is None else str(value)
+    if not raw:
+        return "%EMPTY"
+    trailing_start = len(raw)
+    while trailing_start > 0 and raw[trailing_start - 1] in " .":
+        trailing_start -= 1
+    parts = []
+    for index, char in enumerate(raw):
+        if (
+            char == "%"
+            or ord(char) < 32
+            or char in '<>:"/\\|?*'
+            or (index >= trailing_start and char in " .")
+        ):
+            parts.extend(f"%{byte:02X}" for byte in char.encode("utf-8"))
+        else:
+            parts.append(char)
+    name = "".join(parts)
+    device_base = raw.split(".", 1)[0].rstrip(" ").upper()
+    if (
+        name.casefold() in _KOE_RESERVED_DIR_NAMES
+        or device_base in _WINDOWS_RESERVED_DIR_NAMES
+    ):
+        name = f"%5F{name}"
+    return name
 
 
 def _progress(msg: str):
@@ -768,7 +804,7 @@ def main(argv=None):
             for koe_no in sorted(entries.keys()):
                 e = entries[koe_no]
                 is_unref = not e["callsites"]
-                role = e["name"].strip() or "unknown"
+                role = _safe_role_dir_name(e["name"])
                 dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
                 out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
                 should_extract = not stats_only

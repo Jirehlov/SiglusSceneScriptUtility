@@ -289,7 +289,11 @@ def main(argv=None):
             return 1
         dbs.reset_msvcrt_rand(seed)
         dbs.burn_msvcrt_rand(found)
-        dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)
+        try:
+            dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)
+        except (OSError, ValueError) as exc:
+            eprint(f"error: create failed: {exc}")
+            return 1
         if read_bytes(out_path) != read_bytes(expected_dbs):
             eprint("error: test-shuffle mismatch")
             return 1
@@ -297,6 +301,10 @@ def main(argv=None):
         return 0
     m_type = int(opt_type) if opt_type is not None else 1
     dbs.reset_msvcrt_rand(opt_seed)
-    dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)
+    try:
+        dbs.create_one_dbs_from_csv(inp, out_path, m_type=m_type)
+    except (OSError, ValueError) as exc:
+        eprint(f"error: create failed: {exc}")
+        return 1
     eprint(f"done: wrote {out_path}")
     return 0

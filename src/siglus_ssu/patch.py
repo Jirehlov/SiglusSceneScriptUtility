@@ -4,10 +4,10 @@ import re
 import argparse
 import hashlib
 import struct
+import tempfile
 from bisect import bisect_right
 from .common import (
     read_bytes,
-    write_bytes,
     siglus_engine_exe_element,
     parse_pe32_layout,
     pe32_file_off_to_va,
@@ -74,6 +74,42 @@ def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
     if upper:
         t = t.upper()
     return os.path.join(d, f"{stem}_{t}{ext}")
+
+
+def _same_file_path(left: str, right: str) -> bool:
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return os.path.normcase(os.path.realpath(left)) == os.path.normcase(
+            os.path.realpath(right)
+        )
+
+
+def _atomic_write_bytes(path: str, data: bytes) -> None:
+    target = os.path.abspath(path)
+    if os.path.islink(target):
+        raise OSError(f"refusing to replace symbolic link: {target}")
+    parent = os.path.dirname(target) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(target):
+            os.chmod(tmp_path, os.stat(target).st_mode)
+        os.replace(tmp_path, target)
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _read_cstr(blob: bytes, off: int):
@@ -746,10 +782,15 @@ def _patch_utf16_refs(
     target_active = [item for item in active if item["text"] == target]
     source_active = [item for item in active if item["text"] != target]
     if not source_active:
-        if not target_active:
-            warnings.append(f"{label}: active literal was not found")
-        return
-    target_va = _alloc_utf16z(data, layout, target, used, changes)
+        if target_active:
+            return "already_target"
+        warnings.append(f"{label}: active literal was not found")
+        return "missing"
+    target_va = (
+        int(target_active[0]["va"])
+        if target_active
+        else _alloc_utf16z(data, layout, target, used, changes)
+    )
     for item in source_active:
         for ref_off in item["refs"]:
             _patch_dword(
@@ -759,6 +800,14 @@ def _patch_utf16_refs(
                 f"LANG {label}: {item['text']} -> {target}",
                 changes,
             )
+    verified = _active_utf16_refs(
+        bytes(data), layout, texts, require_code_ref=require_code_ref
+    )
+    if not any(item["text"] == target for item in verified) or any(
+        item["text"] != target for item in verified
+    ):
+        raise RuntimeError(f"{label}: patch verification failed")
+    return "patched"
 
 
 def _patch_charset_slots(data: bytearray, target: int, accepted, changes, warnings):
@@ -766,17 +815,19 @@ def _patch_charset_slots(data: bytearray, target: int, accepted, changes, warnin
         offsets = _find_charset_slot_offsets(data)
     except Exception as e:
         warnings.append(f"charset: {e}")
-        return
+        return "missing"
     accepted_set = {int(x) & 0xFF for x in accepted}
-    touched = False
+    matched = False
+    changed = False
     for off in offsets:
         old = int(data[off]) & 0xFF
         if old not in accepted_set:
             continue
-        touched = True
+        matched = True
         new = int(target) & 0xFF
         if old != new:
             data[off] = new
+            changed = True
             changes.append(
                 (
                     off,
@@ -785,24 +836,13 @@ def _patch_charset_slots(data: bytearray, target: int, accepted, changes, warnin
                     f"LANG charset: {_format_charset_label(old)} -> {_format_charset_label(new)}",
                 )
             )
-    if not touched:
-        new = int(target) & 0xFF
-        if new != 0 and offsets:
-            off = offsets[-1]
-            old = int(data[off]) & 0xFF
-            if old != new:
-                data[off] = new
-                changes.append(
-                    (
-                        off,
-                        old,
-                        new,
-                        f"LANG charset: {_format_charset_label(old)} -> {_format_charset_label(new)}",
-                    )
-                )
-            return
+    if not matched:
         labels = ", ".join(_format_charset_label(x) for x in sorted(accepted_set))
         warnings.append(f"charset: no slot matched {labels}")
+        return "missing"
+    if not any((int(data[off]) & 0xFF) == (int(target) & 0xFF) for off in offsets):
+        raise RuntimeError("charset: patch verification failed")
+    return "patched" if changed else "already_target"
 
 
 _LANG_PRESETS = {
@@ -839,21 +879,23 @@ def _load_lang_preset(spec: str):
     return key, _LANG_PRESETS[key]
 
 
-def patch_lang(data: bytearray, lang_spec: str):
+def patch_lang(data: bytearray, lang_spec: str, *, allow_partial: bool = False):
     tag, preset = _load_lang_preset(lang_spec)
-    layout = parse_pe32_layout(bytes(data))
+    work = bytearray(data)
+    layout = parse_pe32_layout(bytes(work))
     changes = []
     warnings = []
     used = []
-    _patch_charset_slots(
-        data,
+    statuses = {}
+    statuses["charset"] = _patch_charset_slots(
+        work,
         preset["charset"],
         preset["accepted"],
         changes,
         warnings,
     )
-    _patch_utf16_refs(
-        data,
+    statuses["Locale"] = _patch_utf16_refs(
+        work,
         layout,
         "Locale",
         ("japanese", "chinese"),
@@ -862,8 +904,8 @@ def patch_lang(data: bytearray, lang_spec: str):
         changes,
         warnings,
     )
-    _patch_utf16_refs(
-        data,
+    statuses["Code"] = _patch_utf16_refs(
+        work,
         layout,
         "Code",
         ("ja", "zh"),
@@ -873,8 +915,8 @@ def patch_lang(data: bytearray, lang_spec: str):
         warnings,
     )
     if preset["paths"]:
-        _patch_utf16_refs(
-            data,
+        statuses["Scene"] = _patch_utf16_refs(
+            work,
             layout,
             "Scene",
             ("Scene.pck", "SceneZH.pck"),
@@ -883,8 +925,8 @@ def patch_lang(data: bytearray, lang_spec: str):
             changes,
             warnings,
         )
-        _patch_utf16_refs(
-            data,
+        statuses["Save"] = _patch_utf16_refs(
+            work,
             layout,
             "Save",
             ("savedata", "savedata_zh"),
@@ -893,8 +935,8 @@ def patch_lang(data: bytearray, lang_spec: str):
             changes,
             warnings,
         )
-        _patch_utf16_refs(
-            data,
+        statuses["Gameexe"] = _patch_utf16_refs(
+            work,
             layout,
             "Gameexe",
             ("Gameexe.dat", "GameexeZH.dat"),
@@ -903,6 +945,12 @@ def patch_lang(data: bytearray, lang_spec: str):
             changes,
             warnings,
         )
+    missing = [label for label, status in statuses.items() if status == "missing"]
+    if missing and not allow_partial:
+        raise RuntimeError("LANG preset is incomplete; missing: " + ", ".join(missing))
+    if len(missing) == len(statuses):
+        raise RuntimeError("LANG preset is unsupported by this executable")
+    data[:] = work
     return tag, preset["suffix"], changes, warnings
 
 
@@ -978,26 +1026,56 @@ def main(argv=None):
     ap.add_argument("key", nargs="?", help="key file, key=bytes, or angou=text")
     ap.add_argument("-o", "--output", help="output exe path")
     ap.add_argument("--inplace", action="store_true", help="overwrite input file")
+    ap.add_argument(
+        "--allow-partial",
+        action="store_true",
+        help="allow incomplete language preset application",
+    )
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--altkey", action="store_true", help="patch exe_el with <key>")
     g.add_argument("--lang", metavar="PRESET", help="cjk or cjk-path")
     g.add_argument("--info", action="store_true", help="show patchable info and exit")
     g.add_argument("--loc", metavar="0|1", help="toggle region detection: 0=off, 1=on")
     args = ap.parse_args(argv)
-    in_path = os.path.abspath(str(args.input or ""))
-    if not os.path.isfile(in_path):
-        sys.stderr.write(f"not found: {in_path}\n")
-        return 2
-    raw = read_bytes(in_path)
+    output_given = args.output is not None
     if (not args.altkey) and args.key:
         sys.stderr.write("<key> is only valid with --altkey\n")
         return 2
-    if args.info:
-        if args.output or args.inplace:
+    if args.allow_partial and not args.lang:
+        sys.stderr.write("--allow-partial is only valid with --lang\n")
+        return 2
+    if output_given and not str(args.output).strip():
+        sys.stderr.write("-o/--output requires a non-empty path\n")
+        return 2
+    if args.inplace and output_given:
+        sys.stderr.write("--inplace cannot be combined with -o/--output\n")
+        return 2
+    if args.info and (output_given or args.inplace):
+        sys.stderr.write(
+            "--info does not write files; do not use -o/--output/--inplace\n"
+        )
+        return 2
+    in_path = os.path.abspath(str(args.input or ""))
+    if os.path.islink(in_path):
+        sys.stderr.write(f"symbolic link input is not allowed: {in_path}\n")
+        return 2
+    if not os.path.isfile(in_path):
+        sys.stderr.write(f"not found: {in_path}\n")
+        return 2
+    explicit_out_path = ""
+    if output_given:
+        explicit_out_path = os.path.abspath(str(args.output or ""))
+        if os.path.islink(explicit_out_path):
             sys.stderr.write(
-                "--info does not write files; do not use -o/--output/--inplace\n"
+                f"symbolic link output is not allowed: {explicit_out_path}\n"
             )
             return 2
+    try:
+        raw = read_bytes(in_path)
+    except OSError as e:
+        sys.stderr.write(f"failed to read input: {e}\n")
+        return 1
+    if args.info:
         try:
             print_patch_info(in_path, raw)
         except Exception as e:
@@ -1055,11 +1133,33 @@ def main(argv=None):
             return 1
     else:
         try:
-            tag, suffix, changes, warnings = patch_lang(data, args.lang)
+            tag, suffix, changes, warnings = patch_lang(
+                data, args.lang, allow_partial=args.allow_partial
+            )
         except Exception as e:
             sys.stderr.write(str(e) + "\n")
             return 1
         mode_name = f"lang:{tag}"
+    if args.inplace:
+        out_path = in_path
+    elif explicit_out_path:
+        out_path = explicit_out_path
+    else:
+        out_path = (
+            _default_out_path(in_path, "alt", upper=False)
+            if args.altkey
+            else (
+                _default_out_path(in_path, "LOC1" if args.loc == "1" else "LOC0")
+                if args.loc is not None
+                else _default_out_path(in_path, suffix)
+            )
+        )
+    if not args.inplace and _same_file_path(in_path, out_path):
+        sys.stderr.write("output refers to input; use --inplace to overwrite it\n")
+        return 2
+    if os.path.islink(out_path):
+        sys.stderr.write(f"symbolic link output is not allowed: {out_path}\n")
+        return 2
     after = bytes(data)
     after_hash = hashlib.sha256(after).hexdigest()
     print(f"Input : {in_path}")
@@ -1079,23 +1179,8 @@ def main(argv=None):
     print(f"Applied changes: {len(changes)} bytes")
     for r, c in _summarize_changes(changes).items():
         print(f" - {r} ({c} bytes)")
-    if args.inplace:
-        out_path = in_path
-    else:
-        if args.output:
-            out_path = os.path.abspath(str(args.output or ""))
-        else:
-            out_path = (
-                _default_out_path(in_path, "alt", upper=False)
-                if args.altkey
-                else (
-                    _default_out_path(in_path, "LOC1" if args.loc == "1" else "LOC0")
-                    if args.loc is not None
-                    else _default_out_path(in_path, suffix)
-                )
-            )
     try:
-        write_bytes(out_path, after)
+        _atomic_write_bytes(out_path, after)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1

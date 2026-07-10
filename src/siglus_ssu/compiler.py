@@ -7,6 +7,7 @@ import re
 import time
 import shutil
 import csv
+import tempfile
 from contextlib import suppress
 from ._const_manager import get_const_module
 from .BS import (
@@ -45,6 +46,12 @@ from .common import (
     macro_decl_kind,
     merge_macro_stat_counts,
 )
+
+
+def _create_auto_tmp_dir(output_dir):
+    prefix = "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_"
+    return tempfile.mkdtemp(prefix=prefix, dir=output_dir)
+
 
 C = get_const_module()
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
@@ -1247,10 +1254,7 @@ def main(argv=None):
             os.makedirs(tmp, exist_ok=True)
         else:
             tmp_auto = True
-            tmp = os.path.join(
-                out, "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
-            )
-            os.makedirs(tmp, exist_ok=True)
+            tmp = _create_auto_tmp_dir(out)
     ini, inc, ss, scn_ssid_map = _scan_dir(inp)
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False

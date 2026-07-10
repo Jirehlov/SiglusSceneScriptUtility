@@ -1603,7 +1603,11 @@ def main(argv=None):
     if args[0] == "--a":
         if len(args) != 2 or not Path(args[1]).is_file():
             return 2
-        analyze_one(args[1])
+        try:
+            analyze_one(args[1])
+        except (EOFError, OSError, ValueError, struct.error) as exc:
+            print(f"[!] {exc}", file=sys.stderr)
+            return 1
         return 0
     if args[0] == "--x":
         trim = False

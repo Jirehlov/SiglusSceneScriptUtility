@@ -7,6 +7,11 @@ All notable changes to this project will be documented in this file.
 - Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
 - Added LICENSE.
 - Changed `siglus-ssu test` success results from `PASS` to `EXACT` for byte-identical `.pck` files and `PAYLOAD_SAME` for different `.pck` bytes with matching normalized payloads.
+- Changed KOE character directories to use distinct percent escaping for invalid path characters, trailing spaces or dots, reserved names, and empty names.
+- Fixed `.ss` text-map identity and current-span resolution, rejected duplicate or overlapping replacements before write-back, and reduced overlap validation to `O(n log n)`.
+- Fixed disassembly table isolation across const profiles, removed the duplicate decompiler element cache, and made automatic compile temporary directories unique across concurrent runs.
+- Changed language patch presets to verify complete changes on a working copy and write atomically, with explicit `--allow-partial` recovery behavior and symbolic-link rejection.
+- Changed DBS creation to reject unencodable strings, fixed TCR type-zero parsing and expected CLI format errors, and made PCK sample caches verify Git blob hashes without obsolete sidecar metadata.
 
 
 ## [v0.3.7] - 2026-07-07

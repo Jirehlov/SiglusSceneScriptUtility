@@ -521,15 +521,25 @@ def _source_spans_overlap(spans, start: int, end: int) -> bool:
     return False
 
 
-def _source_quote_order(entries, additions, line_no: int, start: int) -> int:
-    count = 0
-    for entry in list(entries or []) + list(additions or []):
-        if _int_value(entry.get("line", 0), 0) != line_no:
+def _normalize_source_entry_order(entries) -> list[dict]:
+    ordered = sorted(
+        (dict(entry) for entry in entries or []),
+        key=lambda entry: (
+            _int_value(entry.get("line", 0), 0),
+            _int_value(entry.get("span_start", -1), -1),
+            _int_value(entry.get("span_end", -1), -1),
+            _int_value(entry.get("index", 0), 0),
+        ),
+    )
+    line_orders = {}
+    for entry in ordered:
+        line_no = _int_value(entry.get("line", 0), 0)
+        if line_no <= 0:
             continue
-        span_start = _int_value(entry.get("span_start", -1), -1)
-        if span_start >= 0 and span_start < start:
-            count += 1
-    return count + 1
+        order = line_orders.get(line_no, 0) + 1
+        line_orders[line_no] = order
+        entry["order"] = order
+    return ordered
 
 
 def add_source_quote_entries(text: str, entries) -> list[dict]:
@@ -572,12 +582,7 @@ def add_source_quote_entries(text: str, entries) -> list[dict]:
                     {
                         "index": max_index,
                         "line": line_no,
-                        "order": _source_quote_order(
-                            out,
-                            additions,
-                            line_no,
-                            abs_start,
-                        ),
+                        "order": 0,
                         "start": abs_start,
                         "span_start": abs_start,
                         "span_end": abs_end,
@@ -589,18 +594,8 @@ def add_source_quote_entries(text: str, entries) -> list[dict]:
                 spans.append((abs_start, abs_end))
             i = rel_end
         line_start += len(raw_line)
-    if not additions:
-        return out
     out.extend(additions)
-    return sorted(
-        out,
-        key=lambda entry: (
-            _int_value(entry.get("line", 0), 0),
-            _int_value(entry.get("order", 0), 0),
-            _int_value(entry.get("span_start", -1), -1),
-            _int_value(entry.get("span_end", -1), -1),
-        ),
-    )
+    return _normalize_source_entry_order(out)
 
 
 def _write_map(csv_path: str, entries):
@@ -655,6 +650,9 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
     changes = []
     line_order_map = {}
     index_map = {}
+    duplicate_line_orders = set()
+    duplicate_indexes = set()
+    selected_entries = set()
     line_spans = []
     pos = 0
     for line_text in text.splitlines(keepends=True):
@@ -666,33 +664,67 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         order = _to_int(entry.get("order", 0), 0)
         idx = _to_int(entry.get("index", 0), 0)
         if idx > 0:
-            index_map[idx] = entry
+            if idx in index_map:
+                duplicate_indexes.add(idx)
+            else:
+                index_map[idx] = entry
         if line > 0 and order > 0:
-            line_order_map[(line, order)] = entry
+            key = (line, order)
+            if key in line_order_map:
+                duplicate_line_orders.add(key)
+            else:
+                line_order_map[key] = entry
     for row in rows:
         line = _to_int(row.get("line", ""), 0)
         order = _to_int(row.get("order", ""), 0)
         idx = _to_int(row.get("index", ""), 0)
+        row_original = row.get("original")
+        original_hint = (
+            None if row_original is None else _csv_unescape_text(row_original)
+        )
         entry = None
+        index_entry = None
+        line_order_entry = None
+        if idx > 0:
+            if idx in duplicate_indexes:
+                raise ValueError(f"textmap: {filename}: duplicate index {idx}")
+            index_entry = index_map.get(idx)
         if line > 0 and order > 0:
-            entry = line_order_map.get((line, order))
-            if entry is None:
-                eprint(
-                    f"textmap: {filename}: missing entry at line {line} order {order}",
-                    errors="replace",
+            key = (line, order)
+            if key in duplicate_line_orders:
+                raise ValueError(
+                    f"textmap: {filename}: duplicate entry at line {line} order {order}"
                 )
-                continue
-        if entry is None and idx > 0:
-            entry = index_map.get(idx)
-            if entry is None:
+            line_order_entry = line_order_map.get(key)
+        if index_entry is not None and (
+            original_hint is None or index_entry.get("text", "") == original_hint
+        ):
+            entry = index_entry
+        elif line_order_entry is not None and (
+            original_hint is None or line_order_entry.get("text", "") == original_hint
+        ):
+            entry = line_order_entry
+        else:
+            entry = index_entry or line_order_entry
+        if entry is None:
+            if idx > 0:
                 eprint(
                     f"textmap: {filename}: index {idx} out of range",
                     errors="replace",
                 )
-                continue
-        if entry is None:
+            elif line > 0 and order > 0:
+                eprint(
+                    f"textmap: {filename}: missing entry at line {line} order {order}",
+                    errors="replace",
+                )
             continue
-        original = _csv_unescape_text(row.get("original", entry.get("text", "")))
+        entry_identity = id(entry)
+        if entry_identity in selected_entries:
+            raise ValueError(
+                f"textmap: {filename}: duplicate replacement for index {_to_int(entry.get('index', 0), 0):d}"
+            )
+        selected_entries.add(entry_identity)
+        original = entry.get("text", "") if original_hint is None else original_hint
         replacement = row.get("replacement")
         if replacement is not None:
             replacement = _csv_unescape_text(replacement)
@@ -712,13 +744,9 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
                 errors="replace",
             )
             continue
-        row_span_start = _to_int(row.get("span_start", row.get("abs_start", "")), -1)
-        row_span_end = _to_int(row.get("span_end", row.get("abs_end", "")), -1)
         entry_span_start = _to_int(entry.get("span_start", ""), -1)
         entry_span_end = _to_int(entry.get("span_end", ""), -1)
         candidates = []
-        if row_span_start >= 0 and row_span_end > row_span_start:
-            candidates.append((row_span_start, row_span_end))
         if entry_span_start >= 0 and entry_span_end > entry_span_start:
             candidates.append((entry_span_start, entry_span_end))
         used_span = None
@@ -789,8 +817,13 @@ def _apply_map(text: str, entries, rows, filename: str = ""):
         changes.append((used_span[0], used_span[1], replacement_lit))
     if not changes:
         return text, 0
-    changes.sort(key=lambda x: x[0], reverse=True)
-    for start, end, repl in changes:
+    changes.sort(key=lambda x: (x[0], x[1]))
+    for previous, current in zip(changes, changes[1:]):
+        if current[0] < previous[1]:
+            raise ValueError(
+                f"textmap: {filename}: overlapping replacements at {current[0]}:{current[1]} and {previous[0]}:{previous[1]}"
+            )
+    for start, end, repl in reversed(changes):
         text = text[:start] + repl + text[end:]
     return text, len(changes)
 
@@ -1135,7 +1168,11 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
     rows = _read_map(csv_path)
-    updated, count = _apply_map(text, entries, rows, filename=fname)
+    try:
+        updated, count = _apply_map(text, entries, rows, filename=fname)
+    except ValueError as ex:
+        eprint(str(ex), errors="replace")
+        return 1
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0

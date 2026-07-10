@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -94,16 +95,22 @@ def _raw_url(repo: str, ref: str, path: str) -> str:
     )
 
 
+def _git_blob_sha(path: Path) -> str:
+    digest = hashlib.sha1(usedforsecurity=False)
+    digest.update(f"blob {path.stat().st_size}\0".encode("ascii"))
+    with path.open("rb") as source:
+        while chunk := source.read(CHUNK_SIZE):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _download_file(url: str, dest: Path, expected_size: int, expected_sha: str) -> None:
-    sha_path = dest.with_name(dest.name + ".sha")
     has_expected_size = dest.is_file() and (
         expected_size <= 0 or dest.stat().st_size == expected_size
     )
-    has_expected_sha = not expected_sha or (
-        sha_path.is_file()
-        and sha_path.read_text(encoding="utf-8").strip() == expected_sha
-    )
-    if has_expected_size and has_expected_sha:
+    if has_expected_size and (
+        not expected_sha or _git_blob_sha(dest) == expected_sha.lower()
+    ):
         print(f"cache: {dest}")
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -126,9 +133,14 @@ def _download_file(url: str, dest: Path, expected_size: int, expected_sha: str) 
                     f"download size mismatch for {dest.name}: "
                     f"got={part.stat().st_size} expected={expected_size}"
                 )
-            part.replace(dest)
             if expected_sha:
-                sha_path.write_text(expected_sha + "\n", encoding="utf-8")
+                actual_sha = _git_blob_sha(part)
+                if actual_sha != expected_sha.lower():
+                    raise RuntimeError(
+                        f"download SHA mismatch for {dest.name}: "
+                        f"got={actual_sha} expected={expected_sha}"
+                    )
+            part.replace(dest)
             print(f"downloaded: {dest}")
             return
         except (HTTPError, URLError, OSError, RuntimeError) as exc:
@@ -152,7 +164,6 @@ def _sample_paths(entries, work_dir: Path) -> set[Path]:
         rel = Path(*str(item["path"]).split("/"))
         dest = work_dir / rel
         paths.add(dest)
-        paths.add(dest.with_name(dest.name + ".sha"))
     return paths
 
 
@@ -162,10 +173,9 @@ def _drop_stale_samples(entries, work_dir: Path, subdir: str) -> Path:
         return samples_dir
     expected = _sample_paths(entries, work_dir)
     for path in samples_dir.iterdir():
-        lower_name = path.name.lower()
         if not path.is_file():
             continue
-        if path.suffix.lower() != ".pck" and not lower_name.endswith(".pck.sha"):
+        if path.suffix.lower() != ".pck":
             continue
         if path in expected:
             continue

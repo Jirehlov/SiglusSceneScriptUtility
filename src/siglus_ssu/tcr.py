@@ -43,7 +43,7 @@ def _parse(blob, want_payload=True):
         if of < 0 or of + _SUB_HDR_SIZE + 768 > n:
             out["warnings"].append(f"bad offset[{i:d}]={of:d}")
             continue
-        typ = int(read_i32_le(blob, of + 0, default=-1) or -1)
+        typ = int(read_i32_le(blob, of + 0, strict=True))
         dsz = int(read_i32_le(blob, of + 4, default=0) or 0)
         try:
             keep = struct.unpack_from("<14i", blob, of + 8)

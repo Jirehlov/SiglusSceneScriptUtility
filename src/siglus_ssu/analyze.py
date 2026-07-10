@@ -1,4 +1,5 @@
 import os
+import struct
 import sys
 import shutil
 from .common import (
@@ -201,7 +202,11 @@ def analyze_file(
             except Exception as e:
                 print(f"write_error: {e!s}")
                 return 1
-        return sav.sav(blob, path=path)
+        try:
+            return sav.sav(blob, path=path)
+        except (EOFError, OSError, ValueError, struct.error) as exc:
+            sys.stderr.write(f"analyze: failed to read .sav: {exc}\n")
+            return 1
     return 0
 
 

@@ -51,18 +51,18 @@ _DISAM_OP_NAMES = (
 )
 
 
-def _read_flag_command_codes():
-    codes = C.READ_FLAG_COMMAND_CODES
+def _read_flag_command_codes(const_module):
+    codes = const_module.READ_FLAG_COMMAND_CODES
     return frozenset((int(a), int(b)) for a, b in (codes or ()))
 
 
-def _build_system_element_index():
+def _build_system_element_index(const_module):
     out = {}
     try:
-        defs = C.SYSTEM_ELEMENT_DEFS
+        defs = const_module.SYSTEM_ELEMENT_DEFS
         if not isinstance(defs, (list, tuple)):
             return out
-        fm = C._FORM_CODE or {}
+        fm = const_module._FORM_CODE or {}
         try:
             from .MA import parse_arg_spec
         except Exception:
@@ -128,7 +128,7 @@ def _build_system_element_index():
                 parent_code = _to_code(parent)
                 if not isinstance(parent_code, int):
                     continue
-                ec = C.create_elm_code(owner, group, code)
+                ec = const_module.create_elm_code(owner, group, code)
                 bucket[(parent_code, ec)].append(
                     {
                         "type": tp,
@@ -179,18 +179,18 @@ def _build_system_element_index():
     return out
 
 
-def _build_array_element_index():
+def _build_array_element_index(const_module):
     out = {}
     try:
-        defs = C.SYSTEM_ELEMENT_DEFS
+        defs = const_module.SYSTEM_ELEMENT_DEFS
         if not isinstance(defs, (list, tuple)):
             return out
-        fm = C._FORM_CODE or {}
+        fm = const_module._FORM_CODE or {}
         for it in defs:
             try:
                 if not isinstance(it, (list, tuple)) or len(it) < 7:
                     continue
-                if int(it[0]) != int(C.ET_PROPERTY):
+                if int(it[0]) != int(const_module.ET_PROPERTY):
                     continue
                 parent = str(it[1])
                 ret = str(it[2])
@@ -200,7 +200,7 @@ def _build_array_element_index():
                 if parent not in fm or ret not in fm:
                     continue
                 out[int(fm[parent])] = {
-                    "type": int(C.ET_PROPERTY),
+                    "type": int(const_module.ET_PROPERTY),
                     "parent": parent,
                     "parent_code": int(fm[parent]),
                     "name": name,
@@ -216,19 +216,40 @@ def _build_array_element_index():
     return out
 
 
-@lru_cache(maxsize=1)
-def _shared_disassembly_tables():
-    form_rev = invert_form_code_map()
-    op_names = {int(getattr(C, nm)): nm for nm in _DISAM_OP_NAMES}
-    read_flag_command_codes = _read_flag_command_codes()
-    elm_exact = _build_system_element_index()
-    elm_array_exact = _build_array_element_index()
+class _ConstCacheKey:
+    __slots__ = ("const_module", "identity")
+
+    def __init__(self, const_module):
+        self.const_module = const_module
+        self.identity = (
+            int(getattr(const_module, "CONST_PROFILE", 0)),
+            str(getattr(const_module, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+            str(getattr(const_module, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
+        )
+
+    def __hash__(self):
+        return hash(self.identity)
+
+    def __eq__(self, other):
+        return isinstance(other, _ConstCacheKey) and self.identity == other.identity
+
+
+@lru_cache(maxsize=4)
+def _cached_disassembly_tables(cache_key):
+    const_module = cache_key.const_module
+    form_rev = invert_form_code_map(const_module)
+    op_names = {int(getattr(const_module, nm)): nm for nm in _DISAM_OP_NAMES}
+    read_flag_command_codes = _read_flag_command_codes(const_module)
+    elm_exact = _build_system_element_index(const_module)
+    elm_array_exact = _build_array_element_index(const_module)
     receiver_forms = set()
     receiver_forms.update(int(key[0]) for key in elm_exact)
     receiver_forms.update(int(key) for key in elm_array_exact)
-    receiver_forms = frozenset(augment_receiver_form_codes(receiver_forms))
+    receiver_forms = frozenset(
+        augment_receiver_form_codes(receiver_forms, const_module)
+    )
     unary_int_ops, string_cmp_ops, unary_text, binary_text = (
-        build_operator_render_tables()
+        build_operator_render_tables(const_module)
     )
     return (
         form_rev,
@@ -242,6 +263,16 @@ def _shared_disassembly_tables():
         unary_text,
         binary_text,
     )
+
+
+def _shared_disassembly_tables(const_module=None):
+    return _cached_disassembly_tables(
+        _ConstCacheKey(C if const_module is None else const_module)
+    )
+
+
+_shared_disassembly_tables.cache_clear = _cached_disassembly_tables.cache_clear
+_shared_disassembly_tables.cache_info = _cached_disassembly_tables.cache_info
 
 
 def new_expression_state(
@@ -1029,7 +1060,7 @@ def disassemble_scn_bytes(
         string_cmp_ops,
         unary_text,
         binary_text,
-    ) = _shared_disassembly_tables()
+    ) = _shared_disassembly_tables(C)
     _form_codes = C._FORM_CODE if isinstance(C._FORM_CODE, dict) else {}
 
     def _form_code(value):

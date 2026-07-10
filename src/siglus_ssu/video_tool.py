@@ -180,7 +180,11 @@ def main(argv=None):
                 if i + 1 >= len(argv):
                     eprint("error: --mode expects a value")
                     return 2
-                mode_override = int(argv[i + 1], 0)
+                try:
+                    mode_override = int(argv[i + 1], 0)
+                except ValueError:
+                    eprint("error: --mode expects an integer")
+                    return 2
                 mode_specified = True
                 i += 2
                 continue

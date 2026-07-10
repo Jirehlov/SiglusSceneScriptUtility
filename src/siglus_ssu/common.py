@@ -47,26 +47,33 @@ def merge_macro_stat_counts(dst, src):
     return dst
 
 
-def invert_form_code_map():
+def invert_form_code_map(const_module=None):
+    constants = C if const_module is None else const_module
     out = {}
-    fm = C._FORM_CODE
+    fm = constants._FORM_CODE
     if isinstance(fm, dict):
         for k, v in fm.items():
             out[int(v)] = str(k)
     return out
 
 
-def augment_receiver_form_codes(forms=None):
+def augment_receiver_form_codes(forms=None, const_module=None):
+    constants = C if const_module is None else const_module
     out = set()
     for form in forms or ():
         try:
             out.add(int(form))
         except (TypeError, ValueError):
             continue
-    fm = C._FORM_CODE
+    fm = constants._FORM_CODE
     if not isinstance(fm, dict):
         fm = {}
-    for name in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
+    for name in (
+        constants.FM_INTREF,
+        constants.FM_STRREF,
+        constants.FM_INTLISTREF,
+        constants.FM_STRLISTREF,
+    ):
         if name in fm:
             out.add(int(fm[name]))
     return out
@@ -391,53 +398,54 @@ def split_element_code(code):
     return ((code >> 24) & 0xFF, code & 0xFFFF)
 
 
-def build_operator_render_tables():
+def build_operator_render_tables(const_module=None):
+    constants = C if const_module is None else const_module
     unary_int_ops = {
         int(x)
         for x in (
-            getattr(C, "OP_PLUS", -1),
-            getattr(C, "OP_MINUS", -1),
-            getattr(C, "OP_TILDE", -1),
+            getattr(constants, "OP_PLUS", -1),
+            getattr(constants, "OP_MINUS", -1),
+            getattr(constants, "OP_TILDE", -1),
         )
         if isinstance(x, int)
     }
     string_cmp_ops = {
         int(x)
         for x in (
-            getattr(C, "OP_EQUAL", -1),
-            getattr(C, "OP_NOT_EQUAL", -1),
-            getattr(C, "OP_GREATER", -1),
-            getattr(C, "OP_GREATER_EQUAL", -1),
-            getattr(C, "OP_LESS", -1),
-            getattr(C, "OP_LESS_EQUAL", -1),
+            getattr(constants, "OP_EQUAL", -1),
+            getattr(constants, "OP_NOT_EQUAL", -1),
+            getattr(constants, "OP_GREATER", -1),
+            getattr(constants, "OP_GREATER_EQUAL", -1),
+            getattr(constants, "OP_LESS", -1),
+            getattr(constants, "OP_LESS_EQUAL", -1),
         )
         if isinstance(x, int)
     }
     unary_text = {
-        int(getattr(C, "OP_PLUS", -1)): "+",
-        int(getattr(C, "OP_MINUS", -1)): "-",
-        int(getattr(C, "OP_TILDE", -1)): "~",
+        int(getattr(constants, "OP_PLUS", -1)): "+",
+        int(getattr(constants, "OP_MINUS", -1)): "-",
+        int(getattr(constants, "OP_TILDE", -1)): "~",
     }
     binary_text = {
-        int(getattr(C, "OP_PLUS", -1)): "+",
-        int(getattr(C, "OP_MINUS", -1)): "-",
-        int(getattr(C, "OP_MULTIPLE", -1)): "*",
-        int(getattr(C, "OP_DIVIDE", -1)): "/",
-        int(getattr(C, "OP_AMARI", -1)): "%",
-        int(getattr(C, "OP_EQUAL", -1)): "==",
-        int(getattr(C, "OP_NOT_EQUAL", -1)): "!=",
-        int(getattr(C, "OP_GREATER", -1)): ">",
-        int(getattr(C, "OP_GREATER_EQUAL", -1)): ">=",
-        int(getattr(C, "OP_LESS", -1)): "<",
-        int(getattr(C, "OP_LESS_EQUAL", -1)): "<=",
-        int(getattr(C, "OP_LOGICAL_AND", -1)): "&&",
-        int(getattr(C, "OP_LOGICAL_OR", -1)): "||",
-        int(getattr(C, "OP_AND", -1)): "&",
-        int(getattr(C, "OP_OR", -1)): "|",
-        int(getattr(C, "OP_HAT", -1)): "^",
-        int(getattr(C, "OP_SL", -1)): "<<",
-        int(getattr(C, "OP_SR", -1)): ">>",
-        int(getattr(C, "OP_SR3", -1)): ">>>",
+        int(getattr(constants, "OP_PLUS", -1)): "+",
+        int(getattr(constants, "OP_MINUS", -1)): "-",
+        int(getattr(constants, "OP_MULTIPLE", -1)): "*",
+        int(getattr(constants, "OP_DIVIDE", -1)): "/",
+        int(getattr(constants, "OP_AMARI", -1)): "%",
+        int(getattr(constants, "OP_EQUAL", -1)): "==",
+        int(getattr(constants, "OP_NOT_EQUAL", -1)): "!=",
+        int(getattr(constants, "OP_GREATER", -1)): ">",
+        int(getattr(constants, "OP_GREATER_EQUAL", -1)): ">=",
+        int(getattr(constants, "OP_LESS", -1)): "<",
+        int(getattr(constants, "OP_LESS_EQUAL", -1)): "<=",
+        int(getattr(constants, "OP_LOGICAL_AND", -1)): "&&",
+        int(getattr(constants, "OP_LOGICAL_OR", -1)): "||",
+        int(getattr(constants, "OP_AND", -1)): "&",
+        int(getattr(constants, "OP_OR", -1)): "|",
+        int(getattr(constants, "OP_HAT", -1)): "^",
+        int(getattr(constants, "OP_SL", -1)): "<<",
+        int(getattr(constants, "OP_SR", -1)): ">>",
+        int(getattr(constants, "OP_SR3", -1)): ">>>",
     }
     return unary_int_ops, string_cmp_ops, unary_text, binary_text
 

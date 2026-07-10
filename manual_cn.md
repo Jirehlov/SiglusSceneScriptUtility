@@ -227,6 +227,8 @@ siglus-ssu -lsp [--serial]
 
 默认情况下，编译模式会在 Rust 原生 backend 可用且支持当前选项时优先使用 Rust，否则自动回退到 Python backend。全局 `--legacy` 强制使用 Python 编译 backend，但仍允许 LZSS 等 native helper；`--legacy-full` 会禁用全部 Rust 原生加速。
 
+未指定 `--tmp` 时，每次编译都会创建名称唯一的自动临时目录。因此，即使多个编译同时写入同一输出目录，也不会共享中间文件。
+
 链接场景写入 `.pck` 时，场景名采用与官方编译器一致的 ASCII-only 小写规则：仅 `A` 至 `Z` 会变为 `a` 至 `z`，非 ASCII 字符不会大小写折叠，包括 `ＥＤ` 这类全角拉丁字母。
 
 也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。
@@ -608,6 +610,8 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 目录输入时，`-d --x` 与 `-d --c` 都会**递归**扫描子目录，并在输出端保留相对目录结构。
 
+编译 `m_type=0` 时，每个字符串都必须能严格编码为 Shift-JIS；其他类型使用严格 UTF-16LE 编码。无法编码的单元格会报告 CSV 路径、记录起始行、列和 call number，且不会写出无效 `.dbs`。
+
 #### CSV 格式
 
 导出的 CSV 使用带 BOM 的 UTF-8 编码和 CRLF 换行，与 Microsoft Excel 兼容。文件前两行为 `#DATANO` 和 `#DATATYPE` 头行，之后才是数据行。
@@ -656,7 +660,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 ```
 <output_dir>/
   koe_master.csv           — 所有 KOE 条目的主清单
-  <角色名或 unknown>/     — 每个角色一个子目录；无法推断角色名时使用 unknown
+  <角色名或 %EMPTY>/     — 每个角色一个子目录；无法推断角色名时使用 %EMPTY
     KOE(000000001).ogg
     KOE(000000002).ogg
     ...
@@ -664,6 +668,8 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
     KOE(000000003).ogg
     ...
 ```
+
+角色名用作目录段时会进行百分号转义，但 `koe_master.csv` 中仍保留原始值。路径分隔符、控制字符、Windows 非法字符、字面 `%`、末尾空格或点、保留设备名以及工具固定输出名会分别编码，而不会统一折叠成同一个替代字符。仅大小写不同的名称仍遵循目标文件系统的大小写敏感规则。
 
 使用 `--single` 时，输出结构变为：
 
@@ -843,6 +849,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
    ```
 
    应用后，工具会自动对修改后的文件执行**括号内容修复**：删除 `【】` 名前括号内未被引号字符串包住的 ASCII 空格，并删除括号内容已经开始后的额外无效双引号。逐文件修复明细会输出到 stderr，最终摘要会输出到 stdout。
+
+   应用时会把每个 CSV 行解析到当前源条目，并使用当前解析得到的 span，而不是 CSV 中可能已经过期的 span。同一条目被重复修改或当前替换区间发生重叠时，该文件会在写回前终止。
 
 #### `.dat` 文件工作流程
 
@@ -1254,7 +1262,7 @@ Patch 模式用于修改 `SiglusEngine.exe` 内部少量二进制值。
 
 ```bash
 siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
-siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace]
+siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace] [--allow-partial]
 siglus-ssu -p --info <input_exe>
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
@@ -1263,10 +1271,11 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 
 | 参数 | 说明 |
 |---|---|
-| `<input_exe>` | 要修改的 `SiglusEngine.exe` 路径。 |
+| `<input_exe>` | 要修改的 `SiglusEngine.exe` 路径。不接受符号链接；请直接传入真实 exe 路径。 |
 | `<input_key>` | **仅 `--altkey` 使用**。新的 16 字节 key 来源，可指向 `key.txt`、`暗号.dat`、`SiglusEngine*.exe` 或 `Scene.pck` 文件路径，也可写成 `key=bytes` 字面量或 `angou=text` 字面量。不接受目录。这个位置参数只在 `--altkey` 模式有效。 |
-| `-o`, `--output` | 输出 exe 路径。默认输出名为 `<stem>_alt.exe`、`<stem>_CJK.exe`、`<stem>_CJKPATH.exe`、`<stem>_LOC0.exe` 或 `<stem>_LOC1.exe`。 |
-| `--inplace` | 直接覆盖输入 exe。 |
+| `-o`, `--output` | 输出 exe 路径。默认输出名为 `<stem>_alt.exe`、`<stem>_CJK.exe`、`<stem>_CJKPATH.exe`、`<stem>_LOC0.exe` 或 `<stem>_LOC1.exe`。若现有输出路径是符号链接则拒绝写入。 |
+| `--inplace` | 直接覆盖输入 exe。不能与 `-o` / `--output` 同用。 |
+| `--allow-partial` | 仅用于 `--lang`。即使当前引擎版本缺少预设中的部分组成项，也写出能够完成的修改。默认要求全部预设组成项满足。 |
 | `--lang cjk` | 修改字体 charset、locale 与 `system.get_language`，用于 CJK 显示；不修改 `Gameexe.dat`、`Scene.pck`、`savedata` 路径。 |
 | `--lang cjk-path` | 在 `cjk` 的基础上，把活动路径引用改向 `GameexeZH.dat`、`SceneZH.pck` 与 `savedata_zh`。 |
 | `--info` | 只打印可修改的 `ALTKEY`、`LANG`、`LOC` 信息，不写文件。 |
@@ -1279,6 +1288,8 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 
 `--lang cjk-path` 会执行同样修改，然后把官方 ZH 路径字符串写入 PE 内未使用的字符串空洞，并把活动引用改向这些新字符串。原来的短字符串可能仍留在 exe 中，但不再被这些引用使用。
 
+语言预设默认按完整事务执行：每个必需的 charset、locale、语言代码和所选路径都必须可修改或已经是目标值。不支持的引擎版本会报告缺少的组成项且不写输出。成功结果会先写入临时文件再原子替换；只有明确需要保留可用子集时才使用 `--allow-partial`。
+
 #### Charset 槽位
 
 `--info` 会显示所有匹配到的 `80 78 17 xx` charset 比较位点，不再要求恰好两个槽。常见值如下：
@@ -1287,7 +1298,7 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 - `0x80`（`SHIFTJIS_CHARSET`）：Shift-JIS 字体搜索。
 - `0x86`（`GB2312_CHARSET`）：GB2312 字体搜索。
 
-CJK 预设优先修改现有日文/CJK 槽；若没有找到日文/CJK 槽，则回退修改最后一个检测到的 charset 槽。
+CJK 预设只修改已识别的日文/CJK 槽；若没有找到此类槽，严格模式会把 charset 组成项报告为缺失，而不会猜测其他槽。
 
 #### 示例
 

@@ -227,6 +227,8 @@ Compiles a directory of `.ss` SceneScript source files into a `.pck` file. Durin
 
 By default, compile mode uses the Rust native backend when it is available and supported for the selected options, and falls back to the Python backend otherwise. Global `--legacy` forces the Python compile backend while still allowing native helpers such as LZSS; `--legacy-full` disables all Rust native acceleration.
 
+When `--tmp` is not supplied, every compile invocation creates a uniquely named automatic temporary directory. Concurrent compiles targeting the same output directory therefore do not share intermediate files.
+
 Scene names written into the linked `.pck` use the same ASCII-only lowercase normalization as the official compiler: `A` through `Z` become `a` through `z`, while non-ASCII characters, including fullwidth Latin letters such as `ＥＤ`, are preserved.
 
 It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
@@ -608,6 +610,8 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 With directory input, both `-d --x` and `-d --c` **recursively** scan subdirectories and preserve the relative directory structure in the output.
 
+When compiling `m_type=0`, every string must encode strictly as Shift-JIS; other types use strict UTF-16LE encoding. An unencodable cell reports its CSV path, record start line, column, and call number, and no invalid `.dbs` is written.
+
 #### CSV Format
 
 The exported CSV uses UTF-8 BOM encoding with CRLF line endings and is compatible with Microsoft Excel. The first two rows are the `#DATANO` and `#DATATYPE` header rows, followed by data rows.
@@ -656,7 +660,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 ```
 <output_dir>/
   koe_master.csv           — Master manifest of all KOE entries
-  <CharacterName or unknown>/ — One subdirectory per character name; unknown when no name is inferred
+  <CharacterName or %EMPTY>/ — One subdirectory per character name; %EMPTY when no name is inferred
     KOE(000000001).ogg
     KOE(000000002).ogg
     ...
@@ -664,6 +668,8 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
     KOE(000000003).ogg
     ...
 ```
+
+Character names used as directory segments are percent-escaped without changing the value stored in `koe_master.csv`. Path separators, control and Windows-invalid characters, literal `%`, trailing spaces or dots, reserved device names, and the tool's fixed output names are encoded distinctly instead of being collapsed to one replacement character. Names that differ only by case still follow the target file system's case-sensitivity rules.
 
 With `--single`, the output structure becomes:
 
@@ -843,6 +849,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
    ```
 
    After applying, the tool automatically performs a **bracket content fix** on the modified file: it removes unquoted ASCII spaces inside `【】` name brackets and drops extra invalid double-quote characters after bracket content has started. Per-file fix detail is reported to stderr; the final summary is printed to stdout.
+
+   Application resolves each CSV row against the current source entry and uses the span obtained from the current parse rather than a potentially stale CSV span. Duplicate rows targeting one entry or replacements whose current spans overlap abort that file before write-back.
 
 #### Workflow: Compiled `.dat` Files
 
@@ -1254,7 +1262,7 @@ Patch mode modifies selected binary values inside `SiglusEngine.exe`.
 
 ```bash
 siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
-siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace]
+siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace] [--allow-partial]
 siglus-ssu -p --info <input_exe>
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
@@ -1263,10 +1271,11 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 
 | Parameter | Description |
 |---|---|
-| `<input_exe>` | Path to `SiglusEngine.exe` to patch. |
+| `<input_exe>` | Path to `SiglusEngine.exe` to patch. Symbolic links are rejected; pass the real executable path. |
 | `<input_key>` | **(`--altkey` only)** Source for the new 16-byte key. Accepts a file path to `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck`; a `key=bytes` literal; or an `angou=text` literal. Directories are not accepted. This positional form is only valid with `--altkey`. |
-| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. |
-| `--inplace` | Overwrite the input executable directly. |
+| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. An existing symbolic-link output is rejected. |
+| `--inplace` | Overwrite the input executable directly. Cannot be combined with `-o` / `--output`. |
+| `--allow-partial` | Only for `--lang`. Write the available changes even when the current engine build lacks part of the selected preset. By default every preset component is required. |
 | `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
 | `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
 | `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
@@ -1279,6 +1288,8 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 
 `--lang cjk-path` performs the same changes, then writes the official ZH path strings into an unused PE string cave and repoints active references to them. The original short strings may remain in the file as unreferenced data.
 
+Language presets are complete transactions by default: every required charset, locale, language-code, and selected path component must be patchable or already have the target value. Unsupported builds report missing components without writing output. Successful output is written through a temporary file and atomically replaced; use `--allow-partial` only when retaining the available subset is intentional.
+
 #### Charset Slots
 
 `--info` reports every matched `80 78 17 xx` charset compare site instead of requiring exactly two slots. The common values are:
@@ -1287,7 +1298,7 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 - `0x80` (`SHIFTJIS_CHARSET`): Shift-JIS font search.
 - `0x86` (`GB2312_CHARSET`): GB2312 font search.
 
-The CJK presets primarily patch existing Japanese/CJK slots. If no Japanese/CJK slot is present, they fall back to the last detected charset slot.
+The CJK presets patch only recognized Japanese/CJK slots. If no such slot is present, strict mode reports the charset component as missing instead of guessing another slot.
 
 #### Examples
 

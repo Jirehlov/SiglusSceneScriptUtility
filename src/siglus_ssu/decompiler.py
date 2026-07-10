@@ -7,12 +7,10 @@ from .CA import is_zen
 from ._const_manager import get_const_module
 from . import disam
 from .common import (
-    augment_receiver_form_codes,
     array_element_info,
     binary_result_form as _binary_result_form,
     build_operator_render_tables,
     format_named_command_args,
-    invert_form_code_map,
     int_or_none as _int_or_none,
     latest_stack_start,
     normalize_ss_quoted_literal_source,
@@ -112,15 +110,12 @@ def _inject_lines_into_blank_run(lines, block_lines):
     return block + out
 
 
-_FORM_REV = invert_form_code_map()
-
-
 def _form_name(form):
     s = str(form or "").strip()
     if s and (not re.fullmatch(r"-?\d+", s)):
         return s
     try:
-        return str(_FORM_REV.get(int(form), "int"))
+        return str(disam._shared_disassembly_tables(C)[0].get(int(form), "int"))
     except (TypeError, ValueError):
         return "int"
 
@@ -223,8 +218,6 @@ _SYMBOLIC_STR_KEYWORDS = frozenset(
         "default",
     }
 )
-_ELEMENT_INDEX_CACHE_KEY = None
-_ELEMENT_INDEX_CACHE = None
 _SYMBOLIC_STRING_BLOCKER_CACHE_KEY = None
 _SYMBOLIC_STRING_BLOCKER_CACHE = None
 _DECOMPILER_CACHE_KEY = "_decompiler_cache"
@@ -266,43 +259,20 @@ def _annotation_cache_signature(
     )
 
 
-def _element_index_cache_key():
-    return (
-        id(getattr(C, "SYSTEM_ELEMENT_DEFS", None)),
-        id(getattr(C, "_FORM_CODE", None)),
-    )
-
-
 def _element_indexes():
-    global _ELEMENT_INDEX_CACHE_KEY, _ELEMENT_INDEX_CACHE
-    cache_key = _element_index_cache_key()
-    if _ELEMENT_INDEX_CACHE is None or cache_key != _ELEMENT_INDEX_CACHE_KEY:
-        try:
-            elm_exact = dict(disam._build_system_element_index() or {})
-        except Exception:
-            elm_exact = {}
-        try:
-            elm_array_exact = dict(disam._build_array_element_index() or {})
-        except Exception:
-            elm_array_exact = {}
-        receiver_forms = set()
-        receiver_forms.update(int(key[0]) for key in elm_exact.keys())
-        receiver_forms.update(int(key) for key in elm_array_exact.keys())
-        receiver_forms = augment_receiver_form_codes(receiver_forms)
-        _ELEMENT_INDEX_CACHE = (elm_exact, elm_array_exact, frozenset(receiver_forms))
-        _ELEMENT_INDEX_CACHE_KEY = cache_key
-    return _ELEMENT_INDEX_CACHE
+    tables = disam._shared_disassembly_tables(C)
+    return tables[3], tables[4], tables[5]
 
 
 def _system_symbolic_string_blockers():
     global _SYMBOLIC_STRING_BLOCKER_CACHE_KEY, _SYMBOLIC_STRING_BLOCKER_CACHE
-    cache_key = _element_index_cache_key()
+    elm_exact, elm_array_exact, _ = _element_indexes()
+    cache_key = (id(elm_exact), id(elm_array_exact))
     if (
         _SYMBOLIC_STRING_BLOCKER_CACHE is None
         or cache_key != _SYMBOLIC_STRING_BLOCKER_CACHE_KEY
     ):
         out = set(_SYMBOLIC_STR_KEYWORDS)
-        elm_exact, elm_array_exact, _ = _element_indexes()
         for index in (elm_exact, elm_array_exact):
             for info in index.values():
                 if not isinstance(info, dict):

@@ -393,7 +393,17 @@ def _wtoi_prefix(s):
 
 def _read_official_csv(csv_path: str):
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
-        rows = list(csv.reader(f))
+        reader = csv.reader(f)
+        rows = []
+        row_lines = []
+        while True:
+            line_no = reader.line_num + 1
+            try:
+                row = next(reader)
+            except StopIteration:
+                break
+            rows.append(row)
+            row_lines.append(line_no)
     datano_i = None
     datatype_i = None
     for i, row in enumerate(rows):
@@ -429,8 +439,9 @@ def _read_official_csv(csv_path: str):
     if not col_specs:
         raise ValueError("no columns found in #DATANO/#DATATYPE")
     data_rows = []
+    data_lines = []
     row_calls = []
-    for row in rows[datatype_i + 1 :]:
+    for i, row in enumerate(rows[datatype_i + 1 :], datatype_i + 1):
         if not row:
             continue
         row_call = _wtoi_prefix(row[0] if len(row) > 0 else "")
@@ -438,7 +449,8 @@ def _read_official_csv(csv_path: str):
             continue
         row_calls.append(int(row_call))
         data_rows.append(row)
-    return col_specs, row_calls, data_rows
+        data_lines.append(row_lines[i])
+    return col_specs, row_calls, data_rows, data_lines
 
 
 def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
@@ -482,7 +494,7 @@ def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
 def create_one_dbs_from_csv(
     csv_path: str, out_dbs_path: str, *, m_type: int = 1
 ) -> None:
-    col_specs, row_calls, data_rows = _read_official_csv(csv_path)
+    col_specs, row_calls, data_rows, data_lines = _read_official_csv(csv_path)
     row_cnt = len(row_calls)
     col_cnt = len(col_specs)
     row_ofs = 28
@@ -502,11 +514,20 @@ def create_one_dbs_from_csv(
         row = data_rows[r] if r < len(data_rows) else []
         base = data_ofs + (r * col_cnt * 4)
         for c in range(col_cnt):
-            csv_idx, _call_no, dt = col_specs[c]
+            csv_idx, call_no, dt = col_specs[c]
             cell = row[csv_idx] if csv_idx < len(row) else ""
             if dt == 83:
                 ofs = len(str_blob)
-                str_blob.extend(_dbs_encode_text(m_type, cell))
+                try:
+                    encoded = _dbs_encode_text(m_type, cell)
+                except UnicodeEncodeError as exc:
+                    line_no = data_lines[r] if r < len(data_lines) else 0
+                    raise ValueError(
+                        f"{csv_path}:{line_no}:{csv_idx + 1}: "
+                        f"cannot encode value for call {call_no}: "
+                        f"{cell[exc.start : exc.end]!r}"
+                    ) from exc
+                str_blob.extend(encoded)
                 struct.pack_into("<I", prefix, base + c * 4, int(ofs))
             else:
                 v = _wtoi_prefix(cell)
@@ -546,5 +567,5 @@ def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
 def _dbs_encode_text(m_type: int, text: str) -> bytes:
     s = "" if text is None else str(text)
     if int(m_type) == 0:
-        return s.encode("shift_jis", errors="replace") + b"\x00"
-    return s.encode("utf-16le", errors="replace") + b"\x00\x00"
+        return s.encode("shift_jis") + b"\x00"
+    return s.encode("utf-16le") + b"\x00\x00"
