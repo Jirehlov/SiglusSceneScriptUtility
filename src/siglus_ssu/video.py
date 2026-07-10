@@ -284,10 +284,8 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     if not theora_info:
         raise ValueError("OGV: missing theora identification header")
     fps_num, fps_den, pic_w, pic_h = theora_info[:2] + theora_info[4:]
-    dword_28 = (
-        (2 if int(pic_w) * 9 == int(pic_h) * 16 else 1) if mode is None else int(mode)
-    )
-    pic_h2 = int(pic_h) if dword_28 == 2 else int(pic_h) * 3 // 4
+    dword_28 = 2 if mode is None else int(mode)
+    pic_h2 = int(pic_h) * 3 // 4 if dword_28 == 1 else int(pic_h)
     page_summaries = []
     frames_in_page = []
     first_frame_index = []
@@ -518,12 +516,11 @@ def _read_theora_ident_from_stream(path, oggs_off, serial):
         if len(packet) >= 42 and packet[0] == 128 and packet[1:7] == b"theora":
             fps_num = int.from_bytes(packet[22:26], "big")
             fps_den = int.from_bytes(packet[26:30], "big")
-            theora_pixfmt = int(packet[37])
             theora_pic_w = int.from_bytes(packet[14:17], "big")
             theora_pic_h = int.from_bytes(packet[17:20], "big")
-            b41 = packet[41] if len(packet) >= 43 else packet[40]
-            b42 = packet[42] if len(packet) >= 43 else packet[41]
-            theora_kfgshift = int((b41 & 3) << 3 | (b42 >> 5))
+            packed_fields = int.from_bytes(packet[40:42], "big")
+            theora_kfgshift = (packed_fields >> 5) & 0x1F
+            theora_pixfmt = (packed_fields >> 3) & 0x03
             return (
                 int(fps_num),
                 int(fps_den),

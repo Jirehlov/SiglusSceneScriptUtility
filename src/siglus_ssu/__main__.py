@@ -155,7 +155,7 @@ def _usage(out=None):
         f"  {p} -v --a <input_file.omv>\n"
         f"  {p} -v --c <input_ogv> <output_omv|output_dir> [--refer ref.omv] [--mode N] [--flags 0x18DE00]\n"
         "    --refer  Apply mode and TableB flags_hi24 from ref .omv (overridden by --mode/--flags)\n"
-        "    --mode   Override header mode (@0x28), default: auto from ogv\n"
+        "    --mode   Override header mode (@0x28), default: 2 (YUV)\n"
         "    --flags  Override TableB flags high 24 bits, default: 0\n"
         "\n"
         "Patch mode:\n"
