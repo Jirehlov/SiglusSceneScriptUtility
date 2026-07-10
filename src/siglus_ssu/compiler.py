@@ -9,7 +9,7 @@ import shutil
 import csv
 import tempfile
 from contextlib import suppress
-from ._const_manager import get_const_module
+from ._const_manager import get_const_module, package_version
 from .BS import (
     compile_all,
     compile_one,
@@ -231,21 +231,24 @@ def _md5_file_for_cache(p):
     return h.hexdigest()
 
 
-def _native_compile_cache_config(
-    *, args, input_dir, tmp_dir, enc, charset, ss, inc, test_shuffle
-):
-    compile_list = list(ss or [])
-    md5_path = os.path.join(tmp_dir, "_md5.json") if tmp_dir else ""
-    cur_inc = {}
-    cur_ss = {}
-    full_compile = True
-    cache_meta = {
+def _compile_cache_meta(enc, charset):
+    return {
         "schema": 2,
+        "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
         "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
         "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
     }
+
+
+def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, incremental):
+    compile_list = list(ss or [])
+    md5_path = os.path.join(tmp_dir, "_md5.json") if tmp_dir else ""
+    cur_inc = {}
+    cur_ss = {}
+    full_compile = True
+    cache_meta = _compile_cache_meta(enc, charset)
     for f in inc or []:
         p = os.path.join(input_dir, f)
         if os.path.isfile(p):
@@ -253,7 +256,7 @@ def _native_compile_cache_config(
     for p in ss or []:
         if os.path.isfile(p):
             cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
-    if getattr(args, "tmp_dir", ""):
+    if incremental:
         old = None
         if md5_path and os.path.isfile(md5_path):
             try:
@@ -292,6 +295,21 @@ def _native_compile_cache_config(
                     comp.add(p)
             compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
     pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
+    return compile_list, md5_path, pending_md5, full_compile
+
+
+def _native_compile_cache_config(
+    *, args, input_dir, tmp_dir, enc, charset, ss, inc, test_shuffle
+):
+    compile_list, md5_path, pending_md5, full_compile = _compile_cache_state(
+        input_dir=input_dir,
+        tmp_dir=tmp_dir,
+        enc=enc,
+        charset=charset,
+        ss=ss,
+        inc=inc,
+        incremental=bool(getattr(args, "tmp_dir", "")),
+    )
     full_compile_stats = (
         (not getattr(args, "dat_repack", False))
         and not getattr(args, "tmp_dir", "")
@@ -485,12 +503,14 @@ def _ascii_case_collision_groups(paths):
     return collisions
 
 
-def _warn_ascii_case_collisions(paths, prog):
-    for names in _ascii_case_collision_groups(paths):
+def _reject_ascii_case_collisions(paths, prog):
+    collisions = _ascii_case_collision_groups(paths)
+    for names in collisions:
         display = ", ".join(repr(name) for name in names)
         sys.stderr.write(
-            f"{prog}: warning: filenames differ only by ASCII case and are not distinct in the official compiler: {display}\n"
+            f"{prog}: error: filenames differ only by ASCII case and are not distinct in the official compiler: {display}\n"
         )
+    return bool(collisions)
 
 
 def _is_jp_char(ch):
@@ -1279,6 +1299,9 @@ def main(argv=None):
         if (not test_dir) or (not os.path.isdir(test_dir)):
             sys.stderr.write("test_dir not found\n")
             return 1
+    ini, inc, ss, scn_ssid_map = _scan_dir(inp)
+    if _reject_ascii_case_collisions([*ini, *inc, *ss], prog):
+        return 2
     os.makedirs(out, exist_ok=True)
     tmp = ""
     tmp_auto = False
@@ -1289,8 +1312,6 @@ def main(argv=None):
         else:
             tmp_auto = True
             tmp = _create_auto_tmp_dir(out)
-    ini, inc, ss, scn_ssid_map = _scan_dir(inp)
-    _warn_ascii_case_collisions([*ini, *inc, *ss], prog)
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     use_utf8 = True if enc.lower().startswith("utf-8") else False
     ctx = {
@@ -1372,94 +1393,29 @@ def main(argv=None):
         write_gameexe_dat(ctx)
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
-            compile_list = ss
-            md5_path = os.path.join(tmp, "_md5.json")
-            cur_inc = {}
-            cur_ss = {}
-            pending_md5 = None
-            cache_meta = {
-                "schema": 2,
-                "charset": enc,
-                "charset_force": charset,
-                "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
-                "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
-            }
-
-            if getattr(a, "tmp_dir", ""):
-                md5_path = os.path.join(tmp, "_md5.json")
-                for f in inc or []:
-                    p = os.path.join(inp, f)
-                    if os.path.isfile(p):
-                        cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
-                for p in ss or []:
-                    if os.path.isfile(p):
-                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(
-                            p
-                        )
-                old = None
-                if os.path.isfile(md5_path):
-                    try:
-                        old = json.loads(
-                            read_text_auto(md5_path, force_charset="utf-8")
-                        )
-                    except Exception:
-                        old = None
-                full_compile = False
-                if not isinstance(old, dict):
-                    full_compile = True
-                else:
-                    old_meta = old.get("meta") or {}
-                    if old_meta != cache_meta:
-                        full_compile = True
-                    else:
-                        old_inc = old.get("inc") or {}
-                        for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
-                            if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
-                                full_compile = True
-                                break
+            compile_list, md5_path, pending_md5, full_compile = _compile_cache_state(
+                input_dir=inp,
+                tmp_dir=tmp,
+                enc=enc,
+                charset=charset,
+                ss=ss,
+                inc=inc,
+                incremental=bool(getattr(a, "tmp_dir", "")),
+            )
+            if getattr(a, "tmp_dir", "") and not a.no_angou:
                 bs_dir = os.path.join(tmp, "bs")
-                if full_compile:
-                    if (not a.no_angou) and os.path.isdir(bs_dir):
-                        for fn in os.listdir(bs_dir):
-                            if str(fn).lower().endswith(".lzss"):
-                                with suppress(OSError):
-                                    os.remove(os.path.join(bs_dir, fn))
-                    compile_list = ss
-                else:
-                    old_ss = old.get("ss") or {}
-                    comp = set()
-                    for p in ss or []:
-                        b = ascii_lower(os.path.basename(p))
+                if full_compile and os.path.isdir(bs_dir):
+                    for fn in os.listdir(bs_dir):
+                        if str(fn).lower().endswith(".lzss"):
+                            with suppress(OSError):
+                                os.remove(os.path.join(bs_dir, fn))
+                elif os.path.isdir(bs_dir):
+                    for p in compile_list:
                         nm = os.path.splitext(os.path.basename(p))[0]
-                        dat_path = os.path.join(bs_dir, nm + ".dat")
-                        need = False
-                        if not os.path.isfile(dat_path):
-                            need = True
-                        elif str(cur_ss.get(b, "")) != str(old_ss.get(b, "")):
-                            need = True
-                        if need:
-                            comp.add(p)
-                    compile_list = sorted(
-                        comp, key=lambda x: ascii_lower(os.path.basename(x))
-                    )
-                    if (not a.no_angou) and os.path.isdir(bs_dir):
-                        for p in compile_list or []:
-                            nm = os.path.splitext(os.path.basename(p))[0]
-                            lp = os.path.join(bs_dir, nm + ".lzss")
-                            if os.path.isfile(lp):
-                                with suppress(OSError):
-                                    os.remove(lp)
-            else:
-                for f in inc or []:
-                    p = os.path.join(inp, f)
-                    if os.path.isfile(p):
-                        cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
-                for p in ss or []:
-                    if os.path.isfile(p):
-                        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(
-                            p
-                        )
-            pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
+                        lp = os.path.join(bs_dir, nm + ".lzss")
+                        if os.path.isfile(lp):
+                            with suppress(OSError):
+                                os.remove(lp)
             if getattr(a, "dat_repack", False):
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)

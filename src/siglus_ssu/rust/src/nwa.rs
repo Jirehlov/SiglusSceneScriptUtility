@@ -195,6 +195,43 @@ fn remap_pack_mod(pack_mod: i32) -> Result<u8, String> {
     }
 }
 
+#[inline]
+fn decode_sample(
+    br: &mut BitReader<'_>,
+    nowsmp: &mut i32,
+    m: u8,
+    zero_mod: i32,
+    zero_cnt: &mut usize,
+) {
+    if *zero_cnt != 0 {
+        *zero_cnt -= 1;
+        return;
+    }
+    let mod_code = br.get(3) as u8;
+    match mod_code {
+        0 => {
+            if zero_mod != 0 {
+                let mut z = br.get(1);
+                if z == 1 {
+                    z = br.get(2);
+                    if z == 3 {
+                        z = br.get(8);
+                    }
+                }
+                *zero_cnt = z as usize;
+            }
+        }
+        1..=6 => apply_by_mod(br, nowsmp, m, mod_code),
+        _ => {
+            if br.get(1) == 0 {
+                apply_by_mod(br, nowsmp, m, 7)
+            } else {
+                *nowsmp = 0;
+            }
+        }
+    }
+}
+
 fn unpack_unit_16_into(
     chunk: &[u8],
     src_smp_cnt: usize,
@@ -216,44 +253,7 @@ fn unpack_unit_16_into(
         let mut zero_cnt: usize = 0;
 
         for _ in 0..src_smp_cnt {
-            if zero_cnt != 0 {
-                zero_cnt -= 1;
-            } else {
-                let mod_code = br.get(3) as u8;
-                if mod_code < 4 {
-                    match mod_code {
-                        0 => {
-                            if header.zero_mod != 0 {
-                                let mut z = br.get(1);
-                                if z == 1 {
-                                    z = br.get(2);
-                                    if z == 3 {
-                                        z = br.get(8);
-                                    }
-                                }
-                                zero_cnt = z as usize;
-                            }
-                        }
-                        1 => apply_by_mod(&mut br, &mut nowsmp, m, 1),
-                        2 => apply_by_mod(&mut br, &mut nowsmp, m, 2),
-                        _ => apply_by_mod(&mut br, &mut nowsmp, m, 3),
-                    }
-                } else {
-                    match mod_code {
-                        4 => apply_by_mod(&mut br, &mut nowsmp, m, 4),
-                        5 => apply_by_mod(&mut br, &mut nowsmp, m, 5),
-                        6 => apply_by_mod(&mut br, &mut nowsmp, m, 6),
-                        _ => {
-                            let b = br.get(1);
-                            if b == 0 {
-                                apply_by_mod(&mut br, &mut nowsmp, m, 7)
-                            } else {
-                                nowsmp = 0;
-                            }
-                        }
-                    }
-                }
-            }
+            decode_sample(&mut br, &mut nowsmp, m, header.zero_mod, &mut zero_cnt);
 
             if out_i + 2 > write_cnt {
                 break;
@@ -278,44 +278,7 @@ fn unpack_unit_16_into(
             &mut nowsmp_r
         };
 
-        if zero_cnt != 0 {
-            zero_cnt -= 1;
-        } else {
-            let mod_code = br.get(3) as u8;
-            if mod_code < 4 {
-                match mod_code {
-                    0 => {
-                        if header.zero_mod != 0 {
-                            let mut z = br.get(1);
-                            if z == 1 {
-                                z = br.get(2);
-                                if z == 3 {
-                                    z = br.get(8);
-                                }
-                            }
-                            zero_cnt = z as usize;
-                        }
-                    }
-                    1 => apply_by_mod(&mut br, nowsmp, m, 1),
-                    2 => apply_by_mod(&mut br, nowsmp, m, 2),
-                    _ => apply_by_mod(&mut br, nowsmp, m, 3),
-                }
-            } else {
-                match mod_code {
-                    4 => apply_by_mod(&mut br, nowsmp, m, 4),
-                    5 => apply_by_mod(&mut br, nowsmp, m, 5),
-                    6 => apply_by_mod(&mut br, nowsmp, m, 6),
-                    _ => {
-                        let b = br.get(1);
-                        if b == 0 {
-                            apply_by_mod(&mut br, nowsmp, m, 7)
-                        } else {
-                            *nowsmp = 0;
-                        }
-                    }
-                }
-            }
-        }
+        decode_sample(&mut br, nowsmp, m, header.zero_mod, &mut zero_cnt);
 
         if out_i + 2 > write_cnt {
             break;

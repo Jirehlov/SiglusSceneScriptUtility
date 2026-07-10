@@ -449,6 +449,25 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
     raise RuntimeError("Failed to decode Gameexe.dat payload")
 
 
+def _load_bgm_table(gameexe_path: str, explicit_angou: str = ""):
+    try:
+        text = _load_gameexe_ini_text(
+            gameexe_path,
+            explicit_angou=explicit_angou,
+        )
+    except ValueError as exc:
+        eprint(f"error: {exc}")
+        return None, 2
+    except Exception as exc:
+        eprint(f"error: {exc}")
+        return None, 1
+    table = _parse_bgm_table(text)
+    if not table:
+        eprint("error: no #BGM.* entries found")
+        return None, 1
+    return table, None
+
+
 def _ffmpeg_trim_ogg_bytes(
     ogg_bytes: bytes,
     start_sample: int,
@@ -1792,21 +1811,9 @@ def main(argv=None) -> int:
             eprint(f"Gameexe source not found: {trim_path}")
             return 1
         ffplay_path = shutil.which("ffplay") or ""
-        try:
-            gei_txt = _load_gameexe_ini_text(
-                trim_path,
-                explicit_angou=explicit_angou,
-            )
-        except ValueError as exc:
-            eprint(f"error: {exc}")
-            return 2
-        except Exception as exc:
-            eprint(f"error: {exc}")
-            return 1
-        trim_table = _parse_bgm_table(gei_txt)
-        if not trim_table:
-            eprint("error: no #BGM.* entries found")
-            return 1
+        trim_table, rc = _load_bgm_table(trim_path, explicit_angou)
+        if rc is not None:
+            return rc
         entries, rc = _collect_playback_entries(inp)
         if rc is not None:
             return rc
@@ -1859,21 +1866,9 @@ def main(argv=None) -> int:
         if not os.path.isfile(trim_path):
             eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
-        try:
-            gei_txt = _load_gameexe_ini_text(
-                trim_path,
-                explicit_angou=explicit_angou,
-            )
-        except ValueError as exc:
-            eprint(f"error: {exc}")
-            return 2
-        except Exception as exc:
-            eprint(f"error: {exc}")
-            return 1
-        trim_table = _parse_bgm_table(gei_txt)
-        if not trim_table:
-            eprint("error: no #BGM.* entries found")
-            return 1
+        trim_table, rc = _load_bgm_table(trim_path, explicit_angou)
+        if rc is not None:
+            return rc
         needs_ffmpeg = any(
             os.path.splitext(path)[1].lower() == ".owp" for path in files
         )

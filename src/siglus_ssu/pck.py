@@ -1608,11 +1608,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
         raise RuntimeError("source_angou: missing codes/params")
     if not enc or len(enc) < hs + 4:
         return (b"", "")
-    dec = enc
-    if lg:
-        _b = bytearray(enc)
-        xor_cycle_inplace(_b, lg, int(sa.get("last_index", 0)))
-        dec = bytes(_b)
+    _b = bytearray(enc)
+    xor_cycle_inplace(_b, lg, int(sa.get("last_index", 0)))
+    dec = bytes(_b)
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
         raise RuntimeError("source_angou: bad version")
@@ -1620,8 +1618,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     name_len = struct.unpack_from("<I", dec, hs)[0]
     p = hs + 4
     nameb = bytearray(dec[p : p + name_len])
-    if ng:
-        xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
+    xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
     try:
         name = nameb.decode("utf-16le", "surrogatepass")
     except Exception:
@@ -1649,10 +1646,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     compiler.tile_copy(sp2, dp2_mv, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
     compiler.tile_copy(sp2, dp1_mv, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
     lz = bytes(lzb[:lzsz])
-    if eg:
-        _b = bytearray(lz)
-        xor_cycle_inplace(_b, eg, int(sa.get("easy_index", 0)))
-        lz = bytes(_b)
+    _b = bytearray(lz)
+    xor_cycle_inplace(_b, eg, int(sa.get("easy_index", 0)))
+    lz = bytes(_b)
     raw = lzss_unpack(lz)
     return (raw, name)
 

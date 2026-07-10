@@ -1300,14 +1300,11 @@ class TutorialBuilder:
                 if target_id in silent_id_set:
                     reverse[target_id].add(segment_id)
         nested_resolutions = {segment_id: set() for segment_id in silent_ids}
-        queue = deque(silent_ids)
-        queued = set(silent_ids)
-        while queue:
-            segment_id = queue.popleft()
-            queued.discard(segment_id)
+
+        def resolve(segment_id, opaque=False):
             segment = self.segment_index.get(segment_id)
             if not isinstance(segment, dict):
-                continue
+                return None
             new_records = set()
             for target_id, records in self.segment_edge_groups.get(
                 segment_id, {}
@@ -1326,7 +1323,7 @@ class TutorialBuilder:
                         )
                     )
                     continue
-                if bool(nested_opaque.get(segment_id)):
+                if opaque:
                     continue
                 for rec in nested_resolutions.get(_safe_text(target.get("id")), ()):
                     next_kind, next_label, next_cross = _compose_seed(
@@ -1338,6 +1335,16 @@ class TutorialBuilder:
                         bool(rec[3]),
                     )
                     new_records.add((rec[0], next_kind, next_label, next_cross))
+            return new_records
+
+        queue = deque(silent_ids)
+        queued = set(silent_ids)
+        while queue:
+            segment_id = queue.popleft()
+            queued.discard(segment_id)
+            new_records = resolve(segment_id, bool(nested_opaque.get(segment_id)))
+            if new_records is None:
+                continue
             if new_records == nested_resolutions.get(segment_id):
                 continue
             nested_resolutions[segment_id] = new_records
@@ -1347,37 +1354,9 @@ class TutorialBuilder:
                     queued.add(pred_id)
         resolutions = {}
         for segment_id in silent_ids:
-            segment = self.segment_index.get(segment_id)
-            if not isinstance(segment, dict):
+            new_records = resolve(segment_id)
+            if new_records is None:
                 continue
-            new_records = set()
-            for target_id, records in self.segment_edge_groups.get(
-                segment_id, {}
-            ).items():
-                kind, label, cross_scene = _collapse_edge_records(records)
-                target = self.segment_index.get(_safe_text(target_id))
-                if not isinstance(target, dict):
-                    continue
-                if int(target.get("dialogue_count", 0) or 0) > 0:
-                    new_records.add(
-                        (
-                            _safe_text(target.get("id")),
-                            _safe_text(kind),
-                            _safe_text(label),
-                            bool(cross_scene),
-                        )
-                    )
-                    continue
-                for rec in nested_resolutions.get(_safe_text(target.get("id")), ()):
-                    next_kind, next_label, next_cross = _compose_seed(
-                        _safe_text(kind),
-                        _safe_text(label),
-                        bool(cross_scene),
-                        rec[1],
-                        rec[2],
-                        bool(rec[3]),
-                    )
-                    new_records.add((rec[0], next_kind, next_label, next_cross))
             resolutions[segment_id] = new_records
         self.silent_resolutions = resolutions
         self.return_frontiers = {}

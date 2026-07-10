@@ -2846,41 +2846,52 @@ KEYWORDS = sorted(KEYWORD_DOCS)
 DIRECTIVES = sorted(DIRECTIVE_DOCS)
 
 
+def _token_range_kind_at_position(
+    result: AnalysisResult,
+    line: int,
+    character: int,
+    position_encoding: str,
+) -> tuple[str, dict[str, Any] | None, str]:
+    occurrence = occurrence_at_position(result, line, character, position_encoding)
+    if occurrence is not None:
+        return (
+            occurrence.name,
+            _range(
+                occurrence.line,
+                occurrence.start_char,
+                occurrence.end_char,
+                _line_text_at(result.text, occurrence.line),
+                position_encoding,
+            ),
+            "label" if occurrence.kind in ("label", "z_label") else "ident",
+        )
+    source_token = _compiler_token_at_position(
+        result, line, character, position_encoding
+    )
+    if source_token is None:
+        return word_at_position(result.text, line, character, position_encoding)
+    return (
+        source_token.text,
+        _range(
+            source_token.line,
+            source_token.start_char,
+            source_token.end_char,
+            _line_text_at(result.text, source_token.line),
+            position_encoding,
+        ),
+        "label" if source_token.kind == "label" else "ident",
+    )
+
+
 def completion_items(
     result: AnalysisResult,
     line: int,
     character: int,
     position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> list[dict[str, Any]]:
-    occurrence = occurrence_at_position(result, line, character, position_encoding)
-    if occurrence is None:
-        source_token = _compiler_token_at_position(
-            result, line, character, position_encoding
-        )
-        if source_token is None:
-            token, rng, token_kind = word_at_position(
-                result.text, line, character, position_encoding
-            )
-        else:
-            token = source_token.text
-            rng = _range(
-                source_token.line,
-                source_token.start_char,
-                source_token.end_char,
-                _line_text_at(result.text, source_token.line),
-                position_encoding,
-            )
-            token_kind = "label" if source_token.kind == "label" else "ident"
-    else:
-        token = occurrence.name
-        rng = _range(
-            occurrence.line,
-            occurrence.start_char,
-            occurrence.end_char,
-            _line_text_at(result.text, occurrence.line),
-            position_encoding,
-        )
-        token_kind = "label" if occurrence.kind in ("label", "z_label") else "ident"
+    token, rng, token_kind = _token_range_kind_at_position(
+        result, line, character, position_encoding
+    )
     prefix = token.casefold()
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
@@ -2964,35 +2975,9 @@ def hover_for_position(
     character: int,
     position_encoding: str = POSITION_ENCODING_UTF16,
 ) -> dict[str, Any] | None:
-    occurrence = occurrence_at_position(result, line, character, position_encoding)
-    if occurrence is not None:
-        token = occurrence.name
-        rng = _range(
-            occurrence.line,
-            occurrence.start_char,
-            occurrence.end_char,
-            _line_text_at(result.text, occurrence.line),
-            position_encoding,
-        )
-        token_kind = "label" if occurrence.kind in ("label", "z_label") else "ident"
-    else:
-        source_token = _compiler_token_at_position(
-            result, line, character, position_encoding
-        )
-        if source_token is None:
-            token, rng, token_kind = word_at_position(
-                result.text, line, character, position_encoding
-            )
-        else:
-            token = source_token.text
-            rng = _range(
-                source_token.line,
-                source_token.start_char,
-                source_token.end_char,
-                _line_text_at(result.text, source_token.line),
-                position_encoding,
-            )
-            token_kind = "label" if source_token.kind == "label" else "ident"
+    token, rng, token_kind = _token_range_kind_at_position(
+        result, line, character, position_encoding
+    )
     if not token or rng is None:
         return None
     key = token.casefold()
@@ -3061,21 +3046,25 @@ def definition_locations_for_occurrence(
     key = occurrence.name.casefold()
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int, int]] = set()
+
+    def add_location(record: DefinitionRecord) -> None:
+        _append_definition_location(
+            locations,
+            seen,
+            record,
+            result.path,
+            current_path=result.path,
+            current_text=result.text,
+            position_encoding=position_encoding,
+            text_for_path=text_for_path,
+            uri_for_path=uri_for_path,
+        )
+
     if occurrence.symbol_id.startswith("cmd:"):
         for mapping in (result.local_definitions, result.project.definitions):
             for rec in mapping.get(key, []):
                 if rec.kind == "command":
-                    _append_definition_location(
-                        locations,
-                        seen,
-                        rec,
-                        result.path,
-                        current_path=result.path,
-                        current_text=result.text,
-                        position_encoding=position_encoding,
-                        text_for_path=text_for_path,
-                        uri_for_path=uri_for_path,
-                    )
+                    add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("cprop:"):
         parts = occurrence.symbol_id.split(":", 2)
@@ -3083,17 +3072,7 @@ def definition_locations_for_occurrence(
             scope = f"command {parts[1]}"
             for rec in result.local_definitions.get(key, []):
                 if rec.kind == "property" and rec.scope.casefold() == scope.casefold():
-                    _append_definition_location(
-                        locations,
-                        seen,
-                        rec,
-                        result.path,
-                        current_path=result.path,
-                        current_text=result.text,
-                        position_encoding=position_encoding,
-                        text_for_path=text_for_path,
-                        uri_for_path=uri_for_path,
-                    )
+                    add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("gprop:"):
         for mapping in (result.local_definitions, result.project.definitions):
@@ -3101,17 +3080,7 @@ def definition_locations_for_occurrence(
                 if rec.kind == "property" and not rec.scope.casefold().startswith(
                     "command "
                 ):
-                    _append_definition_location(
-                        locations,
-                        seen,
-                        rec,
-                        result.path,
-                        current_path=result.path,
-                        current_text=result.text,
-                        position_encoding=position_encoding,
-                        text_for_path=text_for_path,
-                        uri_for_path=uri_for_path,
-                    )
+                    add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("macro:"):
         parts = occurrence.symbol_id.split(":", 2)
@@ -3119,48 +3088,18 @@ def definition_locations_for_occurrence(
             macro_kind = parts[1]
             for rec in result.project.definitions.get(key, []):
                 if rec.kind.casefold() == macro_kind:
-                    _append_definition_location(
-                        locations,
-                        seen,
-                        rec,
-                        result.path,
-                        current_path=result.path,
-                        current_text=result.text,
-                        position_encoding=position_encoding,
-                        text_for_path=text_for_path,
-                        uri_for_path=uri_for_path,
-                    )
+                    add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("macrolocal:"):
         for rec in result.local_definitions.get(key, []):
             if _definition_symbol_id(rec) != occurrence.symbol_id:
                 continue
-            _append_definition_location(
-                locations,
-                seen,
-                rec,
-                result.path,
-                current_path=result.path,
-                current_text=result.text,
-                position_encoding=position_encoding,
-                text_for_path=text_for_path,
-                uri_for_path=uri_for_path,
-            )
+            add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("label:"):
         rec = result.label_definitions.get(key) or result.z_label_definitions.get(key)
         if rec:
-            _append_definition_location(
-                locations,
-                seen,
-                rec,
-                result.path,
-                current_path=result.path,
-                current_text=result.text,
-                position_encoding=position_encoding,
-                text_for_path=text_for_path,
-                uri_for_path=uri_for_path,
-            )
+            add_location(rec)
         return locations
     return locations
 

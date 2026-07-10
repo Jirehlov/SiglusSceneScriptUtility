@@ -542,6 +542,33 @@ def new_expression_state(
             return None
         return f"({lhs} {op_txt} {rhs})"
 
+    def _render_expr_prefix(items, idx, parent_form, base):
+        it = items[idx]
+        code = _stack_int_value(it)
+        if code is None:
+            try:
+                if not bool((it or {}).get("receiver")):
+                    return None
+                parent_form = int((it or {}).get("form"))
+            except Exception:
+                return None
+            return idx + 1, parent_form, _item_expr(it), None, None
+        if int(code) != int(C.ELM_ARRAY):
+            return idx, parent_form, base, code, None
+        info = _array_element_info(parent_form)
+        if not isinstance(info, dict) or idx + 1 >= len(items):
+            return None
+        ret_form = info.get("ret")
+        if not isinstance(ret_form, int):
+            return None
+        return (
+            idx + 2,
+            int(ret_form),
+            f"{base}[{_item_expr(items[idx + 1])}]",
+            None,
+            info,
+        )
+
     def _render_property_expr_items(items):
         parent_form = int(fm_global)
         if not items:
@@ -551,29 +578,14 @@ def new_expression_state(
         last_info = None
         last_ret = None
         while idx < len(items):
-            it = items[idx]
-            code = _stack_int_value(it)
+            prefix = _render_expr_prefix(items, idx, parent_form, base)
+            if prefix is None:
+                return None
+            idx, parent_form, base, code, prefix_info = prefix
             if code is None:
-                try:
-                    if not bool((it or {}).get("receiver")):
-                        return None
-                    parent_form = int((it or {}).get("form"))
-                except Exception:
-                    return None
-                base = _item_expr(it)
-                idx += 1
-                continue
-            if int(code) == int(C.ELM_ARRAY):
-                info = _array_element_info(parent_form)
-                if not isinstance(info, dict) or idx + 1 >= len(items):
-                    return None
-                base = f"{base}[{_item_expr(items[idx + 1])}]"
-                last_info = info
-                last_ret = info.get("ret")
-                if not isinstance(last_ret, int):
-                    return None
-                parent_form = int(last_ret)
-                idx += 2
+                if prefix_info is not None:
+                    last_info = prefix_info
+                    last_ret = prefix_info.get("ret")
                 continue
             info = _element_info(parent_form, code)
             if not isinstance(info, dict) or int(info.get("type", -1)) != int(
@@ -604,28 +616,11 @@ def new_expression_state(
         idx = 0
         base = ""
         while idx < len(items):
-            it = items[idx]
-            code = _stack_int_value(it)
+            prefix = _render_expr_prefix(items, idx, parent_form, base)
+            if prefix is None:
+                return None
+            idx, parent_form, base, code, _prefix_info = prefix
             if code is None:
-                try:
-                    if not bool((it or {}).get("receiver")):
-                        return None
-                    parent_form = int((it or {}).get("form"))
-                except Exception:
-                    return None
-                base = _item_expr(it)
-                idx += 1
-                continue
-            if int(code) == int(C.ELM_ARRAY):
-                info = _array_element_info(parent_form)
-                if not isinstance(info, dict) or idx + 1 >= len(items):
-                    return None
-                base = f"{base}[{_item_expr(items[idx + 1])}]"
-                ret_form = info.get("ret")
-                if not isinstance(ret_form, int):
-                    return None
-                parent_form = int(ret_form)
-                idx += 2
                 continue
             info = (
                 info_hint
@@ -737,10 +732,10 @@ def new_expression_state(
             return _pop_scalar_expr(form)
         return _pop_element_expr()
 
-    def _pop_arg_expr_list(arg_forms):
+    def _pop_arg_list(arg_forms, pop_arg):
         vals = []
         for arg_info in reversed(list(arg_forms or [])):
-            vals.append(_pop_arg_expr(arg_info))
+            vals.append(pop_arg(arg_info))
         vals.reverse()
         return vals
 
@@ -757,10 +752,10 @@ def new_expression_state(
         state.elm_points[:] = saved_points
         state.elm_point_pending_idx = saved_pending
 
-    def _peek_arg_expr_list(arg_forms):
+    def _peek_arg_list(arg_forms, pop_arg):
         saved = _snapshot_state()
         try:
-            return _pop_arg_expr_list(arg_forms)
+            return _pop_arg_list(arg_forms, pop_arg)
         finally:
             _restore_state(saved)
 
@@ -970,10 +965,11 @@ def new_expression_state(
     state.render_command_expr_items = _render_command_expr_items
     state.pop_element_expr = _pop_element_expr
     state.pop_arg_expr = _pop_arg_expr
-    state.pop_arg_expr_list = _pop_arg_expr_list
+    state.pop_arg_expr_list = partial(_pop_arg_list, pop_arg=_pop_arg_expr)
     state.snapshot_state = _snapshot_state
     state.restore_state = _restore_state
-    state.peek_arg_expr_list = _peek_arg_expr_list
+    state.peek_arg_expr_list = partial(_peek_arg_list, pop_arg=_pop_arg_expr)
+    state.peek_arg_list = _peek_arg_list
     state.peek_branch_expr = _peek_branch_expr
     state.resolve_property_expr = _resolve_property_expr
     state.resolve_command_expr = _resolve_command_expr
@@ -1431,6 +1427,7 @@ def disassemble_scn_bytes(
     _snapshot_state = expr_state.snapshot_state
     _restore_state = expr_state.restore_state
     _peek_arg_expr_list = expr_state.peek_arg_expr_list
+    _peek_arg_list = expr_state.peek_arg_list
     _peek_branch_expr = expr_state.peek_branch_expr
     _resolve_property_expr = expr_state.resolve_property_expr
     _resolve_command_expr = expr_state.resolve_command_expr
@@ -1477,20 +1474,6 @@ def disassemble_scn_bytes(
                 return None
         _consume_element()
         return None
-
-    def _pop_arg_value_list(arg_forms):
-        vals = []
-        for arg_info in reversed(list(arg_forms or [])):
-            vals.append(_pop_arg_value(arg_info))
-        vals.reverse()
-        return vals
-
-    def _peek_arg_value_list(arg_forms):
-        saved = _snapshot_state()
-        try:
-            return _pop_arg_value_list(arg_forms)
-        finally:
-            _restore_state(saved)
 
     def _peek_assign_expr(right_form):
         saved = _snapshot_state()
@@ -2226,7 +2209,7 @@ def disassemble_scn_bytes(
             arg_values = []
             named_values = {}
             if not payload_trace:
-                arg_values = _peek_arg_value_list(arg_forms)
+                arg_values = _peek_arg_list(arg_forms, _pop_arg_value)
                 named_values = _command_named_values(info, arg_values, named_ids)
             if render_text:
                 ename = (" " + qname) if qname else ""

@@ -231,7 +231,7 @@ When `--tmp` is not supplied, every compile invocation creates a uniquely named 
 
 Scene names written into the linked `.pck` use the same ASCII-only lowercase normalization as the official compiler: `A` through `Z` become `a` through `z`, while non-ASCII characters, including fullwidth Latin letters such as `ＥＤ`, are preserved.
 
-Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. The official Windows project namespace does not support treating filenames that differ only by ASCII case as distinct. On a case-sensitive file system, the utility warns when immediate input filenames such as `A.ss` and `a.ss` collide under the official normalization rule.
+Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. The official Windows project namespace does not support treating filenames that differ only by ASCII case as distinct. On a case-sensitive file system, the utility rejects immediate input filenames such as `A.ss` and `a.ss` that collide under the official normalization rule.
 
 It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
 
@@ -329,7 +329,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 #### Notes
 
 - **Auto-encoding detection:** If `--charset` is not specified, the utility scans `.ss`, `.inc`, `.ini`, and `.dat` files for a UTF-8 BOM or kana/CJK characters. If found, `utf-8` is used; otherwise, `cp932` (Shift-JIS) is assumed.
-- **Incremental compilation:** When `--tmp` is specified, the compiler caches MD5 hashes of all `.ss` and `.inc` files. On the next run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. If any `.inc` file changes, a full recompile is triggered.
+- **Incremental compilation:** When `--tmp` is specified, the compiler caches MD5 hashes of all `.ss` and `.inc` files. Cache compatibility includes the `siglus-ssu` version, source charset, and active `const.py` content/profile. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. If any `.inc` file changes, a full recompile is triggered.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene, rebuilds every scene serially, and reports any later mismatch while continuing to generate output; use `--set-shuffle` to rebuild with a known seed.
 
 ---

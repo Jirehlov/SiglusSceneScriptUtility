@@ -706,6 +706,39 @@ def _diff_indices(a, b):
     return out
 
 
+def _print_chrkoe_diff(ca, cb, fields, first_formatter=None):
+    n = max(len(ca), len(cb))
+    different = 0
+    for i in range(n):
+        ea = ca[i] if i < len(ca) else None
+        eb = cb[i] if i < len(cb) else None
+        if ea != eb:
+            different += 1
+    print(f"diff_chrkoe: {different}")
+
+    def render(entry):
+        values = [
+            entry.get(field) if isinstance(entry, dict) else default
+            for field, default in fields
+        ]
+        if first_formatter is not None:
+            values[0] = first_formatter(values[0])
+        return "(" + ",".join(str(value) for value in values) + ")"
+
+    shown = 0
+    for i in range(n):
+        ea = ca[i] if i < len(ca) else None
+        eb = cb[i] if i < len(cb) else None
+        if ea == eb:
+            continue
+        print(f"chrkoe[{i}]: {render(ea)} -> {render(eb)}")
+        shown += 1
+        if shown >= 200:
+            break
+    if different > shown:
+        print(f"chrkoe_more: {different - shown}")
+
+
 def _try_parse_global_or_config(blob):
     if (not blob) or len(blob) < 12:
         return None
@@ -1294,32 +1327,12 @@ def compare_sav(b1, b2):
                     print(f"{key}_more: {len(idx) - shown}")
             ca = pa.get("chrkoe") or []
             cb = pb.get("chrkoe") or []
-            n = max(len(ca), len(cb))
-            dd = 0
-            for i in range(n):
-                ea = ca[i] if i < len(ca) else None
-                eb = cb[i] if i < len(cb) else None
-                if ea != eb:
-                    dd += 1
-            print(f"diff_chrkoe: {dd}")
-            shown = 0
-            for i in range(n):
-                ea = ca[i] if i < len(ca) else None
-                eb = cb[i] if i < len(cb) else None
-                if ea == eb:
-                    continue
-                na = ea.get("name_str") if isinstance(ea, dict) else ""
-                nb = eb.get("name_str") if isinstance(eb, dict) else ""
-                laa = ea.get("look_flag") if isinstance(ea, dict) else None
-                lbb = eb.get("look_flag") if isinstance(eb, dict) else None
-                print(
-                    f"chrkoe[{i}]: ({dn(na, 60)!s},{laa!s}) -> ({dn(nb, 60)!s},{lbb!s})"
-                )
-                shown += 1
-                if shown >= 200:
-                    break
-            if dd > shown:
-                print(f"chrkoe_more: {dd - shown}")
+            _print_chrkoe_diff(
+                ca,
+                cb,
+                (("name_str", ""), ("look_flag", None)),
+                first_formatter=lambda value: dn(value, 60),
+            )
         else:
             scalar_keys = (
                 "screen_size_mode",
@@ -1404,30 +1417,11 @@ def compare_sav(b1, b2):
                     print(f"{k}_more: {len(idx) - 500}")
             ca = pa.get("chrkoe") or []
             cb = pb.get("chrkoe") or []
-            n = max(len(ca), len(cb))
-            dd = 0
-            for i in range(n):
-                ea = ca[i] if i < len(ca) else None
-                eb = cb[i] if i < len(cb) else None
-                if ea != eb:
-                    dd += 1
-            print(f"diff_chrkoe: {dd}")
-            shown = 0
-            for i in range(n):
-                ea = ca[i] if i < len(ca) else None
-                eb = cb[i] if i < len(cb) else None
-                if ea == eb:
-                    continue
-                oa = ea.get("onoff") if isinstance(ea, dict) else None
-                ob = eb.get("onoff") if isinstance(eb, dict) else None
-                va = ea.get("volume") if isinstance(ea, dict) else None
-                vb = eb.get("volume") if isinstance(eb, dict) else None
-                print(f"chrkoe[{i}]: ({oa!s},{va!s}) -> ({ob!s},{vb!s})")
-                shown += 1
-                if shown >= 200:
-                    break
-            if dd > shown:
-                print(f"chrkoe_more: {dd - shown}")
+            _print_chrkoe_diff(
+                ca,
+                cb,
+                (("onoff", None), ("volume", None)),
+            )
         return 0
     print("==== Compare .sav ====")
     print(f"kind: {k1['kind']}")
