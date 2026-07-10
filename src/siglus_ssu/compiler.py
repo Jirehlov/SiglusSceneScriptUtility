@@ -88,15 +88,6 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     md5_code = bytearray(68)
     md5_code[: len(md5)] = md5
     n0x40 = lzsz
-    n65 = 65 if (((n0x40 + 1) & 0x3F) <= 0x38) else 129
-    v13 = n65 - ((n0x40 + 1) & 0x3F)
-    v73 = (n0x40 * 8) & 0xFFFFFFFF
-    idx = v13 + 60
-    if idx + 4 <= len(md5_code):
-        md5_code[idx] = v73 & 0xFF
-        md5_code[idx + 1] = (n0x40 >> 5) & 0xFF
-        md5_code[idx + 2] = (v73 >> 16) & 0xFF
-        md5_code[idx + 3] = (v73 >> 24) & 0xFF
     struct.pack_into("<I", md5_code, 64, n0x40)
     nameb = bytearray((name or "").encode("utf-16le"))
     xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))

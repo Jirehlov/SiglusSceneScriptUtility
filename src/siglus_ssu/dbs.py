@@ -152,14 +152,14 @@ def parse_dbs(m_type: int, data: bytes):
             return None
         if data_ofs + dt_sz > len(data):
             return None
-        return (data_size, row_ofs, col_ofs, data_ofs, str_ofs, dt_sz, scale)
+        return (data_size, row_ofs, col_ofs, data_ofs, str_ofs, scale)
 
     chosen = _try_scale(1)
     if chosen is None:
         chosen = _try_scale(4)
     if chosen is None:
         raise ValueError("dbs offset out of range")
-    data_size, row_ofs, col_ofs, data_ofs, str_ofs, dt_sz, ofs_scale = chosen
+    data_size, row_ofs, col_ofs, data_ofs, str_ofs, ofs_scale = chosen
     row_calls = []
     if row_cnt:
         row_calls = list(struct.unpack_from(f"<{row_cnt:d}i", data, row_ofs))

@@ -520,7 +520,7 @@ def _index_ovk(voice_dir: str):
     )
 
 
-def _select_ovk(scene_map: dict, _voice_dir: str, scene_no: int, _chara_no: int):
+def _select_ovk(scene_map: dict, scene_no: int):
     sm = scene_map.get(scene_no)
     if not sm:
         raise FileNotFoundError(f"Missing OVK for scene {scene_no:04d}")
@@ -543,19 +543,16 @@ def _format_duration_seconds_csv(duration) -> str:
     return f"{max(float(duration), 0.0):.6f}"
 
 
-def _collect_entry_durations(entries, scene_map, voice_dir, ovk_entry_map, read_ogg):
+def _collect_entry_durations(entries, scene_map, ovk_entry_map, read_ogg):
     durations = {}
     total = len(entries)
     for idx, koe_no in enumerate(sorted(entries.keys()), 1):
         if idx == 1 or idx % 100 == 0:
             _progress(f"koe: reading duration {idx}/{total}: KOE({int(koe_no):09d})")
-        e = entries[koe_no]
         scene_no = koe_no // 100000
         entry_no = koe_no % 100000
         try:
-            ovk_path = _select_ovk(
-                scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
-            )
+            ovk_path = _select_ovk(scene_map, scene_no)
             entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
             if entry is None:
                 raise KeyError(f"Entry not found: entry_no={entry_no}")
@@ -697,7 +694,7 @@ def main(argv=None):
     duration_by_koe = {}
     if single_koe_no is None:
         duration_by_koe = _collect_entry_durations(
-            entries, scene_map, voice_dir, ovk_entry_map, _read_ogg_from_ovk
+            entries, scene_map, ovk_entry_map, _read_ogg_from_ovk
         )
         _close_current_ovk()
         csv_path = os.path.join(out_dir, "koe_master.csv")
@@ -810,9 +807,7 @@ def main(argv=None):
                 scene_no = koe_no // 100000
                 entry_no = koe_no % 100000
                 try:
-                    ovk_path = _select_ovk(
-                        scene_map, voice_dir, scene_no, _int_or(e["chara_no"], -1)
-                    )
+                    ovk_path = _select_ovk(scene_map, scene_no)
                     entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
                     if entry is None:
                         raise KeyError(f"Entry not found: entry_no={entry_no}")
@@ -866,7 +861,7 @@ def main(argv=None):
                     scene_no = koe_no // 100000
                     entry_no = koe_no % 100000
                     try:
-                        ovk_path = _select_ovk(scene_map, voice_dir, scene_no, -1)
+                        ovk_path = _select_ovk(scene_map, scene_no)
                         entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
                         if entry is None:
                             raise KeyError(f"Entry not found: entry_no={entry_no}")

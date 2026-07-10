@@ -2203,14 +2203,14 @@ class TutorialBuilder:
                             )
                         ):
                             continue
-                    next_kind, next_label, next_cross = _compose_seed(
+                    next_kind, next_label = _compose_seed(
                         _safe_text(kind),
                         _safe_text(label),
                         bool(cross_scene),
                         rec[1],
                         rec[2],
                         bool(rec[3]),
-                    )
+                    )[:2]
                     self._add_plot_edge(
                         edges,
                         edge_seen,

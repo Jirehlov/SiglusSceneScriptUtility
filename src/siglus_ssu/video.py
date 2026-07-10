@@ -283,7 +283,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     theora_info = _read_theora_ident_from_stream(ogv_path, 0, theora_serial)
     if not theora_info:
         raise ValueError("OGV: missing theora identification header")
-    fps_num, fps_den, theora_kfgshift, theora_pixfmt, pic_w, pic_h = theora_info
+    fps_num, fps_den, pic_w, pic_h = theora_info[:2] + theora_info[4:]
     dword_28 = (
         (2 if int(pic_w) * 9 == int(pic_h) * 16 else 1) if mode is None else int(mode)
     )

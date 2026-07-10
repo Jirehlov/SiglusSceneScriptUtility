@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 
 ## [v0.4.0] - TBA
-- Reviewed by Fable 5.
+- Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
 - Added LICENSE.
 - Changed `siglus-ssu test` success results from `PASS` to `EXACT` for byte-identical `.pck` files and `PAYLOAD_SAME` for different `.pck` bytes with matching normalized payloads.
 

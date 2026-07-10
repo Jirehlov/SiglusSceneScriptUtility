@@ -1160,8 +1160,8 @@ def compare_pck(
     compare_payload=False,
     explicit_angou: str = "",
 ) -> int:
-    s1, m1 = _pck_sections(b1, preview=False)
-    s2, m2 = _pck_sections(b2, preview=False)
+    m1 = _pck_sections(b1, preview=False)[1]
+    m2 = _pck_sections(b2, preview=False)[1]
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [
@@ -1870,7 +1870,7 @@ def extract_pck(
     if fail_cnt:
         sys.stderr.write(f"Failed scenes: {fail_cnt:d}\n")
     if disam_fail_cnt:
-        sys.stderr.write(f"Failed scene .dat files: {disam_fail_cnt:d}\n")
+        sys.stderr.write(f"Failed scene outputs: {disam_fail_cnt:d}\n")
     if dat_txt and isinstance(disam_stats, dict):
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"

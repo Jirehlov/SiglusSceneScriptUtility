@@ -165,7 +165,7 @@ def dat_disassembly_bundle(
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
-        secs, meta = dat_sections(blob)
+        meta = dat_sections(blob)[1]
         h = meta.get("header") or {}
         so, ss = bounds
         scn = blob[so : so + ss]
@@ -430,13 +430,15 @@ def process_dat_output_items(items, stats=None, decompile=False):
             stats, "decompile_hints_seconds", time.perf_counter() - started
         )
         for item in ready_items:
-            _write_dat_decompiled(
+            out_path = _write_dat_decompiled(
                 item.get("dat_path"),
                 out_dir=item.get("out_dir"),
                 bundle=item.get("bundle"),
                 decompile_hints=decompile_hints,
                 stats=stats,
             )
+            if not out_path:
+                failed_paths.append(item.get("dat_path"))
     return {"written": ready_items, "failed_paths": failed_paths}
 
 
@@ -974,8 +976,8 @@ def compare_dat(
     disam_out_dir=None,
     disam_to_input_dir=False,
 ) -> int:
-    s1, m1 = dat_sections(b1)
-    s2, m2 = dat_sections(b2)
+    m1 = dat_sections(b1)[1]
+    m2 = dat_sections(b2)[1]
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [

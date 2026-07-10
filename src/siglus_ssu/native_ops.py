@@ -426,8 +426,6 @@ def _py_lzss32_pack(src: bytes) -> bytes:
     if (len(src) & 3) != 0:
         raise ValueError("lzss32: source size is not a multiple of 4")
     src_cnt = len(src) // 4
-    if src_cnt == 0:
-        return b""
     dwords = list(struct.unpack(f"<{src_cnt}I", src))
     INDEX_BITS = 12
     BREAK_EVEN = 0
@@ -472,13 +470,14 @@ def _py_lzss32_pack(src: bytes) -> bytes:
             pack_bit_count = 0
             pack_data_count = 1
             pack_data[0] = 0
-    if pack_data_count > 1:
-        pack_buf.extend(pack_data[:pack_data_count])
+    pack_buf.extend(pack_data[:pack_data_count])
     struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
     return bytes(pack_buf)
 
 
 def _py_lzss32_unpack(src: bytes) -> bytes:
+    if not src:
+        return b""
     if len(src) < 8:
         raise ValueError("lzss32 short")
     _, org = struct.unpack_from("<II", src, 0)

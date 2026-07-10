@@ -196,9 +196,6 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
         return Err("lzss32: source size is not a multiple of 4".to_string());
     }
     let src_cnt = src.len() / 4;
-    if src_cnt == 0 {
-        return Ok(Vec::new());
-    }
     let mut dwords = Vec::with_capacity(src_cnt);
     for chunk in src.chunks_exact(4) {
         let arr: [u8; 4] = chunk
@@ -253,9 +250,7 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
         }
     }
 
-    if pack_data_count > 1 {
-        pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
-    }
+    pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
 
     let arc = pack_buf.len() as u32;
     let org = src.len() as u32;
@@ -265,6 +260,9 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
+    if src.is_empty() {
+        return Ok(Vec::new());
+    }
     if src.len() < 8 {
         return Err("lzss32 short".to_string());
     }

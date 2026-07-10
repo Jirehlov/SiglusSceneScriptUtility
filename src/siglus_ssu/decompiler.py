@@ -1894,16 +1894,10 @@ class _Decompiler:
         _copy_element = expr_state.copy_element
         _consume_element = expr_state.consume_element
         _consume_arg_value = expr_state.consume_arg_value
-        _item_expr = expr_state.item_expr
-        _pop_scalar_expr = expr_state.pop_scalar_expr
         _format_unary_expr = expr_state.format_unary_expr
         _format_binary_expr = expr_state.format_binary_expr
         _render_property_expr_items = expr_state.render_property_expr_items
         _render_command_expr_items = expr_state.render_command_expr_items
-        _pop_element_expr = expr_state.pop_element_expr
-        _pop_arg_expr = expr_state.pop_arg_expr
-        _snapshot_state = expr_state.snapshot_state
-        _restore_state = expr_state.restore_state
         _peek_arg_expr_list = expr_state.peek_arg_expr_list
         _peek_branch_expr = expr_state.peek_branch_expr
         _resolve_property_expr = expr_state.resolve_property_expr
@@ -4613,7 +4607,6 @@ class _Decompiler:
         return self._render_simple(start_idx, end_ofs, ctx, inline=False)
 
     def _match_command_def(self, start_idx, end_ofs, ctx):
-        _ = ctx
         parsed = self._read_command_def(start_idx, end_ofs)
         if parsed is None:
             return None
@@ -4818,7 +4811,6 @@ class _Decompiler:
         return self._with_event(start_idx, out), tramp_idx
 
     def _match_while(self, start_idx, end_ofs, ctx):
-        _ = ctx
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None
@@ -4848,7 +4840,6 @@ class _Decompiler:
         return self._with_event(start_idx, out), tramp_idx
 
     def _match_for(self, start_idx, end_ofs, ctx):
-        _ = ctx
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None
@@ -4950,7 +4941,6 @@ class _Decompiler:
         return out, tramp_idx
 
     def _match_switch(self, start_idx, end_ofs, ctx):
-        _ = ctx
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if j >= len(self.events):
             return None

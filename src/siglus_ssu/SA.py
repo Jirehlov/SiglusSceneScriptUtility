@@ -1021,7 +1021,7 @@ class SA:
                 e["close_b"] = cb
                 s.last = err
                 return 1, p, e
-            ok, p, dt = s.sa_atom(p, C.LA_T["DOT"])
+            ok, p = s.sa_atom(p, C.LA_T["DOT"])[:2]
             if ok:
                 ok, p2, ch = s.sa_element(p, 1)
                 if not ok:
@@ -1285,7 +1285,7 @@ class SA:
             )
         s.plad["atom_list"] = s.atom_list
         s.clear()
-        ok, p, root = s.sa_ss(0)
+        ok, root = s.sa_ss(0)[::2]
         if not ok:
             return 0, None
         s.clear()

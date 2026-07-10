@@ -55,20 +55,6 @@ pub fn encrypt_source(
     let mut md5_code = vec![0u8; 68];
     md5_code[..digest.len().min(68)].copy_from_slice(&digest[..digest.len().min(68)]);
     let n0x40 = packed_size as u32;
-    let n65 = if ((n0x40 + 1) & 0x3f) <= 0x38 {
-        65u32
-    } else {
-        129u32
-    };
-    let v13 = n65 - ((n0x40 + 1) & 0x3f);
-    let v73 = n0x40.wrapping_mul(8);
-    let index = v13 as usize + 60;
-    if index + 4 <= md5_code.len() {
-        md5_code[index] = (v73 & 0xff) as u8;
-        md5_code[index + 1] = ((n0x40 >> 5) & 0xff) as u8;
-        md5_code[index + 2] = ((v73 >> 16) & 0xff) as u8;
-        md5_code[index + 3] = ((v73 >> 24) & 0xff) as u8;
-    }
     write_u32(&mut md5_code, 64, n0x40);
 
     let mut name_bytes = utf16le(name);
