@@ -2313,7 +2313,7 @@ class TutorialBuilder:
 def _write_json(output_json: str, data: dict) -> None:
     out_path = Path(output_json)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\r\n"
+    payload = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
     out_path.write_text(payload, encoding="utf-8", newline="\r\n")
 
 
