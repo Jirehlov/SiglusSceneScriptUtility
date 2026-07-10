@@ -129,28 +129,21 @@ def parse_dbs(m_type: int, data: bytes):
             data_size = data_size * scale
         if data_size > len(data):
             data_size = len(data)
-        if not (
-            0 <= row_ofs <= len(data)
-            and 0 <= col_ofs <= len(data)
-            and 0 <= data_ofs <= len(data)
-            and 0 <= str_ofs <= len(data)
-        ):
-            return None
-        if not (0 <= str_ofs <= data_size <= len(data)):
-            return None
         row_hdr_sz = row_cnt * 4
         col_hdr_sz = col_cnt * 8
         cell_cnt = row_cnt * col_cnt
         if cell_cnt < 0 or cell_cnt > 1_000_000_000:
             return None
         dt_sz = cell_cnt * 4
-        if not (row_ofs <= col_ofs <= data_ofs <= str_ofs):
+        if not (
+            28 <= row_ofs <= col_ofs <= data_ofs <= str_ofs <= data_size <= len(data)
+        ):
             return None
-        if row_ofs + row_hdr_sz > len(data):
+        if row_ofs + row_hdr_sz > col_ofs:
             return None
-        if col_ofs + col_hdr_sz > len(data):
+        if col_ofs + col_hdr_sz > data_ofs:
             return None
-        if data_ofs + dt_sz > len(data):
+        if data_ofs + dt_sz > str_ofs:
             return None
         return (data_size, row_ofs, col_ofs, data_ofs, str_ofs, scale)
 

@@ -70,6 +70,11 @@ def _safe_text(value) -> str:
         return ""
 
 
+def _int_or(value, default: int) -> int:
+    parsed = _int_or_none(value)
+    return int(default) if parsed is None else int(parsed)
+
+
 def _scene_key(scene_no: int) -> str:
     return f"scene:{int(scene_no):d}"
 
@@ -601,9 +606,7 @@ class TutorialBuilder:
                 cursor["choice_last"] = index + 1 >= len(options)
                 if index + 1 >= len(options):
                     break
-                cursor = block_by_start.get(
-                    _int_or_none(cursor.get("tail_target_ofs")) or -1
-                )
+                cursor = block_by_start.get(_int_or(cursor.get("tail_target_ofs"), -1))
 
     def _make_block(
         self,
@@ -771,7 +774,7 @@ class TutorialBuilder:
         if target_ofs is None:
             return None
         return {
-            "scene_no": int(current_scene.get("scene_no", -1) or -1),
+            "scene_no": _int_or(current_scene.get("scene_no"), -1),
             "offset": int(target_ofs),
             "name": name,
         }
@@ -898,7 +901,7 @@ class TutorialBuilder:
                 if last_op == "CD_GOTO":
                     target = self._find_block(
                         int(scene["scene_no"]),
-                        _int_or_none(block.get("tail_target_ofs")) or -1,
+                        _int_or(block.get("tail_target_ofs"), -1),
                     )
                     if isinstance(target, dict):
                         self._add_block_edge(block, target, "goto")
@@ -906,7 +909,7 @@ class TutorialBuilder:
                 if last_op == "CD_GOTO_TRUE":
                     target = self._find_block(
                         int(scene["scene_no"]),
-                        _int_or_none(block.get("tail_target_ofs")) or -1,
+                        _int_or(block.get("tail_target_ofs"), -1),
                     )
                     if isinstance(target, dict):
                         self._add_block_edge(block, target, "branch_true", "true")
@@ -916,7 +919,7 @@ class TutorialBuilder:
                 if last_op == "CD_GOTO_FALSE":
                     target = self._find_block(
                         int(scene["scene_no"]),
-                        _int_or_none(block.get("tail_target_ofs")) or -1,
+                        _int_or(block.get("tail_target_ofs"), -1),
                     )
                     choice_option = _safe_text(block.get("choice_option"))
                     if choice_option:
@@ -975,8 +978,8 @@ class TutorialBuilder:
                     if _safe_text(transfer.get("kind")) == "jump":
                         if bool(transfer.get("resolved")):
                             target = self._find_block(
-                                _int_or_none(transfer.get("target_scene_no")) or -1,
-                                _int_or_none(transfer.get("target_ofs")) or -1,
+                                _int_or(transfer.get("target_scene_no"), -1),
+                                _int_or(transfer.get("target_ofs"), -1),
                             )
                             if isinstance(target, dict):
                                 self._add_block_edge(
@@ -1600,11 +1603,11 @@ class TutorialBuilder:
                     for rec in frontier_records:
                         if (
                             require_return_records_same_scene
-                            and int(
+                            and _int_or(
                                 self.segment_index.get(_safe_text(rec[0]), {}).get(
-                                    "scene_no", -1
-                                )
-                                or -1
+                                    "scene_no"
+                                ),
+                                -1,
                             )
                             != start_scene_no
                         ):
@@ -1624,7 +1627,7 @@ class TutorialBuilder:
                     continue
                 if bool(cross_scene):
                     continue
-                if int(target.get("scene_no", -1) or -1) != start_scene_no:
+                if _int_or(target.get("scene_no"), -1) != start_scene_no:
                     continue
                 next_distance = int(distance) + 1
                 if (
@@ -1764,8 +1767,8 @@ class TutorialBuilder:
                     break
                 if len(incoming.get(target_id, [])) != 1:
                     break
-                if int(target_node.get("scene_no", -1) or -1) != int(
-                    members[0].get("scene_no", -2) or -2
+                if _int_or(target_node.get("scene_no"), -1) != _int_or(
+                    members[0].get("scene_no"), -2
                 ):
                     break
                 members.append(target_node)
@@ -1857,7 +1860,7 @@ class TutorialBuilder:
             if not isinstance(start_node, dict):
                 reachable_cache[start_id] = set()
                 return reachable_cache[start_id]
-            scene_no = int(start_node.get("scene_no", -1) or -1)
+            scene_no = _int_or(start_node.get("scene_no"), -1)
             seen = set()
             queue = deque([start_id])
             while queue:
@@ -1872,7 +1875,7 @@ class TutorialBuilder:
                     next_node = node_by_id.get(next_id)
                     if not isinstance(next_node, dict):
                         continue
-                    if int(next_node.get("scene_no", -2) or -2) != scene_no:
+                    if _int_or(next_node.get("scene_no"), -2) != scene_no:
                         continue
                     if next_id not in seen:
                         queue.append(next_id)
@@ -1888,13 +1891,11 @@ class TutorialBuilder:
                 for edge in edge_list
                 if not bool(edge.get("merge_barrier"))
                 if not bool(edge.get("cross_scene"))
-                and int(
-                    node_by_id.get(_safe_text(edge.get("target")), {}).get(
-                        "scene_no", -1
-                    )
-                    or -1
+                and _int_or(
+                    node_by_id.get(_safe_text(edge.get("target")), {}).get("scene_no"),
+                    -1,
                 )
-                == int(node_by_id.get(source_id, {}).get("scene_no", -2) or -2)
+                == _int_or(node_by_id.get(source_id, {}).get("scene_no"), -2)
             ]
             if len(scene_edges) < 2:
                 continue
@@ -2041,8 +2042,8 @@ class TutorialBuilder:
                 if (
                     not silent_records
                     and _safe_text(kind) != "return"
-                    and int(target.get("scene_no", -1) or -1)
-                    == int(segment.get("scene_no", -2) or -2)
+                    and _int_or(target.get("scene_no"), -1)
+                    == _int_or(segment.get("scene_no"), -2)
                 ):
                     silent_records = self._resolve_same_scene_frontier(
                         _safe_text(target.get("id")),
@@ -2053,9 +2054,9 @@ class TutorialBuilder:
                     )
                     late_return_safe = bool(silent_records)
                 same_scene_silent_safe = False
-                if not silent_records and int(target.get("scene_no", -1) or -1) == int(
-                    segment.get("scene_no", -2) or -2
-                ):
+                if not silent_records and _int_or(
+                    target.get("scene_no"), -1
+                ) == _int_or(segment.get("scene_no"), -2):
                     silent_records = self._resolve_same_scene_frontier(
                         _safe_text(target.get("id")),
                         self.same_scene_silent_frontiers,
@@ -2065,9 +2066,9 @@ class TutorialBuilder:
                     )
                     same_scene_silent_safe = bool(silent_records)
                 same_scene_helper_safe = False
-                if not silent_records and int(target.get("scene_no", -1) or -1) == int(
-                    segment.get("scene_no", -2) or -2
-                ):
+                if not silent_records and _int_or(
+                    target.get("scene_no"), -1
+                ) == _int_or(segment.get("scene_no"), -2):
                     helper_distance, helper_records = (
                         self._resolve_return_frontier_info(_safe_text(target.get("id")))
                     )
@@ -2094,8 +2095,8 @@ class TutorialBuilder:
                         silent_records = helper_records
                         same_scene_helper_safe = bool(silent_records)
                 same_scene_near_return_safe = False
-                if int(target.get("scene_no", -1) or -1) == int(
-                    segment.get("scene_no", -2) or -2
+                if _int_or(target.get("scene_no"), -1) == _int_or(
+                    segment.get("scene_no"), -2
                 ):
                     near_records = self._resolve_same_scene_frontier(
                         _safe_text(target.get("id")),
@@ -2113,9 +2114,9 @@ class TutorialBuilder:
                         for rec in near_records
                     }
                     near_order_gaps = {
-                        int(
-                            node_by_id.get(_safe_text(rec[0]), {}).get("order", -999999)
-                            or -999999
+                        _int_or(
+                            node_by_id.get(_safe_text(rec[0]), {}).get("order"),
+                            -999999,
                         )
                         - int(node.get("order", 0) or 0)
                         for rec in near_records
@@ -2136,11 +2137,11 @@ class TutorialBuilder:
                                     )
                                 ) != _safe_text(node.get("scene_id")):
                                     continue
-                                existing_gap = int(
+                                existing_gap = _int_or(
                                     node_by_id.get(_safe_text(existing_rec[0]), {}).get(
-                                        "order", -999999
-                                    )
-                                    or -999999
+                                        "order"
+                                    ),
+                                    -999999,
                                 ) - int(node.get("order", 0) or 0)
                                 if 0 < int(existing_gap) <= NEAR_RETURN_ORDER_GAP_MAX:
                                     existing_forward_near = True

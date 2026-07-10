@@ -3,7 +3,8 @@ from .common import read_i32_le, hx, append_diff, print_limited_diffs
 
 _TONE = 0
 _RGB_SAT = 1
-_HDR_SIZE = 4008
+_OFFSET_COUNT = 1000
+_HDR_SIZE = 8 + _OFFSET_COUNT * 4
 _SUB_HDR_SIZE = 64
 
 
@@ -24,20 +25,20 @@ def _parse(blob, want_payload=True):
     out["max"] = int(read_i32_le(blob, 0, default=0) or 0)
     out["cnt"] = int(read_i32_le(blob, 4, default=0) or 0)
     try:
-        offs = struct.unpack_from("<256i", blob, 8)
+        offs = struct.unpack_from(f"<{_OFFSET_COUNT:d}i", blob, 8)
     except Exception:
         out["ok"] = False
         out["errors"].append("bad offset table")
         return out
     out["offsets"] = tuple(int(x) for x in offs)
-    if int(out["cnt"]) > 256:
-        out["warnings"].append(f"cnt>256 ({int(out['cnt']):d})")
+    if int(out["cnt"]) > _OFFSET_COUNT:
+        out["warnings"].append(f"cnt>{_OFFSET_COUNT:d} ({int(out['cnt']):d})")
     if not want_payload:
         return out
     curves = []
     n = len(blob)
-    for i in range(256):
-        of = int(out["offsets"][i])
+    for i, raw_offset in enumerate(out["offsets"]):
+        of = int(raw_offset)
         if of == 0:
             continue
         if of < 0 or of + _SUB_HDR_SIZE + 768 > n:
@@ -91,7 +92,7 @@ def tcr(blob: bytes) -> int:
         nz = sum(1 for x in (info.get("offsets") or ()) if int(x) != 0)
     except Exception:
         nz = 0
-    print(f"offset_nonzero_0_255: {int(nz):d}")
+    print(f"offset_nonzero_0_{_OFFSET_COUNT - 1:d}: {int(nz):d}")
     for w in info.get("warnings") or []:
         print(f"warning: {w}")
     if not info.get("ok"):
@@ -142,7 +143,7 @@ def compare_tcr(b1: bytes, b2: bytes) -> int:
                 break
     ma = {int(c.get("no") or 0): c for c in (a.get("curves") or [])}
     mb = {int(c.get("no") or 0): c for c in (b.get("curves") or [])}
-    for i in range(256):
+    for i in range(_OFFSET_COUNT):
         ca = ma.get(i)
         cb = mb.get(i)
         if ca is None and cb is None:

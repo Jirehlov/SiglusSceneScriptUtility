@@ -11,7 +11,7 @@ from .native_ops import (
     lzss32_unpack as lzss32,
     xor_cycle_inplace,
 )
-from .common import read_u16_le, write_bytes
+from .common import write_bytes
 
 C = get_const_module()
 try:
@@ -215,10 +215,9 @@ def _g00_xy(p: Path):
         raise ValueError("g00 too short for coord")
     t = d[0]
     if t == 2:
-        head = d[:31]
-        if len(head) < 31:
+        if len(d) < 33:
             raise ValueError("g00 too short for coord")
-        return read_u16_le(head, 25, strict=True), read_u16_le(head, 29, strict=True)
+        return struct.unpack_from("<ii", d, 25)
     return (0, 0)
 
 

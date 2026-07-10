@@ -83,7 +83,11 @@ def _analyze_one(path: str) -> int:
         unit_sample_cnt = header.unit_sample_cnt
         last_sample_cnt = header.last_sample_cnt
         last_sample_pack_size = header.last_sample_pack_size
-        dur = sample_cnt / float(samples_per_sec) if samples_per_sec else None
+        dur = (
+            sample_cnt / float(samples_per_sec * channels)
+            if samples_per_sec and channels
+            else None
+        )
         print(_fmt_kv("channels", channels))
         print(_fmt_kv("bits_per_sample", bits_per_sample))
         print(_fmt_kv("samples_per_sec", samples_per_sec))
