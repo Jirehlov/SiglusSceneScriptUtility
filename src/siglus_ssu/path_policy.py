@@ -130,5 +130,6 @@ def walk_read_directory(path):
             os.path.join(directory, name)
             for name in dirs
             if not os.path.islink(os.path.join(directory, name))
+            and not os.path.isjunction(os.path.join(directory, name))
         ]
         pending.extend(reversed(children))
