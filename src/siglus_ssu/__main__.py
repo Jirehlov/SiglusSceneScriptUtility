@@ -251,8 +251,14 @@ def _consume_global_options(argv):
 
 
 def _run_mode(module_name, args):
+    from .path_policy import FilenameCaseCollisionError
+
     module = import_module(f"siglus_ssu.{module_name}")
-    rc = module.main(args)
+    try:
+        rc = module.main(args)
+    except FilenameCaseCollisionError as exc:
+        sys.stderr.write(f"{_prog()}: error: {exc}\n")
+        return 1
     if rc == 2:
         _usage_short()
     return rc

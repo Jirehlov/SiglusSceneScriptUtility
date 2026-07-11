@@ -12,6 +12,7 @@ from .common import (
 )
 from . import GEI
 from . import pck
+from .path_policy import resolve_read_path
 
 
 def _default_output_dir(input_path: str) -> str:
@@ -128,8 +129,17 @@ def main(argv=None):
             in_path, out_dir = args
         else:
             return 2
+        try:
+            in_path = resolve_read_path(in_path)
+        except (FileNotFoundError, NotADirectoryError):
+            return 2
         if os.path.isdir(in_path):
-            in_path = os.path.join(in_path, "Gameexe.dat")
+            try:
+                in_path = resolve_read_path(
+                    os.path.join(in_path, "Gameexe.dat"), kind="file"
+                )
+            except (FileNotFoundError, NotADirectoryError):
+                return 2
         os_dir = os.path.dirname(os.path.abspath(in_path))
         try:
             cands = list(
@@ -163,16 +173,20 @@ def main(argv=None):
         return 1
     if len(args) == 1:
         in_path = args[0]
-        if dat_txt and os.path.isdir(in_path):
-            out_dir = _default_output_dir(in_path)
-        elif os.path.isfile(in_path):
-            out_dir = _default_output_dir(in_path)
-        else:
-            return 2
+        out_dir = None
     elif len(args) == 2:
         in_path, out_dir = args
     else:
         return 2
+    try:
+        in_path = resolve_read_path(in_path)
+    except (FileNotFoundError, NotADirectoryError):
+        return 2
+    if out_dir is None:
+        if (dat_txt and os.path.isdir(in_path)) or os.path.isfile(in_path):
+            out_dir = _default_output_dir(in_path)
+        else:
+            return 2
     if dat_txt and os.path.isdir(in_path):
         if decompile:
             sys.stderr.write(

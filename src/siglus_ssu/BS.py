@@ -28,6 +28,7 @@ from .common import (
     write_bytes,
     read_scn_header,
 )
+from .path_policy import read_directory, resolve_read_path
 
 C = get_const_module()
 TNMSERR_BS_NONE = 0
@@ -649,13 +650,16 @@ def build_ia_data(ctx):
     sp = ctx.get("scn_path") or ""
     inc_list = ctx.get("inc_list") or []
     enc = "utf-8" if ctx.get("utf8") else "cp932"
-    if not inc_list and sp and os.path.isdir(sp):
+    if not inc_list and sp:
+        try:
+            _, entries = read_directory(sp)
+        except (FileNotFoundError, NotADirectoryError):
+            entries = []
         inc_list = sorted(
             [
-                f
-                for f in os.listdir(sp)
-                if os.path.isfile(os.path.join(sp, f))
-                and ascii_lower(f).endswith(".inc")
+                entry.name
+                for entry in entries
+                if entry.is_file() and ascii_lower(entry.name).endswith(".inc")
             ],
             key=ascii_lower,
         )
@@ -667,7 +671,9 @@ def build_ia_data(ctx):
     for inc in inc_list:
         inc_path = inc if os.path.isabs(inc) else os.path.join(sp, inc)
         log_stage("IA", inc_path, ctx)
-        if not os.path.isfile(inc_path):
+        try:
+            inc_path = resolve_read_path(inc_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"inc not found: {inc_path}")
         txt = read_text_auto(
             inc_path,
@@ -1931,13 +1937,16 @@ def find_ss(ctx, only=None):
     if only:
         return [absp(x) for x in only]
     sp = ctx.get("scn_path")
-    if (not sp) or (not os.path.isdir(sp)):
+    if not sp:
+        return []
+    try:
+        _, entries = read_directory(sp)
+    except (FileNotFoundError, NotADirectoryError):
         return []
     ss_files = []
-    for name in os.listdir(sp):
-        path = os.path.join(sp, name)
-        if os.path.isfile(path) and ascii_lower(name).endswith(".ss"):
-            ss_files.append(path)
+    for entry in entries:
+        if entry.is_file() and ascii_lower(entry.name).endswith(".ss"):
+            ss_files.append(entry.path)
     return sorted(ss_files, key=lambda x: ascii_lower(os.path.basename(x)))
 
 

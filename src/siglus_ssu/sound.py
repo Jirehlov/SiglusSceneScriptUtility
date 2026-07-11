@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Iterator, List, Tuple
 from .common import read_u32_le_from_file
 from .native_ops import legacy_mode_enabled
+from .path_policy import open_read
 
 _LEGACY_MODE = legacy_mode_enabled()
 try:
@@ -35,7 +36,7 @@ def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
 
 
 def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         b = f.read()
     if len(b) >= 4 and b[:4] == b"OggS":
         return b
@@ -139,7 +140,7 @@ def _duration_seconds_from_sample_count(
 
 
 def read_ogg_duration_seconds(path: str) -> float | None:
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         return estimate_ogg_duration_seconds(f.read())
 
 
@@ -218,7 +219,7 @@ _OVK_ENTRY_STRUCT = struct.Struct("<IIii")
 
 
 def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
-    with open(ovk_path, "rb") as f:
+    with open_read(ovk_path) as f:
         cnt = read_u32_le_from_file(f, strict=True)
         if cnt == 0:
             return []
@@ -259,7 +260,7 @@ def iter_ovk_entries(
     table = read_ovk_table(ovk_path) if entries is None else list(entries)
     if not table:
         return
-    with open(ovk_path, "rb") as f:
+    with open_read(ovk_path) as f:
         for entry in table:
             yield entry.entry_no, extract_ogg_bytes_from_ovk_stream(f, entry)
 
@@ -527,7 +528,7 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
 
 
 def decode_nwa_to_wav_bytes(path: str) -> bytes:
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         data = f.read()
     pcm, h = decode_nwa_to_pcm_bytes(data)
     return _build_wav(pcm, h.channels, h.bits_per_sample, h.samples_per_sec)

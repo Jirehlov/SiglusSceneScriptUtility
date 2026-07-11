@@ -19,6 +19,7 @@ from .common import (
     int_or_none as _int_or_none,
     is_trace_command_base as _is_trace_command_base,
 )
+from .path_policy import open_read, resolve_read_path
 
 FORMAT_NAME = "siglus-tutorial/v1"
 VIEWER_FILE_NAME = "tutorial_viewer.html"
@@ -704,7 +705,8 @@ class TutorialBuilder:
         }
 
     def _load_scenes(self) -> None:
-        blob = Path(self.input_pck).read_bytes()
+        with open_read(self.input_pck) as file_obj:
+            blob = file_obj.read()
         if not pck.looks_like_pck(blob):
             raise RuntimeError("input is not a supported .pck file")
         for index, item in enumerate(
@@ -2318,12 +2320,22 @@ def _write_json(output_json: str, data: dict) -> None:
 
 
 def _write_viewer_copy(output_json: str) -> str | None:
-    template_path = Path(__file__).with_name(VIEWER_FILE_NAME)
-    if not template_path.is_file():
+    try:
+        template_path = Path(
+            resolve_read_path(Path(__file__).with_name(VIEWER_FILE_NAME), kind="file")
+        )
+    except (FileNotFoundError, NotADirectoryError):
         return None
     viewer_path = Path(output_json).with_name(VIEWER_FILE_NAME)
-    content = template_path.read_text(encoding="utf-8")
-    current = viewer_path.read_text(encoding="utf-8") if viewer_path.is_file() else None
+    with open_read(template_path, mode="r", encoding="utf-8") as f:
+        content = f.read()
+    try:
+        existing_viewer = resolve_read_path(viewer_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        current = None
+    else:
+        with open_read(existing_viewer, mode="r", encoding="utf-8") as f:
+            current = f.read()
     if current != content:
         viewer_path.write_text(content, encoding="utf-8", newline="\r\n")
     return str(viewer_path)
@@ -2446,11 +2458,12 @@ def main(argv=None):
     if len(args) not in (1, 2):
         _usage()
         return 2
-    input_pck = args[0]
-    output_json = args[1] if len(args) == 2 else _default_output_path(input_pck)
-    if not os.path.isfile(input_pck):
-        eprint(f"tutorial: input not found: {input_pck}", errors="replace")
+    try:
+        input_pck = resolve_read_path(args[0], kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        eprint(f"tutorial: input not found: {args[0]}", errors="replace")
         return 1
+    output_json = args[1] if len(args) == 2 else _default_output_path(input_pck)
     try:
         builder = TutorialBuilder(input_pck)
         data = builder.build()

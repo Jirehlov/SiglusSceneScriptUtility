@@ -100,6 +100,7 @@ struct SceneData {
     dat: Vec<u8>,
     command_labels: Vec<(i32, i32)>,
     read_flag_count: usize,
+    compiled: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -2384,9 +2385,21 @@ fn compile_project_inner(
                 dat: scene.dat,
                 command_labels: scene.command_labels,
                 read_flag_count: scene.read_flag_count,
+                compiled: true,
             }
         } else {
-            let dat_path = bs_dir.join(format!("{stem}.dat"));
+            let key = ascii_lowercase(&stem);
+            let dat_path = config
+                .cache
+                .dat_paths
+                .get(&key)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    format!(
+                        "scene dat not found: {}",
+                        bs_dir.join(format!("{stem}.dat")).display()
+                    )
+                })?;
             let dat = fs::read(&dat_path).map_err(|error| format_path_error(&dat_path, error))?;
             let command_labels = parse_command_labels(config, &dat);
             let read_flag_count =
@@ -2396,6 +2409,7 @@ fn compile_project_inner(
                 dat,
                 command_labels,
                 read_flag_count,
+                compiled: false,
             }
         };
         scene_records.push(record);
@@ -2466,12 +2480,17 @@ fn compile_project_inner(
     if use_lzss {
         for record in &scene_records {
             let path = bs_dir.join(format!("{}.lzss", record.stem));
-            if path.is_file() {
-                let lz = fs::read(&path).map_err(|error| format_path_error(&path, error))?;
+            if !record.compiled
+                && let Some(cached_path) =
+                    config.cache.lzss_paths.get(&ascii_lowercase(&record.stem))
+            {
+                let cached_path = Path::new(cached_path);
+                let lz =
+                    fs::read(cached_path).map_err(|error| format_path_error(cached_path, error))?;
                 lzss_results.insert(record.stem.clone(), lz);
-            } else {
-                lzss_tasks.push((record.stem.clone(), record.dat.clone(), path));
+                continue;
             }
+            lzss_tasks.push((record.stem.clone(), record.dat.clone(), path));
         }
     }
     if use_lzss

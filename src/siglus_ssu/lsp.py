@@ -32,6 +32,12 @@ from .native_ops import (
     native_lsp_scan_available,
     scan_lsp_document_native,
 )
+from .path_policy import (
+    FilenameCaseCollisionError,
+    open_read,
+    read_directory,
+    read_file_stat,
+)
 
 C = get_const_module()
 SEVERITY_ERROR = 1
@@ -320,16 +326,23 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
         return _normalize_source_text(overlay_text)
     try:
         return _normalize_source_text(read_text_auto(norm))
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, ValueError):
         try:
-            return _decode_text_fallback(Path(norm).read_bytes())
+            with open_read(norm) as f:
+                return _decode_text_fallback(f.read())
+        except FilenameCaseCollisionError:
+            raise
         except (OSError, ValueError):
             return ""
 
 
 def _file_state(path: str) -> tuple[int, int] | None:
     try:
-        stat = os.stat(path)
+        stat = read_file_stat(path)
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, ValueError):
         return None
     return stat.st_mtime_ns, stat.st_size
@@ -342,12 +355,13 @@ def _sorted_dir_paths(
     root = os.path.abspath(root_dir)
     root_key = _path_identity(root)
     try:
-        if os.path.isdir(root):
-            for name in os.listdir(root):
-                path = os.path.join(root, name)
-                if os.path.isfile(path) and name.lower().endswith(suffix):
-                    norm = os.path.abspath(path)
-                    out[_path_identity(norm)] = norm
+        _, entries = read_directory(root)
+        for entry in entries:
+            if entry.is_file() and entry.name.lower().endswith(suffix):
+                norm = os.path.abspath(entry.path)
+                out[_path_identity(norm)] = norm
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, ValueError):
         pass
     for path in overlays:
@@ -3317,7 +3331,7 @@ def _lsp_index_const_signature() -> dict[str, Any]:
 
 def _md5_file(path: str) -> str:
     h = hashlib.md5()
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         while True:
             chunk = f.read(1024 * 1024)
             if not chunk:
@@ -3337,6 +3351,8 @@ def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
         for key, paths in groups:
             for path in paths:
                 inputs[key][os.path.basename(path)] = _md5_file(path)
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, ValueError):
         return None
     return inputs
@@ -3347,9 +3363,12 @@ def _read_lsp_index_cache_header(
     inputs: dict[str, dict[str, str]],
 ) -> dict[str, Any] | None:
     try:
-        data = json.loads(
-            Path(_lsp_index_cache_path(directory, inputs)).read_text("utf-8")
-        )
+        with open_read(
+            _lsp_index_cache_path(directory, inputs), mode="r", encoding="utf-8"
+        ) as f:
+            data = json.loads(f.read())
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):

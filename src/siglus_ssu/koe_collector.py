@@ -13,6 +13,13 @@ from .common import (
     consume_angou_option,
     iter_exe_el_sources,
 )
+from .path_policy import (
+    FilenameCaseCollisionError,
+    open_read,
+    read_directory,
+    resolve_read_path,
+    walk_read_directory,
+)
 
 C = get_const_module()
 _VOICE_CALL_NAMES = frozenset(
@@ -136,7 +143,7 @@ def _iter_scene_dat_paths(scene_root: str):
     if not os.path.isdir(scene_root):
         return []
     out = []
-    for base, _dirs, files in os.walk(scene_root):
+    for base, _dirs, files in walk_read_directory(scene_root):
         for name in files:
             low = name.lower()
             if not low.endswith(".dat") or low.endswith(".dat.txt"):
@@ -175,6 +182,8 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
         try:
             blob = read_bytes(scene_root)
             hdr = pck.parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             blob = b""
             hdr = None
@@ -212,6 +221,8 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
     for dat_path in _iter_scene_dat_paths(scene_root):
         try:
             blob = read_bytes(dat_path)
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             continue
         cands = list(
@@ -509,7 +520,8 @@ def _index_ovk(voice_dir: str):
     table_failed = 0
     ovk_paths = []
     if os.path.isdir(voice_dir):
-        for e in os.scandir(voice_dir):
+        _, dir_entries = read_directory(voice_dir)
+        for e in dir_entries:
             if e.is_file() and e.name.lower().endswith(".ovk"):
                 ovk_paths.append(e.path)
     elif os.path.isfile(voice_dir) and voice_dir.lower().endswith(".ovk"):
@@ -649,6 +661,11 @@ def main(argv=None):
             eprint(usage_single)
             return 2
         scene_root, voice_dir, out_dir = pos
+        try:
+            scene_root = resolve_read_path(scene_root)
+        except (FileNotFoundError, NotADirectoryError):
+            eprint(f"scene input not found: {scene_root}")
+            return 1
     else:
         if len(pos) != 2:
             eprint(usage_single)
@@ -658,6 +675,11 @@ def main(argv=None):
             return 2
         scene_root = ""
         voice_dir, out_dir = pos
+    try:
+        voice_dir = resolve_read_path(voice_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        eprint(f"voice input not found: {voice_dir}")
+        return 1
     if explicit_angou:
         try:
             list(iter_exe_el_sources(explicit_angou=explicit_angou))
@@ -719,7 +741,7 @@ def main(argv=None):
         nonlocal current_ovk_path, current_ovk_file
         if current_ovk_file is None or current_ovk_path != ovk_path:
             prev_file = current_ovk_file
-            current_ovk_file = open(ovk_path, "rb")
+            current_ovk_file = open_read(ovk_path)
             current_ovk_path = ovk_path
             if prev_file is not None:
                 prev_file.close()

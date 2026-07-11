@@ -4,6 +4,13 @@ import struct
 import hashlib
 import re
 from ._const_manager import get_const_module
+from .path_policy import (
+    FilenameCaseCollisionError,
+    read_directory,
+    resolve_read_path,
+    walk_read_directory,
+    windows_filename_key,
+)
 
 C = get_const_module()
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
@@ -536,18 +543,14 @@ def clone_stack_segment(stack, stack_start, int_getter):
 
 
 def find_siglus_engine_exe(base_dir: str) -> str:
-    base_dir = _safe_abspath(base_dir)
-    if not base_dir or (not os.path.isdir(base_dir)):
-        return ""
     try:
-        names = os.listdir(base_dir)
-    except Exception:
-        names = []
-    for fn in names:
-        if str(fn or "").casefold() == "siglusengine.exe":
-            p = os.path.join(base_dir, fn)
-            if os.path.isfile(p):
-                return _safe_abspath(p)
+        base_dir, entries = read_directory(base_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        return ""
+    names = [entry.name for entry in entries]
+    for entry in entries:
+        if windows_filename_key(entry.name) == "siglusengine.exe" and entry.is_file():
+            return _safe_abspath(entry.path)
     cands = []
     for fn in names:
         s = str(fn or "")
@@ -768,6 +771,8 @@ def siglus_engine_exe_element(exe_bytes: bytes, with_patch_points: bool = False)
 def read_siglus_engine_exe_el(path: str) -> bytes:
     try:
         b = read_bytes(path)
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, TypeError, ValueError):
         return b""
     return siglus_engine_exe_element(b)
@@ -781,26 +786,23 @@ def _safe_abspath(p: str) -> str:
 
 
 def is_named_filename(name: str, target_name: str) -> bool:
-    return str(name or "").casefold() == str(target_name or "").casefold()
+    return windows_filename_key(name) == windows_filename_key(target_name)
 
 
 def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
-    base_dir = _safe_abspath(base_dir)
-    if not base_dir or (not os.path.isdir(base_dir)):
+    try:
+        base_dir, entries = read_directory(base_dir)
+    except (FileNotFoundError, NotADirectoryError):
         return []
     out = []
-    try:
-        names = os.listdir(base_dir)
-    except Exception:
-        names = []
-    for fn in names:
+    for entry in entries:
+        fn = entry.name
         if not is_named_filename(fn, target_name):
             continue
-        p = os.path.join(base_dir, fn)
-        if os.path.isfile(p):
-            out.append(p)
+        if entry.is_file():
+            out.append(entry.path)
     if recursive:
-        for dirpath, _, filenames in os.walk(base_dir):
+        for dirpath, _, filenames in walk_read_directory(base_dir):
             if dirpath == base_dir:
                 continue
             for fn in filenames:
@@ -917,8 +919,7 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
 
 
 def read_text_auto(path: str, force_charset: str = "") -> str:
-    with open(path, "rb") as f:
-        data = f.read()
+    data = read_bytes(path)
     return decode_text_auto(data, force_charset=force_charset)[0]
 
 
@@ -942,6 +943,8 @@ def angou_first_line(text: str) -> str:
 def read_angou_first_line(path: str, force_charset: str = "") -> str:
     try:
         return angou_first_line(read_text_auto(path, force_charset=force_charset))
+    except FilenameCaseCollisionError:
+        raise
     except Exception:
         return ""
 
@@ -955,6 +958,7 @@ def decode_angou_first_line(data: bytes, force_charset: str = "") -> str:
 
 
 def read_bytes(path: str) -> bytes:
+    path = resolve_read_path(path, kind="file")
     with open(path, "rb") as f:
         return f.read()
 
@@ -1149,6 +1153,8 @@ def parse_exe_el_key_text(text: str) -> bytes:
 def read_exe_el_key(path: str) -> bytes:
     try:
         b = read_bytes(path)
+    except FilenameCaseCollisionError:
+        raise
     except Exception:
         return b""
     if len(b) == 16:
@@ -1255,6 +1261,8 @@ def iter_exe_el_sources(
     def add_pck(path, label, blob=b""):
         try:
             data = bytes(blob) if blob else read_bytes(path)
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             return []
         if not data:
@@ -1294,6 +1302,8 @@ def iter_exe_el_sources(
             return out
         try:
             data = read_bytes(path)
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             data = b""
         if data and looks_like_siglus_pck(data):
@@ -1326,12 +1336,12 @@ def iter_exe_el_sources(
         return out
 
     def scene_pck_paths(path):
-        if not path or not os.path.isdir(path):
+        if not path:
             return []
         try:
-            entries = list(os.scandir(path))
-        except Exception:
-            entries = []
+            _, entries = read_directory(path)
+        except (FileNotFoundError, NotADirectoryError):
+            return []
         hits = []
         others = []
         for e in entries:
@@ -1388,13 +1398,17 @@ def iter_exe_el_sources(
 
     def add_dir_with_parent(path, label):
         out = []
-        if path and os.path.isdir(path):
-            ap = _safe_abspath(path)
-            out.extend(add_dir(ap, label))
-            if include_parent:
-                parent = os.path.dirname(ap)
-                if parent and parent != ap:
-                    out.extend(add_dir(parent, "parent_dir"))
+        if not path:
+            return out
+        try:
+            ap = resolve_read_path(path, kind="dir")
+        except (FileNotFoundError, NotADirectoryError):
+            return out
+        out.extend(add_dir(ap, label))
+        if include_parent:
+            parent = os.path.dirname(ap)
+            if parent and parent != ap:
+                out.extend(add_dir(parent, "parent_dir"))
         return out
 
     explicit = str(explicit_angou or "").strip()
@@ -1421,8 +1435,9 @@ def iter_exe_el_sources(
             yield src
         else:
             stop_parent_after_explicit_path = True
-            p = os.path.abspath(explicit)
-            if not os.path.exists(p):
+            try:
+                p = resolve_read_path(explicit)
+            except (FileNotFoundError, NotADirectoryError):
                 raise ValueError(
                     f"not found: {explicit}; use angou=... for literal angou text"
                 )
@@ -1435,9 +1450,15 @@ def iter_exe_el_sources(
             for src in found:
                 yield src
     ip = str(input_path or "")
-    if ip and os.path.isfile(ip):
-        for src in add_pck(ip, "input_pck", blob=input_blob):
-            yield src
+    if ip:
+        try:
+            ip = resolve_read_path(ip)
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        else:
+            if os.path.isfile(ip):
+                for src in add_pck(ip, "input_pck", blob=input_blob):
+                    yield src
     if base_dir:
         scan_base = os.path.abspath(base_dir)
     elif ip:
@@ -1787,6 +1808,10 @@ def iter_files_by_ext(
             return True
         return False
 
+    try:
+        root = resolve_read_path(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     if os.path.isfile(root):
         if should_skip(root):
             return []
@@ -1794,7 +1819,8 @@ def iter_files_by_ext(
             return [root]
         return []
     if not recursive:
-        for entry in os.scandir(root):
+        _, entries = read_directory(root)
+        for entry in entries:
             if not entry.is_file():
                 continue
             name = entry.name
@@ -1805,7 +1831,7 @@ def iter_files_by_ext(
                 continue
             out.append(path)
         return sorted(out)
-    for dirpath, _dirs, filenames in os.walk(root):
+    for dirpath, _dirs, filenames in walk_read_directory(root):
         for name in filenames:
             if os.path.splitext(name)[1].lower() not in ext_set:
                 continue
@@ -2269,7 +2295,9 @@ def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
 
 
 def missing_input_file(path: str) -> bool:
-    if not os.path.isfile(path):
+    try:
+        resolve_read_path(path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         eprint(f"input not found: {path}")
         return True
     return False
@@ -2294,7 +2322,14 @@ def prepare_batch_paths(
         help_fn()
         return None, None, None, 2
     inp, out_root = argv
+    try:
+        inp = resolve_read_path(inp)
+    except (FileNotFoundError, NotADirectoryError):
+        eprint(f"input not found: {inp}")
+        return None, None, None, 1
     src_is_dir = os.path.isdir(inp)
+    if src_is_dir:
+        read_directory(inp)
     if not src_is_dir and missing_input_file(inp):
         return None, None, None, 1
     if create_output:

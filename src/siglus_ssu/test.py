@@ -19,6 +19,7 @@ from .common import (
     parse_i32_header,
     read_bytes,
 )
+from .path_policy import FilenameCaseCollisionError, read_directory, resolve_read_path
 
 C = get_const_module()
 
@@ -186,7 +187,10 @@ def _payload_stdout(stdout_text: str) -> str:
 
 
 def _collect_pcks(path: str):
-    path = os.path.abspath(path)
+    try:
+        path = resolve_read_path(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
     if os.path.isfile(path):
         return [path]
     if not os.path.isdir(path):
@@ -210,10 +214,12 @@ def _read_siglus_pck(path: str):
 def _find_extract_dir(tmp_root: str) -> str:
     cands = []
     try:
-        for name in os.listdir(tmp_root):
-            path = os.path.join(tmp_root, name)
-            if os.path.isdir(path) and name.startswith("output_"):
-                cands.append(path)
+        _, entries = read_directory(tmp_root)
+        for entry in entries:
+            if entry.is_dir() and entry.name.startswith("output_"):
+                cands.append(entry.path)
+    except FilenameCaseCollisionError:
+        raise
     except OSError:
         return ""
     cands.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
@@ -223,12 +229,14 @@ def _find_extract_dir(tmp_root: str) -> str:
 def _count_files_with_ext(path: str, ext: str) -> int:
     ext = ext.lower()
     try:
+        _, entries = read_directory(path)
         return sum(
             1
-            for name in os.listdir(path)
-            if os.path.isfile(os.path.join(path, name))
-            and os.path.splitext(name)[1].lower() == ext
+            for entry in entries
+            if entry.is_file() and os.path.splitext(entry.name)[1].lower() == ext
         )
+    except FilenameCaseCollisionError:
+        raise
     except OSError:
         return 0
 
@@ -341,8 +349,12 @@ def _compile_payload_with_profile_fallback(
         compile_args.extend([extract_dir, rebuilt_pck])
         rc, out, err = _capture(compiler.main, compile_args)
         elapsed = max(0.0, time.perf_counter() - started)
-        ok = rc == 0 and os.path.isfile(rebuilt_pck)
-        if rc == 0 and not os.path.isfile(rebuilt_pck):
+        try:
+            rebuilt_read_path = resolve_read_path(rebuilt_pck, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            rebuilt_read_path = ""
+        ok = rc == 0 and bool(rebuilt_read_path)
+        if rc == 0 and not rebuilt_read_path:
             err = (err.rstrip("\r\n") + "\nrebuilt .pck not found\n").lstrip("\n")
         attempts.append(
             {
@@ -360,7 +372,7 @@ def _compile_payload_with_profile_fallback(
         payload_started = time.perf_counter()
         result, detail, payload_out, payload_err, counts = _compare_rebuilt_pck(
             original_pck,
-            rebuilt_pck,
+            rebuilt_read_path,
             original_blob,
         )
         payload_ok = result != "FAIL"
@@ -570,9 +582,10 @@ def main(argv=None):
             sys.stdout if argv and argv[0] in ("-h", "--help", "help") else sys.stderr
         )
         return 0 if argv and argv[0] in ("-h", "--help", "help") else 2
-    input_path = os.path.abspath(argv[0])
-    if not os.path.exists(input_path):
-        sys.stderr.write(f"not found: {input_path}\n")
+    try:
+        input_path = resolve_read_path(argv[0])
+    except (FileNotFoundError, NotADirectoryError):
+        sys.stderr.write(f"not found: {os.path.abspath(argv[0])}\n")
         return 1
     paths = _collect_pcks(input_path)
     if not paths:

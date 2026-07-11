@@ -46,6 +46,13 @@ from .common import (
     macro_decl_kind,
     merge_macro_stat_counts,
 )
+from .path_policy import (
+    FilenameCaseCollisionError,
+    open_read,
+    read_directory,
+    resolve_read_path,
+    walk_read_directory,
+)
 
 
 def _create_auto_tmp_dir(output_dir):
@@ -222,7 +229,7 @@ def _write_md5_cache(path, payload):
 
 def _md5_file_for_cache(p):
     h = hashlib.md5()
-    with open(p, "rb") as f:
+    with open_read(p) as f:
         while True:
             b = f.read(1024 * 1024)
             if not b:
@@ -251,16 +258,30 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
     cache_meta = _compile_cache_meta(enc, charset)
     for f in inc or []:
         p = os.path.join(input_dir, f)
-        if os.path.isfile(p):
-            cur_inc[ascii_lower(f)] = _md5_file_for_cache(p)
+        try:
+            p = resolve_read_path(p, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        cur_inc[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
     for p in ss or []:
-        if os.path.isfile(p):
-            cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
+        try:
+            p = resolve_read_path(p, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
     if incremental:
         old = None
-        if md5_path and os.path.isfile(md5_path):
+        try:
+            existing_md5_path = resolve_read_path(md5_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            existing_md5_path = ""
+        if existing_md5_path:
             try:
-                old = json.loads(read_text_auto(md5_path, force_charset="utf-8"))
+                old = json.loads(
+                    read_text_auto(existing_md5_path, force_charset="utf-8")
+                )
+            except FilenameCaseCollisionError:
+                raise
             except Exception:
                 old = None
         full_compile = False
@@ -286,16 +307,43 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
                 b = ascii_lower(os.path.basename(p))
                 nm = os.path.splitext(os.path.basename(p))[0]
                 dat_path = os.path.join(bs_dir, nm + ".dat")
-                need = False
-                if not os.path.isfile(dat_path):
-                    need = True
-                elif str(cur_ss.get(b, "")) != str(old_ss.get(b, "")):
-                    need = True
+                need = str(cur_ss.get(b, "")) != str(old_ss.get(b, ""))
+                if not need:
+                    try:
+                        resolve_read_path(dat_path, kind="file")
+                    except (FileNotFoundError, NotADirectoryError):
+                        need = True
                 if need:
                     comp.add(p)
             compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
     pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
     return compile_list, md5_path, pending_md5, full_compile
+
+
+def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
+    compiled = {
+        ascii_lower(os.path.splitext(os.path.basename(path))[0])
+        for path in compile_list or []
+    }
+    dat_paths = {}
+    lzss_paths = {}
+    for path in ss or []:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        key = ascii_lower(stem)
+        if key in compiled:
+            continue
+        candidate = os.path.join(tmp_dir, "bs", stem + ".dat")
+        try:
+            dat_paths[key] = resolve_read_path(candidate, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            pass
+        if use_lzss:
+            candidate = os.path.join(tmp_dir, "bs", stem + ".lzss")
+            try:
+                lzss_paths[key] = resolve_read_path(candidate, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+    return dat_paths, lzss_paths
 
 
 def _native_compile_cache_config(
@@ -310,6 +358,12 @@ def _native_compile_cache_config(
         inc=inc,
         incremental=bool(getattr(args, "tmp_dir", "")),
     )
+    dat_paths, lzss_paths = _native_cache_read_paths(
+        tmp_dir,
+        ss,
+        compile_list,
+        use_lzss=not args.no_angou and not args.no_lzss,
+    )
     full_compile_stats = (
         (not getattr(args, "dat_repack", False))
         and not getattr(args, "tmp_dir", "")
@@ -321,6 +375,8 @@ def _native_compile_cache_config(
         "md5_path": md5_path,
         "pending_md5_json": json.dumps(pending_md5, ensure_ascii=False, sort_keys=True),
         "compile_scene_names": [os.path.basename(p) for p in compile_list],
+        "dat_paths": dat_paths,
+        "lzss_paths": lzss_paths,
         "compiled_scene_files": len(compile_list or []),
         "full_compile": bool(full_compile),
         "full_compile_stats": bool(full_compile_stats),
@@ -452,8 +508,10 @@ def _write_test_shuffle_csv(csv_path, rows):
 
 def _read_scene_ssid(path):
     try:
-        with open(path, "rb") as fh:
+        with open_read(path) as fh:
             line = fh.readline(1024)
+    except FilenameCaseCollisionError:
+        raise
     except Exception:
         return None
     if (not line.startswith(SCENE_SCRIPT_ID_PREFIX)) or (
@@ -470,7 +528,8 @@ def _read_scene_ssid(path):
 
 
 def _scan_dir(p):
-    fs = [f for f in os.listdir(p) if os.path.isfile(os.path.join(p, f))]
+    _, entries = read_directory(p)
+    fs = [entry.name for entry in entries if entry.is_file()]
     fs.sort(key=ascii_lower)
     ini = [f for f in fs if ascii_lower(os.path.splitext(f)[1]) in (".ini", ".dat")]
     inc = [f for f in fs if ascii_lower(f).endswith(".inc")]
@@ -487,32 +546,6 @@ def _scan_dir(p):
     return ini, inc, ss, scn_ssid_map
 
 
-def _ascii_case_collision_groups(paths):
-    groups = {}
-    for path in paths or []:
-        name = os.path.basename(str(path or ""))
-        if not name:
-            continue
-        groups.setdefault(ascii_lower(name), []).append(name)
-    collisions = []
-    for names in groups.values():
-        unique_names = sorted(set(names), key=lambda name: (ascii_lower(name), name))
-        if len(unique_names) > 1:
-            collisions.append(unique_names)
-    collisions.sort(key=lambda names: (ascii_lower(names[0]), names[0]))
-    return collisions
-
-
-def _reject_ascii_case_collisions(paths, prog):
-    collisions = _ascii_case_collision_groups(paths)
-    for names in collisions:
-        display = ", ".join(repr(name) for name in names)
-        sys.stderr.write(
-            f"{prog}: error: filenames differ only by ASCII case and are not distinct in the official compiler: {display}\n"
-        )
-    return bool(collisions)
-
-
 def _is_jp_char(ch):
     o = ord(ch)
     return (0x3040 <= o <= 0x30FF) or (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
@@ -527,11 +560,14 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
     for f in ini or []:
         paths.append(os.path.join(base_dir, f))
     for p in paths:
-        if not p or not os.path.isfile(p):
+        if not p:
             continue
         try:
-            with open(p, "rb") as f:
+            p = resolve_read_path(p, kind="file")
+            with open_read(p) as f:
                 b = f.read()
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             continue
         if b.startswith(b"\xef\xbb\xbf"):
@@ -1273,7 +1309,11 @@ def main(argv=None):
     else:
         if user_seed is not None:
             set_shuffle_seed(int(user_seed) & 0xFFFFFFFF)
-    inp = os.path.abspath(a.input_dir)
+    try:
+        inp = resolve_read_path(a.input_dir)
+    except (FileNotFoundError, NotADirectoryError):
+        sys.stderr.write("input_dir not found\n")
+        return 1
     gei_ini = ""
     if a.gei and os.path.isfile(inp):
         gei_ini = os.path.basename(inp)
@@ -1295,19 +1335,23 @@ def main(argv=None):
         sys.stderr.write("input_dir not found\n")
         return 1
     if test_shuffle:
-        test_dir = os.path.abspath(getattr(a, "test_dir", "") or "")
-        if (not test_dir) or (not os.path.isdir(test_dir)):
+        try:
+            test_dir = resolve_read_path(getattr(a, "test_dir", "") or "", kind="dir")
+        except (FileNotFoundError, NotADirectoryError):
             sys.stderr.write("test_dir not found\n")
             return 1
     ini, inc, ss, scn_ssid_map = _scan_dir(inp)
-    if _reject_ascii_case_collisions([*ini, *inc, *ss], prog):
-        return 2
     os.makedirs(out, exist_ok=True)
     tmp = ""
     tmp_auto = False
     if not a.gei:
         if getattr(a, "tmp_dir", ""):
-            tmp = os.path.abspath(a.tmp_dir)
+            try:
+                tmp = resolve_read_path(a.tmp_dir, kind="dir")
+                for _ in walk_read_directory(tmp):
+                    pass
+            except (FileNotFoundError, NotADirectoryError):
+                tmp = os.path.abspath(a.tmp_dir)
             os.makedirs(tmp, exist_ok=True)
         else:
             tmp_auto = True
@@ -1352,6 +1396,8 @@ def main(argv=None):
                 .splitlines()[0]
                 .strip("\r\n")
             )
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             angou_content = ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
@@ -1405,7 +1451,9 @@ def main(argv=None):
             if getattr(a, "tmp_dir", "") and not a.no_angou:
                 bs_dir = os.path.join(tmp, "bs")
                 if full_compile and os.path.isdir(bs_dir):
-                    for fn in os.listdir(bs_dir):
+                    _, entries = read_directory(bs_dir)
+                    for entry in entries:
+                        fn = entry.name
                         if str(fn).lower().endswith(".lzss"):
                             with suppress(OSError):
                                 os.remove(os.path.join(bs_dir, fn))
@@ -1420,7 +1468,9 @@ def main(argv=None):
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
                 dats = []
-                for f in os.listdir(inp):
+                _, entries = read_directory(inp)
+                for entry in entries:
+                    f = entry.name
                     if not str(f).lower().endswith(".dat"):
                         continue
                     fp = os.path.join(inp, f)
@@ -1428,6 +1478,8 @@ def main(argv=None):
                         continue
                     try:
                         b = read_bytes(fp)
+                    except FilenameCaseCollisionError:
+                        raise
                     except Exception:
                         continue
                     if looks_like_siglus_dat(b):
@@ -1469,12 +1521,16 @@ def main(argv=None):
                     first_ss = compile_list[0]
                     first_nm = os.path.splitext(os.path.basename(first_ss))[0]
                     exp_first = os.path.join(test_dir, first_nm + ".dat")
-                    if not os.path.isfile(exp_first):
+                    try:
+                        exp_first = resolve_read_path(exp_first, kind="file")
+                    except (FileNotFoundError, NotADirectoryError):
                         raise FileNotFoundError(f"expected dat not found: {exp_first}")
                     set_shuffle_seed(0)
                     compile_one(ctx, first_ss)
                     my_first = os.path.join(bs_dir, first_nm + ".dat")
-                    if not os.path.isfile(my_first):
+                    try:
+                        my_first = resolve_read_path(my_first, kind="file")
+                    except (FileNotFoundError, NotADirectoryError):
                         raise FileNotFoundError(f"generated dat not found: {my_first}")
                     from collections import Counter
 
@@ -1499,7 +1555,9 @@ def main(argv=None):
                     for ss_path in compile_list:
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         exp_dat = os.path.join(test_dir, nm + ".dat")
-                        if not os.path.isfile(exp_dat):
+                        try:
+                            exp_dat = resolve_read_path(exp_dat, kind="file")
+                        except (FileNotFoundError, NotADirectoryError):
                             raise FileNotFoundError(
                                 f"expected dat not found: {exp_dat}"
                             )
@@ -1538,7 +1596,9 @@ def main(argv=None):
                         final_seed = get_shuffle_seed()
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         my_dat = os.path.join(bs_dir, nm + ".dat")
-                        if not os.path.isfile(my_dat):
+                        try:
+                            my_dat = resolve_read_path(my_dat, kind="file")
+                        except (FileNotFoundError, NotADirectoryError):
                             raise FileNotFoundError(
                                 f"generated dat not found: {my_dat}"
                             )

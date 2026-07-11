@@ -5,6 +5,7 @@ import re
 from ._const_manager import get_const_module
 from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
 from .common import read_bytes, sha1, write_bytes
+from .path_policy import open_read
 
 C = get_const_module()
 
@@ -385,7 +386,7 @@ def _wtoi_prefix(s):
 
 
 def _read_official_csv(csv_path: str):
-    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+    with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         rows = []
         row_lines = []

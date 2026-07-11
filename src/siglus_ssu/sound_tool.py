@@ -33,6 +33,13 @@ from .common import (
 from . import sound
 from . import GEI
 from . import pck
+from .path_policy import (
+    FilenameCaseCollisionError,
+    open_read,
+    read_file_stat,
+    read_directory,
+    resolve_read_path,
+)
 
 
 def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) -> None:
@@ -56,15 +63,17 @@ def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) ->
 def _analyze_one(path: str) -> int:
     ext = os.path.splitext(path)[1].lower()
     try:
-        st = os.stat(path)
+        st = read_file_stat(path)
         size = st.st_size
+    except FilenameCaseCollisionError:
+        raise
     except OSError:
         size = "?"
     print(_fmt_kv("path", path))
     print(_fmt_kv("type", ext.lstrip(".") or "unknown"))
     print(_fmt_kv("size_bytes", size))
     if ext == ".nwa":
-        with open(path, "rb") as f:
+        with open_read(path) as f:
             data = f.read(sound.NWA_HEADER_STRUCT.size)
         try:
             header = sound.parse_nwa_header(data)
@@ -107,7 +116,7 @@ def _analyze_one(path: str) -> int:
         import struct
 
         entry_struct = struct.Struct("<IIii")
-        with open(path, "rb") as f:
+        with open_read(path) as f:
             cnt_b = f.read(4)
             if len(cnt_b) != 4:
                 eprint("error: OVK header truncated")
@@ -131,7 +140,7 @@ def _analyze_one(path: str) -> int:
         return 0
     if ext == ".owp":
         try:
-            with open(path, "rb") as f:
+            with open_read(path) as f:
                 head = f.read(4)
             is_ogg = head == b"OggS"
             xor_key = None
@@ -186,7 +195,7 @@ def _ovk_compare_entries(path: str) -> list[_OvkCompareEntry]:
     entries = sound.read_ovk_table(path)
     seen = {}
     out = []
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         for entry in entries:
             occurrence = int(seen.get(entry.entry_no, 0))
             seen[entry.entry_no] = occurrence + 1
@@ -217,8 +226,8 @@ def _compare_ovk(p1: str, p2: str) -> int:
         eprint("error: OVK compare expects two .ovk files")
         return 2
     try:
-        st1 = os.stat(p1)
-        st2 = os.stat(p2)
+        st1 = read_file_stat(p1)
+        st2 = read_file_stat(p2)
         e1 = _ovk_compare_entries(p1)
         e2 = _ovk_compare_entries(p2)
     except Exception as exc:
@@ -397,6 +406,8 @@ def _parse_bgm_table(gameexe_ini_text: str):
 def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
     try:
         txt = read_text_auto(gameexe_path)
+    except FilenameCaseCollisionError:
+        raise
     except Exception:
         txt = ""
     if txt:
@@ -520,7 +531,7 @@ def _ffmpeg_trim_ogg_bytes(
         if p.returncode != 0:
             err = (p.stderr or b"").decode("utf-8", "backslashreplace").strip()
             raise RuntimeError("ffmpeg trim failed: " + (err or "unknown error"))
-        with open(out_path, "rb") as f:
+        with open_read(out_path) as f:
             return f.read()
     finally:
         with suppress(OSError):
@@ -676,7 +687,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
             channel_layout="",
         )
     if ext == ".nwa":
-        with open(src_path, "rb") as f:
+        with open_read(src_path) as f:
             data = f.read()
         pcm, header = sound.decode_nwa_to_pcm_bytes(data)
         bytes_per_sample = header.bits_per_sample // 8
@@ -1003,7 +1014,9 @@ def _default_play_gameexe_path(inp: str) -> str:
         return exact
     wildcard_matches = []
     try:
-        for name in os.listdir(root_dir):
+        _, entries = read_directory(root_dir)
+        for entry in entries:
+            name = entry.name
             path = os.path.join(root_dir, name)
             if not os.path.isfile(path):
                 continue
@@ -1012,6 +1025,8 @@ def _default_play_gameexe_path(inp: str) -> str:
             if "." not in name:
                 continue
             wildcard_matches.append(path)
+    except FilenameCaseCollisionError:
+        raise
     except OSError:
         return exact
     if wildcard_matches:
@@ -1629,7 +1644,7 @@ def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
     out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
     os.makedirs(out_dir, exist_ok=True)
     if ext == ".ogg":
-        with open(src_path, "rb") as f:
+        with open_read(src_path) as f:
             ogg = f.read()
         owp = sound.encode_ogg_to_owp_bytes(ogg)
         out_path = os.path.join(out_dir, base_name + ".owp")
@@ -1677,7 +1692,7 @@ def _extract_one(
             eprint(
                 f"trim {base_name} #{bgm_entry.name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
             )
-            with open(src_path, "rb") as f:
+            with open_read(src_path) as f:
                 wav = _trim_nwa_to_wav_bytes(
                     f.read(),
                     start_sample=rep_pos,
@@ -1722,13 +1737,18 @@ def main(argv=None) -> int:
             eprint("error: --trim is only valid with --x")
             return 2
         if len(argv) == 1:
-            inp = argv[0]
-            if missing_input_file(inp):
+            try:
+                inp = resolve_read_path(argv[0], kind="file")
+            except (FileNotFoundError, NotADirectoryError):
+                eprint(f"input not found: {argv[0]}")
                 return 1
             return _analyze_one(inp)
         if len(argv) == 2:
-            p1, p2 = argv
-            if missing_input_file(p1) or missing_input_file(p2):
+            try:
+                p1 = resolve_read_path(argv[0], kind="file")
+                p2 = resolve_read_path(argv[1], kind="file")
+            except (FileNotFoundError, NotADirectoryError):
+                eprint("input not found")
                 return 1
             return _compare_ovk(p1, p2)
         eprint("error: expected 1 input file, or 2 .ovk files, for --a")
@@ -1790,7 +1810,7 @@ def main(argv=None) -> int:
             os.makedirs(out_dir, exist_ok=True)
             entry_list = []
             for no, src_path in sorted(items, key=lambda x: x[0]):
-                with open(src_path, "rb") as f:
+                with open_read(src_path) as f:
                     ogg = f.read()
                 entry_list.append((no, ogg))
             ovk = sound.encode_oggs_to_ovk_bytes(entry_list)
@@ -1809,9 +1829,15 @@ def main(argv=None) -> int:
         if psutil is None:
             eprint("error: need psutil: pip install psutil")
             return 1
-        inp = argv[0]
+        try:
+            inp = resolve_read_path(argv[0])
+        except (FileNotFoundError, NotADirectoryError):
+            eprint(f"input not found: {argv[0]}")
+            return 1
         trim_path = _resolve_play_gameexe_path(inp, argv[1] if len(argv) == 2 else "")
-        if not os.path.isfile(trim_path):
+        try:
+            trim_path = resolve_read_path(trim_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             eprint(f"Gameexe source not found: {trim_path}")
             return 1
         ffplay_path = shutil.which("ffplay") or ""
@@ -1867,7 +1893,9 @@ def main(argv=None) -> int:
     if rc is not None:
         return rc
     if trim_path:
-        if not os.path.isfile(trim_path):
+        try:
+            trim_path = resolve_read_path(trim_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
         trim_table, rc = _load_bgm_table(trim_path, explicit_angou)

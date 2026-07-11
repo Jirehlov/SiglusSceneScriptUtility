@@ -12,6 +12,7 @@ from .common import (
     consume_angou_option,
     iter_exe_el_sources,
 )
+from .path_policy import open_read, read_file_stat, resolve_read_path
 from . import pck
 from . import dat
 from . import gan
@@ -99,7 +100,9 @@ def analyze_file(
     dat_disam=False,
     explicit_angou: str = "",
 ):
-    if not os.path.exists(path):
+    try:
+        path = resolve_read_path(path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
@@ -113,7 +116,7 @@ def analyze_file(
     if dat_disam and ftype != "dat":
         sys.stderr.write("analyze: --disam is only valid for .dat inputs\n")
         return 2
-    st = os.stat(path)
+    st = read_file_stat(path)
     print("==== Analyze ====")
     print(f"file: {path}")
     print(f"type: {ftype}")
@@ -166,7 +169,7 @@ def analyze_file(
         if apply:
             txt = os.path.splitext(path)[0] + ".txt"
             try:
-                with open(txt, "rb") as f:
+                with open_read(txt) as f:
                     txt_blob = f.read()
             except Exception as e:
                 print(f"apply_txt_error: {e!s}")
@@ -220,7 +223,10 @@ def compare_files(
     dat_disam=False,
     explicit_angou: str = "",
 ):
-    if not os.path.exists(p1) or not os.path.exists(p2):
+    try:
+        p1 = resolve_read_path(p1, kind="file")
+        p2 = resolve_read_path(p2, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write("not found\n")
         return 2
     b1 = read_bytes(p1)

@@ -11,7 +11,8 @@ from .native_ops import (
     lzss32_unpack as lzss32,
     xor_cycle_inplace,
 )
-from .common import write_bytes
+from .common import read_bytes, write_bytes
+from .path_policy import open_read, read_directory, resolve_read_path
 
 C = get_const_module()
 try:
@@ -30,6 +31,8 @@ _JPEG_SUFFIXES = (".jpg", ".jpeg")
 _SIMPLE_G00_TYPES = (0, 1, 3)
 _SIMPLE_EXT = {0: ".png", 1: ".png", 3: ".jpeg"}
 _SIMPLE_COMP = {0: "LZSS32", 1: "LZSS"}
+_TYPE2_CENTER_OFFSET = 25
+_TYPE2_CENTER_STRUCT = struct.Struct("<ii")
 if len(C.G00_XOR_T) != 256:
     raise SystemExit(f"bad G00_XOR_T: {len(C.G00_XOR_T)}")
 
@@ -210,14 +213,14 @@ def blit(
 
 
 def _g00_xy(p: Path):
-    d = p.read_bytes()
+    d = read_bytes(p)
     if len(d) < 1:
         raise ValueError("g00 too short for coord")
     t = d[0]
     if t == 2:
-        if len(d) < 33:
+        if len(d) < _TYPE2_CENTER_OFFSET + _TYPE2_CENTER_STRUCT.size:
             raise ValueError("g00 too short for coord")
-        return struct.unpack_from("<ii", d, 25)
+        return _TYPE2_CENTER_STRUCT.unpack_from(d, _TYPE2_CENTER_OFFSET)
     return (0, 0)
 
 
@@ -228,10 +231,11 @@ def _parse_g00_spec(s: str):
     m = _G00_SPEC_RE.match(s)
     if not m:
         raise ValueError(f"bad g00 spec: {s}")
-    p = Path(m.group("path"))
+    raw_path = Path(m.group("path"))
+    p = Path(resolve_read_path(raw_path, kind="file"))
     cut_s = m.group("cut")
     cut = int(cut_s, 10) if cut_s is not None else None
-    label = p.stem
+    label = raw_path.stem
     if cut is not None:
         label = f"{label}_cut{cut:03d}"
     return p, cut, label
@@ -259,7 +263,7 @@ def _select_type2_cut(cuts, cut_index):
 
 def _decode_g00_main_image_pil(p: Path, cut_index=None):
     need_pil()
-    d = p.read_bytes()
+    d = read_bytes(p)
     if not d:
         raise ValueError("empty")
     t = d[0]
@@ -366,9 +370,9 @@ def _type2_extract_meta(ci: int, blk: bytes, outer_rects, dst_name: str):
 
 
 def extract_one(path_s: str, out_s: str, trim: bool = False):
-    p = Path(path_s)
+    p = Path(resolve_read_path(path_s, kind="file"))
     out = Path(out_s)
-    d = p.read_bytes()
+    d = read_bytes(p)
     if not d:
         raise ValueError("empty")
     t = d[0]
@@ -418,7 +422,7 @@ def _analyze_simple(t: int, pay: bytes, w: int, h: int):
 
 
 def analyze_one(p: str):
-    d = Path(p).read_bytes()
+    d = read_bytes(p)
     if not d:
         raise ValueError("empty")
     t = d[0]
@@ -451,14 +455,24 @@ def analyze_one(p: str):
 
 
 def iter_g00(p):
-    p = Path(p)
-    return [p] if p.is_file() else [x for x in sorted(p.glob("*.g00")) if x.is_file()]
+    p = Path(resolve_read_path(p))
+    if p.is_file():
+        return [p]
+    _, entries = read_directory(p)
+    return sorted(
+        Path(entry.path)
+        for entry in entries
+        if entry.is_file() and entry.name.lower().endswith(".g00")
+    )
 
 
 def run_extract(inp, out_dir, trim: bool = False):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    fs = iter_g00(inp)
+    try:
+        fs = iter_g00(inp)
+    except (FileNotFoundError, NotADirectoryError):
+        return 2
     if not fs:
         return 2
     from .parallel import parallel_g00_extract
@@ -486,6 +500,7 @@ def _is_jpeg_file(p: Path) -> bool:
 
 def _load_image_bgra(p: Path):
     need_pil()
+    p = Path(resolve_read_path(p, kind="file"))
     img = Image.open(p)
     rgba = img.convert("RGBA")
     w, h = rgba.size
@@ -612,14 +627,22 @@ def _dump_type2_layout_json(out_path: Path, canvas_w: int, canvas_h: int, cuts_m
 def _resolve_refer_base(refer_arg, base_name: str, dir_input: bool):
     if refer_arg is None:
         return None
-    rp = Path(refer_arg)
+    try:
+        rp = Path(resolve_read_path(refer_arg))
+    except (FileNotFoundError, NotADirectoryError):
+        raise ValueError(f"missing refer g00: {refer_arg}") from None
     if dir_input:
-        if not rp.exists() or not rp.is_dir():
+        if not rp.is_dir():
             raise ValueError("--refer must be a directory when input is a directory")
-        return rp / f"{base_name}.g00"
-    if rp.exists() and rp.is_dir():
-        return rp / f"{base_name}.g00"
-    return rp
+        candidate = rp / f"{base_name}.g00"
+    elif rp.is_dir():
+        candidate = rp / f"{base_name}.g00"
+    else:
+        candidate = rp
+    try:
+        return Path(resolve_read_path(candidate, kind="file"))
+    except (FileNotFoundError, NotADirectoryError):
+        raise ValueError(f"missing refer g00: {candidate}") from None
 
 
 def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
@@ -894,8 +917,10 @@ def _find_layout_sidecar(inp_p: Path):
         if key in seen:
             continue
         seen.add(key)
-        if c.is_file():
-            return c
+        try:
+            return Path(resolve_read_path(c, kind="file"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
     return None
 
 
@@ -970,9 +995,8 @@ def _build_create_bytes(inp_p: Path, type_opt):
 
 def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None = None):
     try:
-        text = _strip_json_comments(
-            config_path.read_text(encoding="utf-8", errors="replace")
-        )
+        with open_read(config_path, mode="r", encoding="utf-8", errors="replace") as f:
+            text = _strip_json_comments(f.read())
         obj = json.loads(text)
     except ValueError as exc:
         raise ValueError(f"invalid type2 layout json: {config_path}: {exc}") from exc
@@ -1048,18 +1072,21 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
                 "type2 layout cut is missing source and no default source was provided"
             )
         sp = Path(sp)
+        candidates = []
         if sp.is_absolute():
-            return sp
+            candidates.append(sp)
         if base_dir is not None:
-            cand = (base_dir / sp).resolve()
-            if cand.exists():
-                return cand
+            candidates.append(base_dir / sp)
         if img_p is not None:
             base = img_p.parent if img_p.is_file() else img_p
-            cand = (base / sp).resolve()
-            if cand.exists():
-                return cand
-        return sp.resolve()
+            candidates.append(base / sp)
+        candidates.append(sp)
+        for candidate in candidates:
+            try:
+                return Path(resolve_read_path(candidate, kind="file"))
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+        return candidates[-1].resolve()
 
     def _load_source(sp, base_dir: Path | None = None):
         rp = _resolve_source_path(sp, base_dir)
@@ -1174,9 +1201,10 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
         if not _is_jpeg_file(img_p):
             raise ValueError("type3 create expects .jpg/.jpeg input")
         need_pil()
+        img_p = Path(resolve_read_path(img_p, kind="file"))
         with Image.open(img_p) as img:
             w, h = img.size
-        jpeg = img_p.read_bytes()
+        jpeg = read_bytes(img_p)
         return bytes([3]) + struct.pack("<HH", w, h) + de_xor(jpeg)
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
@@ -1266,13 +1294,14 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         img_p, _ = updates[0]
         if not _is_jpeg_file(img_p):
             raise ValueError("type3 expects .jpg/.jpeg")
+        img_p = Path(resolve_read_path(img_p, kind="file"))
         bw, bh = struct.unpack_from("<HH", base_bytes, 1)
         need_pil()
         with Image.open(img_p) as img:
             w, h = img.size
         if (w, h) != (bw, bh):
             raise ValueError(f"size mismatch: image={w}x{h} base={bw}x{bh}")
-        jpeg = img_p.read_bytes()
+        jpeg = read_bytes(img_p)
         base_jpeg = de_xor(base_bytes[5:])
         is_changed = base_jpeg != jpeg
         _report_single_update(report, img_p, (bw, bh), is_changed)
@@ -1457,16 +1486,18 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
         base_name, cut_idx = _layout_base_name(ip), None
     else:
         return 2
-    out_path = (
+    base_path = (
         _resolve_refer_base(refer_arg, base_name, dir_input=False)
+        if do_update
+        else None
+    )
+    out_path = (
+        base_path
         if do_update and out_arg is None
         else _resolve_create_out(ip, out_arg, base_name, dir_input=False)
     )
     if do_update:
-        base_path = _resolve_refer_base(refer_arg, base_name, dir_input=False)
-        if not base_path.is_file():
-            raise ValueError(f"missing refer g00: {base_path}")
-        base_bytes = base_path.read_bytes()
+        base_bytes = read_bytes(base_path)
         rep = {}
         new_bytes = _apply_updates_to_g00(base_bytes, [(ip, cut_idx)], type_opt, rep)
         _print_update_report(base_path, rep, base_bytes, new_bytes)
@@ -1488,7 +1519,12 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
 def _run_type2_layout_dir(ip: Path, out_arg, type_opt, refer_arg):
     if refer_arg is not None or type_opt != 2:
         return None
-    cfgs = [p for p in sorted(ip.iterdir()) if p.is_file() and _is_layout_file(p)]
+    _, entries = read_directory(ip)
+    cfgs = [
+        Path(entry.path)
+        for entry in sorted(entries, key=lambda entry: entry.name)
+        if entry.is_file() and _is_layout_file(Path(entry.path))
+    ]
     if not cfgs:
         return None
     out_dir = _resolve_compose_dir(out_arg, ip)
@@ -1508,7 +1544,12 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
     done = _run_type2_layout_dir(ip, out_arg, type_opt, refer_arg)
     if done is not None:
         return done
-    imgs = [p for p in sorted(ip.iterdir()) if p.is_file() and _is_image_file(p)]
+    _, entries = read_directory(ip)
+    imgs = [
+        Path(entry.path)
+        for entry in sorted(entries, key=lambda entry: entry.name)
+        if entry.is_file() and _is_image_file(Path(entry.path))
+    ]
     if not imgs:
         return 2
     groups = {}
@@ -1517,9 +1558,10 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
         groups.setdefault(base_name, []).append((p, cut_idx))
     do_update = refer_arg is not None
     if do_update:
+        refer_dir = Path(resolve_read_path(refer_arg, kind="dir"))
         out_dir = _resolve_compose_dir(
             out_arg,
-            Path(refer_arg),
+            refer_dir,
             require_existing=True,
             missing_msg="--refer must be a directory when input is a directory",
         )
@@ -1536,9 +1578,7 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
         out_path = out_dir / f"{base_name}.g00"
         if do_update:
             base_path = _resolve_refer_base(refer_arg, base_name, dir_input=True)
-            if not base_path.is_file():
-                raise ValueError(f"missing refer g00: {base_path}")
-            base_bytes = base_path.read_bytes()
+            base_bytes = read_bytes(base_path)
             rep = {}
             new_bytes = _apply_updates_to_g00(base_bytes, ups, type_opt, rep)
             _print_update_report(base_path, rep, base_bytes, new_bytes)
@@ -1568,8 +1608,9 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
 
 
 def run_compose(inp: str, out_arg, type_opt, refer_arg=None):
-    ip = Path(inp)
-    if not ip.exists():
+    try:
+        ip = Path(resolve_read_path(inp))
+    except (FileNotFoundError, NotADirectoryError):
         return 2
     return (
         _run_compose_file(ip, out_arg, type_opt, refer_arg)
@@ -1638,10 +1679,10 @@ def main(argv=None):
     if not args or args[0] in ("-h", "--help", "help"):
         return 2
     if args[0] == "--a":
-        if len(args) != 2 or not Path(args[1]).is_file():
+        if len(args) != 2:
             return 2
         try:
-            analyze_one(args[1])
+            analyze_one(resolve_read_path(args[1], kind="file"))
         except (EOFError, OSError, ValueError, struct.error) as exc:
             print(f"[!] {exc}", file=sys.stderr)
             return 1

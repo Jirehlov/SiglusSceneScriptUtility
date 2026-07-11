@@ -13,6 +13,7 @@ from .common import (
 )
 from . import dbs
 from .native_ops import msvcrt_rand_byte
+from .path_policy import resolve_read_path
 
 
 def _analyze_one(path):
@@ -254,6 +255,11 @@ def main(argv=None):
             hint_help()
             return 2
         inp, out_root = argv[0], argv[1]
+    try:
+        inp = resolve_read_path(inp)
+    except (FileNotFoundError, NotADirectoryError):
+        eprint(f"input not found: {inp}")
+        return 1
     src_is_dir = os.path.isdir(inp)
     if src_is_dir:
         if test_shuffle:
@@ -292,7 +298,9 @@ def main(argv=None):
         os.makedirs(out_root, exist_ok=True)
         out_path = os.path.join(out_root, _map_out_name(inp))
     if test_shuffle:
-        if not os.path.isfile(expected_dbs):
+        try:
+            expected_dbs = resolve_read_path(expected_dbs, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             eprint(f"error: expected dbs not found: {expected_dbs}")
             return 1
         exp_m_type, pat = _extract_padding_pattern_from_dbs(expected_dbs)

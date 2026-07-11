@@ -16,6 +16,7 @@ from .common import (
     scan_text_comments,
 )
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
+from .path_policy import read_path_exists
 
 C = get_const_module()
 
@@ -162,7 +163,7 @@ def write_gameexe_dat(ctx):
     gei_path = os.path.join(scn, gameexe_ini)
     gei = (
         read_text_auto(gei_path, force_charset=charset_force)
-        if os.path.exists(gei_path)
+        if read_path_exists(gei_path, kind="file")
         else ""
     )
     ged = ""

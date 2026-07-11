@@ -1,7 +1,7 @@
 import os
 import struct
 import time
-import glob
+import fnmatch
 from ._const_manager import get_const_module
 from .CA import new_replace_tree
 from .common import (
@@ -26,16 +26,22 @@ from .common import (
 )
 from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
+from .path_policy import read_directory, resolve_read_path
 
 C = get_const_module()
 
 
 def _glob_sorted_rel(base, pattern):
-    hits = glob.glob(os.path.join(base, pattern), recursive=True)
+    base, entries = read_directory(base)
+    folded_pattern = ascii_lower(pattern)
     rels = []
-    for p in hits:
-        if os.path.isfile(p):
-            rels.append(os.path.relpath(p, base).replace("/", "\\"))
+    for entry in entries:
+        if entry.name.startswith(".") and not pattern.startswith("."):
+            continue
+        if entry.is_file() and fnmatch.fnmatchcase(
+            ascii_lower(entry.name), folded_pattern
+        ):
+            rels.append(os.path.relpath(entry.path, base).replace("/", "\\"))
     rels.sort(key=ascii_lower)
     return rels
 
@@ -124,15 +130,17 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
     easy_code = ctx.get("easy_angou_code") or b""
     for nm in scn_names:
         dat_path = os.path.join(bs_dir, nm + ".dat")
-        if not os.path.isfile(dat_path):
+        try:
+            dat_path = resolve_read_path(dat_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         enc_names.append(nm)
         dat = read_bytes(dat_path)
         if lzss_mode:
             lz_path = os.path.join(bs_dir, nm + ".lzss")
-            if os.path.isfile(lz_path):
-                lz = read_bytes(lz_path)
-            else:
+            try:
+                lz_path = resolve_read_path(lz_path, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
                 t = time.time()
                 if not easy_code:
                     raise RuntimeError("ctx.easy_angou_code is not set")
@@ -143,6 +151,8 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
                 write_bytes(lz_path, lz)
                 record_stage_time(ctx, "LZSS", time.time() - t)
                 log_stage("LZSS", nm + ".ss", ctx)
+            else:
+                lz = read_bytes(lz_path)
             lzss_list.append(lz)
         dat_list.append(dat)
     return enc_names, dat_list, lzss_list
@@ -332,7 +342,9 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
     chunks = []
     for rel in rel_list:
         src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
-        if not os.path.isfile(src_path):
+        try:
+            src_path = resolve_read_path(src_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             continue
         start = time.time()
         log_stage("OS", rel, ctx)

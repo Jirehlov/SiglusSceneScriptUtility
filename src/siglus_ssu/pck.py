@@ -41,6 +41,7 @@ from .common import (
     iter_exe_el_sources,
     format_exe_el_source,
 )
+from .path_policy import FilenameCaseCollisionError, resolve_read_path
 
 C = get_const_module()
 MAX_SCENE_LIST = 2000
@@ -869,6 +870,8 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                             "\\", "/"
                         )
                         write_bytes(out_path, raw)
+                except FilenameCaseCollisionError:
+                    raise
                 except Exception:
                     out_path = _unique_outpath(
                         os.path.dirname(out_path) or tmpdir,
@@ -931,8 +934,9 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
 def pck_word_count(
     input_pck: str, output_csv: str = "", explicit_angou: str = ""
 ) -> int:
-    input_pck = os.path.abspath(input_pck)
-    if not os.path.exists(input_pck):
+    try:
+        input_pck = resolve_read_path(input_pck, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write(f"not found: {input_pck}\n")
         return 2
     blob = read_bytes(input_pck)

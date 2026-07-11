@@ -27,6 +27,7 @@ from .common import (
     write_encoded_text,
     format_exe_el_source,
 )
+from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
 
 C = get_const_module()
 TEXTMAP_KIND_DIALOGUE = 1
@@ -82,7 +83,7 @@ def _csv_unescape_text(s: str) -> str:
 
 
 def read_text(path: str):
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         data = f.read()
     if b"\r\n" in data:
         newline = "\r\n"
@@ -636,7 +637,7 @@ def _write_map(csv_path: str, entries):
 
 
 def _read_map(csv_path: str):
-    with open(csv_path, encoding="utf-8-sig", newline="") as f:
+    with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
 
 
@@ -1076,13 +1077,18 @@ def _process_dat(
     apply_mode: bool,
     exe_el_candidates=None,
 ) -> int:
-    fname = os.path.basename(dat_path)
-    if not os.path.exists(dat_path):
+    try:
+        dat_path = resolve_read_path(dat_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: file not found: {dat_path}", errors="replace")
         return 1
+    fname = os.path.basename(dat_path)
     try:
-        with open(dat_path, "rb") as f:
+        with open_read(dat_path) as f:
             blob = f.read()
+    except FilenameCaseCollisionError as exc:
+        eprint(f"textmap: {exc}", errors="replace")
+        return 1
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1
@@ -1115,7 +1121,9 @@ def _process_dat(
         _write_disam_map(csv_path, str_list, kind_map)
         print(csv_path)
         return 0
-    if not os.path.exists(csv_path):
+    try:
+        csv_path = resolve_read_path(csv_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
     rows = _read_map(csv_path)
@@ -1140,10 +1148,12 @@ def _process_dat(
 
 
 def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
-    fname = os.path.basename(ss_path)
-    if not os.path.exists(ss_path):
+    try:
+        ss_path = resolve_read_path(ss_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
+    fname = os.path.basename(ss_path)
     text, encoding, newline = read_text(ss_path)
     ctx = {
         "scn_path": os.path.dirname(os.path.abspath(ss_path)),
@@ -1164,7 +1174,9 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         _write_map(csv_path, entries)
         print(csv_path)
         return 0
-    if not os.path.exists(csv_path):
+    try:
+        csv_path = resolve_read_path(csv_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
     rows = _read_map(csv_path)
@@ -1276,7 +1288,11 @@ def main(argv=None):
         )
         _hint_help()
         return 2
-    ss_path = args[0]
+    try:
+        ss_path = resolve_read_path(args[0])
+    except (FileNotFoundError, NotADirectoryError):
+        eprint(f"textmap: path not found: {args[0]}", errors="replace")
+        return 1
     if disam_mode or disam_apply_mode:
         dat_path = ss_path
         if os.path.isdir(dat_path):

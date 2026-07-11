@@ -2,6 +2,12 @@ import os
 import shutil
 import struct
 from collections import namedtuple
+from .path_policy import (
+    FilenameCaseCollisionError,
+    open_read,
+    read_file_stat,
+    resolve_read_path,
+)
 
 OGGS_SIGNATURE = b"OggS"
 OGG_HEADER_STRUCT = struct.Struct("<4sBBqIIIB")
@@ -120,7 +126,7 @@ def _read_exact(file_obj, n_bytes):
 
 def _parse_outer_header(path):
     try:
-        with open(path, "rb") as file_obj:
+        with open_read(path) as file_obj:
             raw = file_obj.read(168)
         if len(raw) != 168:
             return None
@@ -144,6 +150,8 @@ def _parse_outer_header(path):
             int(dword_4c),
             int(dword_50),
         )
+    except FilenameCaseCollisionError:
+        raise
     except (OSError, struct.error):
         return None
 
@@ -151,7 +159,7 @@ def _parse_outer_header(path):
 def find_oggs_offset(path, start_off=0, *, chunk_size=1024 * 1024):
     start_off = 0 if start_off < 0 else int(start_off)
     chunk_size = 64 if chunk_size < 64 else int(chunk_size)
-    with open(path, "rb") as file_obj:
+    with open_read(path) as file_obj:
         file_obj.seek(start_off)
         offset = start_off
         tail = b""
@@ -188,13 +196,13 @@ def extract_ogv_from_omv(omv_path, out_ogv_path):
     out_dir = os.path.dirname(out_ogv_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open(omv_path, "rb") as fin, open(out_ogv_path, "wb") as fout:
+    with open_read(omv_path) as fin, open(out_ogv_path, "wb") as fout:
         fin.seek(oggs_off)
         shutil.copyfileobj(fin, fout, length=1024 * 1024)
 
 
 def read_omv_info(path, *, parse_streams=True):
-    size = int(os.stat(path).st_size)
+    size = int(read_file_stat(path).st_size)
     oggs_off = find_oggs_offset(path, 0)
     header_size = int(oggs_off)
     ogv_size = int(size - oggs_off)
@@ -260,8 +268,7 @@ def read_omv_full_info(path):
 
 
 def read_ogv_stream_kinds(path, *, max_pages=256):
-    if not os.path.isfile(path):
-        raise FileNotFoundError(path)
+    path = resolve_read_path(path, kind="file")
     kinds_by_serial = {}
     for serial, packet in _iter_ogg_packets(path, 0, max_pages=max_pages):
         if serial in kinds_by_serial:
@@ -272,8 +279,7 @@ def read_ogv_stream_kinds(path, *, max_pages=256):
 
 
 def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
-    if not os.path.isfile(ogv_path):
-        raise FileNotFoundError(ogv_path)
+    ogv_path = resolve_read_path(ogv_path, kind="file")
     kinds = _parse_ogg_stream_kinds_by_serial(ogv_path, 0)
     theora_serial = next(
         (serial for serial, kind in kinds.items() if kind == "theora"), None
@@ -315,7 +321,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     seq = 0
     x0 = 0
     video_page_no = -1
-    with open(ogv_path, "rb") as file_obj:
+    with open_read(ogv_path) as file_obj:
         for page in _iter_ogg_pages(file_obj, 0):
             if page.serial != theora_serial:
                 continue
@@ -430,7 +436,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
             )
             for entry in table_b
         )
-        with open(ogv_path, "rb") as file_obj:
+        with open_read(ogv_path) as file_obj:
             for page in _iter_ogg_pages(file_obj, 0):
                 if page.serial == theora_serial:
                     out.write(page.page_bytes)
@@ -487,7 +493,7 @@ def _detect_packet_kind(packet):
 
 def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
     assemblers = {}
-    with open(path, "rb") as file_obj:
+    with open_read(path) as file_obj:
         for page in _iter_ogg_pages(file_obj, oggs_off, max_pages=max_pages):
             serial = int(page.serial)
             if serial_filter is not None and serial != int(serial_filter):
@@ -604,7 +610,7 @@ def _parse_tableb(buf):
 
 
 def _try_parse_tables(path, outer):
-    size = int(os.stat(path).st_size)
+    size = int(read_file_stat(path).st_size)
     table_a_count = int(outer.dword_4c)
     if table_a_count <= 0 or table_a_count > 5000000:
         return (), (), None
@@ -612,7 +618,7 @@ def _try_parse_tables(path, outer):
     after_a = 168 + table_a_bytes
     if after_a > size:
         return (), (), None
-    with open(path, "rb") as file_obj:
+    with open_read(path) as file_obj:
         file_obj.seek(168)
         table_a = _parse_tablea(_read_exact(file_obj, table_a_bytes))
     table_b_count = int(outer.dword_50)
@@ -621,7 +627,7 @@ def _try_parse_tables(path, outer):
     if 0 < table_b_count <= 50000000:
         table_b_len = 32 * table_b_count
         if after_a + table_b_len <= size:
-            with open(path, "rb") as file_obj:
+            with open_read(path) as file_obj:
                 file_obj.seek(after_a)
                 table_b = _parse_tableb(_read_exact(file_obj, table_b_len))
             data_off_guess = int(after_a + table_b_len)
@@ -639,7 +645,7 @@ def _try_parse_tables(path, outer):
         if tail_len > 0 and tail_len % 32 == 0:
             fb_n = tail_len // 32
             if 0 < fb_n <= 50000000:
-                with open(path, "rb") as file_obj:
+                with open_read(path) as file_obj:
                     file_obj.seek(after_a)
                     table_b = _parse_tableb(_read_exact(file_obj, tail_len))
     return table_a, table_b, int(ogg_off)

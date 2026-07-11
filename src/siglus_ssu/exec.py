@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import datetime
+from .path_policy import resolve_read_path
 
 
 def _strip_outer_quotes(value):
@@ -21,6 +22,11 @@ def main(argv=None):
         return 2
     engine_path, ss_name, zlabel = args
     engine_path = _strip_outer_quotes(engine_path)
+    try:
+        engine_path = resolve_read_path(engine_path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        sys.stderr.write(f"Engine not found: {engine_path}\n")
+        return 1
     ss_name = _strip_outer_quotes(ss_name)
     zlabel = _strip_outer_quotes(zlabel)
     if os.path.basename(ss_name) != ss_name:

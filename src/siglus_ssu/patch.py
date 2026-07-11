@@ -18,6 +18,7 @@ from .common import (
     parse_exe_el_key_text,
     angou_to_exe_el,
 )
+from .path_policy import resolve_read_path
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
 _LOC_BYPASS_STUB = b"\xb0\x01\xc3"
@@ -33,8 +34,9 @@ _LOC_IMPORT_ALIASES = {
 
 
 def _derive_key_from_file(p: str) -> bytes:
-    p = os.path.abspath(str(p or ""))
-    if not p or not os.path.isfile(p):
+    try:
+        p = resolve_read_path(str(p or ""), kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         return b""
     try:
         for src in iter_exe_el_sources(explicit_angou=p):
@@ -1055,7 +1057,10 @@ def main(argv=None):
             "--info does not write files; do not use -o/--output/--inplace\n"
         )
         return 2
-    in_path = os.path.abspath(str(args.input or ""))
+    try:
+        in_path = resolve_read_path(args.input, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        in_path = os.path.abspath(str(args.input or ""))
     if os.path.islink(in_path):
         sys.stderr.write(f"symbolic link input is not allowed: {in_path}\n")
         return 2

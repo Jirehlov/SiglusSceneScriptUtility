@@ -7,10 +7,10 @@ from .common import (
     hint_help,
     parse_main_argv,
     prepare_batch_paths,
-    missing_input_file,
     run_batch,
 )
 from . import video
+from .path_policy import resolve_read_path
 
 
 def _build_hi24_ranges(hi24):
@@ -137,8 +137,10 @@ def main(argv=None):
             eprint("error: expected 1 input file for --a")
             hint_help()
             return 2
-        inp = argv[0]
-        if missing_input_file(inp):
+        try:
+            inp = resolve_read_path(argv[0], kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            eprint(f"input not found: {argv[0]}")
             return 1
         return _analyze_one(inp)
     if mode == "c":
@@ -213,8 +215,11 @@ def main(argv=None):
             eprint("error: expected <input_ogv> <output_omv_or_dir> for --c")
             hint_help()
             return 2
-        inp, outp = positional[0], positional[1]
-        if missing_input_file(inp):
+        outp = positional[1]
+        try:
+            inp = resolve_read_path(positional[0], kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            eprint(f"input not found: {positional[0]}")
             return 1
         treat_dir = (
             os.path.isdir(outp)
@@ -232,7 +237,9 @@ def main(argv=None):
             if out_dir:
                 os.makedirs(out_dir, exist_ok=True)
         if refer_path is not None:
-            if not os.path.isfile(refer_path):
+            try:
+                refer_path = resolve_read_path(refer_path, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
                 eprint(f"refer not found: {refer_path}")
                 return 1
             try:

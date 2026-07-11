@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from .common import format_scene_name
+from .path_policy import resolve_read_path
 
 
 def get_max_workers(max_workers: int | None = None) -> int:
@@ -310,7 +311,9 @@ def _lzss_compress_task(
         from . import compiler as _m
         from .native_ops import xor_cycle_inplace
 
-        if not os.path.isfile(dat_path):
+        try:
+            dat_path = resolve_read_path(dat_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         dat = read_bytes(dat_path)
         if not easy_code:
@@ -340,7 +343,9 @@ def parallel_lzss_compress(
         dat_list = []
         for nm in scn_names:
             dat_path = os.path.join(bs_dir, nm + ".dat")
-            if not os.path.isfile(dat_path):
+            try:
+                dat_path = resolve_read_path(dat_path, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
                 raise FileNotFoundError(f"scene dat not found: {dat_path}")
             dat = read_bytes(dat_path)
             dat_list.append(dat)
@@ -350,14 +355,18 @@ def parallel_lzss_compress(
     tasks = []
     for nm in scn_names:
         dat_path = os.path.join(bs_dir, nm + ".dat")
-        if not os.path.isfile(dat_path):
+        try:
+            dat_path = resolve_read_path(dat_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         lz_path = os.path.join(bs_dir, nm + ".lzss")
         dat = read_bytes(dat_path)
-        if os.path.isfile(lz_path):
-            results[nm] = (dat, read_bytes(lz_path))
-        else:
+        try:
+            lz_path = resolve_read_path(lz_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             tasks.append((nm, dat_path, lz_path, easy_code))
+        else:
+            results[nm] = (dat, read_bytes(lz_path))
     if not tasks:
         enc_names = []
         dat_list = []
@@ -403,7 +412,9 @@ def _source_encrypt_task(
         from .common import read_bytes, write_cached_bytes
         from . import compiler as _m
 
-        if not os.path.isfile(src_path):
+        try:
+            src_path = resolve_read_path(src_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
             return (rel, 0, b"", None)
         ctx = {"source_angou": source_angou}
         raw = read_bytes(src_path)

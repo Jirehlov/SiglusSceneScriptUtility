@@ -4,6 +4,7 @@ import os
 import struct
 import sys
 import time
+from .path_policy import read_file_stat, resolve_read_path
 from ._const_manager import get_const_module
 from . import disam
 from . import pck
@@ -875,11 +876,13 @@ def _parse_gameexe_ini_configs(txt):
 def analyze_gameexe_dat(path, explicit_angou: str = ""):
     import sys
 
-    if not os.path.exists(path):
+    try:
+        path = resolve_read_path(path, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write(f"not found: {path}\n")
         return 2
     blob = read_bytes(path)
-    st = os.stat(path)
+    st = read_file_stat(path)
     print("==== Analyze ====")
     print(f"file: {path}")
     print("type: gameexe_dat")
@@ -925,7 +928,10 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
 
 
 def compare_gameexe_dat(p1, p2, explicit_angou: str = ""):
-    if not os.path.exists(p1) or not os.path.exists(p2):
+    try:
+        p1 = resolve_read_path(p1, kind="file")
+        p2 = resolve_read_path(p2, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write("not found\n")
         return 2
     b1 = read_bytes(p1)

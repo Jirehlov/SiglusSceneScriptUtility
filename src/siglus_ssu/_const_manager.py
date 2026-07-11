@@ -11,6 +11,7 @@ from urllib import error as urlerror
 from importlib import util as iu
 from importlib.metadata import PackageNotFoundError, version as dist_version
 from pathlib import Path
+from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
 
 _API = "https://api.github.com/repos/Jirehlov/SiglusSceneScriptUtility/contents/src/siglus_ssu/const.py?ref={ref}"
 _COMMITS_API = (
@@ -61,9 +62,12 @@ def _validate_const_bytes(data: bytes) -> str:
 def _read_validated_const(path: Path | None = None) -> tuple[Path, bytes, str]:
     candidates = _const_search_paths(path)
     for p in candidates:
-        if not p.is_file():
+        try:
+            p = Path(resolve_read_path(p, kind="file"))
+        except (FileNotFoundError, NotADirectoryError):
             continue
-        data = p.read_bytes()
+        with open_read(p) as f:
+            data = f.read()
         return p, data, _validate_const_bytes(data)
     if len(candidates) == 1:
         raise FileNotFoundError(
@@ -142,13 +146,19 @@ def _source_project_version() -> str:
     for parent in pkg_dir.parents:
         project_file = parent / "pyproject.toml"
         source_pkg = parent / "src" / "siglus_ssu"
-        if not project_file.is_file() or not source_pkg.exists():
+        try:
+            project_file = Path(resolve_read_path(project_file, kind="file"))
+            source_pkg = Path(resolve_read_path(source_pkg, kind="dir"))
+        except (FileNotFoundError, NotADirectoryError):
             continue
         try:
             if source_pkg.resolve() != pkg_dir:
                 continue
-            data = tomllib.loads(project_file.read_text(encoding="utf-8"))
+            with open_read(project_file, mode="r", encoding="utf-8") as f:
+                data = tomllib.loads(f.read())
             return str(((data.get("project") or {}).get("version")) or "").strip()
+        except FilenameCaseCollisionError:
+            raise
         except Exception:
             return ""
     return ""
@@ -164,11 +174,30 @@ def package_version() -> str:
         return ""
 
 
-def _repo_root() -> Path | None:
+def _repo_root() -> tuple[Path, Path] | None:
     here = Path(__file__).resolve()
     for parent in here.parents:
-        if (parent / ".git").exists():
-            return parent
+        try:
+            marker = Path(resolve_read_path(parent / ".git"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        if marker.is_dir():
+            return parent, marker
+        try:
+            with open_read(marker, mode="r", encoding="utf-8") as f:
+                line = f.readline().strip()
+        except (OSError, UnicodeError):
+            continue
+        if not line.lower().startswith("gitdir:"):
+            continue
+        git_dir = line.split(":", 1)[1].strip()
+        if not os.path.isabs(git_dir):
+            git_dir = marker.parent / git_dir
+        try:
+            git_dir = Path(resolve_read_path(git_dir, kind="dir"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        return parent, git_dir
     return None
 
 
@@ -199,12 +228,21 @@ def _git_version_refs(version: str) -> tuple[str, ...]:
     pattern = _version_subject_pattern(version)
     if pattern is None:
         return ()
-    root = _repo_root()
-    if root is None:
+    repo = _repo_root()
+    if repo is None:
         return ()
+    root, git_dir = repo
     try:
         out = subprocess.check_output(
-            ["git", "-C", str(root), "log", "--all", "--format=%H%x09%s"],
+            [
+                "git",
+                "-C",
+                str(root),
+                f"--git-dir={git_dir}",
+                "log",
+                "--all",
+                "--format=%H%x09%s",
+            ],
             text=True,
             timeout=10,
         )
