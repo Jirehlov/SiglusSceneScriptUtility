@@ -1762,11 +1762,16 @@ def fmt_ts(ts):
     return time.strftime("%Y-%m-%d %H:%M:%S", lt)
 
 
-def sha1(b):
-    try:
-        return hashlib.sha1(b).hexdigest()
-    except Exception:
-        return ""
+def content_digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def content_digest_file(path):
+    digest = hashlib.sha256()
+    with open_read(path) as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_sections(blob, header_fields, header_size, header_size_validator=None):

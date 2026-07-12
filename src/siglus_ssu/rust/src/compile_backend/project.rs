@@ -2141,18 +2141,18 @@ fn finalize_scene(
     (dat, command_labels)
 }
 
-fn write_md5_cache(config: &CompileConfig) -> Result<(), String> {
-    if config.cache.md5_path.is_empty() || config.cache.pending_md5_json.is_empty() {
+fn write_digest_cache(config: &CompileConfig) -> Result<(), String> {
+    if config.cache.digest_path.is_empty() || config.cache.pending_digests_json.is_empty() {
         return Ok(());
     }
-    let path = Path::new(&config.cache.md5_path);
+    let path = Path::new(&config.cache.digest_path);
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;
     }
     let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-    fs::write(&tmp_path, config.cache.pending_md5_json.as_bytes())
+    fs::write(&tmp_path, config.cache.pending_digests_json.as_bytes())
         .map_err(|error| format_path_error(&tmp_path, error))?;
     replace_file(&tmp_path, path).map_err(|error| {
         let _ = fs::remove_file(&tmp_path);
@@ -2449,7 +2449,7 @@ fn compile_project_inner(
     });
     read_flag_stats.top_scenes.truncate(5);
 
-    write_md5_cache(config)?;
+    write_digest_cache(config)?;
 
     for (scene_number, record) in scene_records.iter().enumerate() {
         for (command_id, offset) in &record.command_labels {

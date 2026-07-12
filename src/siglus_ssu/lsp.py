@@ -1,7 +1,6 @@
 from __future__ import annotations
 from contextlib import redirect_stdout
 from functools import lru_cache
-import hashlib
 import io
 import json
 import os
@@ -26,7 +25,12 @@ from .LA import la_analize
 from .MA import MA, FormTable
 from .SA import SA
 from ._const_manager import package_version
-from .common import build_empty_ia_data, read_text_auto
+from .common import (
+    build_empty_ia_data,
+    content_digest,
+    content_digest_file,
+    read_text_auto,
+)
 from .native_ops import (
     build_lsp_project_native,
     native_lsp_scan_available,
@@ -3164,7 +3168,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 11
+LSP_INDEX_CACHE_VERSION = 12
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -3339,7 +3343,7 @@ def _lsp_index_cache_root() -> str:
 
 def _lsp_index_directory_signature(directory: str) -> str:
     key_src = _path_identity(directory or ".")
-    return hashlib.sha1(key_src.encode("utf-8", "surrogatepass")).hexdigest()
+    return content_digest(key_src.encode("utf-8", "surrogatepass"))
 
 
 def _lsp_index_cache_key(
@@ -3363,7 +3367,7 @@ def _lsp_index_cache_path(directory: str, inputs: dict[str, dict[str, str]]) -> 
         sort_keys=True,
         separators=(",", ":"),
     )
-    key = hashlib.sha1(key_src.encode("utf-8", "surrogatepass")).hexdigest()
+    key = content_digest(key_src.encode("utf-8", "surrogatepass"))
     return os.path.join(_lsp_index_cache_root(), key + ".json")
 
 
@@ -3372,17 +3376,6 @@ def _lsp_index_const_signature() -> dict[str, Any]:
         "profile": getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
         "sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
     }
-
-
-def _md5_file(path: str) -> str:
-    h = hashlib.md5()
-    with open_read(path) as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
@@ -3395,7 +3388,7 @@ def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
         )
         for key, paths in groups:
             for path in paths:
-                inputs[key][os.path.basename(path)] = _md5_file(path)
+                inputs[key][os.path.basename(path)] = content_digest_file(path)
     except FilenameCaseCollisionError:
         raise
     except (OSError, ValueError):

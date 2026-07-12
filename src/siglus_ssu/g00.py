@@ -31,8 +31,6 @@ _JPEG_SUFFIXES = (".jpg", ".jpeg")
 _SIMPLE_G00_TYPES = (0, 1, 3)
 _SIMPLE_EXT = {0: ".png", 1: ".png", 3: ".jpeg"}
 _SIMPLE_COMP = {0: "LZSS32", 1: "LZSS"}
-_TYPE2_CENTER_OFFSET = 25
-_TYPE2_CENTER_STRUCT = struct.Struct("<ii")
 if len(C.G00_XOR_T) != 256:
     raise SystemExit(f"bad G00_XOR_T: {len(C.G00_XOR_T)}")
 
@@ -212,18 +210,6 @@ def blit(
             si += 4
 
 
-def _g00_xy(p: Path):
-    d = read_bytes(p)
-    if len(d) < 1:
-        raise ValueError("g00 too short for coord")
-    t = d[0]
-    if t == 2:
-        if len(d) < _TYPE2_CENTER_OFFSET + _TYPE2_CENTER_STRUCT.size:
-            raise ValueError("g00 too short for coord")
-        return _TYPE2_CENTER_STRUCT.unpack_from(d, _TYPE2_CENTER_OFFSET)
-    return (0, 0)
-
-
 _G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNORECASE)
 
 
@@ -261,7 +247,7 @@ def _select_type2_cut(cuts, cut_index):
     raise ValueError(f"type2 cut not found: cut{cut_index:03d}")
 
 
-def _decode_g00_main_image_pil(p: Path, cut_index=None):
+def _decode_g00_main_layer(p: Path, cut_index=None):
     need_pil()
     d = read_bytes(p)
     if not d:
@@ -269,15 +255,22 @@ def _decode_g00_main_image_pil(p: Path, cut_index=None):
     t = d[0]
     if t in _SIMPLE_G00_TYPES:
         _t, w, h, pay = _parse_simple_g00(d)
-        return _simple_to_pil(t, pay, w, h)
+        return _simple_to_pil(t, pay, w, h), (0, 0)
     if t != 2:
         raise ValueError(f"unsupported type for merge: {t}")
     _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, 1)
     if not cuts:
         raise ValueError("type2 no cuts")
     _ci, o, s = _select_type2_cut(cuts, cut_index)
-    canvas, cw, ch = _render_cut_canvas(unp[o : o + s], keep_hidden_rgb=False)
-    return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA")
+    block = unp[o : o + s]
+    canvas, cw, ch = _render_cut_canvas(block, keep_hidden_rgb=True)
+    return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA"), _type2_cut_header(
+        block
+    )["center"]
+
+
+def _decode_g00_main_image_pil(p: Path, cut_index=None):
+    return _decode_g00_main_layer(p, cut_index)[0]
 
 
 def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
@@ -289,11 +282,9 @@ def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
         if not p.is_file():
             raise ValueError(f"missing file: {p}")
     base_path, base_cut, _base_lab = specs[0]
-    base_xy = _g00_xy(base_path)
-    base_img = _decode_g00_main_image_pil(base_path, base_cut)
+    base_img, base_xy = _decode_g00_main_layer(base_path, base_cut)
     for p, cut, _lab in specs[1:]:
-        xy = _g00_xy(p)
-        src_img = _decode_g00_main_image_pil(p, cut)
+        src_img, xy = _decode_g00_main_layer(p, cut)
         dx = int(base_xy[0]) - int(xy[0])
         dy = int(base_xy[1]) - int(xy[1])
         base_img.alpha_composite(src_img, dest=(dx, dy))

@@ -1,7 +1,6 @@
 import sys
 import os
 import struct
-import hashlib
 import json
 import re
 import time
@@ -32,6 +31,7 @@ from .common import (
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
+    content_digest_file,
     read_bytes,
     read_text_auto,
     write_text,
@@ -254,7 +254,7 @@ def _parse_u32_token(t, opt):
     return n
 
 
-def _write_md5_cache(path, payload):
+def _write_digest_cache(path, payload):
     tmp_path = path + ".tmp"
     try:
         write_text(
@@ -269,20 +269,9 @@ def _write_md5_cache(path, payload):
         raise
 
 
-def _md5_file_for_cache(p):
-    h = hashlib.md5()
-    with open_read(p) as f:
-        while True:
-            b = f.read(1024 * 1024)
-            if not b:
-                break
-            h.update(b)
-    return h.hexdigest()
-
-
 def _compile_cache_meta(enc, charset):
     return {
-        "schema": 2,
+        "schema": 3,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
@@ -293,7 +282,7 @@ def _compile_cache_meta(enc, charset):
 
 def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, incremental):
     compile_list = list(ss or [])
-    md5_path = os.path.join(tmp_dir, "_md5.json") if tmp_dir else ""
+    digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
     cur_inc = {}
     cur_ss = {}
     full_compile = True
@@ -304,23 +293,23 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
             p = resolve_read_path(p, kind="file")
         except (FileNotFoundError, NotADirectoryError):
             continue
-        cur_inc[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
+        cur_inc[ascii_lower(os.path.basename(p))] = content_digest_file(p)
     for p in ss or []:
         try:
             p = resolve_read_path(p, kind="file")
         except (FileNotFoundError, NotADirectoryError):
             continue
-        cur_ss[ascii_lower(os.path.basename(p))] = _md5_file_for_cache(p)
+        cur_ss[ascii_lower(os.path.basename(p))] = content_digest_file(p)
     if incremental:
         old = None
         try:
-            existing_md5_path = resolve_read_path(md5_path, kind="file")
+            existing_digest_path = resolve_read_path(digest_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
-            existing_md5_path = ""
-        if existing_md5_path:
+            existing_digest_path = ""
+        if existing_digest_path:
             try:
                 old = json.loads(
-                    read_text_auto(existing_md5_path, force_charset="utf-8")
+                    read_text_auto(existing_digest_path, force_charset="utf-8")
                 )
             except FilenameCaseCollisionError:
                 raise
@@ -358,8 +347,8 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
                 if need:
                     comp.add(p)
             compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
-    pending_md5 = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
-    return compile_list, md5_path, pending_md5, full_compile
+    pending_digests = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
+    return compile_list, digest_path, pending_digests, full_compile
 
 
 def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
@@ -391,7 +380,7 @@ def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
 def _native_compile_cache_config(
     *, args, input_dir, tmp_dir, enc, charset, ss, inc, test_shuffle
 ):
-    compile_list, md5_path, pending_md5, full_compile = _compile_cache_state(
+    compile_list, digest_path, pending_digests, full_compile = _compile_cache_state(
         input_dir=input_dir,
         tmp_dir=tmp_dir,
         enc=enc,
@@ -435,8 +424,10 @@ def _native_compile_cache_config(
         and len(compile_list) == len(ss or [])
     )
     return {
-        "md5_path": md5_path,
-        "pending_md5_json": json.dumps(pending_md5, ensure_ascii=False, sort_keys=True),
+        "digest_path": digest_path,
+        "pending_digests_json": json.dumps(
+            pending_digests, ensure_ascii=False, sort_keys=True
+        ),
         "compile_scene_names": [os.path.basename(p) for p in compile_list],
         "dat_paths": dat_paths,
         "lzss_paths": lzss_paths,
@@ -1523,6 +1514,7 @@ def main(argv=None):
             cache_lock.close()
         return native_rc
     ok = False
+    test_shuffle_failed = False
     compile_stats = {
         "parallel": False,
         "scene_macro_counts": empty_macro_stat_counts(),
@@ -1534,14 +1526,16 @@ def main(argv=None):
         write_gameexe_dat(ctx)
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
-            compile_list, md5_path, pending_md5, full_compile = _compile_cache_state(
-                input_dir=inp,
-                tmp_dir=tmp,
-                enc=enc,
-                charset=charset,
-                ss=ss,
-                inc=inc,
-                incremental=bool(getattr(a, "tmp_dir", "")),
+            compile_list, digest_path, pending_digests, full_compile = (
+                _compile_cache_state(
+                    input_dir=inp,
+                    tmp_dir=tmp,
+                    enc=enc,
+                    charset=charset,
+                    ss=ss,
+                    inc=inc,
+                    incremental=bool(getattr(a, "tmp_dir", "")),
+                )
             )
             if getattr(a, "tmp_dir", "") and not a.no_angou:
                 bs_dir = os.path.join(tmp, "bs")
@@ -1720,8 +1714,9 @@ def main(argv=None):
                             f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n"
                         )
                     if not all_ok:
+                        test_shuffle_failed = True
                         sys.stderr.write(
-                            f"{test_shuffle_prefix} WARNING: seed matched first script but mismatch found in later scripts; continuing to build output\n"
+                            f"{test_shuffle_prefix} ERROR: seed matched first script but mismatch found in later scripts; output will be built with a failure status\n"
                         )
                         sys.stderr.flush()
                 else:
@@ -1731,8 +1726,8 @@ def main(argv=None):
                         max_workers=a.max_workers,
                         parallel=(not force_serial_compile),
                     )
-            if pending_md5 is not None:
-                _write_md5_cache(md5_path, pending_md5)
+            if pending_digests is not None:
+                _write_digest_cache(digest_path, pending_digests)
             if full_compile_stats:
                 _set_macro_stats(ctx, _collect_macro_stats(ctx, compile_stats))
                 _set_source_stats(ctx, _finalize_source_stats(ctx, compile_stats))
@@ -1753,7 +1748,7 @@ def main(argv=None):
                 _set_source_stats(ctx, None)
                 _set_read_flag_stats(ctx, None, None, None)
             link_pack(ctx)
-        ok = True
+        ok = not test_shuffle_failed
     except Exception as e:
         msg = str(e) if e is not None else ""
         if not msg:

@@ -13,7 +13,6 @@ from .word_count import count_text_units
 from .common import (
     hx,
     dn,
-    sha1,
     I32_PAIR_STRUCT,
     read_struct_list,
     max_pair_end,
@@ -387,7 +386,7 @@ def _pck_original_source_entries(blob, h, scn_data_end):
 
 
 def _pck_original_source_rows(entries):
-    return [(nm, a, b, len(raw), sha1(raw)) for nm, a, b, raw in entries]
+    return [(nm, a, b, len(raw), raw) for nm, a, b, raw in entries]
 
 
 def _read_scene_script_id(raw):
@@ -1143,15 +1142,15 @@ def _payload_compare_scene_task(args):
             return int(row_index), "-"
         full1 = c1.get("full") or {}
         full2 = c2.get("full") or {}
-        if full1.get("size") == full2.get("size") and full1.get("sha1") == full2.get(
-            "sha1"
+        if full1.get("size") == full2.get("size") and full1.get("sha256") == full2.get(
+            "sha256"
         ):
             return int(row_index), "same"
         no_text1 = c1.get("no_text") or {}
         no_text2 = c2.get("no_text") or {}
         if no_text1.get("size") == no_text2.get("size") and no_text1.get(
-            "sha1"
-        ) == no_text2.get("sha1"):
+            "sha256"
+        ) == no_text2.get("sha256"):
             return int(row_index), "text_only"
         return int(row_index), "real_diff"
     except Exception:
@@ -1209,7 +1208,7 @@ def compare_pck(
             nm = (names[i] if names and i < len(names) else (f"scene#{i:d}")) or (
                 f"scene#{i:d}"
             )
-            m.setdefault(nm, []).append((a, b, sha1(blob[a:b])))
+            m.setdefault(nm, []).append((a, b))
         return m
 
     sm1 = _scene_map(names1, idx1, h1.get("scn_data_list_ofs", 0), b1)
@@ -1283,8 +1282,11 @@ def compare_pck(
             r2 = l2[i] if i < len(l2) else None
             row_sid1 = _scene_script_id_get(sid1, k)
             row_sid2 = _scene_script_id_get(sid2, k)
-            same_data = (
-                r1 and r2 and (r1[1] - r1[0]) == (r2[1] - r2[0]) and r1[2] == r2[2]
+            same_data = bool(
+                r1
+                and r2
+                and (r1[1] - r1[0]) == (r2[1] - r2[0])
+                and b1[r1[0] : r1[1]] == b2[r2[0] : r2[1]]
             )
             if same_data and row_sid1 == row_sid2:
                 continue
@@ -1396,9 +1398,9 @@ def compare_pck(
     allrows = rows + orows
     if not allrows:
         if show_ids:
-            print("Sections: identical by (name,size,sha1,id)")
+            print("Sections: identical by (name,size,bytes,id)")
         else:
-            print("Sections: identical by (name,size,sha1)")
+            print("Sections: identical by (name,size,bytes)")
         if (not os1) and (not os2):
             print()
             print("Original sources: none")

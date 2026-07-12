@@ -12,7 +12,7 @@ from .decompiler import build_decompile_hints, write_decompiled_ss
 from .common import (
     hx,
     fmt_ts,
-    sha1,
+    content_digest,
     I32_STRUCT,
     I32_PAIR_STRUCT,
     read_struct_list,
@@ -506,8 +506,8 @@ def _payload_trace_normalize_value(ev, key, value):
 
 
 def _payload_trace_hash_bundles(trace):
-    full_h = hashlib.sha1()
-    no_text_h = hashlib.sha1()
+    full_h = hashlib.sha256()
+    no_text_h = hashlib.sha256()
     full_size = 0
     no_text_size = 0
     full_wrote_line = False
@@ -547,8 +547,8 @@ def _payload_trace_hash_bundles(trace):
             no_text_h, no_text_size, no_text_wrote_line, no_text_norm
         )
     return {
-        "full": {"size": full_size, "sha1": full_h.hexdigest()},
-        "no_text": {"size": no_text_size, "sha1": no_text_h.hexdigest()},
+        "full": {"size": full_size, "sha256": full_h.hexdigest()},
+        "no_text": {"size": no_text_size, "sha256": no_text_h.hexdigest()},
     }
 
 
@@ -888,7 +888,7 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
     print("type: gameexe_dat")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {fmt_ts(st.st_mtime)}")
-    print(f"sha1: {sha1(blob)}")
+    print(f"sha256: {content_digest(blob)}")
     print()
     if not blob or len(blob) < 8:
         print("invalid gameexe.dat: too small")
@@ -1033,12 +1033,12 @@ def compare_dat(
             no_text1 = c1.get("no_text") or {}
             no_text2 = c2.get("no_text") or {}
             if full1.get("size") == full2.get("size") and full1.get(
-                "sha1"
-            ) == full2.get("sha1"):
+                "sha256"
+            ) == full2.get("sha256"):
                 payload_status = "identical"
             elif no_text1.get("size") == no_text2.get("size") and no_text1.get(
-                "sha1"
-            ) == no_text2.get("sha1"):
+                "sha256"
+            ) == no_text2.get("sha256"):
                 payload_status = "text_only"
             else:
                 payload_status = "real_diff"

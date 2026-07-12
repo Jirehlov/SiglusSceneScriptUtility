@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
@@ -122,8 +123,8 @@ struct CallSlotInfo {
 }
 
 struct PayloadHasher {
-    full: Sha1,
-    no_text: Sha1,
+    full: Sha256,
+    no_text: Sha256,
     full_size: usize,
     no_text_size: usize,
     full_wrote: bool,
@@ -274,8 +275,8 @@ impl Config {
 impl PayloadHasher {
     fn new() -> Self {
         Self {
-            full: Sha1::new(),
-            no_text: Sha1::new(),
+            full: Sha256::new(),
+            no_text: Sha256::new(),
             full_size: 0,
             no_text_size: 0,
             full_wrote: false,
@@ -320,10 +321,10 @@ impl PayloadHasher {
         let out = PyDict::new(py);
         let full = PyDict::new(py);
         full.set_item("size", self.full_size)?;
-        full.set_item("sha1", hex_lower(&self.full.finalize()))?;
+        full.set_item("sha256", hex_lower(&self.full.finalize()))?;
         let no_text = PyDict::new(py);
         no_text.set_item("size", self.no_text_size)?;
-        no_text.set_item("sha1", hex_lower(&self.no_text.finalize()))?;
+        no_text.set_item("sha256", hex_lower(&self.no_text.finalize()))?;
         out.set_item("full", full)?;
         out.set_item("no_text", no_text)?;
         Ok(out.into())
@@ -1772,109 +1773,4 @@ fn hex_lower(data: &[u8]) -> String {
         out.push_str(&format!("{b:02x}"));
     }
     out
-}
-
-struct Sha1 {
-    state: [u32; 5],
-    len: u64,
-    buf: Vec<u8>,
-}
-
-impl Sha1 {
-    fn new() -> Self {
-        Self {
-            state: [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0],
-            len: 0,
-            buf: Vec::with_capacity(64),
-        }
-    }
-
-    fn update(&mut self, data: &[u8]) {
-        self.len = self.len.wrapping_add(data.len() as u64);
-        let mut p = data;
-        if !self.buf.is_empty() {
-            let need = 64 - self.buf.len();
-            let take = need.min(p.len());
-            self.buf.extend_from_slice(&p[..take]);
-            p = &p[take..];
-            if self.buf.len() == 64 {
-                let mut block = [0u8; 64];
-                block.copy_from_slice(&self.buf);
-                self.process(&block);
-                self.buf.clear();
-            }
-        }
-        while p.len() >= 64 {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(&p[..64]);
-            self.process(&block);
-            p = &p[64..];
-        }
-        if !p.is_empty() {
-            self.buf.extend_from_slice(p);
-        }
-    }
-
-    fn finalize(mut self) -> [u8; 20] {
-        let bit_len = self.len.wrapping_mul(8);
-        self.buf.push(0x80);
-        while self.buf.len() % 64 != 56 {
-            self.buf.push(0);
-        }
-        self.buf.extend_from_slice(&bit_len.to_be_bytes());
-        let blocks = self.buf.clone();
-        for chunk in blocks.chunks(64) {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(chunk);
-            self.process(&block);
-        }
-        let mut out = [0u8; 20];
-        for (i, v) in self.state.iter().enumerate() {
-            out[i * 4..i * 4 + 4].copy_from_slice(&v.to_be_bytes());
-        }
-        out
-    }
-
-    fn process(&mut self, block: &[u8; 64]) {
-        let mut w = [0u32; 80];
-        for (i, slot) in w.iter_mut().enumerate().take(16) {
-            let p = i * 4;
-            *slot = u32::from_be_bytes([block[p], block[p + 1], block[p + 2], block[p + 3]]);
-        }
-        for i in 16..80 {
-            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
-        }
-        let mut a = self.state[0];
-        let mut b = self.state[1];
-        let mut c = self.state[2];
-        let mut d = self.state[3];
-        let mut e = self.state[4];
-        for (i, wi) in w.iter().enumerate() {
-            let (f, k) = if i < 20 {
-                ((b & c) | ((!b) & d), 0x5a827999)
-            } else if i < 40 {
-                (b ^ c ^ d, 0x6ed9eba1)
-            } else if i < 60 {
-                ((b & c) | (b & d) | (c & d), 0x8f1bbcdc)
-            } else {
-                (b ^ c ^ d, 0xca62c1d6)
-            };
-            let temp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(*wi);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
-        }
-        self.state[0] = self.state[0].wrapping_add(a);
-        self.state[1] = self.state[1].wrapping_add(b);
-        self.state[2] = self.state[2].wrapping_add(c);
-        self.state[3] = self.state[3].wrapping_add(d);
-        self.state[4] = self.state[4].wrapping_add(e);
-    }
 }

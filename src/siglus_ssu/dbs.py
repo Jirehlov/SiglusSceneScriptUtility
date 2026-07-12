@@ -4,7 +4,7 @@ import csv
 import re
 from ._const_manager import get_const_module
 from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
-from .common import read_bytes, sha1, write_bytes
+from .common import content_digest, read_bytes, write_bytes
 from .path_policy import open_read
 
 C = get_const_module()
@@ -187,8 +187,8 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         print(f"dbs: unpack failed: {e}")
         return 1
     print("dbs structural compare:")
-    print(f"  m_type_1={int(t1):d}  unpacked_sha1_1={sha1(u1)}")
-    print(f"  m_type_2={int(t2):d}  unpacked_sha1_2={sha1(u2)}")
+    print(f"  m_type_1={int(t1):d}  unpacked_sha256_1={content_digest(u1)}")
+    print(f"  m_type_2={int(t2):d}  unpacked_sha256_2={content_digest(u2)}")
     if u1 == u2 and int(t1) == int(t2):
         print("  identical after XOR+LZSS unpack")
         return 0

@@ -6,7 +6,7 @@ from .common import (
     hx,
     fmt_ts,
     read_bytes,
-    sha1,
+    content_digest,
     looks_like_siglus_dat,
     parse_gei_disam_args,
     consume_angou_option,
@@ -122,7 +122,7 @@ def analyze_file(
     print(f"type: {ftype}")
     print(f"size: {len(blob):d} bytes ({hx(len(blob))})")
     print(f"mtime: {fmt_ts(st.st_mtime)}")
-    print(f"sha1: {sha1(blob)}")
+    print(f"sha256: {content_digest(blob)}")
     print()
     if ftype not in SUPPORTED_TYPES:
         print(f"unsupported file type for -a mode: {ftype}")
@@ -246,8 +246,8 @@ def compare_files(
     print(f"file2: {p2}")
     print(f"type1: {t1}  size1={len(b1):d} ({hx(len(b1))})")
     print(f"type2: {t2}  size2={len(b2):d} ({hx(len(b2))})")
-    print(f"sha1_1: {sha1(b1)}")
-    print(f"sha1_2: {sha1(b2)}")
+    print(f"sha256_1: {content_digest(b1)}")
+    print(f"sha256_2: {content_digest(b2)}")
     print()
     if (t1 not in SUPPORTED_TYPES) or (t2 not in SUPPORTED_TYPES):
         print(f"unsupported file type for -a mode (type1={t1} type2={t2})")
@@ -337,7 +337,7 @@ def compare_files(
         return cgm.compare_cgm(b1, b2)
     if t1 == "tcr":
         return tcr.compare_tcr(b1, b2)
-    print("No structural comparer for this type; comparing sha1 only.")
+    print("No structural comparer for this type; comparing sha256 only.")
     return 0
 
 

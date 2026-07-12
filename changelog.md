@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 ## [v0.4.0] - TBA
 - Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
 - Added LICENSE.
+- Changed internal cache, analysis, and payload digests from MD5/SHA-1 to SHA-256, invalidating old compile and LSP caches without compatibility fallback.
+- Fixed G00 type2 merging to preserve straight-alpha RGB and use the center coordinates of the selected cut.
+- Changed `--test-shuffle` to return failure when later scene verification does not match, while still building the requested output.
 - Changed `siglus-ssu test` success results from `PASS` to `EXACT` for byte-identical `.pck` files and `PAYLOAD_SAME` for different `.pck` bytes with matching normalized payloads.
 - Changed KOE character directories to use distinct percent escaping for invalid path characters, trailing spaces or dots, reserved names, and empty names.
 - Fixed `.ss` text-map identity and current-span resolution, rejected duplicate or overlapping replacements before write-back, and reduced overlap validation to `O(n log n)`.

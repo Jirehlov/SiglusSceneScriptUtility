@@ -157,8 +157,8 @@ pub struct CompileContext {
 
 #[derive(Debug, Clone)]
 pub struct CompileCache {
-    pub md5_path: String,
-    pub pending_md5_json: String,
+    pub digest_path: String,
+    pub pending_digests_json: String,
     pub compile_scene_names: Vec<String>,
     pub dat_paths: HashMap<String, String>,
     pub lzss_paths: HashMap<String, String>,
@@ -444,8 +444,8 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         easy_link: get_bool(&context_dict, "easy_link")?,
     };
     let cache = CompileCache {
-        md5_path: get_str(&cache_dict, "md5_path")?,
-        pending_md5_json: get_str(&cache_dict, "pending_md5_json")?,
+        digest_path: get_str(&cache_dict, "digest_path")?,
+        pending_digests_json: get_str(&cache_dict, "pending_digests_json")?,
         compile_scene_names: get_string_list(&cache_dict, "compile_scene_names")?,
         dat_paths: get_string_map(&cache_dict, "dat_paths")?,
         lzss_paths: get_string_map(&cache_dict, "lzss_paths")?,

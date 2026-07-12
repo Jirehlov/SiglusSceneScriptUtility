@@ -5,7 +5,7 @@ from .common import (
     fmt_kv,
     hint_help,
     read_bytes,
-    sha1,
+    content_digest,
     parse_main_argv,
     prepare_batch_paths,
     missing_input_file,
@@ -33,7 +33,7 @@ def _analyze_one(path):
     print(fmt_kv("packed_bytes", len(blob) - 4))
     print(fmt_kv("m_type", int(m_type)))
     print(fmt_kv("unpacked_bytes", len(expanded)))
-    print(fmt_kv("unpacked_sha1", sha1(expanded)))
+    print(fmt_kv("unpacked_sha256", content_digest(expanded)))
     for k in (
         "data_size",
         "row_cnt",

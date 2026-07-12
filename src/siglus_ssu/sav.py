@@ -3,7 +3,7 @@ import re
 import struct
 from ._const_manager import get_const_module
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
-from .common import dn, sha1
+from .common import content_digest, dn
 
 C = get_const_module()
 
@@ -117,7 +117,7 @@ def _stream_info(b):
     bb = bytes(b) if b else b""
     return {
         "size": int(len(bb)),
-        "sha1": sha1(bb),
+        "sha256": content_digest(bb),
         "head": _parse_save_stream_head(bb),
     }
 
@@ -128,7 +128,7 @@ def _parse_local_stream_ex(b):
     if n == 0:
         return {
             "size": 0,
-            "sha1": sha1(b""),
+            "sha256": content_digest(b""),
             "local_extra_switch": [],
             "local_extra_mode": [],
         }
@@ -148,7 +148,7 @@ def _parse_local_stream_ex(b):
         if n < md_off + md_bytes:
             sw_stride = None
     if sw_stride is None:
-        return {"size": int(n), "sha1": sha1(bb), "raw_hex": bb.hex()}
+        return {"size": int(n), "sha256": content_digest(bb), "raw_hex": bb.hex()}
     out_sw = []
     off = 0
     for _ in range(sw_cnt):
@@ -170,7 +170,7 @@ def _parse_local_stream_ex(b):
     tail = bb[off:]
     d = {
         "size": int(n),
-        "sha1": sha1(bb),
+        "sha256": content_digest(bb),
         "local_extra_switch": out_sw,
         "local_extra_mode": out_md,
     }
@@ -321,7 +321,7 @@ def _parse_read_sav(blob):
         "scn_cnt": int(scn_cnt),
         "pack_size": int(pack_sz),
         "org_size": int(org_sz),
-        "unpacked_sha1": sha1(unpacked),
+        "unpacked_sha256": content_digest(unpacked),
         "rows": rows,
         "total_read": tr,
         "total_cnt": tc,
@@ -677,7 +677,7 @@ def _parse_global_or_config(blob):
         raise ValueError("not global/config sav")
     enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
     raw = _unpack_tnm_data(enc)
-    sha1_hex = sha1(raw)
+    sha256_hex = content_digest(raw)
     if k["kind"] == "global":
         payload, variant, err = _try_parse_global_payload(raw, k["major"], k["minor"])
     else:
@@ -685,7 +685,7 @@ def _parse_global_or_config(blob):
     return {
         **k,
         "unpacked_size": len(raw),
-        "unpacked_sha1": sha1_hex,
+        "unpacked_sha256": sha256_hex,
         "payload": payload,
         "payload_variant": variant,
         "payload_error": err,
@@ -1067,7 +1067,7 @@ def sav(blob, path=None):
         print(f"scn_cnt: {info['scn_cnt']}")
         print(f"packed_size: {info['pack_size']}")
         print(f"org_size: {info['org_size']}")
-        print(f"unpacked_sha1: {info['unpacked_sha1']}")
+        print(f"unpacked_sha256: {info['unpacked_sha256']}")
         print()
         for name, cnt, r in info["rows"]:
             if cnt <= 0:
@@ -1093,7 +1093,7 @@ def sav(blob, path=None):
             print(f"packed_size: {info['pack_size']}")
             print(f"org_size: {info['org_size']}")
         print(f"unpacked_size: {info['unpacked_size']}")
-        print(f"unpacked_sha1: {info['unpacked_sha1']}")
+        print(f"unpacked_sha256: {info['unpacked_sha256']}")
         if info.get("payload_variant") is not None:
             print(f"parse_variant: {info['payload_variant']}")
         if info.get("payload") is None:
@@ -1169,7 +1169,7 @@ def sav(blob, path=None):
             xor_cycle_inplace(enc, C.TPC, 0)
             try:
                 unpacked = lzss_unpack(bytes(enc))
-                print(f"unpacked_sha1: {sha1(unpacked)}")
+                print(f"unpacked_sha256: {content_digest(unpacked)}")
                 try:
                     p, var = _parse_local_payload(unpacked)
                     print(f"parse_variant: {var!s}")
@@ -1205,10 +1205,10 @@ def compare_sav(b1, b2):
         w = int(C.NAME_W)
         print("==== Compare read.sav ====")
         print(
-            f"ver1: {a['major']}.{a['minor']}  scn1={a['scn_cnt']}  org1={a['org_size']}  sha1={a['unpacked_sha1']}"
+            f"ver1: {a['major']}.{a['minor']}  scn1={a['scn_cnt']}  org1={a['org_size']}  sha256={a['unpacked_sha256']}"
         )
         print(
-            f"ver2: {b['major']}.{b['minor']}  scn2={b['scn_cnt']}  org2={b['org_size']}  sha1={b['unpacked_sha1']}"
+            f"ver2: {b['major']}.{b['minor']}  scn2={b['scn_cnt']}  org2={b['org_size']}  sha256={b['unpacked_sha256']}"
         )
         print()
         ma = {name: (cnt, r) for name, cnt, r in a["rows"]}
@@ -1270,10 +1270,10 @@ def compare_sav(b1, b2):
         size_name = "config_data_size" if k1["kind"] == "config" else "global_data_size"
         print(f"==== Compare {title} ====")
         print(
-            f"ver1: {a['major']}.{a['minor']}  {size_name}1={a['data_size']}  pack1={a.get('pack_size')}  org1={a.get('org_size')}  unpack1={a.get('unpacked_size')}  sha1={a.get('unpacked_sha1')}"
+            f"ver1: {a['major']}.{a['minor']}  {size_name}1={a['data_size']}  pack1={a.get('pack_size')}  org1={a.get('org_size')}  unpack1={a.get('unpacked_size')}  sha256={a.get('unpacked_sha256')}"
         )
         print(
-            f"ver2: {b['major']}.{b['minor']}  {size_name}2={b['data_size']}  pack2={b.get('pack_size')}  org2={b.get('org_size')}  unpack2={b.get('unpacked_size')}  sha1={b.get('unpacked_sha1')}"
+            f"ver2: {b['major']}.{b['minor']}  {size_name}2={b['data_size']}  pack2={b.get('pack_size')}  org2={b.get('org_size')}  unpack2={b.get('unpacked_size')}  sha256={b.get('unpacked_sha256')}"
         )
         if a.get("payload_variant") is not None or b.get("payload_variant") is not None:
             print(f"variant1: {a.get('payload_variant')}")

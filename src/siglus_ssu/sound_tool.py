@@ -22,7 +22,7 @@ from .common import (
     hx,
     parse_main_argv,
     prepare_batch_paths,
-    sha1,
+    content_digest,
     write_bytes,
     missing_input_file,
     read_text_auto,
@@ -160,7 +160,7 @@ class _OvkCompareEntry:
     occurrence: int
     size: int
     sample_count: int
-    payload_sha1: str
+    payload_sha256: str
     error: str = ""
 
 
@@ -186,11 +186,11 @@ def _ovk_compare_entries(path: str) -> list[_OvkCompareEntry]:
         for entry in entries:
             occurrence = int(seen.get(entry.entry_no, 0))
             seen[entry.entry_no] = occurrence + 1
-            payload_sha1 = ""
+            payload_sha256 = ""
             error = ""
             try:
                 ogg = sound.extract_ogg_bytes_from_ovk_stream(f, entry)
-                payload_sha1 = sha1(ogg)
+                payload_sha256 = content_digest(ogg)
             except Exception as exc:
                 error = str(exc)
             out.append(
@@ -199,7 +199,7 @@ def _ovk_compare_entries(path: str) -> list[_OvkCompareEntry]:
                     occurrence=occurrence,
                     size=int(entry.size),
                     sample_count=int(entry.sample_count),
-                    payload_sha1=payload_sha1,
+                    payload_sha256=payload_sha256,
                     error=error,
                 )
             )
@@ -271,7 +271,7 @@ def _compare_ovk(p1: str, p2: str) -> int:
         if a.error or b.error:
             read_errors += 1
             status.append("read_error")
-        elif a.payload_sha1 != b.payload_sha1:
+        elif a.payload_sha256 != b.payload_sha256:
             payload_diff += 1
             status.append("payload")
         if status:
