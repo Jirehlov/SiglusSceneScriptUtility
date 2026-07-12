@@ -128,11 +128,9 @@ impl CompileConstants {
 #[derive(Debug, Clone)]
 pub struct CompileOptions {
     pub dat_repack: bool,
-    pub no_angou: bool,
     pub serial: bool,
     pub max_workers: Option<usize>,
     pub set_shuffle: Option<String>,
-    pub tmp_dir_option: String,
     pub gei: bool,
     pub test_shuffle: bool,
     pub force_serial_compile: bool,
@@ -141,6 +139,8 @@ pub struct CompileOptions {
 #[derive(Debug, Clone)]
 pub struct CompileContext {
     pub gameexe_ini: String,
+    pub angou_path: String,
+    pub key_path: String,
     pub scn_list: Vec<String>,
     pub scene_display_names: HashMap<String, String>,
     pub inc_list: Vec<String>,
@@ -162,8 +162,8 @@ pub struct CompileCache {
     pub compile_scene_names: Vec<String>,
     pub dat_paths: HashMap<String, String>,
     pub lzss_paths: HashMap<String, String>,
+    pub lzss_remove_paths: Vec<String>,
     pub compiled_scene_files: usize,
-    pub full_compile: bool,
     pub full_compile_stats: bool,
 }
 
@@ -419,17 +419,17 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
     let constants = parse_compile_constants(constants_dict.into_any())?;
     let options = CompileOptions {
         dat_repack: get_bool(&options_dict, "dat_repack")?,
-        no_angou: get_bool(&options_dict, "no_angou")?,
         serial: get_bool(&options_dict, "serial")?,
         max_workers: get_option_usize(&options_dict, "max_workers")?,
         set_shuffle: get_option_string(&options_dict, "set_shuffle")?,
-        tmp_dir_option: get_str(&options_dict, "tmp_dir")?,
         gei: get_bool(&options_dict, "gei")?,
         test_shuffle: get_bool(&options_dict, "test_shuffle")?,
         force_serial_compile: get_bool(&options_dict, "force_serial_compile")?,
     };
     let context = CompileContext {
         gameexe_ini: get_str(&context_dict, "gameexe_ini")?,
+        angou_path: get_str(&context_dict, "angou_path")?,
+        key_path: get_str(&context_dict, "key_path")?,
         scn_list: get_string_list(&context_dict, "scn_list")?,
         scene_display_names: get_string_map(&context_dict, "scene_display_names")?,
         inc_list: get_string_list(&context_dict, "inc_list")?,
@@ -449,8 +449,8 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         compile_scene_names: get_string_list(&cache_dict, "compile_scene_names")?,
         dat_paths: get_string_map(&cache_dict, "dat_paths")?,
         lzss_paths: get_string_map(&cache_dict, "lzss_paths")?,
+        lzss_remove_paths: get_string_list(&cache_dict, "lzss_remove_paths")?,
         compiled_scene_files: get_i64(&cache_dict, "compiled_scene_files")? as usize,
-        full_compile: get_bool(&cache_dict, "full_compile")?,
         full_compile_stats: get_bool(&cache_dict, "full_compile_stats")?,
     };
     Ok(CompileConfig {

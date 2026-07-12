@@ -37,6 +37,7 @@ from .path_policy import (
     open_read,
     read_directory,
     read_file_stat,
+    windows_filename_key,
 )
 
 C = get_const_module()
@@ -254,7 +255,7 @@ def _normalize_source_text(text: str) -> str:
 
 
 def _path_identity(path: str) -> str:
-    return os.path.normcase(os.path.abspath(path))
+    return windows_filename_key(os.path.abspath(path))
 
 
 def _overlay_text_for_path(overlays: dict[str, str], path: str) -> str | None:
@@ -1724,7 +1725,7 @@ def _local_macro_symbol_id(kind: str, path: str, name: str) -> str:
         "macrolocal:"
         + str(kind).casefold()
         + ":"
-        + os.path.abspath(path).casefold()
+        + _path_identity(path)
         + ":"
         + str(name).casefold()
     )
@@ -2772,12 +2773,12 @@ def document_key_for_uri(uri: str) -> str:
 
     parsed = urlsplit(uri)
     if parsed.scheme == "file":
-        return "file:" + os.path.normcase(os.path.abspath(uri_to_path(uri)))
+        return "file:" + _path_identity(uri_to_path(uri))
     return "uri:" + str(uri)
 
 
 def document_key_for_path(path: str) -> str:
-    return "file:" + os.path.normcase(os.path.abspath(path))
+    return "file:" + _path_identity(path)
 
 
 def _symbol_kind(record: DefinitionRecord) -> int:

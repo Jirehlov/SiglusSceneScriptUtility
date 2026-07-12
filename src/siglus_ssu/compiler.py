@@ -36,8 +36,8 @@ from .common import (
     read_text_auto,
     write_text,
     parse_code,
-    find_named_path,
     ANGOU_DAT_NAME,
+    KEY_TXT_NAME,
     MACRO_STAT_KINDS,
     has_option,
     empty_macro_stat_counts,
@@ -52,6 +52,7 @@ from .path_policy import (
     read_directory,
     resolve_read_path,
     walk_read_directory,
+    windows_filename_key,
 )
 
 
@@ -364,6 +365,27 @@ def _native_compile_cache_config(
         compile_list,
         use_lzss=not args.no_angou and not args.no_lzss,
     )
+    lzss_remove_paths = []
+    if getattr(args, "tmp_dir", "") and not args.no_angou:
+        bs_dir = os.path.join(tmp_dir, "bs")
+        if full_compile:
+            try:
+                _, entries = read_directory(bs_dir)
+            except (FileNotFoundError, NotADirectoryError):
+                entries = []
+            lzss_remove_paths = [
+                entry.path
+                for entry in entries
+                if entry.is_file() and entry.name.lower().endswith(".lzss")
+            ]
+        else:
+            for path in compile_list:
+                stem = os.path.splitext(os.path.basename(path))[0]
+                candidate = os.path.join(bs_dir, stem + ".lzss")
+                try:
+                    lzss_remove_paths.append(resolve_read_path(candidate, kind="file"))
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
     full_compile_stats = (
         (not getattr(args, "dat_repack", False))
         and not getattr(args, "tmp_dir", "")
@@ -377,6 +399,7 @@ def _native_compile_cache_config(
         "compile_scene_names": [os.path.basename(p) for p in compile_list],
         "dat_paths": dat_paths,
         "lzss_paths": lzss_paths,
+        "lzss_remove_paths": lzss_remove_paths,
         "compiled_scene_files": len(compile_list or []),
         "full_compile": bool(full_compile),
         "full_compile_stats": bool(full_compile_stats),
@@ -543,7 +566,7 @@ def _scan_dir(p):
         ssid = _read_scene_ssid(fp)
         scn_ssid_map[ascii_lower(f)] = ssid
         scn_ssid_map[ascii_lower(os.path.splitext(f)[0])] = ssid
-    return ini, inc, ss, scn_ssid_map
+    return fs, ini, inc, ss, scn_ssid_map
 
 
 def _is_jp_char(ch):
@@ -1093,6 +1116,8 @@ def _native_compile_config(
         },
         "context": {
             "gameexe_ini": ctx.get("gameexe_ini"),
+            "angou_path": ctx.get("angou_path"),
+            "key_path": ctx.get("key_path"),
             "scn_list": list(ctx.get("scn_list") or []),
             "scene_display_names": scene_display_names,
             "inc_list": list(ctx.get("inc_list") or []),
@@ -1340,7 +1365,20 @@ def main(argv=None):
         except (FileNotFoundError, NotADirectoryError):
             sys.stderr.write("test_dir not found\n")
             return 1
-    ini, inc, ss, scn_ssid_map = _scan_dir(inp)
+    files, ini, inc, ss, scn_ssid_map = _scan_dir(inp)
+    angou_key = windows_filename_key(ANGOU_DAT_NAME)
+    key_txt_key = windows_filename_key(KEY_TXT_NAME)
+    angou_name = next(
+        (name for name in files if windows_filename_key(name) == angou_key), ""
+    )
+    key_txt_name = next(
+        (name for name in files if windows_filename_key(name) == key_txt_key), ""
+    )
+    if not gei_ini:
+        gameexe_key = windows_filename_key("Gameexe.ini")
+        gei_ini = next(
+            (name for name in ini if windows_filename_key(name) == gameexe_key), ""
+        )
     os.makedirs(out, exist_ok=True)
     tmp = ""
     tmp_auto = False
@@ -1366,6 +1404,8 @@ def main(argv=None):
         "out_path_noangou": "",
         "scene_pck": scene_pck,
         "gameexe_ini": gei_ini,
+        "angou_path": os.path.join(inp, angou_name) if angou_name else "",
+        "key_path": os.path.join(inp, key_txt_name) if key_txt_name else "",
         "exe_path": None,
         "scn_list": [os.path.basename(x) for x in ss],
         "scn_ssid_map": scn_ssid_map,
@@ -1388,7 +1428,7 @@ def main(argv=None):
     }
     _init_stats(ctx)
     angou_content = None
-    angou_path = find_named_path(inp, ANGOU_DAT_NAME, recursive=False)
+    angou_path = ctx["angou_path"]
     if (not a.no_angou) and angou_path:
         try:
             angou_content = (

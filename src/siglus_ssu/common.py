@@ -6,6 +6,7 @@ import re
 from ._const_manager import get_const_module
 from .path_policy import (
     FilenameCaseCollisionError,
+    open_read,
     read_directory,
     resolve_read_path,
     walk_read_directory,
@@ -958,8 +959,7 @@ def decode_angou_first_line(data: bytes, force_charset: str = "") -> str:
 
 
 def read_bytes(path: str) -> bytes:
-    path = resolve_read_path(path, kind="file")
-    with open(path, "rb") as f:
+    with open_read(path) as f:
         return f.read()
 
 

@@ -922,6 +922,8 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                         continue
                     row["lines"] += 1
                     row["count"] += count_text_units(txt)
+            except FilenameCaseCollisionError:
+                raise
             except Exception:
                 row["status"] = "failed"
                 stats["ss_failed_files"] += 1

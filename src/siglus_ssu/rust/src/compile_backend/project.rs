@@ -455,39 +455,6 @@ fn source_path(base: &Path, name: &str) -> PathBuf {
     }
 }
 
-fn find_named_file(base: &Path, target_name: &str) -> Option<PathBuf> {
-    let target = ascii_lowercase(target_name);
-    let mut hits = Vec::new();
-    if let Ok(entries) = fs::read_dir(base) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-                continue;
-            };
-            if ascii_lowercase(name) == target {
-                hits.push(path);
-            }
-        }
-    }
-    hits.sort_by(|left, right| {
-        let left_name = left
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let right_name = right
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        left_name.cmp(&right_name)
-    });
-    hits.into_iter().next()
-}
-
 fn line_error(prefix: &str, line: usize, message: &str) -> String {
     format!("{prefix} line({line}): {message}")
 }
@@ -1570,8 +1537,9 @@ fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
             return Ok(Some(key));
         }
     }
-    if let Some(key_path) = find_named_file(Path::new(&config.input_dir), "key.txt") {
-        let raw = fs::read(&key_path).map_err(|error| format_path_error(&key_path, error))?;
+    if !config.context.key_path.is_empty() {
+        let key_path = Path::new(&config.context.key_path);
+        let raw = fs::read(key_path).map_err(|error| format_path_error(key_path, error))?;
         if raw.len() == 16 {
             return Ok(Some(raw));
         }
@@ -1691,11 +1659,20 @@ fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
             append_path(&mut sources, &mut seen, base, source_path(base, name));
         }
     }
-    let angou_name = "\u{6697}\u{53f7}.dat";
-    if let Some(path) = find_named_file(base, angou_name) {
-        append_path(&mut sources, &mut seen, base, path);
-    } else if let Some(path) = find_named_file(base, "key.txt") {
-        append_path(&mut sources, &mut seen, base, path);
+    if !config.context.angou_path.is_empty() {
+        append_path(
+            &mut sources,
+            &mut seen,
+            base,
+            PathBuf::from(&config.context.angou_path),
+        );
+    } else if !config.context.key_path.is_empty() {
+        append_path(
+            &mut sources,
+            &mut seen,
+            base,
+            PathBuf::from(&config.context.key_path),
+        );
     }
     for name in &config.context.inc_list {
         append_path(&mut sources, &mut seen, base, source_path(base, name));
@@ -2128,29 +2105,10 @@ fn write_md5_cache(config: &CompileConfig) -> Result<(), String> {
     })
 }
 
-fn invalidate_lzss_cache(config: &CompileConfig, bs_dir: &Path) -> Result<(), String> {
-    if config.options.tmp_dir_option.is_empty() || config.options.no_angou || !bs_dir.is_dir() {
-        return Ok(());
-    }
-    if config.cache.full_compile {
-        for entry in fs::read_dir(bs_dir).map_err(|error| format_path_error(bs_dir, error))? {
-            let entry = entry.map_err(|error| format_path_error(bs_dir, error))?;
-            let path = entry.path();
-            if path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| value.eq_ignore_ascii_case("lzss"))
-            {
-                fs::remove_file(&path).map_err(|error| format_path_error(&path, error))?;
-            }
-        }
-        return Ok(());
-    }
-    for name in &config.cache.compile_scene_names {
-        let path = bs_dir.join(format!("{}.lzss", scene_stem(name)));
-        if path.is_file() {
-            fs::remove_file(&path).map_err(|error| format_path_error(&path, error))?;
-        }
+fn invalidate_lzss_cache(config: &CompileConfig) -> Result<(), String> {
+    for value in &config.cache.lzss_remove_paths {
+        let path = Path::new(value);
+        fs::remove_file(path).map_err(|error| format_path_error(path, error))?;
     }
     Ok(())
 }
@@ -2217,7 +2175,7 @@ fn compile_project_inner(
     if !config.tmp_dir.is_empty() {
         fs::create_dir_all(&bs_dir).map_err(|error| format_path_error(&bs_dir, error))?;
     }
-    invalidate_lzss_cache(config, &bs_dir)?;
+    invalidate_lzss_cache(config)?;
 
     let tasks = config
         .context

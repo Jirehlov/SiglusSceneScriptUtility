@@ -231,7 +231,7 @@ When `--tmp` is not supplied, every compile invocation creates a uniquely named 
 
 Scene names written into the linked `.pck` use the same ASCII-only lowercase normalization as the official compiler: `A` through `Z` become `a` through `z`, while non-ASCII characters, including fullwidth Latin letters such as `ＥＤ`, are preserved.
 
-Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. The official Windows project namespace does not support treating filenames that differ only by ASCII case as distinct. On a case-sensitive file system, the utility rejects immediate input filenames such as `A.ss` and `a.ss` that collide under the official normalization rule.
+Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. Runtime input reads prefer an exact file or directory name. On every platform, a missing exact path falls back to Windows filename case matching and rejects ambiguous matches. Every directory enumeration rejects immediate entries such as `A.ss` and `a.ss` whose names collide under Windows filename lowercase rules. Output creation continues to use the target filesystem's native path semantics.
 
 It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
 

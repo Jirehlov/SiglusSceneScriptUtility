@@ -1,5 +1,6 @@
 import base64
 import os
+import stat
 import struct
 import zlib
 from pathlib import Path
@@ -34,30 +35,31 @@ def _collision_details(directory, entries):
     return f"filenames differ only by case in the same directory: {directory}: {names}"
 
 
-def _entry_groups(entries):
-    groups = {}
-    for entry in entries:
-        groups.setdefault(windows_filename_key(entry.name), []).append(entry)
-    return groups
-
-
 def _read_entries(directory):
     entries = list(os.scandir(directory))
-    for group in _entry_groups(entries).values():
-        if len(group) > 1:
+    seen = {}
+    for entry in entries:
+        key = windows_filename_key(entry.name)
+        previous = seen.get(key)
+        if previous is not None:
             raise FilenameCaseCollisionError(
                 _collision_details(
-                    directory, sorted(group, key=lambda entry: entry.name)
+                    directory, sorted((previous, entry), key=lambda item: item.name)
                 )
             )
+        seen[key] = entry
     return entries
 
 
-def resolve_read_path(path, kind=None):
-    original = os.fspath(path)
-    if not original:
+def _check_kind(path, original, kind):
+    path_stat = os.stat(path)
+    if kind == "file" and not stat.S_ISREG(path_stat.st_mode):
         raise FileNotFoundError(original)
-    absolute = os.path.abspath(original)
+    if kind == "dir" and not stat.S_ISDIR(path_stat.st_mode):
+        raise NotADirectoryError(original)
+
+
+def _resolve_case_fallback(original, absolute, kind):
     parts = Path(absolute).parts
     if not parts:
         raise FileNotFoundError(original)
@@ -76,17 +78,22 @@ def resolve_read_path(path, kind=None):
                 )
             )
         if not matches:
-            candidate = os.path.join(current, part)
-            if os.name == "nt" and os.path.lexists(candidate):
-                current = candidate
-                continue
             raise FileNotFoundError(original)
         current = matches[0].path
-    if kind == "file" and not os.path.isfile(current):
-        raise FileNotFoundError(original)
-    if kind == "dir" and not os.path.isdir(current):
-        raise NotADirectoryError(original)
+    _check_kind(current, original, kind)
     return current
+
+
+def resolve_read_path(path, kind=None):
+    original = os.fspath(path)
+    if not original:
+        raise FileNotFoundError(original)
+    absolute = os.path.abspath(original)
+    try:
+        _check_kind(absolute, original, kind)
+    except (FileNotFoundError, NotADirectoryError):
+        return _resolve_case_fallback(original, absolute, kind)
+    return absolute
 
 
 def read_path_exists(path, kind=None):
@@ -100,24 +107,45 @@ def read_path_exists(path, kind=None):
 def open_read(path, mode="rb", **kwargs):
     if "r" not in mode or any(flag in mode for flag in "wax+"):
         raise ValueError(f"not a read-only mode: {mode}")
+    try:
+        return open(path, mode, **kwargs)
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError):
+        pass
     return open(resolve_read_path(path, kind="file"), mode, **kwargs)
 
 
 def read_file_stat(path):
-    return os.stat(resolve_read_path(path, kind="file"))
+    original = os.fspath(path)
+    if not original:
+        raise FileNotFoundError(original)
+    try:
+        path_stat = os.stat(original)
+    except (FileNotFoundError, NotADirectoryError):
+        resolved = resolve_read_path(original, kind="file")
+        return os.stat(resolved)
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise FileNotFoundError(original)
+    return path_stat
 
 
 def read_directory(path):
-    directory = resolve_read_path(path, kind="dir")
+    original = os.fspath(path)
+    if not original:
+        raise FileNotFoundError(original)
+    directory = os.path.abspath(original)
+    try:
+        return directory, _read_entries(directory)
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    directory = resolve_read_path(original, kind="dir")
     return directory, _read_entries(directory)
 
 
 def walk_read_directory(path):
-    root = resolve_read_path(path, kind="dir")
-    pending = [root]
+    root, entries = read_directory(path)
+    pending = [(root, entries)]
     while pending:
-        directory = pending.pop()
-        entries = _read_entries(directory)
+        directory, entries = pending.pop()
         dirs = []
         files = []
         for entry in entries:
@@ -132,4 +160,4 @@ def walk_read_directory(path):
             if not os.path.islink(os.path.join(directory, name))
             and not os.path.isjunction(os.path.join(directory, name))
         ]
-        pending.extend(reversed(children))
+        pending.extend((child, _read_entries(child)) for child in reversed(children))
