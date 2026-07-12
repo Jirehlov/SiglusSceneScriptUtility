@@ -91,12 +91,10 @@ fn to_i32(value: i64) -> i32 {
 }
 
 fn starts_with(chars: &[char], pos: usize, text: &str) -> bool {
-    let mut i = pos;
-    for ch in text.chars() {
+    for (i, ch) in (pos..).zip(text.chars()) {
         if chars.get(i) != Some(&ch) {
             return false;
         }
-        i += 1;
     }
     true
 }

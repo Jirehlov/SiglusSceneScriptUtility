@@ -100,7 +100,10 @@ def build_lsp_project_native(config):
 def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False):
     if not HAS_NATIVE_LSP_SCAN or project is None:
         return None
-    return _native_lsp_scan_document(project, path, text, bool(run_bs))
+    from .path_policy import windows_filename_key
+
+    path_identity = windows_filename_key(os.path.abspath(path))
+    return _native_lsp_scan_document(project, path, path_identity, text, bool(run_bs))
 
 
 def _payload_native_config():

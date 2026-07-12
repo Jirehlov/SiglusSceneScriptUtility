@@ -235,9 +235,10 @@ pub fn lsp_scan_document(
     py: Python<'_>,
     project: Bound<'_, PyAny>,
     path: String,
+    path_identity: String,
     text: String,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
     let project = project.extract::<PyRef<'_, lsp_scan::NativeLspProject>>()?;
-    lsp_scan::lsp_scan_document(py, project, path, text, run_bs)
+    lsp_scan::lsp_scan_document(py, project, path, path_identity, text, run_bs)
 }

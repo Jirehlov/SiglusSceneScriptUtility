@@ -67,12 +67,10 @@ pub fn encrypt_source(
         % config.mask_h_sur.max(1))
         + config.mask_h_add;
     let mut mask = vec![0u8; mask_width.saturating_mul(mask_height)];
-    let mut mask_index = config.mask_index;
     let mut smd5_index = config.mask_smd5_index;
-    for value in &mut mask {
+    for (mask_index, value) in (config.mask_index..).zip(&mut mask) {
         *value = config.mask_code[mask_index % config.mask_code.len()]
             ^ smd5_code[(smd5_index % 16) * 4];
-        mask_index += 1;
         smd5_index = (smd5_index + 1) % 16;
     }
     let map_width = (read_u32(&smd5_code, config.map_w_smd5_i) as usize % config.map_w_sur.max(1))
@@ -84,13 +82,11 @@ pub fn encrypt_source(
     let mut padded = packed;
     padded.resize(map_bytes.saturating_mul(2), 0);
     let garbage_count = padded.len().saturating_sub(packed_size);
-    let mut garbage_index = config.gomi_index;
     let mut garbage_smd5_index = config.gomi_smd5_index;
-    for index in 0..garbage_count {
+    for (garbage_index, index) in (config.gomi_index..).zip(0..garbage_count) {
         let smd5_offset = (garbage_smd5_index % 16) * 4;
         padded[packed_size + index] =
             config.gomi_code[garbage_index % config.gomi_code.len()] ^ smd5_code[smd5_offset];
-        garbage_index += 1;
         garbage_smd5_index = (garbage_smd5_index + 1) % 16;
     }
 

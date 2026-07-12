@@ -886,7 +886,7 @@ def _append_occurrence_from_definition(
         return False
     if not _source_token_matches_text(result.text, token):
         return False
-    symbol_id = _definition_symbol_id(record)
+    symbol_id = _definition_symbol_id_for_result(result, record)
     if not symbol_id:
         return False
     rng = (token.line, token.start_char, token.end_char)
@@ -1624,6 +1624,8 @@ def word_at_position(
     character = _lsp_character_to_char(src, character, position_encoding)
     idx = min(max(character, 0), len(src))
     if idx == len(src) and idx > 0:
+        if not _is_ident_char(src[idx - 1]) and src[idx - 1] != "#":
+            return "", None, ""
         idx -= 1
 
     def scan_ident(pos: int) -> tuple[int, int]:
@@ -1708,12 +1710,23 @@ def _command_symbol_id(name: str) -> str:
     return "cmd:" + str(name).casefold()
 
 
+def _local_command_symbol_id(path: str, name: str) -> str:
+    return "cmdlocal:" + _path_identity(path) + ":" + str(name).casefold()
+
+
 def _global_property_symbol_id(name: str) -> str:
     return "gprop:" + str(name).casefold()
 
 
-def _call_property_symbol_id(command_name: str, name: str) -> str:
-    return "cprop:" + str(command_name).casefold() + ":" + str(name).casefold()
+def _local_call_property_symbol_id(path: str, command_name: str, name: str) -> str:
+    return (
+        "cproplocal:"
+        + _path_identity(path)
+        + ":"
+        + str(command_name).casefold()
+        + ":"
+        + str(name).casefold()
+    )
 
 
 def _macro_symbol_id(kind: str, name: str) -> str:
@@ -1757,6 +1770,17 @@ def _definition_symbol_id(record: DefinitionRecord) -> str:
             return _local_macro_symbol_id(record.kind, record.path, record.name)
         return _macro_symbol_id(record.kind, record.name)
     return ""
+
+
+def _definition_symbol_id_for_result(
+    result: AnalysisResult, record: DefinitionRecord
+) -> str:
+    if record.kind == "command" and record.scope == C.FM_SCENE:
+        key = record.name.casefold()
+        project_records = result.project.definitions.get(key, [])
+        if not any(item.kind == "command" for item in project_records):
+            return _local_command_symbol_id(result.path, record.name)
+    return _definition_symbol_id(record)
 
 
 def _definition_renamable(record: DefinitionRecord) -> bool:
@@ -1839,6 +1863,16 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
         for key, records in result.project.definitions.items()
         if any(record.kind == "command" for record in records)
     }
+
+    def command_symbol_id(name: str) -> str:
+        key = name.casefold()
+        if key in local_command_keys and key not in project_command_keys:
+            return _local_command_symbol_id(result.path, name)
+        return _command_symbol_id(name)
+
+    def call_property_symbol_id(command_name: str, name: str) -> str:
+        return _local_call_property_symbol_id(result.path, command_name, name)
+
     user_command_keys = local_command_keys | project_command_keys
     project_property_keys = {
         key
@@ -2016,7 +2050,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             add_request(
                 name_atom,
                 name,
-                _command_symbol_id(name),
+                command_symbol_id(name),
                 "command",
                 "function",
                 True,
@@ -2028,7 +2062,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     prop_atom,
                     prop_name,
-                    _call_property_symbol_id(name, prop_name),
+                    call_property_symbol_id(name, prop_name),
                     "property",
                     "parameter",
                     True,
@@ -2043,7 +2077,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             name = _unknown_name(result.lad, name_atom)
             key = name.casefold()
             if current_command:
-                symbol_id = _call_property_symbol_id(current_command, name)
+                symbol_id = call_property_symbol_id(current_command, name)
                 renamable = True
             else:
                 symbol_id = _global_property_symbol_id(name)
@@ -2141,7 +2175,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     name_atom,
                     name,
-                    _command_symbol_id(name),
+                    command_symbol_id(name),
                     "command",
                     ("element" if is_element else "function"),
                     False,
@@ -2159,7 +2193,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                     add_request(
                         name_atom,
                         name,
-                        _call_property_symbol_id(current_command, name),
+                        call_property_symbol_id(current_command, name),
                         "property",
                         ("element" if is_element else "variable"),
                         False,
@@ -3075,19 +3109,29 @@ def definition_locations_for_occurrence(
             uri_for_path=uri_for_path,
         )
 
+    if occurrence.symbol_id.startswith("cmdlocal:"):
+        for rec in result.local_definitions.get(key, []):
+            if _definition_symbol_id_for_result(result, rec) == occurrence.symbol_id:
+                add_location(rec)
+        return locations
     if occurrence.symbol_id.startswith("cmd:"):
         for mapping in (result.local_definitions, result.project.definitions):
             for rec in mapping.get(key, []):
                 if rec.kind == "command":
                     add_location(rec)
         return locations
-    if occurrence.symbol_id.startswith("cprop:"):
-        parts = occurrence.symbol_id.split(":", 2)
-        if len(parts) == 3:
-            scope = f"command {parts[1]}"
-            for rec in result.local_definitions.get(key, []):
-                if rec.kind == "property" and rec.scope.casefold() == scope.casefold():
-                    add_location(rec)
+    if occurrence.symbol_id.startswith("cproplocal:"):
+        for rec in result.local_definitions.get(key, []):
+            if rec.kind != "property" or not rec.scope.casefold().startswith(
+                "command "
+            ):
+                continue
+            command_name = rec.scope[len("command ") :]
+            if (
+                _local_call_property_symbol_id(result.path, command_name, rec.name)
+                == occurrence.symbol_id
+            ):
+                add_location(rec)
         return locations
     if occurrence.symbol_id.startswith("gprop:"):
         for mapping in (result.local_definitions, result.project.definitions):
@@ -3120,7 +3164,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 9
+LSP_INDEX_CACHE_VERSION = 11
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 

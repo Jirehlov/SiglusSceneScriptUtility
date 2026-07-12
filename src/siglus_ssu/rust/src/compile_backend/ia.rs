@@ -247,12 +247,10 @@ impl IncAnalyzer {
     }
 
     fn starts_with(&self, pos: usize, needle: &str) -> bool {
-        let mut i = pos;
-        for ch in needle.chars() {
+        for (i, ch) in (pos..).zip(needle.chars()) {
             if self.text.get(i) != Some(&ch) {
                 return false;
             }
-            i += 1;
         }
         true
     }

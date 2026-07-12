@@ -960,10 +960,7 @@ impl SyntaxAnalyzer {
             };
             (next, primary)
         };
-        loop {
-            let Some((next, operator, precedence)) = self.binary_operator(pos) else {
-                break;
-            };
+        while let Some((next, operator, precedence)) = self.binary_operator(pos) {
             if precedence <= minimum_precedence {
                 break;
             }

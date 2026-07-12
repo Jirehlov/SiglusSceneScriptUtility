@@ -446,15 +446,18 @@ fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<Py
 }
 
 #[pyfunction]
-#[pyo3(signature = (project, path, text, run_bs=false))]
+#[pyo3(signature = (project, path, path_identity, text, run_bs=false))]
 fn lsp_scan_document(
     py: Python<'_>,
     project: Bound<'_, PyAny>,
     path: String,
+    path_identity: String,
     text: String,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
-    catch_native_panic(|| compile_backend::lsp_scan_document(py, project, path, text, run_bs))
+    catch_native_panic(|| {
+        compile_backend::lsp_scan_document(py, project, path, path_identity, text, run_bs)
+    })
 }
 
 #[pyfunction]

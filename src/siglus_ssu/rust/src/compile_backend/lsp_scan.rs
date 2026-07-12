@@ -379,12 +379,16 @@ fn command_symbol_id(name: &str) -> String {
     format!("cmd:{}", key(name))
 }
 
+fn local_command_symbol_id(path_identity: &str, name: &str) -> String {
+    format!("cmdlocal:{path_identity}:{}", key(name))
+}
+
 fn global_property_symbol_id(name: &str) -> String {
     format!("gprop:{}", key(name))
 }
 
-fn call_property_symbol_id(command: &str, name: &str) -> String {
-    format!("cprop:{}:{}", key(command), key(name))
+fn local_call_property_symbol_id(path_identity: &str, command: &str, name: &str) -> String {
+    format!("cproplocal:{path_identity}:{}:{}", key(command), key(name))
 }
 
 fn macro_symbol_id(kind: &str, name: &str) -> String {
@@ -432,6 +436,23 @@ fn definition_symbol_id(record: &LspDefinition) -> String {
         }
         _ => String::new(),
     }
+}
+
+fn definition_symbol_id_for_document(
+    record: &LspDefinition,
+    path_identity: &str,
+    project_defs: &HashMap<String, Vec<LspDefinition>>,
+) -> String {
+    if record.kind == "command" && key(&record.scope) == "scene" {
+        let name_key = key(&record.name);
+        let project_command = project_defs
+            .get(&name_key)
+            .is_some_and(|records| records.iter().any(|item| item.kind == "command"));
+        if !project_command {
+            return local_command_symbol_id(path_identity, &record.name);
+        }
+    }
+    definition_symbol_id(record)
 }
 
 fn definition_renamable(record: &LspDefinition) -> bool {
@@ -799,8 +820,9 @@ impl UsedRanges {
 
 fn append_occurrence_from_definition(
     out: &mut Vec<LspOccurrence>,
-    source_lines: &[Vec<char>],
     path: &str,
+    path_identity: &str,
+    project_defs: &HashMap<String, Vec<LspDefinition>>,
     token: Option<SourceToken>,
     record: Option<&LspDefinition>,
     used_ranges: &mut UsedRanges,
@@ -811,10 +833,7 @@ fn append_occurrence_from_definition(
     let Some(record) = record else {
         return false;
     };
-    if !token_matches_text(source_lines, &token) {
-        return false;
-    }
-    let symbol_id = definition_symbol_id(record);
+    let symbol_id = definition_symbol_id_for_document(record, path_identity, project_defs);
     if symbol_id.is_empty() {
         return false;
     }
@@ -918,6 +937,7 @@ struct OccurrenceContext<'a> {
     lex: &'a LexResult,
     source_lines: &'a [Vec<char>],
     path: &'a str,
+    path_identity: &'a str,
     local_command_keys: HashSet<String>,
     project_command_keys: HashSet<String>,
     project_property_keys: HashSet<String>,
@@ -940,6 +960,20 @@ impl<'a> OccurrenceContext<'a> {
         self.project
             .builtin_kinds
             .contains(&(key_name.to_string(), kind.to_string()))
+    }
+
+    fn command_symbol_id(&self, name: &str) -> String {
+        let name_key = key(name);
+        if self.local_command_keys.contains(&name_key)
+            && !self.project_command_keys.contains(&name_key)
+        {
+            return local_command_symbol_id(self.path_identity, name);
+        }
+        command_symbol_id(name)
+    }
+
+    fn call_property_symbol_id(&self, command: &str, name: &str) -> String {
+        local_call_property_symbol_id(self.path_identity, command, name)
     }
 
     fn add_request(
@@ -1018,7 +1052,7 @@ fn walk_element(
                 RequestSpec {
                     atom,
                     name,
-                    symbol_id: command_symbol_id(name),
+                    symbol_id: ctx.command_symbol_id(name),
                     kind: "command",
                     semantic_type: if is_element { "element" } else { "function" },
                     definition: false,
@@ -1040,7 +1074,7 @@ fn walk_element(
                     RequestSpec {
                         atom,
                         name,
-                        symbol_id: call_property_symbol_id(current_command, name),
+                        symbol_id: ctx.call_property_symbol_id(current_command, name),
                         kind: "property",
                         semantic_type: if is_element { "element" } else { "variable" },
                         definition: false,
@@ -1173,7 +1207,7 @@ fn walk_occurrences(
                 RequestSpec {
                     atom: name_atom,
                     name,
-                    symbol_id: command_symbol_id(name),
+                    symbol_id: ctx.command_symbol_id(name),
                     kind: "command",
                     semantic_type: "function",
                     definition: true,
@@ -1187,7 +1221,7 @@ fn walk_occurrences(
                     RequestSpec {
                         atom: &parameter.name_atom,
                         name: &parameter.name,
-                        symbol_id: call_property_symbol_id(name, &parameter.name),
+                        symbol_id: ctx.call_property_symbol_id(name, &parameter.name),
                         kind: "property",
                         semantic_type: "parameter",
                         definition: true,
@@ -1215,7 +1249,7 @@ fn walk_occurrences(
                     ctx.project_property_keys.contains(&key_name),
                 )
             } else {
-                (call_property_symbol_id(current_command, name), true)
+                (ctx.call_property_symbol_id(current_command, name), true)
             };
             ctx.add_request(
                 out,
@@ -1338,6 +1372,7 @@ struct BodyOccurrenceContext<'a, 'b> {
     out: &'b mut Vec<LspOccurrence>,
     source_lines: &'a [Vec<char>],
     path: &'a str,
+    path_identity: &'a str,
     ia_data: &'a IaData,
     local_defs: &'a HashMap<String, Vec<LspDefinition>>,
     project_defs: &'a HashMap<String, Vec<LspDefinition>>,
@@ -1371,8 +1406,9 @@ fn append_body_occurrences(ctx: &mut BodyOccurrenceContext<'_, '_>, body: &IncBo
                 );
                 append_occurrence_from_definition(
                     ctx.out,
-                    ctx.source_lines,
                     ctx.path,
+                    ctx.path_identity,
+                    ctx.project_defs,
                     token,
                     record,
                     ctx.used_ranges,
@@ -1410,8 +1446,9 @@ fn append_body_occurrences(ctx: &mut BodyOccurrenceContext<'_, '_>, body: &IncBo
         let token = token_from_atom(&lex, ctx.source_lines, atom, name);
         append_occurrence_from_definition(
             ctx.out,
-            ctx.source_lines,
             ctx.path,
+            ctx.path_identity,
+            ctx.project_defs,
             token,
             record,
             ctx.used_ranges,
@@ -1425,6 +1462,7 @@ struct CollectOccurrencesInput<'a> {
     lex: &'a LexResult,
     source_text: &'a str,
     path: &'a str,
+    path_identity: &'a str,
     root: &'a AstNode,
     replace_uses: &'a [ReplaceUse],
     sidecar: &'a IncSidecar,
@@ -1438,6 +1476,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         lex,
         source_text,
         path,
+        path_identity,
         root,
         replace_uses,
         sidecar,
@@ -1515,6 +1554,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         lex,
         source_lines: &source_lines,
         path,
+        path_identity,
         local_command_keys,
         project_command_keys,
         project_property_keys,
@@ -1569,6 +1609,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         out: &mut out,
         source_lines: &source_lines,
         path,
+        path_identity,
         ia_data,
         local_defs,
         project_defs: &project.definitions,
@@ -1650,6 +1691,7 @@ pub fn lsp_scan_document(
     py: Python<'_>,
     project: PyRef<'_, NativeLspProject>,
     path: String,
+    path_identity: String,
     text: String,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
@@ -1799,6 +1841,7 @@ pub fn lsp_scan_document(
         lex: &lex,
         source_text: &source_text,
         path: &path,
+        path_identity: &path_identity,
         root: &root,
         replace_uses: &scene.replace_uses,
         sidecar: &scene_sidecar,
