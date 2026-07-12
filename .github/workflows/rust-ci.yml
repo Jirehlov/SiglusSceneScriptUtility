@@ -43,6 +43,8 @@ jobs:
           cd src/siglus_ssu/rust
           cargo fmt
           cargo clippy --fix --allow-dirty --allow-staged
+          cargo fmt -- --check
+          cargo clippy -- -D warnings
           if [ -n "$(git status --porcelain)" ]; then
             echo "changes=true" >> $GITHUB_OUTPUT
           else

@@ -72,7 +72,7 @@ pip install siglus-ssu
 siglus-ssu init
 ```
 
-> **注意：** 需要 Python 3.12 或更高版本。软件包内置了预编译的 Rust 原生扩展以加速关键操作。如果您的平台没有兼容的 wheel，则需要自行从源码构建 Rust 扩展。
+> **注意：** 需要 Python 3.12 或更高版本。PyPI 同时发布带 Rust 原生扩展的平台 wheel 和通用的 `py3-none-any` 纯 Python 回退 wheel。如果没有兼容的原生 wheel，pip 仍可安装纯 Python wheel；受支持的操作会使用 Python 回退实现，但运行速度可能较慢。只有在该平台上需要原生加速时，才需要配备 Rust 从源码构建。
 >
 > `const.py` 存储在平台特定的用户数据目录：
 > - **Windows：** `%APPDATA%\siglus-ssu\const.py`
@@ -255,7 +255,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<input_dir>` | 包含 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。 |
 | `<output_pck \| output_dir>` | 输出路径。若参数指向一个已存在目录，则在其中创建 `Scene.pck`。否则该参数会按输出文件路径处理；即使一个不存在的路径不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
-| `--charset ENC` | 强制指定源文件编码。接受值：`jis`、`cp932`、`sjis`、`shift_jis`（均等价于 Shift-JIS）或 `utf8`、`utf-8`。省略时自动检测。 |
+| `--charset ENC` | 强制指定源文件编码。CP932/Shift-JIS 别名：`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`。UTF-8 别名：`utf8`、`utf-8`、`utf_8`、`utf8-sig`、`utf-8-sig`。省略时自动检测。 |
 | `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。不能与 `--tmp` 同用。 |
@@ -263,7 +263,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--serial` | 禁用多进程并行编译，并强制编译阶段按串行方式运行。默认启用并行编译。 |
 | `--max-workers N` | 最大并行工作进程数。仅在启用并行编译时生效；默认为自动。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
-| `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
+| `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 MD5 缓存（`_md5.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。不能与 `--tmp` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，写出 CSV，记录串行重建阶段每个场景对象的初态种子和终态种子。若路径是已存在目录或以路径分隔符结尾，则在其中写出 `test_shuffle_seeds.csv`。不能与 `--tmp` 同用。 |
 | `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段。输出参数始终按目录处理；如果目录不存在会自动创建，并在其中写入 `Gameexe.dat`。不能与 `--tmp` 同用。 |
@@ -328,7 +328,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 #### 说明
 
-- **自动编码检测：** 若未指定 `--charset`，工具会扫描 `.ss`、`.inc`、`.ini`、`.dat` 文件中的 UTF-8 BOM 或假名/CJK 字符。找到则使用 `utf-8`，否则使用 `cp932`（Shift-JIS）。
+- **自动编码检测：** 若未指定 `--charset`，每个源文件都会独立尝试 UTF-8 与 CP932，并根据 BOM、严格解码结果和确定性的歧义评分选择编码。编译器还会另行扫描 `.ss`、`.inc`、`.ini`、`.dat` 文件中的 UTF-8 BOM 或假名/CJK 字符，以生成用于编译缓存元数据及中间/调试文本编码的项目级提示；该提示不会强制所有源文件使用同一种编码。需要为整个项目覆盖自动选择时，请使用 `--charset`。
 - **增量编译：** 当指定 `--tmp` 时，编译器会缓存所有 `.ss` 和 `.inc` 文件的 MD5 哈希。缓存兼容条件包括 `siglus-ssu` 版本、源码字符集以及当前 `const.py` 内容/profile。下次兼容运行时仅重编译已更改（或缺少对应 `.dat`）的文件，并复用已有 `.lzss` 产物。若某个场景源码发生变化，或对应 `.lzss` 缺失，则重新生成该场景的 `.lzss`。若任一 `.inc` 文件发生变化，则触发全量重编译。
 - **字符串混淆：** 编译器会用 MSVC 兼容 `rand()` 种子打乱每个 `.dat` 的字符串表；字符串顺序不影响普通翻译工作。`--test-shuffle` 根据第一个 scene 寻找种子，再串行重建全部 scene；后续若有不匹配会报告，但仍继续生成输出。已知种子可通过 `--set-shuffle` 使用。
 
@@ -1649,11 +1649,11 @@ hex     ::= "0x" { hex-digit }
 
 #### 全角/双字节裸字符串
 
-凡被 `_iszen()` 判定为双字节或全角的连续字符序列（不含 `【` 与 `】`），都会直接词法化为 `VAL_STR`。因此，以下两种写法在词法上都能形成字符串 token：
+凡被 `is_zen()` 判定为 Windows CP932 双字节字符的连续序列（不含 `【` 与 `】`），都会直接词法化为 `VAL_STR`。这与官方编译器在日文 locale 下进行多字节转换的规则一致。因此，以下两种写法在词法上都能形成字符串 token：
 
 ```text
-"你好"
-你好
+"こんにちは"
+こんにちは
 ```
 
 这也是 `【角色名】` 与裸台词行能够成立的基础。

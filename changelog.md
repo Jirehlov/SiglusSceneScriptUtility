@@ -14,6 +14,11 @@ All notable changes to this project will be documented in this file.
 - Changed DBS creation to reject unencodable strings, fixed TCR type-zero parsing and expected CLI format errors, and made PCK sample caches verify Git blob hashes without obsolete sidecar metadata.
 - Documented case-insensitive scene lookup and case-preserving embedded source metadata, made runtime input reads prefer exact paths before case-insensitive fallback, rejected case-colliding directory enumeration under Windows filename rules, and included the `siglus-ssu` version in persistent compile-cache compatibility checks.
 - Rejected analyze and DBS options that do not apply to the selected input or mode instead of silently ignoring them.
+- Aligned the Python and Rust frontends with the official compiler for scene-local commands, exact Windows CP932 decoding/encoding, and CP932 double-byte character classification.
+- Made native LSP token validation and overlap tracking linear or logarithmic instead of quadratic on large multi-line and single-line documents, bounded its casefold cache, and preserved invalid-character diagnostics and nested macro occurrences.
+- Serialized writers of an explicit compile `--tmp` cache to prevent concurrent cache corruption.
+- Hardened CLI failures for invalid output directories, unsupported sound extraction inputs, textmap file types/decoding, and invalid analyze option combinations; sound trimming now uses an invocation-unique temporary directory without deleting pre-existing output content.
+- Fixed the PyPI README documentation links and aligned both manuals with per-file source encoding detection and the pure-Python fallback wheel.
 
 
 ## [v0.3.7] - 2026-07-07

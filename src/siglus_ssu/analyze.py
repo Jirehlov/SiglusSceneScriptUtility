@@ -358,11 +358,15 @@ def main(argv=None):
         word = True
     if word and ("--disam" in args or "--decompile" in args):
         return 2
-    args, gei, _disam, _decompile = parse_gei_disam_args(
-        args,
-        allow_gei_disam=True,
-        return_decompile=True,
-    )
+    try:
+        args, gei, _disam, _decompile = parse_gei_disam_args(
+            args,
+            allow_gei_disam=True,
+            return_decompile=True,
+        )
+    except ValueError as e:
+        sys.stderr.write(str(e) + "\n")
+        return 2
     dat_disam = bool(_disam)
     if _decompile:
         sys.stderr.write(

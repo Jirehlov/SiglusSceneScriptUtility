@@ -13,12 +13,14 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyString};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 
 thread_local! {
     static CASEFOLD_CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
 }
+
+const CASEFOLD_CACHE_LIMIT: usize = 4096;
 
 #[derive(Debug, Clone)]
 struct LspDefinition {
@@ -75,7 +77,11 @@ fn key(text: &str) -> String {
                 .and_then(|value| value.extract::<String>())
                 .unwrap_or_else(|_| text.to_lowercase())
         });
-        cache.borrow_mut().insert(text.to_string(), folded.clone());
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= CASEFOLD_CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(text.to_string(), folded.clone());
         folded
     })
 }
@@ -285,33 +291,27 @@ fn diagnostic_result<'py>(
     Ok(out)
 }
 
-fn char_slice(text: &str, start: usize, end: usize) -> String {
-    text.chars()
-        .skip(start)
-        .take(end.saturating_sub(start))
-        .collect()
-}
-
-fn line_text(text: &str, line: usize) -> String {
-    text.split('\n').nth(line).unwrap_or_default().to_string()
-}
-
-fn token_matches_text(source_text: &str, token: &SourceToken) -> bool {
-    let line = line_text(source_text, token.line);
-    if token.start_char >= token.end_char || token.end_char > line.chars().count() {
+fn token_matches_text(source_lines: &[Vec<char>], token: &SourceToken) -> bool {
+    let Some(line) = source_lines.get(token.line) else {
+        return false;
+    };
+    if token.start_char >= token.end_char || token.end_char > line.len() {
         return false;
     }
-    key(&char_slice(&line, token.start_char, token.end_char)) == key(&token.text)
+    let text = line[token.start_char..token.end_char]
+        .iter()
+        .collect::<String>();
+    key(&text) == key(&token.text)
 }
 
 fn token_from_atom(
     lex: &LexResult,
-    source_text: &str,
+    source_lines: &[Vec<char>],
     atom: &Atom,
     name: &str,
 ) -> Option<SourceToken> {
     let token = token_span_from_atom(lex, atom, name)?;
-    token_matches_text(source_text, &token).then_some(token)
+    token_matches_text(source_lines, &token).then_some(token)
 }
 
 fn token_span_from_atom(lex: &LexResult, atom: &Atom, name: &str) -> Option<SourceToken> {
@@ -328,7 +328,7 @@ fn token_span_from_atom(lex: &LexResult, atom: &Atom, name: &str) -> Option<Sour
 }
 
 fn token_from_source_map(
-    source_text: &str,
+    source_lines: &[Vec<char>],
     text: &str,
     source_map: &[Option<SourcePoint>],
     name: &str,
@@ -372,7 +372,7 @@ fn token_from_source_map(
             end_char: end.saturating_sub(line_start),
         }
     };
-    token_matches_text(source_text, &token).then_some(token)
+    token_matches_text(source_lines, &token).then_some(token)
 }
 
 fn command_symbol_id(name: &str) -> String {
@@ -731,7 +731,7 @@ fn unique_macro_definitions(
 
 struct UsedRanges {
     ranges: HashSet<(usize, usize, usize)>,
-    by_line: HashMap<usize, Vec<(usize, usize)>>,
+    by_line: HashMap<usize, BTreeMap<usize, usize>>,
 }
 
 impl UsedRanges {
@@ -747,23 +747,59 @@ impl UsedRanges {
     }
 
     fn overlaps(&self, rng: (usize, usize, usize)) -> bool {
-        self.by_line
-            .get(&rng.0)
-            .is_some_and(|items| items.iter().any(|used| rng.1 < used.1 && rng.2 > used.0))
+        let Some(items) = self.by_line.get(&rng.0) else {
+            return false;
+        };
+        let overlaps_left = items
+            .range(..=rng.1)
+            .next_back()
+            .is_some_and(|(_, end)| *end > rng.1);
+        let overlaps_right = items
+            .range(rng.1..)
+            .next()
+            .is_some_and(|(start, _)| *start < rng.2);
+        overlaps_left || overlaps_right
     }
 
     fn insert(&mut self, rng: (usize, usize, usize)) -> bool {
         if !self.ranges.insert(rng) {
             return false;
         }
-        self.by_line.entry(rng.0).or_default().push((rng.1, rng.2));
+        let items = self.by_line.entry(rng.0).or_default();
+        let mut start = rng.1;
+        let mut end = rng.2;
+        if let Some((left_start, left_end)) = items
+            .range(..=start)
+            .next_back()
+            .map(|(left_start, left_end)| (*left_start, *left_end))
+            && left_end >= start
+        {
+            start = left_start;
+            end = end.max(left_end);
+            items.remove(&left_start);
+        }
+        loop {
+            let next = items
+                .range(start..)
+                .next()
+                .map(|(next_start, next_end)| (*next_start, *next_end));
+            let Some((next_start, next_end)) = next else {
+                break;
+            };
+            if next_start > end {
+                break;
+            }
+            end = end.max(next_end);
+            items.remove(&next_start);
+        }
+        items.insert(start, end);
         true
     }
 }
 
 fn append_occurrence_from_definition(
     out: &mut Vec<LspOccurrence>,
-    source_text: &str,
+    source_lines: &[Vec<char>],
     path: &str,
     token: Option<SourceToken>,
     record: Option<&LspDefinition>,
@@ -775,7 +811,7 @@ fn append_occurrence_from_definition(
     let Some(record) = record else {
         return false;
     };
-    if !token_matches_text(source_text, &token) {
+    if !token_matches_text(source_lines, &token) {
         return false;
     }
     let symbol_id = definition_symbol_id(record);
@@ -792,7 +828,9 @@ fn append_occurrence_from_definition(
         "macro" | "define" | "replace" => ("macro", "macro"),
         _ => return false,
     };
-    used_ranges.insert(rng);
+    if !used_ranges.insert(rng) {
+        return false;
+    }
     out.push(LspOccurrence {
         symbol_id,
         path: path.to_string(),
@@ -810,7 +848,7 @@ fn append_occurrence_from_definition(
 
 fn append_macro_use_occurrences(
     out: &mut Vec<LspOccurrence>,
-    source_text: &str,
+    source_lines: &[Vec<char>],
     path: &str,
     tokens: Vec<SourceToken>,
     used_ranges: &mut UsedRanges,
@@ -819,7 +857,7 @@ fn append_macro_use_occurrences(
 ) {
     for token in tokens {
         let rng = (token.line, token.start_char, token.end_char);
-        if used_ranges.contains_exact(rng) || !token_matches_text(source_text, &token) {
+        if used_ranges.contains_exact(rng) || !token_matches_text(source_lines, &token) {
             continue;
         }
         let token_key = key(&token.text);
@@ -827,8 +865,8 @@ fn append_macro_use_occurrences(
         if record.is_none() && !token.text.starts_with('@') {
             continue;
         }
-        if mark_used_ranges {
-            used_ranges.insert(rng);
+        if mark_used_ranges && !used_ranges.insert(rng) {
+            continue;
         }
         let symbol_id = record
             .map(definition_symbol_id)
@@ -878,7 +916,7 @@ fn global_property_definition_from_maps<'a>(
 struct OccurrenceContext<'a> {
     project: &'a NativeLspProject,
     lex: &'a LexResult,
-    source_text: &'a str,
+    source_lines: &'a [Vec<char>],
     path: &'a str,
     local_command_keys: HashSet<String>,
     project_command_keys: HashSet<String>,
@@ -922,14 +960,16 @@ impl<'a> OccurrenceContext<'a> {
         if name.is_empty() || symbol_id.is_empty() {
             return;
         }
-        let Some(token) = token_from_atom(self.lex, self.source_text, atom, name) else {
+        let Some(token) = token_from_atom(self.lex, self.source_lines, atom, name) else {
             return;
         };
         let rng = (token.line, token.start_char, token.end_char);
         if used_ranges.overlaps(rng) {
             return;
         }
-        used_ranges.insert(rng);
+        if !used_ranges.insert(rng) {
+            return;
+        }
         out.push(LspOccurrence {
             symbol_id,
             path: self.path.to_string(),
@@ -967,13 +1007,9 @@ fn walk_element(
     if let (Some(name), Some(atom)) = (&element.name, &element.name_atom) {
         let key_name = key(name);
         if element.element_type == ctx.project.base_ia.codes.element_type.command {
-            let user_command_keys: HashSet<String> = ctx
-                .local_command_keys
-                .union(&ctx.project_command_keys)
-                .cloned()
-                .collect();
-            let is_element = !user_command_keys.contains(&key_name)
-                && ctx.builtin_kind_defined(&key_name, "command");
+            let is_user_command = ctx.local_command_keys.contains(&key_name)
+                || ctx.project_command_keys.contains(&key_name);
+            let is_element = !is_user_command && ctx.builtin_kind_defined(&key_name, "command");
             let renamable = ctx.local_command_keys.contains(&key_name)
                 || ctx.project_command_keys.contains(&key_name);
             ctx.add_request(
@@ -1300,7 +1336,7 @@ fn replace_tokens(replace_uses: &[ReplaceUse]) -> Vec<SourceToken> {
 
 struct BodyOccurrenceContext<'a, 'b> {
     out: &'b mut Vec<LspOccurrence>,
-    source_text: &'a str,
+    source_lines: &'a [Vec<char>],
     path: &'a str,
     ia_data: &'a IaData,
     local_defs: &'a HashMap<String, Vec<LspDefinition>>,
@@ -1326,7 +1362,7 @@ fn append_body_occurrences(ctx: &mut BodyOccurrenceContext<'_, '_>, body: &IncBo
             if !name.is_empty() && !arg_names.contains(&key(&name)) {
                 let record = ctx.macro_maps.iter().find_map(|map| map.get(&key(&name)));
                 let token = token_from_source_map(
-                    ctx.source_text,
+                    ctx.source_lines,
                     &body.text,
                     &body.source_map,
                     &name,
@@ -1335,7 +1371,7 @@ fn append_body_occurrences(ctx: &mut BodyOccurrenceContext<'_, '_>, body: &IncBo
                 );
                 append_occurrence_from_definition(
                     ctx.out,
-                    ctx.source_text,
+                    ctx.source_lines,
                     ctx.path,
                     token,
                     record,
@@ -1371,10 +1407,10 @@ fn append_body_occurrences(ctx: &mut BodyOccurrenceContext<'_, '_>, body: &IncBo
         if record.is_none() {
             record = ctx.macro_maps.iter().find_map(|map| map.get(&key_name));
         }
-        let token = token_from_atom(&lex, ctx.source_text, atom, name);
+        let token = token_from_atom(&lex, ctx.source_lines, atom, name);
         append_occurrence_from_definition(
             ctx.out,
-            ctx.source_text,
+            ctx.source_lines,
             ctx.path,
             token,
             record,
@@ -1407,6 +1443,10 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         sidecar,
         ia_data,
     } = input;
+    let source_lines = source_text
+        .split('\n')
+        .map(|line| line.chars().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
     let mut used_ranges = UsedRanges::new();
     let mut out = Vec::new();
     let local_command_keys = local_defs
@@ -1463,7 +1503,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
     let project_macro_defs = unique_macro_definitions(&project.definitions);
     append_macro_use_occurrences(
         &mut out,
-        source_text,
+        &source_lines,
         path,
         replace_tokens(replace_uses),
         &mut used_ranges,
@@ -1473,7 +1513,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
     let ctx = OccurrenceContext {
         project,
         lex,
-        source_text,
+        source_lines: &source_lines,
         path,
         local_command_keys,
         project_command_keys,
@@ -1507,7 +1547,9 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         if used_ranges.contains_exact(rng) {
             continue;
         }
-        used_ranges.insert(rng);
+        if !used_ranges.insert(rng) {
+            continue;
+        }
         out.push(LspOccurrence {
             symbol_id: definition_symbol_id(&record),
             path: path.to_string(),
@@ -1525,7 +1567,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
     let project_macro_defs = unique_macro_definitions(&project.definitions);
     let mut body_ctx = BodyOccurrenceContext {
         out: &mut out,
-        source_text,
+        source_lines: &source_lines,
         path,
         ia_data,
         local_defs,
@@ -1672,7 +1714,7 @@ pub fn lsp_scan_document(
     ) {
         Ok(value) => value,
         Err(error) => {
-            return Ok(diagnostic_result(py, "LA", error.line, "UNK_ERROR")?.unbind());
+            return Ok(diagnostic_result(py, "LA", error.line, &error.message)?.unbind());
         }
     };
     let mut syntax = SyntaxAnalyzer::new(&lex, ia_data.codes.clone());

@@ -3,7 +3,7 @@ use super::bs::{
     BytecodeBuilder, TNMSERR_BS_BREAK_NO_LOOP, TNMSERR_BS_CONTINUE_NO_LOOP,
     TNMSERR_BS_ILLEGAL_DEFAULT_ARG, TNMSERR_BS_NEED_REFERENCE, TNMSERR_BS_NEED_VALUE,
 };
-use super::ca::{CharacterAnalyzer, PreprocessStats};
+use super::ca::{CharacterAnalyzer, PreprocessStats, cp932_code};
 use super::codes::RuntimeCodes;
 use super::config::CompileConfig;
 use super::form_table::FormTable;
@@ -325,6 +325,53 @@ fn decode_strict(bytes: &[u8], encoding: &'static encoding_rs::Encoding) -> Opti
     (!had_errors).then(|| decoded.into_owned())
 }
 
+fn is_cp932_lead(byte: u8) -> bool {
+    (0x81..=0x9F).contains(&byte) || (0xE0..=0xFC).contains(&byte)
+}
+
+fn is_cp932_trail(byte: u8) -> bool {
+    (0x40..=0x7E).contains(&byte) || (0x80..=0xFC).contains(&byte)
+}
+
+fn decode_cp932_strict(bytes: &[u8]) -> Option<String> {
+    let mut out = String::new();
+    let mut segment_start = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if is_cp932_lead(byte) && index + 1 < bytes.len() && is_cp932_trail(bytes[index + 1]) {
+            index += 2;
+            continue;
+        }
+        let special = match byte {
+            0xA0 => Some('\u{F8F0}'),
+            0xFD => Some('\u{F8F1}'),
+            0xFE => Some('\u{F8F2}'),
+            0xFF => Some('\u{F8F3}'),
+            _ => None,
+        };
+        if let Some(ch) = special {
+            if segment_start < index {
+                let decoded = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(
+                    &bytes[segment_start..index],
+                )?;
+                out.push_str(&decoded);
+            }
+            out.push(ch);
+            index += 1;
+            segment_start = index;
+            continue;
+        }
+        index += 1;
+    }
+    if segment_start < bytes.len() {
+        let decoded = SHIFT_JIS
+            .decode_without_bom_handling_and_without_replacement(&bytes[segment_start..])?;
+        out.push_str(&decoded);
+    }
+    Some(out)
+}
+
 fn normalized_charset(charset: &str) -> Option<&'static str> {
     match charset.trim().to_ascii_lowercase().as_str() {
         "" => None,
@@ -386,7 +433,7 @@ fn read_text_auto(path: &Path, force_charset: &str) -> Result<String, String> {
     let bytes = fs::read(path).map_err(|error| format_path_error(path, error))?;
     if !force_charset.is_empty() {
         return match normalized_charset(force_charset) {
-            Some("cp932") => decode_strict(&bytes, SHIFT_JIS)
+            Some("cp932") => decode_cp932_strict(&bytes)
                 .map(normalize_text_newlines)
                 .ok_or_else(|| format!("{}: failed to decode as cp932", path.display())),
             Some("utf-8") => decode_strict(&bytes, UTF_8)
@@ -397,7 +444,7 @@ fn read_text_auto(path: &Path, force_charset: &str) -> Result<String, String> {
     }
 
     let utf8 = decode_strict(&bytes, UTF_8);
-    let cp932 = decode_strict(&bytes, SHIFT_JIS);
+    let cp932 = decode_cp932_strict(&bytes);
     match (utf8, cp932) {
         (Some(text), None) => Ok(normalize_text_newlines(text)),
         (None, Some(text)) => Ok(normalize_text_newlines(text)),
@@ -405,7 +452,7 @@ fn read_text_auto(path: &Path, force_charset: &str) -> Result<String, String> {
             if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
                 return Ok(normalize_text_newlines(utf8_text));
             }
-            let (_, _, utf8_not_cp932) = SHIFT_JIS.encode(&utf8_text);
+            let utf8_not_cp932 = encode_cp932(&utf8_text, false).is_err();
             if utf8_not_cp932 {
                 return Ok(normalize_text_newlines(utf8_text));
             }
@@ -423,15 +470,26 @@ fn read_text_auto(path: &Path, force_charset: &str) -> Result<String, String> {
 }
 
 fn encode_shift_jis_ignore(text: &str) -> Vec<u8> {
+    encode_cp932(text, true).unwrap_or_default()
+}
+
+fn encode_cp932(text: &str, ignore_errors: bool) -> Result<Vec<u8>, ()> {
     let mut out = Vec::new();
     for ch in text.chars() {
-        let mut utf8 = [0u8; 4];
-        let (encoded, _, had_errors) = SHIFT_JIS.encode(ch.encode_utf8(&mut utf8));
-        if !had_errors {
-            out.extend_from_slice(&encoded);
+        if let Some(encoded) = cp932_code(ch) {
+            if encoded <= 0xFF {
+                out.push(encoded as u8);
+            } else {
+                out.extend_from_slice(&encoded.to_be_bytes());
+            }
+            continue;
         }
+        if ignore_errors {
+            continue;
+        }
+        return Err(());
     }
-    out
+    Ok(out)
 }
 
 fn utf16le(text: &str) -> Vec<u8> {
@@ -535,11 +593,8 @@ fn write_text_encoded(path: &Path, text: &str, utf8: bool) -> Result<(), String>
     let bytes = if utf8 {
         text.into_bytes()
     } else {
-        let (encoded, _, had_errors) = SHIFT_JIS.encode(&text);
-        if had_errors {
-            return Err(format!("{}: failed to encode as cp932", path.display()));
-        }
-        encoded.into_owned()
+        encode_cp932(&text, false)
+            .map_err(|()| format!("{}: failed to encode as cp932", path.display()))?
     };
     fs::write(path, bytes).map_err(|error| format_path_error(path, error))
 }
@@ -1418,7 +1473,7 @@ fn bs_error_code(kind: i32) -> &'static str {
 
 fn decode_key_text_auto(bytes: &[u8]) -> String {
     let utf8 = decode_strict(bytes, UTF_8);
-    let cp932 = decode_strict(bytes, SHIFT_JIS);
+    let cp932 = decode_cp932_strict(bytes);
     let text = match (utf8, cp932) {
         (Some(text), None) => text,
         (None, Some(text)) => text,
@@ -1426,7 +1481,7 @@ fn decode_key_text_auto(bytes: &[u8]) -> String {
             if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
                 utf8_text
             } else {
-                let (_, _, utf8_not_cp932) = SHIFT_JIS.encode(&utf8_text);
+                let utf8_not_cp932 = encode_cp932(&utf8_text, false).is_err();
                 if utf8_not_cp932
                     || text_decode_penalty(&utf8_text) <= text_decode_penalty(&cp932_text)
                 {

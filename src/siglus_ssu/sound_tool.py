@@ -42,21 +42,8 @@ from .path_policy import (
 )
 
 
-def _cleanup_tmp_dir(tmp_dir: str, out_root: str, remove_owned: bool = False) -> None:
-    if not tmp_dir:
-        return
-    if not os.path.isdir(tmp_dir):
-        return
-    if remove_owned:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return
-    if os.path.basename(tmp_dir) != ".tmp_ffmpeg":
-        return
-    out_abs = os.path.abspath(out_root)
-    tmp_abs = os.path.abspath(tmp_dir)
-    if tmp_abs == os.path.join(out_abs, ".tmp_ffmpeg") or tmp_abs.startswith(
-        out_abs + os.sep
-    ):
+def _cleanup_tmp_dir(tmp_dir: str, remove_owned: bool = False) -> None:
+    if remove_owned and tmp_dir and os.path.isdir(tmp_dir):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
@@ -1716,7 +1703,7 @@ def _extract_one(
             write_bytes(os.path.join(out_dir, out_name), ogg)
             wrote += 1
         return wrote
-    return 0
+    raise RuntimeError("unsupported file type (expected .owp, .nwa, or .ovk)")
 
 
 def main(argv=None) -> int:
@@ -1909,12 +1896,11 @@ def main(argv=None) -> int:
             if not ffmpeg_path:
                 eprint("ffmpeg not found in PATH")
                 return 1
-            tmp_dir = os.path.join(out_root, ".tmp_ffmpeg")
             try:
-                os.makedirs(tmp_dir, exist_ok=True)
-            except Exception:
+                tmp_dir = tempfile.mkdtemp(prefix=".tmp_ffmpeg_", dir=out_root)
+            except OSError:
                 tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
-                tmp_dir_owned = True
+            tmp_dir_owned = True
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
@@ -1929,5 +1915,5 @@ def main(argv=None) -> int:
         return n, n
 
     exit_code = run_batch(files, _proc)
-    _cleanup_tmp_dir(tmp_dir, out_root, remove_owned=tmp_dir_owned)
+    _cleanup_tmp_dir(tmp_dir, remove_owned=tmp_dir_owned)
     return exit_code

@@ -83,6 +83,7 @@ pub struct LexResult {
 #[derive(Debug, Clone)]
 pub struct LexError {
     pub line: usize,
+    pub message: String,
 }
 
 fn to_i32(value: i64) -> i32 {
@@ -356,7 +357,10 @@ pub fn lex_scene_text_with_source_map(
                 }
             }
             let Some(kind) = symbol_type else {
-                return Err(LexError { line: cur_line });
+                return Err(LexError {
+                    line: cur_line,
+                    message: format!("Invalid character: '{ch}'"),
+                });
             };
             atom.atom_type = kind;
         }

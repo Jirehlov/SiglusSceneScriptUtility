@@ -1126,7 +1126,11 @@ def _process_dat(
     except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
-    rows = _read_map(csv_path)
+    try:
+        rows = _read_map(csv_path)
+    except (OSError, UnicodeError, csv.Error) as exc:
+        eprint(f"textmap: {fname}: map read failed: {exc}", errors="replace")
+        return 1
     updated_list, count = _apply_disam_map(list(str_list), rows, filename=fname)
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
@@ -1154,21 +1158,25 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
         eprint(f"textmap: file not found: {ss_path}", errors="replace")
         return 1
     fname = os.path.basename(ss_path)
-    text, encoding, newline = read_text(ss_path)
-    ctx = {
-        "scn_path": os.path.dirname(os.path.abspath(ss_path)),
-        "utf8": bool(encoding.startswith("utf-8")),
-    }
-    iad_base = None
-    if iad_cache is not None:
-        key = (ctx["scn_path"], ctx["utf8"])
-        iad_base = iad_cache.get(key)
-        if iad_base is None:
-            iad_base = BS.build_ia_data(ctx)
-            iad_cache[key] = iad_base
-    tokens, iad = collect_tokens(text, ctx, iad_base=iad_base)
-    entries = locate_tokens(text, tokens, iad)
-    entries = add_source_quote_entries(text, entries)
+    try:
+        text, encoding, newline = read_text(ss_path)
+        ctx = {
+            "scn_path": os.path.dirname(os.path.abspath(ss_path)),
+            "utf8": bool(encoding.startswith("utf-8")),
+        }
+        iad_base = None
+        if iad_cache is not None:
+            key = (ctx["scn_path"], ctx["utf8"])
+            iad_base = iad_cache.get(key)
+            if iad_base is None:
+                iad_base = BS.build_ia_data(ctx)
+                iad_cache[key] = iad_base
+        tokens, iad = collect_tokens(text, ctx, iad_base=iad_base)
+        entries = locate_tokens(text, tokens, iad)
+        entries = add_source_quote_entries(text, entries)
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        eprint(f"textmap: {fname}: {exc}", errors="replace")
+        return 1
     csv_path = ss_path + ".csv"
     if not apply_mode:
         _write_map(csv_path, entries)
@@ -1179,7 +1187,11 @@ def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
     except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: map file not found: {csv_path}", errors="replace")
         return 1
-    rows = _read_map(csv_path)
+    try:
+        rows = _read_map(csv_path)
+    except (OSError, UnicodeError, csv.Error) as exc:
+        eprint(f"textmap: {fname}: map read failed: {exc}", errors="replace")
+        return 1
     try:
         updated, count = _apply_map(text, entries, rows, filename=fname)
     except ValueError as ex:
@@ -1357,4 +1369,7 @@ def main(argv=None):
             if rc != 0:
                 errors += 1
         return 1 if errors else 0
+    if os.path.splitext(ss_path)[1].lower() != ".ss":
+        eprint("textmap: unsupported file type (expected .ss)", errors="replace")
+        return 1
     return _process_ss(ss_path, apply_mode)

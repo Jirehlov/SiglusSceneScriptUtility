@@ -61,6 +61,47 @@ def _create_auto_tmp_dir(output_dir):
     return tempfile.mkdtemp(prefix=prefix, dir=output_dir)
 
 
+class _CompileCacheLock:
+    def __init__(self, directory):
+        self.file = open(os.path.join(directory, "_compile.lock"), "a+b")
+        self.locked = False
+        try:
+            self.file.seek(0, os.SEEK_END)
+            if self.file.tell() == 0:
+                self.file.write(b"\0")
+                self.file.flush()
+            self.file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.locked = True
+        except (OSError, RuntimeError) as exc:
+            self.file.close()
+            raise RuntimeError(f"--tmp is already in use: {directory}") from exc
+
+    def close(self):
+        if not self.locked:
+            return
+        try:
+            self.file.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.locked = False
+            self.file.close()
+
+
 C = get_const_module()
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
@@ -1443,29 +1484,43 @@ def main(argv=None):
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None
     _record_angou(ctx, angou_content)
-    native_rc = _try_native_compile(
-        _native_compile_config(
-            args=a,
-            ctx=ctx,
-            input_dir=inp,
-            output_dir=out,
-            scene_pck=scene_pck,
-            tmp_dir=tmp,
-            ss=ss,
-            inc=inc,
-            enc=enc,
-            charset_force=charset,
-            test_shuffle=test_shuffle,
-            force_serial_compile=force_serial_compile,
-            angou_content=angou_content,
-        ),
-        ctx,
-        tmp=tmp,
-        tmp_auto=tmp_auto,
-        debug=bool(a.debug),
-        legacy=bool(a.legacy),
-    )
+    cache_lock = None
+    if getattr(a, "tmp_dir", ""):
+        try:
+            cache_lock = _CompileCacheLock(tmp)
+        except (OSError, RuntimeError) as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return 1
+    try:
+        native_rc = _try_native_compile(
+            _native_compile_config(
+                args=a,
+                ctx=ctx,
+                input_dir=inp,
+                output_dir=out,
+                scene_pck=scene_pck,
+                tmp_dir=tmp,
+                ss=ss,
+                inc=inc,
+                enc=enc,
+                charset_force=charset,
+                test_shuffle=test_shuffle,
+                force_serial_compile=force_serial_compile,
+                angou_content=angou_content,
+            ),
+            ctx,
+            tmp=tmp,
+            tmp_auto=tmp_auto,
+            debug=bool(a.debug),
+            legacy=bool(a.legacy),
+        )
+    except Exception:
+        if cache_lock is not None:
+            cache_lock.close()
+        raise
     if native_rc is not None:
+        if cache_lock is not None:
+            cache_lock.close()
         return native_rc
     ok = False
     compile_stats = {
@@ -1707,6 +1762,8 @@ def main(argv=None):
         ok = False
     finally:
         _print_summary(ctx, ok=ok)
+        if cache_lock is not None:
+            cache_lock.close()
         if ok and (not a.debug) and tmp and tmp_auto:
             shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1

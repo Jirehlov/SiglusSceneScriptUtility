@@ -1,4 +1,3 @@
-import unicodedata
 from functools import lru_cache
 from ._const_manager import get_const_module
 from .common import (
@@ -28,7 +27,7 @@ def is_zen(c):
     try:
         return len(c.encode("cp932")) == 2
     except UnicodeEncodeError:
-        return unicodedata.east_asian_width(c) in "WF"
+        return False
 
 
 def get_form_code_by_name(name):

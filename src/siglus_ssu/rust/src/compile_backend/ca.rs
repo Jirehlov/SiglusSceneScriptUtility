@@ -4,7 +4,7 @@ use super::frontend_common::{
 };
 use encoding_rs::SHIFT_JIS;
 use std::collections::{HashMap, HashSet};
-use unicode_width::UnicodeWidthChar;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplaceKind {
@@ -828,15 +828,57 @@ impl CharacterAnalyzer {
     }
 }
 
+static CP932_ENCODE_MAP: OnceLock<HashMap<char, u16>> = OnceLock::new();
+
+fn insert_cp932_decoded(map: &mut HashMap<char, u16>, bytes: &[u8], encoded: u16) {
+    let Some(text) = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(bytes) else {
+        return;
+    };
+    let mut chars = text.chars();
+    let Some(ch) = chars.next() else {
+        return;
+    };
+    if chars.next().is_none() {
+        map.entry(ch).or_insert(encoded);
+    }
+}
+
+fn build_cp932_encode_map() -> HashMap<char, u16> {
+    let mut map = HashMap::new();
+    for byte in 0u16..=0xFF {
+        insert_cp932_decoded(&mut map, &[byte as u8], byte);
+    }
+    for encoded in 0u32..=0xFFFF {
+        let bytes = [(encoded >> 8) as u8, encoded as u8];
+        insert_cp932_decoded(&mut map, &bytes, encoded as u16);
+    }
+    for (ch, encoded) in [
+        ('\u{00A2}', 0x8191),
+        ('\u{00A3}', 0x8192),
+        ('\u{00AC}', 0x81CA),
+        ('\u{2016}', 0x8161),
+        ('\u{2212}', 0x817C),
+        ('\u{301C}', 0x8160),
+        ('\u{F8F0}', 0x00A0),
+        ('\u{F8F1}', 0x00FD),
+        ('\u{F8F2}', 0x00FE),
+        ('\u{F8F3}', 0x00FF),
+    ] {
+        map.insert(ch, encoded);
+    }
+    map
+}
+
+pub(crate) fn cp932_code(ch: char) -> Option<u16> {
+    CP932_ENCODE_MAP
+        .get_or_init(build_cp932_encode_map)
+        .get(&ch)
+        .copied()
+}
+
 pub(crate) fn is_zen(ch: char) -> bool {
     if ch == '\0' {
         return false;
     }
-    let mut utf8 = [0u8; 4];
-    let encoded = ch.encode_utf8(&mut utf8);
-    let (shift_jis, _, had_errors) = SHIFT_JIS.encode(encoded);
-    if !had_errors {
-        return shift_jis.len() == 2;
-    }
-    UnicodeWidthChar::width(ch) == Some(2)
+    cp932_code(ch).is_some_and(|encoded| encoded > 0xFF)
 }

@@ -166,7 +166,12 @@ def normalize_atom(a):
 
 
 def build_empty_ia_data(replace_tree, defined_names=None):
+    from .MA import FormTable
+
+    form_table = FormTable()
+    form_table.create_system_form_table()
     return {
+        "form_table": form_table,
         "replace_tree": replace_tree,
         "name_set": set(defined_names or []),
         "macro_defs": [],

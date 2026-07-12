@@ -259,6 +259,9 @@ def _run_mode(module_name, args):
     except FilenameCaseCollisionError as exc:
         sys.stderr.write(f"{_prog()}: error: {exc}\n")
         return 1
+    except OSError as exc:
+        sys.stderr.write(f"{_prog()}: error: {exc}\n")
+        return 1
     if rc == 2:
         _usage_short()
     return rc

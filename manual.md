@@ -72,7 +72,7 @@ After installation, if this machine does not already have a verified user-data `
 siglus-ssu init
 ```
 
-> **Note:** Python 3.12 or later is required. The package ships with a prebuilt native Rust extension for performance-critical operations. If no compatible wheel is available for your platform, you will need to build the Rust extension from source.
+> **Note:** Python 3.12 or later is required. PyPI publishes platform wheels with the native Rust extension and a universal `py3-none-any` pure-Python fallback wheel. If no compatible native wheel is available, pip can install the pure-Python wheel; supported operations use Python fallbacks and may run more slowly. Build from source with Rust only when native acceleration is required on that platform.
 >
 > `const.py` is stored in a platform-specific user data directory:
 > - **Windows:** `%APPDATA%\siglus-ssu\const.py`
@@ -255,7 +255,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<input_dir>` | Directory containing `.ss` source files, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. |
 | `<output_pck \| output_dir>` | Output path. If the argument names an existing directory, `Scene.pck` is created inside it. Otherwise the argument is treated as the output file path; a non-existent path that does not end in `.pck` is still written as that exact file name. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
-| `--charset ENC` | Force source file encoding. Accepted values: `jis`, `cp932`, `sjis`, `shift_jis` (all equivalent to CP932/Shift-JIS), or `utf8`, `utf-8`. If omitted, the encoding is auto-detected. |
+| `--charset ENC` | Force source file encoding. CP932/Shift-JIS aliases: `jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`. UTF-8 aliases: `utf8`, `utf-8`, `utf_8`, `utf8-sig`, `utf-8-sig`. If omitted, the encoding is auto-detected. |
 | `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan the immediate files in `input_dir` for existing Siglus scene `.dat` files, copy them, and pack them directly into a `.pck` file. Useful for packing already-compiled scripts. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 | `--no-angou` | Disable LZSS compression and XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. Cannot be combined with `--tmp`. |
@@ -263,7 +263,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--serial` | Disable multi-process parallel compilation and force the compile stage to run serially. Parallel compilation is enabled by default. |
 | `--max-workers N` | Maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
-| `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
+| `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, an MD5 cache (`_md5.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. Cannot be combined with `--tmp`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
 | `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is always treated as a directory. If it does not exist, it is created, and `Gameexe.dat` is written inside it. Cannot be combined with `--tmp`. |
@@ -328,7 +328,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 #### Notes
 
-- **Auto-encoding detection:** If `--charset` is not specified, the utility scans `.ss`, `.inc`, `.ini`, and `.dat` files for a UTF-8 BOM or kana/CJK characters. If found, `utf-8` is used; otherwise, `cp932` (Shift-JIS) is assumed.
+- **Auto-encoding detection:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. The compiler separately scans `.ss`, `.inc`, `.ini`, and `.dat` files for a UTF-8 BOM or kana/CJK characters to derive a project-level encoding hint for compile-cache metadata and generated intermediate/debug text encoding; that hint does not force every source file to use one encoding. Use `--charset` when the automatic choice must be overridden for the whole project.
 - **Incremental compilation:** When `--tmp` is specified, the compiler caches MD5 hashes of all `.ss` and `.inc` files. Cache compatibility includes the `siglus-ssu` version, source charset, and active `const.py` content/profile. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. If any `.inc` file changes, a full recompile is triggered.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene, rebuilds every scene serially, and reports any later mismatch while continuing to generate output; use `--set-shuffle` to rebuild with a known seed.
 
@@ -1649,11 +1649,11 @@ In double-quoted literals, `\n` becomes a newline. In single-quoted literals, th
 
 #### Fullwidth / double-byte bare strings
 
-Any consecutive run of characters that `_iszen()` classifies as double-byte or fullwidth, excluding `【` and `】`, lexes directly as `VAL_STR`. Therefore both of the following produce string tokens:
+Any consecutive run of characters that `is_zen()` classifies as a two-byte character in Windows CP932, excluding `【` and `】`, lexes directly as `VAL_STR`. This matches the official compiler's Japanese-locale multibyte conversion rule. Therefore both of the following produce string tokens:
 
 ```text
-"Hello"
-你好
+"こんにちは"
+こんにちは
 ```
 
 This is also why speaker-name brackets such as `【角色名】` and bare dialogue lines work without quotes.
