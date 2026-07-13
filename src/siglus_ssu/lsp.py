@@ -3443,7 +3443,7 @@ def _normalize_lsp_cache_inputs(value: Any) -> dict[str, dict[str, str]] | None:
                 return None
             if not isinstance(digest, str):
                 return None
-            if re.fullmatch(r"[0-9a-f]{32}", digest) is None:
+            if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
                 return None
             out[group][cache_name] = digest
     return out

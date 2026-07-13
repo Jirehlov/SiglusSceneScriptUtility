@@ -62,6 +62,21 @@ def process_pool(max_workers: int, initializer=None, initargs=()):
             yield executor
 
 
+def _terminate_process_pool(executor) -> None:
+    terminate_workers = getattr(executor, "terminate_workers", None)
+    if callable(terminate_workers):
+        terminate_workers()
+        return
+    processes = dict(getattr(executor, "_processes", None) or {})
+    executor.shutdown(wait=False, cancel_futures=True)
+    for process in processes.values():
+        try:
+            if process.is_alive():
+                process.terminate()
+        except (ProcessLookupError, ValueError):
+            continue
+
+
 def parallel_process_completed_map(
     process_fn,
     items,
@@ -139,11 +154,7 @@ def parallel_process_completed_map(
         except BaseException:
             for future in pending:
                 future.cancel()
-            terminate_workers = getattr(executor, "terminate_workers", None)
-            if callable(terminate_workers):
-                terminate_workers()
-            else:
-                executor.shutdown(wait=False, cancel_futures=True)
+            _terminate_process_pool(executor)
             raise
         else:
             executor.shutdown()
