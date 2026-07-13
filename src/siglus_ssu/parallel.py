@@ -4,7 +4,6 @@ import os
 import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
-from .common import format_scene_name
 from .path_policy import resolve_read_path
 
 
@@ -203,8 +202,13 @@ def _init_compile_worker(
     enc: str,
     utf8: bool,
     debug_outputs: bool,
+    const_path: str | None,
+    const_profile: int | None,
 ) -> None:
     global _COMPILE_WORKER_STATE
+    from ._const_manager import load_const_module
+
+    load_const_module(path=const_path, profile=const_profile)
     _COMPILE_WORKER_STATE = (tmp_path, ia_data, enc, utf8, debug_outputs)
 
 
@@ -263,6 +267,8 @@ def parallel_compile(
         merge_macro_stat_counts,
         merge_source_stat_counts,
     )
+    from ._const_manager import get_const_module
+    from .common import format_scene_name
 
     if not ss_files:
         return {
@@ -278,6 +284,9 @@ def parallel_compile(
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
     source_texts = ctx.get("source_texts") or {}
+    const_module = get_const_module()
+    const_path = getattr(const_module, "_SIGLUS_SSU_CONST_SOURCE_PATH", None)
+    const_profile = getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None)
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
     errors = []
     completed = 0
@@ -289,7 +298,15 @@ def parallel_compile(
     with process_pool(
         workers,
         initializer=_init_compile_worker,
-        initargs=(tmp_path, ia_data, enc, utf8, debug_outputs),
+        initargs=(
+            tmp_path,
+            ia_data,
+            enc,
+            utf8,
+            debug_outputs,
+            const_path,
+            const_profile,
+        ),
     ) as executor:
         futures = [
             executor.submit(
@@ -357,7 +374,7 @@ def parallel_lzss_compress(
     lzss_mode: bool,
     max_workers: int | None = None,
 ) -> tuple[list[str], list[bytes], list[bytes]]:
-    from .common import read_bytes
+    from .common import format_scene_name, read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
     if not lzss_mode:

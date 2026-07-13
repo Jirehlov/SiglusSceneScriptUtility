@@ -682,7 +682,7 @@ class TutorialBuilder:
             return None
         label_list = list(bundle.get("label_list") or [])
         z_label_list = list(bundle.get("z_label_list") or [])
-        kind_map = textmap._collect_disam_string_kinds(bundle, scene_name)
+        kind_map = textmap._collect_dat_string_kinds(bundle, scene_name)
         dialogue_by_ofs = self._collect_dialogues(events, kind_map)
         blocks = self._build_scene_blocks(scene_no, scene_name, events, dialogue_by_ofs)
         return {
