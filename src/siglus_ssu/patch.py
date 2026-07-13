@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import argparse
+import json
 import hashlib
 import struct
 import tempfile
@@ -585,19 +586,47 @@ def _is_charset_compare_tail(data: bytearray, i: int) -> bool:
     return False
 
 
+def _charset_loop_back_edge(data: bytearray, start: int, limit: int = 192):
+    end = min(len(data), int(start) + int(limit))
+    i = int(start) + 4
+    while i < end:
+        op = data[i]
+        if op in (0x74, 0x75) and i + 2 <= len(data):
+            target = i + 2 + struct.unpack_from("<b", data, i + 1)[0]
+            if target == start:
+                return True
+            i += 2
+            continue
+        if op == 0x0F and i + 6 <= len(data) and data[i + 1] in (0x84, 0x85):
+            target = i + 6 + struct.unpack_from("<i", data, i + 2)[0]
+            if target == start:
+                return True
+            i += 6
+            continue
+        i += 1
+    return False
+
+
+def _is_font_charset_loop(data: bytearray, i: int) -> bool:
+    if i + 4 > len(data) or data[i] != 0x80:
+        return False
+    if not (0x78 <= data[i + 1] <= 0x7F) or data[i + 2] != 0x17:
+        return False
+    if not _is_charset_compare_tail(data, i):
+        return False
+    end = min(len(data), i + 192)
+    if b"\x1c\x01\x00\x00" not in data[i + 4 : end]:
+        return False
+    return _charset_loop_back_edge(data, i)
+
+
 def _find_charset_candidates(data: bytearray, accept_values=None):
-    pat = b"\x80x\x17"
     candidates = []
-    start = 0
-    while True:
-        i = data.find(pat, start)
-        if i == -1:
-            break
+    for i in range(max(0, len(data) - 4)):
         if (
             accept_values is None or data[i + 3] in accept_values
-        ) and _is_charset_compare_tail(data, i):
+        ) and _is_font_charset_loop(data, i):
             candidates.append(i)
-        start = i + 1
     return candidates
 
 
@@ -605,7 +634,7 @@ def _find_charset_slot_offsets(data: bytearray):
     candidates = _find_charset_candidates(data)
     if not candidates:
         raise RuntimeError(
-            "Could not find charset-compare instruction signature (80 78 17 ?? + short/near jcc); the engine version may differ."
+            "Could not find a verified ENUMLOGFONT charset-filter loop; the engine version may differ."
         )
     return [i + 3 for i in candidates]
 
@@ -623,6 +652,10 @@ def _format_charset_label(v: int):
 
 def _utf16z(text: str) -> bytes:
     return str(text).encode("utf-16le") + b"\x00\x00"
+
+
+def _utf16_length(text: str):
+    return len(str(text).encode("utf-16le")) // 2
 
 
 def _find_bytes_all(data: bytes, needle: bytes, start: int = 0, end: int | None = None):
@@ -689,60 +722,252 @@ def _patch_dword(data: bytearray, off: int, value: int, reason: str, changes):
     _patch_bytes(data, off, struct.pack("<I", int(value) & 0xFFFFFFFF), reason, changes)
 
 
-def _section_file_limit(sec):
-    raw_start = int(sec["raw_offset"])
-    raw_size = int(sec["raw_size"])
-    virtual_size = int(sec["virtual_size"])
-    usable = raw_size if virtual_size <= 0 else min(raw_size, virtual_size)
-    return raw_start, raw_start + max(0, usable)
+_LANG_SECTION_NAME = ".ssustr"
+_LANG_OVERLAY_FOOTER = b"SSULEND1"
+_LANG_OVERLAY_FORMAT = 1
 
 
-def _range_overlaps(start: int, end: int, ranges):
-    for a, b in ranges:
-        if int(start) < int(b) and int(a) < int(end):
-            return True
-    return False
+def _align_up(value: int, alignment: int):
+    value = int(value)
+    alignment = int(alignment)
+    if alignment <= 0:
+        raise RuntimeError("Invalid PE alignment.")
+    return ((value + alignment - 1) // alignment) * alignment
 
 
-def _alloc_sections(layout):
-    sections = list(layout["sections"])
+def _pe32_patch_header(data: bytes):
+    if len(data) < 0x40 or data[:2] != b"MZ":
+        raise RuntimeError("Not a PE executable.")
+    pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+    if pe_off + 24 > len(data) or data[pe_off : pe_off + 4] != b"PE\x00\x00":
+        raise RuntimeError("Invalid PE header.")
+    coff_off = pe_off + 4
+    section_count = struct.unpack_from("<H", data, coff_off + 2)[0]
+    optional_size = struct.unpack_from("<H", data, coff_off + 16)[0]
+    optional_off = coff_off + 20
+    if struct.unpack_from("<H", data, optional_off)[0] != 0x10B:
+        raise RuntimeError("Only 32-bit PE32 images are supported.")
+    section_table_off = optional_off + optional_size
+    section_table_end = section_table_off + section_count * 40
+    file_alignment = struct.unpack_from("<I", data, optional_off + 36)[0]
+    section_alignment = struct.unpack_from("<I", data, optional_off + 32)[0]
+    size_of_headers = struct.unpack_from("<I", data, optional_off + 60)[0]
+    return {
+        "coff_off": coff_off,
+        "optional_off": optional_off,
+        "section_count": section_count,
+        "section_table_off": section_table_off,
+        "section_table_end": section_table_end,
+        "file_alignment": file_alignment,
+        "section_alignment": section_alignment,
+        "size_of_headers": size_of_headers,
+    }
 
-    def score(sec):
-        name = str(sec["name"]).lower()
-        if name == ".rdata":
-            return 0
-        if name == ".data":
-            return 1
-        return 2
 
-    return sorted(sections, key=score)
+def _add_lang_string_section(data: bytearray, texts, changes):
+    unique = []
+    for text in texts:
+        text = str(text)
+        if text not in unique:
+            unique.append(text)
+    if not unique:
+        return {}
+    blob = bytearray()
+    string_offsets = {}
+    for text in unique:
+        if len(blob) & 1:
+            blob.append(0)
+        string_offsets[text] = len(blob)
+        blob.extend(_utf16z(text))
+    original_layout = parse_pe32_layout(bytes(data))
+    header = _pe32_patch_header(bytes(data))
+    if any(sec["name"] == _LANG_SECTION_NAME for sec in original_layout["sections"]):
+        raise RuntimeError(f"PE already contains {_LANG_SECTION_NAME}.")
+    if header["section_count"] >= 0xFFFF:
+        raise RuntimeError("PE section table is full.")
+    first_raw = min(
+        int(sec["raw_offset"])
+        for sec in original_layout["sections"]
+        if int(sec["raw_offset"]) > 0
+    )
+    section_header_off = header["section_table_end"]
+    if (
+        section_header_off + 40 > first_raw
+        or section_header_off + 40 > header["size_of_headers"]
+    ):
+        raise RuntimeError("PE header has no room for a language string section.")
+    file_alignment = header["file_alignment"]
+    section_alignment = header["section_alignment"]
+    raw_offset = _align_up(len(data), file_alignment)
+    raw_size = _align_up(len(blob), file_alignment)
+    virtual_address = _align_up(
+        max(
+            int(sec["virtual_address"])
+            + max(int(sec["virtual_size"]), int(sec["raw_size"]))
+            for sec in original_layout["sections"]
+        ),
+        section_alignment,
+    )
+    section_header = struct.pack(
+        "<8sIIIIIIHHI",
+        _LANG_SECTION_NAME.encode("ascii").ljust(8, b"\x00"),
+        len(blob),
+        virtual_address,
+        raw_size,
+        raw_offset,
+        0,
+        0,
+        0,
+        0,
+        0x40000040,
+    )
+    _patch_bytes(
+        data,
+        header["coff_off"] + 2,
+        struct.pack("<H", header["section_count"] + 1),
+        "LANG PE section count",
+        changes,
+    )
+    _patch_bytes(
+        data,
+        header["optional_off"] + 56,
+        struct.pack("<I", _align_up(virtual_address + len(blob), section_alignment)),
+        "LANG PE image size",
+        changes,
+    )
+    initialized_size = struct.unpack_from("<I", data, header["optional_off"] + 8)[0]
+    _patch_bytes(
+        data,
+        header["optional_off"] + 8,
+        struct.pack("<I", initialized_size + raw_size),
+        "LANG PE initialized data size",
+        changes,
+    )
+    _patch_bytes(
+        data,
+        section_header_off,
+        section_header,
+        "LANG PE string section",
+        changes,
+    )
+    if len(data) < raw_offset:
+        data.extend(b"\x00" * (raw_offset - len(data)))
+    data.extend(blob)
+    data.extend(b"\x00" * (raw_size - len(blob)))
+    for index, value in enumerate(blob):
+        if value:
+            changes.append((raw_offset + index, 0, value, "LANG mapped string storage"))
+    image_base = int(original_layout["image_base"])
+    return {
+        text: image_base + virtual_address + offset
+        for text, offset in string_offsets.items()
+    }
 
 
-def _alloc_utf16z(data: bytearray, layout, text: str, used, changes):
-    raw = _utf16z(text)
-    need = len(raw) + 2
-    for sec in _alloc_sections(layout):
-        start, end = _section_file_limit(sec)
-        pos = start
-        while pos + need <= end:
-            hit = bytes(data).find(b"\x00" * need, pos, end)
-            if hit < 0:
-                break
-            aligned = (hit + 1) & ~1
-            if aligned + need <= end and not _range_overlaps(
-                aligned, aligned + need, used
-            ):
-                if all(x == 0 for x in data[aligned : aligned + need]):
-                    _patch_bytes(data, aligned, raw, f"LANG string {text}", changes)
-                    used.append((aligned, aligned + need))
-                    va = pe32_file_off_to_va(layout, aligned)
-                    if va is None:
-                        raise RuntimeError(
-                            f"Allocated string is not mapped: 0x{aligned:X}"
-                        )
-                    return va
-            pos = hit + 2
-    raise RuntimeError(f"Could not find a PE string cave for {text!r}.")
+def _diff_byte_runs(before: bytes, after: bytes):
+    if len(after) < len(before):
+        raise RuntimeError("Patched image is shorter than its original image.")
+    entries = []
+    i = 0
+    while i < len(before):
+        if before[i] == after[i]:
+            i += 1
+            continue
+        start = i
+        while i < len(before) and before[i] != after[i]:
+            i += 1
+        entries.append(
+            {
+                "offset": start,
+                "before": before[start:i].hex(),
+                "after": after[start:i].hex(),
+            }
+        )
+    return entries
+
+
+def _canonical_lang_config(config):
+    return json.dumps(
+        config, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def _append_lang_overlay(data: bytearray, original: bytes, config):
+    canonical = _canonical_lang_config(config)
+    manifest = {
+        "format": _LANG_OVERLAY_FORMAT,
+        "original_size": len(original),
+        "original_sha256": hashlib.sha256(original).hexdigest(),
+        "config_sha256": hashlib.sha256(canonical).hexdigest(),
+        "config": config,
+        "entries": _diff_byte_runs(original, bytes(data)),
+    }
+    payload = json.dumps(
+        manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    data.extend(payload)
+    data.extend(hashlib.sha256(payload).digest())
+    data.extend(struct.pack("<Q", len(payload)))
+    data.extend(_LANG_OVERLAY_FOOTER)
+
+
+def _read_lang_overlay(data: bytes):
+    if len(data) < 48 or data[-8:] != _LANG_OVERLAY_FOOTER:
+        return None
+    payload_size = struct.unpack_from("<Q", data, len(data) - 16)[0]
+    payload_end = len(data) - 48
+    payload_start = payload_end - payload_size
+    if payload_start < 0:
+        raise RuntimeError("Invalid language patch overlay length.")
+    payload = data[payload_start:payload_end]
+    expected = data[payload_end : payload_end + 32]
+    if hashlib.sha256(payload).digest() != expected:
+        raise RuntimeError("Language patch overlay checksum mismatch.")
+    try:
+        manifest = json.loads(payload.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError("Invalid language patch overlay JSON.") from exc
+    if not isinstance(manifest, dict) or manifest.get("format") != _LANG_OVERLAY_FORMAT:
+        raise RuntimeError("Unsupported language patch overlay format.")
+    manifest["overlay_start"] = payload_start
+    return manifest
+
+
+def _restore_lang_overlay(data: bytes, expected_config=None):
+    manifest = _read_lang_overlay(data)
+    if manifest is None:
+        raise RuntimeError(
+            "The executable does not contain a reversible language patch."
+        )
+    config = manifest.get("config")
+    if expected_config is not None and _canonical_lang_config(
+        config
+    ) != _canonical_lang_config(expected_config):
+        raise RuntimeError(
+            "The supplied language configuration does not match the patch."
+        )
+    original_size = int(manifest.get("original_size", -1))
+    if original_size < 0 or original_size > manifest["overlay_start"]:
+        raise RuntimeError(
+            "Invalid original executable size in language patch overlay."
+        )
+    restored = bytearray(data)
+    for entry in manifest.get("entries", []):
+        off = int(entry["offset"])
+        before = bytes.fromhex(entry["before"])
+        after = bytes.fromhex(entry["after"])
+        if off < 0 or off + len(after) > len(restored):
+            raise RuntimeError("Language patch undo entry is out of range.")
+        if bytes(restored[off : off + len(after)]) != after:
+            raise RuntimeError(
+                f"Language patch verification failed at file offset 0x{off:X}."
+            )
+        restored[off : off + len(before)] = before
+    del restored[original_size:]
+    digest = hashlib.sha256(restored).hexdigest()
+    if digest != manifest.get("original_sha256"):
+        raise RuntimeError("Restored executable does not match its original SHA-256.")
+    return restored, manifest
 
 
 def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = True):
@@ -767,13 +992,58 @@ def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = T
     return active
 
 
+def _patch_utf16_ref_length(
+    data: bytearray,
+    layout,
+    ref_off: int,
+    source: str,
+    target: str,
+    reason: str,
+    changes,
+):
+    old_len = _utf16_length(source)
+    new_len = _utf16_length(target)
+    if old_len == new_len or not _is_code_ref(layout, ref_off):
+        return
+    if ref_off < 1 or data[ref_off - 1] != 0x68:
+        return
+    candidates = []
+    start = max(0, ref_off - 24)
+    if old_len <= 0x7F:
+        needle = bytes((0x6A, old_len))
+        candidates.extend(
+            (off, 1) for off in _find_bytes_all(bytes(data), needle, start, ref_off - 1)
+        )
+    needle = b"\x68" + struct.pack("<I", old_len)
+    candidates.extend(
+        (off, 4) for off in _find_bytes_all(bytes(data), needle, start, ref_off - 1)
+    )
+    if not candidates:
+        return
+    push_off, size = max(candidates, key=lambda item: item[0])
+    if size == 1:
+        if new_len > 0x7F:
+            raise RuntimeError(
+                f"{reason}: target literal is too long for its length instruction"
+            )
+        _patch_bytes(
+            data,
+            push_off + 1,
+            bytes((new_len,)),
+            reason + " length",
+            changes,
+        )
+    else:
+        _patch_dword(data, push_off + 1, new_len, reason + " length", changes)
+
+
 def _patch_utf16_refs(
     data: bytearray,
     layout,
     label: str,
     texts,
     target: str,
-    used,
+    target_va,
     changes,
     warnings,
     require_code_ref: bool = True,
@@ -788,13 +1058,21 @@ def _patch_utf16_refs(
             return "already_target"
         warnings.append(f"{label}: active literal was not found")
         return "missing"
-    target_va = (
-        int(target_active[0]["va"])
-        if target_active
-        else _alloc_utf16z(data, layout, target, used, changes)
-    )
+    if target_active:
+        target_va = int(target_active[0]["va"])
+    elif target_va is None:
+        raise RuntimeError(f"{label}: mapped target storage was not provided")
     for item in source_active:
         for ref_off in item["refs"]:
+            _patch_utf16_ref_length(
+                data,
+                layout,
+                ref_off,
+                item["text"],
+                target,
+                f"LANG {label}: {item['text']} -> {target}",
+                changes,
+            )
             _patch_dword(
                 data,
                 ref_off,
@@ -847,113 +1125,201 @@ def _patch_charset_slots(data: bytearray, target: int, accepted, changes, warnin
     return "patched" if changed else "already_target"
 
 
+_LANG_CONFIG_KEYS = frozenset(
+    ("pck", "gameexe", "save", "charset", "locale", "language_code")
+)
 _LANG_PRESETS = {
-    "cjk": {
-        "suffix": "CJK",
-        "charset": 134,
-        "accepted": (128, 134),
-        "locale": "chinese",
-        "code": "zh",
-        "paths": None,
-    },
-    "cjk-path": {
-        "suffix": "CJKPATH",
-        "charset": 134,
-        "accepted": (128, 134),
-        "locale": "chinese",
-        "code": "zh",
-        "paths": {
-            "Scene": "SceneZH.pck",
-            "Save": "savedata_zh",
-            "Gameexe": "GameexeZH.dat",
+    "cjk": (
+        "CJK",
+        {
+            "pck": "Scene.pck",
+            "gameexe": "Gameexe.dat",
+            "save": "savedata",
+            "charset": 134,
+            "locale": "chinese",
+            "language_code": "zh",
         },
-    },
+    ),
+    "cjk-path": (
+        "CJKPATH",
+        {
+            "pck": "SceneZH.pck",
+            "gameexe": "GameexeZH.dat",
+            "save": "savedata_zh",
+            "charset": 134,
+            "locale": "chinese",
+            "language_code": "zh",
+        },
+    ),
 }
 
 
-def _load_lang_preset(spec: str):
-    key = str(spec or "").strip().lower()
-    if not key:
+def _validate_lang_text(name: str, value, *, leaf: bool):
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError(f"language config {name!r} must be a non-empty string")
+    if leaf and (value in (".", "..") or any(ch in value for ch in ("/", "\\", ":"))):
+        raise ValueError(f"language config {name!r} must be a single name")
+    _utf16z(value)
+    return value
+
+
+def _validate_lang_config(obj):
+    if not isinstance(obj, dict):
+        raise ValueError("language JSON must contain an object")
+    keys = set(obj)
+    missing = sorted(_LANG_CONFIG_KEYS - keys)
+    extra = sorted(keys - _LANG_CONFIG_KEYS)
+    if missing:
+        raise ValueError("language JSON is missing: " + ", ".join(missing))
+    if extra:
+        raise ValueError("language JSON has unknown fields: " + ", ".join(extra))
+    charset = obj["charset"]
+    if (
+        isinstance(charset, bool)
+        or not isinstance(charset, int)
+        or not 0 <= charset <= 255
+    ):
+        raise ValueError("language config 'charset' must be an integer from 0 to 255")
+    return {
+        "pck": _validate_lang_text("pck", obj["pck"], leaf=True),
+        "gameexe": _validate_lang_text("gameexe", obj["gameexe"], leaf=True),
+        "save": _validate_lang_text("save", obj["save"], leaf=True),
+        "charset": charset,
+        "locale": _validate_lang_text("locale", obj["locale"], leaf=False),
+        "language_code": _validate_lang_text(
+            "language_code", obj["language_code"], leaf=False
+        ),
+    }
+
+
+def _load_lang_config(spec: str):
+    text = str(spec or "").strip()
+    if not text:
         raise ValueError("missing value for --lang")
-    if key not in _LANG_PRESETS:
-        names = "|".join(_LANG_PRESETS)
-        raise ValueError(f"--lang expects one of: {names}")
-    return key, _LANG_PRESETS[key]
+    key = text.lower()
+    if key in _LANG_PRESETS:
+        suffix, config = _LANG_PRESETS[key]
+        return key, suffix, _validate_lang_config(dict(config))
+    if text.startswith("{"):
+        source = text
+        suffix = "JSON"
+    else:
+        try:
+            path = resolve_read_path(text, kind="file")
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise ValueError(
+                "--lang expects cjk, cjk-path, a JSON file, or a JSON object"
+            ) from exc
+        with open(path, encoding="utf-8-sig", newline="") as handle:
+            source = handle.read()
+        suffix = (
+            re.sub(r"[^0-9A-Za-z_\-]+", "", os.path.splitext(os.path.basename(path))[0])
+            or "JSON"
+        )
+    try:
+        obj = json.loads(source)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid language JSON: {exc}") from exc
+    return "json", suffix, _validate_lang_config(obj)
+
+
+def _lang_field_specs(config):
+    return (
+        ("Locale", ("japanese", "chinese", config["locale"]), config["locale"]),
+        ("Code", ("ja", "zh", config["language_code"]), config["language_code"]),
+        ("Scene", ("Scene.pck", "SceneZH.pck", config["pck"]), config["pck"]),
+        (
+            "Save",
+            ("savedata", "savedata_zh", config["save"]),
+            config["save"],
+        ),
+        (
+            "Gameexe",
+            ("Gameexe.dat", "GameexeZH.dat", config["gameexe"]),
+            config["gameexe"],
+        ),
+    )
+
+
+def _lang_needed_strings(data: bytes, layout, specs):
+    needed = []
+    for _label, texts, target in specs:
+        unique = tuple(dict.fromkeys(texts))
+        active = _active_utf16_refs(data, layout, unique, require_code_ref=True)
+        if any(item["text"] != target for item in active) and not any(
+            item["text"] == target for item in active
+        ):
+            needed.append(target)
+    return needed
 
 
 def patch_lang(data: bytearray, lang_spec: str, *, allow_partial: bool = False):
-    tag, preset = _load_lang_preset(lang_spec)
-    work = bytearray(data)
-    layout = parse_pe32_layout(bytes(work))
+    tag, suffix, config = _load_lang_config(lang_spec)
+    current = bytes(data)
+    existing = _read_lang_overlay(current)
+    if existing is not None:
+        current, _manifest = _restore_lang_overlay(current)
+        current = bytes(current)
+    original = current
+    work = bytearray(original)
     changes = []
     warnings = []
-    used = []
     statuses = {}
     statuses["charset"] = _patch_charset_slots(
         work,
-        preset["charset"],
-        preset["accepted"],
+        config["charset"],
+        (0, 128, 134, config["charset"]),
         changes,
         warnings,
     )
-    statuses["Locale"] = _patch_utf16_refs(
-        work,
-        layout,
-        "Locale",
-        ("japanese", "chinese"),
-        preset["locale"],
-        used,
-        changes,
-        warnings,
-    )
-    statuses["Code"] = _patch_utf16_refs(
-        work,
-        layout,
-        "Code",
-        ("ja", "zh"),
-        preset["code"],
-        used,
-        changes,
-        warnings,
-    )
-    if preset["paths"]:
-        statuses["Scene"] = _patch_utf16_refs(
+    layout = parse_pe32_layout(bytes(work))
+    specs = _lang_field_specs(config)
+    needed = _lang_needed_strings(bytes(work), layout, specs)
+    storage = _add_lang_string_section(work, needed, changes)
+    layout = parse_pe32_layout(bytes(work))
+    for label, texts, target in specs:
+        statuses[label] = _patch_utf16_refs(
             work,
             layout,
-            "Scene",
-            ("Scene.pck", "SceneZH.pck"),
-            preset["paths"]["Scene"],
-            used,
-            changes,
-            warnings,
-        )
-        statuses["Save"] = _patch_utf16_refs(
-            work,
-            layout,
-            "Save",
-            ("savedata", "savedata_zh"),
-            preset["paths"]["Save"],
-            used,
-            changes,
-            warnings,
-        )
-        statuses["Gameexe"] = _patch_utf16_refs(
-            work,
-            layout,
-            "Gameexe",
-            ("Gameexe.dat", "GameexeZH.dat"),
-            preset["paths"]["Gameexe"],
-            used,
+            label,
+            tuple(dict.fromkeys(texts)),
+            target,
+            storage.get(target),
             changes,
             warnings,
         )
     missing = [label for label, status in statuses.items() if status == "missing"]
     if missing and not allow_partial:
-        raise RuntimeError("LANG preset is incomplete; missing: " + ", ".join(missing))
+        raise RuntimeError("LANG config is incomplete; missing: " + ", ".join(missing))
     if len(missing) == len(statuses):
-        raise RuntimeError("LANG preset is unsupported by this executable")
+        raise RuntimeError("LANG config is unsupported by this executable")
+    if changes:
+        _append_lang_overlay(work, original, config)
     data[:] = work
-    return tag, preset["suffix"], changes, warnings
+    return tag, suffix, changes, warnings
+
+
+def revert_lang(data: bytearray, lang_spec: str):
+    tag, _suffix, config = _load_lang_config(lang_spec)
+    restored, manifest = _restore_lang_overlay(bytes(data), config)
+    changes = []
+    for entry in manifest.get("entries", []):
+        off = int(entry["offset"])
+        before = bytes.fromhex(entry["before"])
+        after = bytes.fromhex(entry["after"])
+        for index, (old, new) in enumerate(zip(after, before, strict=True)):
+            if old != new:
+                changes.append((off + index, old, new, "LANG restore original bytes"))
+    changes.append(
+        (
+            int(manifest["original_size"]),
+            0,
+            0,
+            "LANG remove mapped strings and overlay",
+        )
+    )
+    data[:] = restored
+    return tag, "ORIGINAL", changes, []
 
 
 def _format_active_utf16_refs(data: bytes, layout, texts):
@@ -971,6 +1337,12 @@ def _format_active_utf16_refs(data: bytes, layout, texts):
 def print_patch_info(in_path: str, raw: bytes):
     data = bytearray(raw)
     layout = parse_pe32_layout(raw)
+    manifest = _read_lang_overlay(raw)
+    lang_config = manifest.get("config", {}) if manifest else {}
+
+    def info_texts(*values):
+        return tuple(value for value in dict.fromkeys(values) if value)
+
     print(f"Input : {in_path}")
     print(f"SHA256: {hashlib.sha256(raw).hexdigest()}")
     altkey = siglus_engine_exe_element(raw, with_patch_points=True)
@@ -983,24 +1355,58 @@ def print_patch_info(in_path: str, raw: bytes):
         charset_offsets = _find_charset_slot_offsets(data)
         for idx, off in enumerate(charset_offsets, start=1):
             val = data[off]
-            print(
-                f"LANG charset{idx}: 0x{off:X}=0x{val:02X} ({_format_charset_label(val)})"
+            label = (
+                "LANG charset" if len(charset_offsets) == 1 else f"LANG charset{idx}"
             )
+            print(f"{label}: 0x{off:X}=0x{val:02X} ({_format_charset_label(val)})")
     except Exception:
         print("LANG charset: not found")
-    print("LANG presets: cjk, cjk-path")
+    print("LANG presets: cjk, cjk-path, JSON")
+    if manifest:
+        print(
+            "LANG reversible: yes "
+            f"(original={manifest['original_sha256']}, config="
+            f"{_canonical_lang_config(lang_config).decode('utf-8')})"
+        )
     print(
-        f"LANG Locale : {_format_active_utf16_refs(raw, layout, ('japanese', 'chinese'))}"
+        "LANG Locale : "
+        + _format_active_utf16_refs(
+            raw,
+            layout,
+            info_texts("japanese", "chinese", lang_config.get("locale", "")),
+        )
     )
-    print(f"LANG Code   : {_format_active_utf16_refs(raw, layout, ('ja', 'zh'))}")
     print(
-        f"LANG Scene  : {_format_active_utf16_refs(raw, layout, ('Scene.pck', 'SceneZH.pck'))}"
+        "LANG Code   : "
+        + _format_active_utf16_refs(
+            raw,
+            layout,
+            info_texts("ja", "zh", lang_config.get("language_code", "")),
+        )
     )
     print(
-        f"LANG Save   : {_format_active_utf16_refs(raw, layout, ('savedata', 'savedata_zh'))}"
+        "LANG Scene  : "
+        + _format_active_utf16_refs(
+            raw,
+            layout,
+            info_texts("Scene.pck", "SceneZH.pck", lang_config.get("pck", "")),
+        )
     )
     print(
-        f"LANG Gameexe: {_format_active_utf16_refs(raw, layout, ('Gameexe.dat', 'GameexeZH.dat'))}"
+        "LANG Save   : "
+        + _format_active_utf16_refs(
+            raw,
+            layout,
+            info_texts("savedata", "savedata_zh", lang_config.get("save", "")),
+        )
+    )
+    print(
+        "LANG Gameexe: "
+        + _format_active_utf16_refs(
+            raw,
+            layout,
+            info_texts("Gameexe.dat", "GameexeZH.dat", lang_config.get("gameexe", "")),
+        )
     )
     try:
         func_off = _find_loc_guard_function(data)
@@ -1029,13 +1435,20 @@ def main(argv=None):
     ap.add_argument("-o", "--output", help="output exe path")
     ap.add_argument("--inplace", action="store_true", help="overwrite input file")
     ap.add_argument(
+        "--revert",
+        action="store_true",
+        help="restore the original executable from a reversible language patch",
+    )
+    ap.add_argument(
         "--allow-partial",
         action="store_true",
         help="allow incomplete language preset application",
     )
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--altkey", action="store_true", help="patch exe_el with <key>")
-    g.add_argument("--lang", metavar="PRESET", help="cjk or cjk-path")
+    g.add_argument(
+        "--lang", metavar="CONFIG", help="cjk, cjk-path, or a language JSON file"
+    )
     g.add_argument("--info", action="store_true", help="show patchable info and exit")
     g.add_argument("--loc", metavar="0|1", help="toggle region detection: 0=off, 1=on")
     args = ap.parse_args(argv)
@@ -1045,6 +1458,12 @@ def main(argv=None):
         return 2
     if args.allow_partial and not args.lang:
         sys.stderr.write("--allow-partial is only valid with --lang\n")
+        return 2
+    if args.revert and not args.lang:
+        sys.stderr.write("--revert is only valid with --lang\n")
+        return 2
+    if args.revert and args.allow_partial:
+        sys.stderr.write("--revert cannot be combined with --allow-partial\n")
         return 2
     if output_given and not str(args.output).strip():
         sys.stderr.write("-o/--output requires a non-empty path\n")
@@ -1138,13 +1557,16 @@ def main(argv=None):
             return 1
     else:
         try:
-            tag, suffix, changes, warnings = patch_lang(
-                data, args.lang, allow_partial=args.allow_partial
-            )
+            if args.revert:
+                tag, suffix, changes, warnings = revert_lang(data, args.lang)
+            else:
+                tag, suffix, changes, warnings = patch_lang(
+                    data, args.lang, allow_partial=args.allow_partial
+                )
         except Exception as e:
             sys.stderr.write(str(e) + "\n")
             return 1
-        mode_name = f"lang:{tag}"
+        mode_name = f"lang-revert:{tag}" if args.revert else f"lang:{tag}"
     if args.inplace:
         out_path = in_path
     elif explicit_out_path:

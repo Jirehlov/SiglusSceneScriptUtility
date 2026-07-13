@@ -1264,7 +1264,7 @@ Patch mode modifies selected binary values inside `SiglusEngine.exe`.
 
 ```bash
 siglus-ssu -p --altkey <input_exe> <input_key> [-o output_exe] [--inplace]
-siglus-ssu -p --lang (cjk | cjk-path) <input_exe> [-o output_exe] [--inplace] [--allow-partial]
+siglus-ssu -p --lang (cjk | cjk-path | config.json) <input_exe> [-o output_exe] [--inplace] [--allow-partial] [--revert]
 siglus-ssu -p --info <input_exe>
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
@@ -1280,6 +1280,8 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--allow-partial` | Only for `--lang`. Write the available changes even when the current engine build lacks part of the selected preset. By default every preset component is required. |
 | `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
 | `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
+| `--lang config.json` | Apply a complete six-field language configuration from JSON. |
+| `--revert` | Restore the byte-identical original executable using the configuration and undo data embedded by a language patch. |
 | `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
 | `--loc 0` | Disable region detection by replacing the matched top-level check routine with an always-pass stub. |
 | `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. |
@@ -1288,13 +1290,26 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 
 `--lang cjk` changes Japanese/CJK charset compare slots to `0x86`, relocates the active locale string to `chinese`, and relocates the active language code string to `zh`.
 
-`--lang cjk-path` performs the same changes, then writes the official ZH path strings into an unused PE string cave and repoints active references to them. The original short strings may remain in the file as unreferenced data.
+`--lang cjk-path` performs the same changes, writes the official ZH path strings into a dedicated read-only PE section, and repoints active references to them. The normalized configuration and exact undo data are stored in an unmapped EOF overlay.
+
+JSON configurations contain exactly `pck`, `gameexe`, `save`, `charset`, `locale`, and `language_code`. All six fields are required. A language-patched executable can be converted to another configuration directly; the patcher restores the original image in memory before applying the target configuration.
+
+```json
+{
+  "pck": "SceneZH.pck",
+  "gameexe": "GameexeZH.dat",
+  "save": "savedata_zh",
+  "charset": 134,
+  "locale": "chinese",
+  "language_code": "zh"
+}
+```
 
 Language presets are complete transactions by default: every required charset, locale, language-code, and selected path component must be patchable or already have the target value. Unsupported builds report missing components without writing output. Successful output is written through a temporary file and atomically replaced; use `--allow-partial` only when retaining the available subset is intentional.
 
 #### Charset Slots
 
-`--info` reports every matched `80 78 17 xx` charset compare site instead of requiring exactly two slots. The common values are:
+`--info` reports verified `ENUMLOGFONT` charset-filter loops. Detection accepts different base registers and requires the `lfCharSet` offset, the `0x11C` record stride, and the loop back edge, so unrelated zero-valued structure flags are not treated as charset slots. The common values are:
 
 - `0x00` (`ANSI_CHARSET`): ANSI font search.
 - `0x80` (`SHIFTJIS_CHARSET`): Shift-JIS font search.
@@ -1308,6 +1323,8 @@ The CJK presets patch only recognized Japanese/CJK slots. If no such slot is pre
 siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/SiglusEngine_patched.exe
 siglus-ssu -p --lang cjk /path/to/SiglusEngine.exe
 siglus-ssu -p --lang cjk-path /path/to/SiglusEngine.exe --inplace
+siglus-ssu -p --lang config.json /path/to/SiglusEngine.exe
+siglus-ssu -p --lang config.json --revert /path/to/SiglusEngine_JSON.exe
 siglus-ssu -p --info /path/to/SiglusEngine.exe
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
 siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
