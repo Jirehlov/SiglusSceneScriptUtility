@@ -23,7 +23,7 @@ from .common import (
     write_u16_le,
     write_i32_le,
     write_i32_le_array,
-    read_text_auto,
+    read_compile_source,
     write_text,
     write_bytes,
     read_scn_header,
@@ -649,7 +649,7 @@ def summarize_scene_macro_stats(iad, base=None, baseline_usage=None):
 def build_ia_data(ctx):
     sp = ctx.get("scn_path") or ""
     inc_list = ctx.get("inc_list") or []
-    enc = "utf-8" if ctx.get("utf8") else "cp932"
+    enc = ctx.get("debug_charset") or ("utf-8" if ctx.get("utf8") else "cp932")
     if not inc_list and sp:
         try:
             _, entries = read_directory(sp)
@@ -675,10 +675,7 @@ def build_ia_data(ctx):
             inc_path = resolve_read_path(inc_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"inc not found: {inc_path}")
-        txt = read_text_auto(
-            inc_path,
-            force_charset=(ctx.get("charset_force") if isinstance(ctx, dict) else ""),
-        )
+        txt = read_compile_source(ctx, inc_path)
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(txt, C.FM_GLOBAL, iad, iad2)
         if not ia.step1():
@@ -1966,11 +1963,12 @@ def compile_one_pipeline(
     def fmt_err(code, line):
         return f"{code} at {display_name}:{int(line or 0)}"
 
-    enc = "utf-8" if (isinstance(ctx, dict) and ctx.get("utf8")) else "cp932"
-    scn = read_text_auto(
-        ss_path,
-        force_charset=(ctx.get("charset_force") if isinstance(ctx, dict) else ""),
+    enc = (
+        ctx.get("debug_charset") or ("utf-8" if ctx.get("utf8") else "cp932")
+        if isinstance(ctx, dict)
+        else "cp932"
     )
+    scn = read_compile_source(ctx, ss_path)
     base = ia_data
     if not isinstance(base, dict) and isinstance(ctx, dict):
         base = ctx.get("ia_data")

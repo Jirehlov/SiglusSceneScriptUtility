@@ -255,7 +255,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<input_dir>` | 包含 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。 |
 | `<output_pck \| output_dir>` | 输出路径。若参数指向一个已存在目录，则在其中创建 `Scene.pck`。否则该参数会按输出文件路径处理；即使一个不存在的路径不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
-| `--charset ENC` | 强制指定源文件编码。CP932/Shift-JIS 别名：`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`。UTF-8 别名：`utf8`、`utf-8`、`utf_8`、`utf8-sig`、`utf-8-sig`。省略时自动检测。 |
+| `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`）有意统一为 Windows CP932；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
 | `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。不能与 `--tmp` 同用。 |
@@ -328,7 +328,8 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 #### 说明
 
-- **自动编码检测：** 若未指定 `--charset`，每个源文件都会独立尝试 UTF-8 与 CP932，并根据 BOM、严格解码结果和确定性的歧义评分选择编码。编译器还会另行扫描 `.ss`、`.inc`、`.ini`、`.dat` 文件中的 UTF-8 BOM 或假名/CJK 字符，以生成用于编译缓存元数据及中间/调试文本编码的项目级提示；该提示不会强制所有源文件使用同一种编码。需要为整个项目覆盖自动选择时，请使用 `--charset`。
+- **源文件解码：** 若未指定 `--charset`，每个源文件都会独立尝试 UTF-8 与 CP932，并根据 BOM、严格解码结果和确定性的歧义评分选择编码。其他 Python codec 必须显式指定，并采用严格解码；非法字节序列会令编译失败。解码会移除一个开头的 Unicode BOM，并把 CRLF 或孤立 CR 归一化为 LF，但不会进行 Unicode 规范化。两个编译后端接收同一份解码后的文本快照。
+- **与编码无关的编译：** 源文件编码不会选择另一套词法规则。解码完成后，CP932、UTF-8 和其他编码都使用与官方日文编译器一致、固定的 CP932 双字节字符分类。因此，内容等价的 CP932 与 UTF-8 源文件会得到相同编译结果。固定集合以外的字符可以写在引号字符串内，但不会被当作无引号的全角文本。
 - **增量编译：** 当指定 `--tmp` 时，编译器会缓存所有 `.ss` 和 `.inc` 文件的 SHA-256 哈希。缓存兼容条件包括 `siglus-ssu` 版本、源码字符集以及当前 `const.py` 内容/profile。下次兼容运行时仅重编译已更改（或缺少对应 `.dat`）的文件，并复用已有 `.lzss` 产物。若某个场景源码发生变化，或对应 `.lzss` 缺失，则重新生成该场景的 `.lzss`。若任一 `.inc` 文件发生变化，则触发全量重编译。
 - **字符串混淆：** 编译器会用 MSVC 兼容 `rand()` 种子打乱每个 `.dat` 的字符串表；字符串顺序不影响普通翻译工作。`--test-shuffle` 根据第一个 scene 寻找种子，再串行重建全部 scene；后续若有不匹配仍会生成请求的输出，但命令返回失败。已知种子可通过 `--set-shuffle` 使用。
 
@@ -792,74 +793,32 @@ siglus-ssu -e /path/to/SiglusEngine.exe chapter2 "#z5"
 
 ### `-m` / `--textmap` — 翻译用文本映射
 
-从 `.ss` 源文件或已编译的 `.dat` 文件导出字符串 token 到 CSV "文本映射"，并将已翻译的文本从 CSV 应用回源文件。这提供了一种无需直接编辑 `.ss` 文件的替代翻译工作流。
+将已编译场景 `.dat` 的字符串表导出为 CSV 文本映射，并把译文应用回已编译文件。工具有意不修改 `.ss` 源文件，因为项目宏和替换规则可能令源代码层面的字符串修改改变编译结构。
 
 #### 语法
 
 ```
-# 从 .ss 源文件导出文本映射
-siglus-ssu -m <path_to_ss | path_to_dir>
-
-# 将已翻译的文本映射应用回 .ss 源文件
-siglus-ssu -m --apply <path_to_ss | path_to_dir>
-
 # 从已编译的 .dat 文件导出字符串列表
-siglus-ssu -m --disam <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -m <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
 
 # 将已翻译的字符串列表应用回已编译的 .dat 文件
-siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
 ```
 
 #### 参数
 
 | 参数 | 说明 |
 |---|---|
-| `<path_to_ss \| path_to_dir>` | 单个 `.ss` 文件或包含 `.ss` 文件的目录。**只接受 1 个路径参数**。目录输入会递归扫描。 |
-| `<path_to_dat \| path_to_dir>` | 单个 `.dat` 文件或目录。**只接受 1 个路径参数**。 |
-| `--apply`, `-a` | 将 `.ss.csv` 文本映射就地应用回对应的 `.ss` 文件。`.ss.csv` 必须已与 `.ss` 文件并排存在。 |
-| `--disam` | 将已编译的 `.dat` 的字符串列表导出到紧邻 `.dat` 的 `.dat.csv` 文件。支持加密、LZSS 压缩或原始 `.dat`。扫描目录时会递归处理 `.dat`，并自动跳过 `Gameexe.dat` 和 `暗号.dat`。 |
-| `--disam-apply` | 将 `.dat.csv` 转换后的字符串列表就地应用回已编译的 `.dat`。`--apply`、`--disam`、`--disam-apply` 互斥。 |
-| `--angou <path\|angou=text\|key=bytes>` | 对加密的已编译 `.dat` 执行 `--disam` / `--disam-apply` 时使用的 key 来源。使用 [`-a` / `--analyze`](#-a----analyze--分析和比较文件) 中说明的公共 key-source 规则。输入为目录时，会先为该目录解析一次 key 候选，并复用于扫描到的每个 `.dat` 文件。不能用于 `.ss` 文本映射导出/应用。 |
+| `<path_to_dat \| path_to_dir>` | 单个场景 `.dat` 文件或目录。**只接受 1 个路径参数**。目录输入会递归扫描。 |
+| `--apply` | 将 `.dat.csv` 中的译文就地应用回已编译的 `.dat`。不带此选项时，将字符串列表导出到紧邻 `.dat` 的 `.dat.csv`。导出与应用都支持加密、LZSS 压缩或原始 `.dat`；扫描目录时会递归处理 `.dat`，并自动跳过 `Gameexe.dat` 和 `暗号.dat`。 |
+| `--angou <path\|angou=text\|key=bytes>` | 加密 `.dat` 使用的 key 来源。使用 [`-a` / `--analyze`](#-a----analyze--分析和比较文件) 中说明的公共 key-source 规则。输入为目录时，会先为该目录解析一次 key 候选，并复用于扫描到的每个 `.dat` 文件。 |
 
-#### `.ss` 文件工作流程
-
-1. **导出文本映射：**
-
-   ```bash
-   # 单个文件
-   siglus-ssu -m /path/to/scripts/chapter1.ss
-   # → 生成 /path/to/scripts/chapter1.ss.csv
-
-   # 整个目录
-   siglus-ssu -m /path/to/scripts/
-   # → 每个 .ss 文件生成一个 .ss.csv
-   ```
-
-2. **编辑 `chapter1.ss.csv`：** 在 `replacement` 列填入翻译文本。
-
-   导出的 `.ss.csv` 还会包含一个 `kind` 列：
-   `1 = dialogue`（台词）、`2 = speaker name`（说话人名）、`3 = other text`（其他文本）。
-
-   `replacement` 始终是字符串值，不是原始 `.ss` 源码片段。CSV 引号会先由 CSV 读取器处理；解析后的单元格里如果仍然有双引号，它们就是普通文本，写回 `.ss` 时会被转义为 `\"`。工具不会根据首尾引号隐式切换到 raw literal 模式。
-
-3. **应用翻译：**
-
-   ```bash
-   siglus-ssu -m --apply /path/to/scripts/chapter1.ss
-   # 或使用别名
-   siglus-ssu -m -a /path/to/scripts/chapter1.ss
-   ```
-
-   应用后，工具会自动对修改后的文件执行**括号内容修复**：删除 `【】` 名前括号内未被引号字符串包住的 ASCII 空格，并删除括号内容已经开始后的额外无效双引号。逐文件修复明细会输出到 stderr，最终摘要会输出到 stdout。
-
-   应用时会把每个 CSV 行解析到当前源条目，并使用当前解析得到的 span，而不是 CSV 中可能已经过期的 span。同一条目被重复修改或当前替换区间发生重叠时，该文件会在写回前终止。
-
-#### `.dat` 文件工作流程
+#### 工作流程
 
 1. **导出字符串列表：**
 
    ```bash
-   siglus-ssu -m --disam /path/to/chapter1.dat
+   siglus-ssu -m /path/to/chapter1.dat
    # → 生成 /path/to/chapter1.dat.csv
    ```
 
@@ -868,36 +827,10 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 3. **应用翻译：**
 
    ```bash
-   siglus-ssu -m --disam-apply /path/to/chapter1.dat
+   siglus-ssu -m --apply /path/to/chapter1.dat
    ```
 
    `.dat` 文件被就地重写，保留原始的加密和 LZSS 状态。
-
-#### `.ss.csv` 格式
-
-| 列名 | 说明 |
-|---|---|
-| `index` | 唯一的顺序 token 索引（从 1 开始）。 |
-| `line` | 在源 `.ss` 文件中的行号。 |
-| `order` | 该 token 在当前行的出现顺序（从 1 开始）。 |
-| `start` | token 内容的绝对字符偏移。 |
-| `span_start` | 完整 token 范围（含引号）的绝对起始偏移。 |
-| `span_end` | 完整 token 范围的绝对结束偏移。 |
-| `quoted` | `1` 表示源码中用 `"..."` 引用，`0` 表示未引用。 |
-| `kind` | token 分类：`1 = dialogue`（台词）、`2 = speaker name`（说话人名）、`3 = other text`（其他文本）。 |
-| `original` | 原始字符串值（转义编码）。 |
-| `replacement` | 要应用回源文件的译文字符串。初始与 `original` 相同；不会被解释为原始 `.ss` 源码。 |
-
-在 `original` 和 `replacement` 中，特殊字符使用转义形式编码：
-
-| 转义 | 含义 |
-|---|---|
-| `\\` | 字面反斜杠 |
-| `\n` | 换行 |
-| `\r` | 回车 |
-| `\t` | 制表符 |
-
-对于 `.ss.csv`，这些转义描述的是 CSV 文本值。应用到 `.ss` 时，工具会把该值重新序列化为合法的 SiglusSS 源码，并保留字面双引号、反斜杠、换行和制表符。包含回车的 replacement 会被跳过，因为 SiglusSS 源码预处理会移除物理回车字符。`.dat.csv` replacement 仍可在编译后的字符串表中直接保存回车。
 
 #### `.dat.csv` 格式
 
@@ -907,6 +840,8 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 | `kind` | 字符串分类：`1 = dialogue`（台词）、`2 = speaker name`（说话人名）、`3 = other text`（其他文本）。 |
 | `original` | 原始字符串值（转义编码）。 |
 | `replacement` | 替换后的字符串值（转义编码）。初始与 `original` 相同。 |
+
+`original` 与 `replacement` 中的特殊字符分别以 `\\`、`\n`、`\r`、`\t` 表示字面反斜杠、换行、回车和制表符。
 
 ---
 
@@ -1505,7 +1440,7 @@ siglus-ssu test /path/to/pck_dir/
 
 #### 解码与行结束符
 
-`-c` 模式先把源文件按输入编码解码为文本；该编码可以由 `--charset` 指定，也可以由编译器自动探测。读取时，CRLF 和孤立 CR 行结束符会被归一化为 `\n`；CA 阶段还会在字符级处理前删除任何残留的 `\r`。因此，SiglusSS语言的后续规则是以这个归一化后的 LF 文本流为对象定义的。
+`-c` 模式先按 `--charset` 指定或自动探测的编码严格解码每个源文件。解码会移除一个开头的 Unicode BOM，把 CRLF 和孤立 CR 行结束符归一化为 `\n`，但不执行 NFC、NFKC 或其他 Unicode 规范化；CA 阶段还会在字符级处理前删除任何残留的 `\r`。因此，SiglusSS 语言的后续规则只以这个归一化后的 LF 文本流为对象，与原始字节编码无关。
 
 #### 规范术语
 

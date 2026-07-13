@@ -24,7 +24,6 @@ from .common import (
     read_struct_list,
     I32_PAIR_STRUCT,
     read_scn_metadata,
-    write_encoded_text,
     format_exe_el_source,
 )
 from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
@@ -96,12 +95,6 @@ def read_text(path: str):
     return text, encoding, newline
 
 
-def _align_newlines(text: str, newline: str) -> str:
-    if newline and newline != "\n":
-        return text.replace("\n", newline)
-    return text
-
-
 def _encode_quoted(value: str) -> str:
     out = []
     for ch in value:
@@ -114,15 +107,6 @@ def _encode_quoted(value: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
-
-
-def _needs_quoted_literal(value: str) -> bool:
-    if not value:
-        return False
-    for ch in value:
-        if ch in "\u3010\u3011" or not CA.is_zen(ch):
-            return True
-    return False
 
 
 def _merge_textmap_kind(cur_kind, new_kind):
@@ -339,7 +323,7 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
     return tokens, iad
 
 
-def _collect_disam_string_kinds(bundle, source_name: str = ""):
+def _collect_dat_string_kinds(bundle, source_name: str = ""):
     out = {}
     prefix = f"textmap: {source_name}" if source_name else "textmap"
     if not isinstance(bundle, dict):
@@ -472,427 +456,9 @@ def locate_tokens(source_text: str, tokens, iad):
     return out
 
 
-def _source_line_body(line: str) -> str:
-    if line.endswith("\r\n"):
-        return line[:-2]
-    if line.endswith("\n") or line.endswith("\r"):
-        return line[:-1]
-    return line
-
-
-def _source_active_line_end(line: str) -> int:
-    in_quote = False
-    escape = False
-    jp_close = ""
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if in_quote:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_quote = False
-            i += 1
-            continue
-        if jp_close:
-            if ch == jp_close:
-                jp_close = ""
-            i += 1
-            continue
-        if ch == '"':
-            in_quote = True
-        elif ch == "\u300c":
-            jp_close = "\u300d"
-        elif ch == "\u300e":
-            jp_close = "\u300f"
-        elif ch == ";":
-            return i
-        elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
-            return i
-        i += 1
-    return len(line)
-
-
-def _source_spans_overlap(spans, start: int, end: int) -> bool:
-    for left, right in spans or []:
-        if start < right and end > left:
-            return True
-    return False
-
-
-def _normalize_source_entry_order(entries) -> list[dict]:
-    ordered = sorted(
-        (dict(entry) for entry in entries or []),
-        key=lambda entry: (
-            _int_value(entry.get("line", 0), 0),
-            _int_value(entry.get("span_start", -1), -1),
-            _int_value(entry.get("span_end", -1), -1),
-            _int_value(entry.get("index", 0), 0),
-        ),
-    )
-    line_orders = {}
-    for entry in ordered:
-        line_no = _int_value(entry.get("line", 0), 0)
-        if line_no <= 0:
-            continue
-        order = line_orders.get(line_no, 0) + 1
-        line_orders[line_no] = order
-        entry["order"] = order
-    return ordered
-
-
-def add_source_quote_entries(text: str, entries) -> list[dict]:
-    out = list(entries or [])
-    spans = []
-    max_index = 0
-    for entry in out:
-        max_index = max(max_index, _int_value(entry.get("index", 0), 0))
-        start = _int_value(entry.get("span_start", -1), -1)
-        end = _int_value(entry.get("span_end", -1), -1)
-        if start >= 0 and end > start:
-            spans.append((start, end))
-    additions = []
-    line_start = 0
-    pairs = {"\u300c": "\u300d", "\u300e": "\u300f"}
-    for line_no, raw_line in enumerate(str(text or "").splitlines(keepends=True), 1):
-        line = _source_line_body(raw_line)
-        active_end = _source_active_line_end(line)
-        i = 0
-        while i < active_end:
-            ch = line[i]
-            close_ch = pairs.get(ch)
-            if close_ch is None:
-                i += 1
-                continue
-            close = line.find(close_ch, i + 1, active_end)
-            if close < 0:
-                i += 1
-                continue
-            rel_start = i
-            rel_end = close + 1
-            abs_start = line_start + rel_start
-            abs_end = line_start + rel_end
-            value = line[rel_start:rel_end]
-            if value[1:-1].strip() and not _source_spans_overlap(
-                spans, abs_start, abs_end
-            ):
-                max_index += 1
-                additions.append(
-                    {
-                        "index": max_index,
-                        "line": line_no,
-                        "order": 0,
-                        "start": abs_start,
-                        "span_start": abs_start,
-                        "span_end": abs_end,
-                        "quoted": 0,
-                        "text": value,
-                        "kind": TEXTMAP_KIND_DIALOGUE,
-                    }
-                )
-                spans.append((abs_start, abs_end))
-            i = rel_end
-        line_start += len(raw_line)
-    out.extend(additions)
-    return _normalize_source_entry_order(out)
-
-
-def _write_map(csv_path: str, entries):
-    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(
-            [
-                "index",
-                "line",
-                "order",
-                "start",
-                "span_start",
-                "span_end",
-                "quoted",
-                "kind",
-                "original",
-                "replacement",
-            ]
-        )
-        for e in entries:
-            if e.get("text", "") == "":
-                continue
-            w.writerow(
-                [
-                    e.get("index", 0),
-                    e.get("line", 0),
-                    e.get("order", 0),
-                    e.get("start", 0),
-                    e.get("span_start", 0),
-                    e.get("span_end", 0),
-                    e.get("quoted", 0),
-                    e.get("kind", TEXTMAP_KIND_OTHER),
-                    _csv_escape_text(e.get("text", "")),
-                    _csv_escape_text(e.get("text", "")),
-                ]
-            )
-
-
 def _read_map(csv_path: str):
     with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
-
-
-def _apply_map(text: str, entries, rows, filename: str = ""):
-    def _to_int(v, default=-1):
-        try:
-            return int(v)
-        except Exception:
-            return default
-
-    changes = []
-    line_order_map = {}
-    index_map = {}
-    duplicate_line_orders = set()
-    duplicate_indexes = set()
-    selected_entries = set()
-    line_spans = []
-    pos = 0
-    for line_text in text.splitlines(keepends=True):
-        line_len = len(line_text)
-        line_spans.append((pos, pos + line_len, line_text))
-        pos += line_len
-    for entry in entries:
-        line = _to_int(entry.get("line", 0), 0)
-        order = _to_int(entry.get("order", 0), 0)
-        idx = _to_int(entry.get("index", 0), 0)
-        if idx > 0:
-            if idx in index_map:
-                duplicate_indexes.add(idx)
-            else:
-                index_map[idx] = entry
-        if line > 0 and order > 0:
-            key = (line, order)
-            if key in line_order_map:
-                duplicate_line_orders.add(key)
-            else:
-                line_order_map[key] = entry
-    for row in rows:
-        line = _to_int(row.get("line", ""), 0)
-        order = _to_int(row.get("order", ""), 0)
-        idx = _to_int(row.get("index", ""), 0)
-        row_original = row.get("original")
-        original_hint = (
-            None if row_original is None else _csv_unescape_text(row_original)
-        )
-        entry = None
-        index_entry = None
-        line_order_entry = None
-        if idx > 0:
-            if idx in duplicate_indexes:
-                raise ValueError(f"textmap: {filename}: duplicate index {idx}")
-            index_entry = index_map.get(idx)
-        if line > 0 and order > 0:
-            key = (line, order)
-            if key in duplicate_line_orders:
-                raise ValueError(
-                    f"textmap: {filename}: duplicate entry at line {line} order {order}"
-                )
-            line_order_entry = line_order_map.get(key)
-        if index_entry is not None and (
-            original_hint is None or index_entry.get("text", "") == original_hint
-        ):
-            entry = index_entry
-        elif line_order_entry is not None and (
-            original_hint is None or line_order_entry.get("text", "") == original_hint
-        ):
-            entry = line_order_entry
-        else:
-            entry = index_entry or line_order_entry
-        if entry is None:
-            if idx > 0:
-                eprint(
-                    f"textmap: {filename}: index {idx} out of range",
-                    errors="replace",
-                )
-            elif line > 0 and order > 0:
-                eprint(
-                    f"textmap: {filename}: missing entry at line {line} order {order}",
-                    errors="replace",
-                )
-            continue
-        entry_identity = id(entry)
-        if entry_identity in selected_entries:
-            raise ValueError(
-                f"textmap: {filename}: duplicate replacement for index {_to_int(entry.get('index', 0), 0):d}"
-            )
-        selected_entries.add(entry_identity)
-        original = entry.get("text", "") if original_hint is None else original_hint
-        replacement = row.get("replacement")
-        if replacement is not None:
-            replacement = _csv_unescape_text(replacement)
-        if replacement is None:
-            replacement = original
-        if replacement == original:
-            continue
-        if entry.get("text", "") != original:
-            eprint(
-                f"textmap: {filename}: skip index {_to_int(entry.get('index', 0), 0):d} (text mismatch: '{entry.get('text', '')}' vs '{original}')",
-                errors="replace",
-            )
-            continue
-        if "\r" in replacement:
-            eprint(
-                f"textmap: {filename}: skip index {_to_int(entry.get('index', 0), 0):d} (replacement contains carriage return)",
-                errors="replace",
-            )
-            continue
-        entry_span_start = _to_int(entry.get("span_start", ""), -1)
-        entry_span_end = _to_int(entry.get("span_end", ""), -1)
-        candidates = []
-        if entry_span_start >= 0 and entry_span_end > entry_span_start:
-            candidates.append((entry_span_start, entry_span_end))
-        used_span = None
-        used_quoted = None
-        expected_q = '"' + _encode_quoted(original) + '"'
-        expected_r = original
-        for s, e in candidates:
-            if s < 0 or e > len(text) or e <= s:
-                continue
-            seg = text[s:e]
-            if seg == expected_q:
-                used_span = (s, e)
-                used_quoted = 1
-                break
-            if seg == expected_r:
-                used_span = (s, e)
-                used_quoted = 0
-                break
-        if used_span is None:
-            line_no = _to_int(entry.get("line", 0), 0)
-            if line_no > 0:
-                if line_no <= len(line_spans):
-                    line_start, _line_end, line_text = line_spans[line_no - 1]
-                    rel_start = max(0, _to_int(entry.get("start", 0), 0) - line_start)
-                    pos = line_text.find(expected_q, rel_start)
-                    if pos >= 0:
-                        used_span = (
-                            line_start + pos,
-                            line_start + pos + len(expected_q),
-                        )
-                        used_quoted = 1
-                    else:
-                        pos2 = (
-                            -1
-                            if original == ""
-                            else line_text.find(original, rel_start)
-                        )
-                        if pos2 >= 0:
-                            rel_left = pos2
-                            rel_right = pos2 + len(original)
-                            if (
-                                rel_left > 0
-                                and rel_right < len(line_text)
-                                and line_text[rel_left - 1] == '"'
-                                and line_text[rel_right] == '"'
-                            ):
-                                while rel_left > 0 and line_text[rel_left - 1] == '"':
-                                    rel_left -= 1
-                                while (
-                                    rel_right < len(line_text)
-                                    and line_text[rel_right] == '"'
-                                ):
-                                    rel_right += 1
-                                used_quoted = 1
-                            else:
-                                used_quoted = 0
-                            used_span = (line_start + rel_left, line_start + rel_right)
-        if used_span is None:
-            eprint(
-                f"textmap: {filename}: original not found at line {line:d} order {order:d}",
-                errors="replace",
-            )
-            continue
-        if replacement == "" or used_quoted or _needs_quoted_literal(replacement):
-            replacement_lit = '"' + _encode_quoted(replacement) + '"'
-        else:
-            replacement_lit = replacement
-        changes.append((used_span[0], used_span[1], replacement_lit))
-    if not changes:
-        return text, 0
-    changes.sort(key=lambda x: (x[0], x[1]))
-    for previous, current in zip(changes, changes[1:]):
-        if current[0] < previous[1]:
-            raise ValueError(
-                f"textmap: {filename}: overlapping replacements at {current[0]}:{current[1]} and {previous[0]}:{previous[1]}"
-            )
-    for start, end, repl in reversed(changes):
-        text = text[:start] + repl + text[end:]
-    return text, len(changes)
-
-
-def _fix_brackets_content(text: str):
-    if '"' not in text and " " not in text:
-        return text, 0, 0
-    out = []
-    in_bracket = False
-    stage = 0
-    in_str = False
-    esc = False
-    fixed_quotes = 0
-    fixed_spaces = 0
-    for ch in text:
-        if not in_bracket:
-            out.append(ch)
-            if ch == "\u3010":
-                in_bracket = True
-                stage = 0
-                in_str = False
-                esc = False
-            continue
-        if ch == "\u3011":
-            in_bracket = False
-            stage = 0
-            in_str = False
-            esc = False
-            out.append(ch)
-            continue
-        if stage == 0:
-            if ch == " ":
-                fixed_spaces += 1
-                continue
-            if ch == '"':
-                stage = 2
-                in_str = True
-                esc = False
-                out.append(ch)
-                continue
-            stage = 1
-        if stage == 1:
-            if ch == '"':
-                fixed_quotes += 1
-                continue
-            if ch == " ":
-                fixed_spaces += 1
-                continue
-            out.append(ch)
-            continue
-        if stage == 2:
-            if in_str:
-                out.append(ch)
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-                continue
-            if ch == " ":
-                fixed_spaces += 1
-                continue
-            if ch == '"':
-                fixed_quotes += 1
-                continue
-            out.append(ch)
-    return "".join(out), fixed_quotes, fixed_spaces
 
 
 def _parse_scn_dat(blob: bytes):
@@ -951,7 +517,7 @@ def _parse_scn_dat(blob: bytes):
     return str_list, out_scn
 
 
-def _write_disam_map(csv_path: str, str_list, kind_map):
+def _write_dat_map(csv_path: str, str_list, kind_map):
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -972,7 +538,7 @@ def _write_disam_map(csv_path: str, str_list, kind_map):
             )
 
 
-def _apply_disam_map(str_list, rows, filename: str = ""):
+def _apply_dat_map(str_list, rows, filename: str = ""):
     changes = 0
     for row in rows or []:
         try:
@@ -1115,10 +681,10 @@ def _process_dat(
         return 1
     str_list, out_scn = parsed
     bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
-    kind_map = _collect_disam_string_kinds(bundle, fname)
+    kind_map = _collect_dat_string_kinds(bundle, fname)
     csv_path = dat_path + ".csv"
     if not apply_mode:
-        _write_disam_map(csv_path, str_list, kind_map)
+        _write_dat_map(csv_path, str_list, kind_map)
         print(csv_path)
         return 0
     try:
@@ -1131,7 +697,7 @@ def _process_dat(
     except (OSError, UnicodeError, csv.Error) as exc:
         eprint(f"textmap: {fname}: map read failed: {exc}", errors="replace")
         return 1
-    updated_list, count = _apply_disam_map(list(str_list), rows, filename=fname)
+    updated_list, count = _apply_dat_map(list(str_list), rows, filename=fname)
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0
@@ -1151,102 +717,6 @@ def _process_dat(
     return 0
 
 
-def _process_ss(ss_path: str, apply_mode: bool, iad_cache=None) -> int:
-    try:
-        ss_path = resolve_read_path(ss_path, kind="file")
-    except (FileNotFoundError, NotADirectoryError):
-        eprint(f"textmap: file not found: {ss_path}", errors="replace")
-        return 1
-    fname = os.path.basename(ss_path)
-    try:
-        text, encoding, newline = read_text(ss_path)
-        ctx = {
-            "scn_path": os.path.dirname(os.path.abspath(ss_path)),
-            "utf8": bool(encoding.startswith("utf-8")),
-        }
-        iad_base = None
-        if iad_cache is not None:
-            key = (ctx["scn_path"], ctx["utf8"])
-            iad_base = iad_cache.get(key)
-            if iad_base is None:
-                iad_base = BS.build_ia_data(ctx)
-                iad_cache[key] = iad_base
-        tokens, iad = collect_tokens(text, ctx, iad_base=iad_base)
-        entries = locate_tokens(text, tokens, iad)
-        entries = add_source_quote_entries(text, entries)
-    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
-        eprint(f"textmap: {fname}: {exc}", errors="replace")
-        return 1
-    csv_path = ss_path + ".csv"
-    if not apply_mode:
-        _write_map(csv_path, entries)
-        print(csv_path)
-        return 0
-    try:
-        csv_path = resolve_read_path(csv_path, kind="file")
-    except (FileNotFoundError, NotADirectoryError):
-        eprint(f"textmap: map file not found: {csv_path}", errors="replace")
-        return 1
-    try:
-        rows = _read_map(csv_path)
-    except (OSError, UnicodeError, csv.Error) as exc:
-        eprint(f"textmap: {fname}: map read failed: {exc}", errors="replace")
-        return 1
-    try:
-        updated, count = _apply_map(text, entries, rows, filename=fname)
-    except ValueError as ex:
-        eprint(str(ex), errors="replace")
-        return 1
-    if count == 0:
-        eprint(f"textmap: {fname}: no changes to apply", errors="replace")
-        return 0
-    out_encoding = encoding
-    try:
-        write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
-    except UnicodeEncodeError:
-        eprint(
-            f"textmap: {fname}: encode failed, falling back to utf-8", errors="replace"
-        )
-        out_encoding = "utf-8"
-        write_encoded_text(ss_path, _align_newlines(updated, newline), out_encoding)
-    written_text, _written_enc, _nl2 = read_text(ss_path)
-    fixed_text, fixed_quote_count, fixed_space_count = _fix_brackets_content(
-        written_text
-    )
-    fixed_total = fixed_quote_count + fixed_space_count
-    if fixed_total:
-        try:
-            write_encoded_text(
-                ss_path, _align_newlines(fixed_text, newline), out_encoding
-            )
-        except UnicodeEncodeError:
-            eprint(
-                f"textmap: {fname}: encode failed during post-fix, falling back to utf-8",
-                errors="replace",
-            )
-            out_encoding = "utf-8"
-            write_encoded_text(
-                ss_path, _align_newlines(fixed_text, newline), out_encoding
-            )
-        if fixed_quote_count:
-            eprint(
-                f"textmap: {fname}: fixed {fixed_quote_count} invalid quote(s) inside \u3010\u3011",
-                errors="replace",
-            )
-        if fixed_space_count:
-            eprint(
-                f"textmap: {fname}: removed {fixed_space_count} space(s) inside \u3010\u3011",
-                errors="replace",
-            )
-    if fixed_total:
-        print(
-            f"textmap: applied {count} changes, fixed {fixed_quote_count} bracket quote(s), removed {fixed_space_count} bracket space(s)"
-        )
-    else:
-        print(f"textmap: applied {count} changes")
-    return 0
-
-
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -1255,121 +725,79 @@ def main(argv=None):
         return 0
     try:
         argv, explicit_angou = consume_angou_option(argv)
-    except ValueError as e:
-        eprint(str(e), errors="replace")
+    except ValueError as exc:
+        eprint(str(exc), errors="replace")
         return 2
     apply_mode = False
-    disam_mode = False
-    disam_apply_mode = False
     args = []
-    for a in argv:
-        if a in ("--apply", "-a"):
+    for arg in argv:
+        if arg == "--apply":
             apply_mode = True
-        elif a == "--disam":
-            disam_mode = True
-        elif a == "--disam-apply":
-            disam_apply_mode = True
-        elif a.startswith("-"):
-            eprint(f"textmap: unknown option: {a}", errors="replace")
+        elif arg.startswith("-"):
+            eprint(f"textmap: unknown option: {arg}", errors="replace")
             _hint_help()
             return 2
         else:
-            args.append(a)
-    if apply_mode and (disam_mode or disam_apply_mode):
-        eprint(
-            "textmap: --apply cannot be used with --disam/--disam-apply",
-            errors="replace",
-        )
-        _hint_help()
-        return 2
-    if disam_mode and disam_apply_mode:
-        eprint(
-            "textmap: --disam and --disam-apply are mutually exclusive",
-            errors="replace",
-        )
-        _hint_help()
-        return 2
+            args.append(arg)
     if len(args) != 1:
         eprint("textmap: expected exactly 1 path argument", errors="replace")
         _hint_help()
         return 2
-    if explicit_angou and not (disam_mode or disam_apply_mode):
-        eprint(
-            "textmap: --angou is only valid with --disam/--disam-apply",
-            errors="replace",
-        )
-        _hint_help()
-        return 2
     try:
-        ss_path = resolve_read_path(args[0])
+        dat_path = resolve_read_path(args[0])
     except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: path not found: {args[0]}", errors="replace")
         return 1
-    if disam_mode or disam_apply_mode:
-        dat_path = ss_path
-        if os.path.isdir(dat_path):
-            dat_files = iter_files_by_ext(
-                dat_path,
-                [".dat"],
-                exclude_pred=lambda p: (
-                    os.path.basename(p).lower() == "gameexe.dat"
-                    or is_named_filename(os.path.basename(p), ANGOU_DAT_NAME)
-                ),
-            )
-            if not dat_files:
-                eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
-                return 1
-            try:
-                exe_el_candidates = list(
-                    pck.iter_exe_el_candidates(
-                        os.path.abspath(dat_path),
-                        explicit_angou=explicit_angou,
-                        with_sources=True,
-                    )
-                )
-            except ValueError as e:
-                eprint(str(e), errors="replace")
-                return 2
-            errors = 0
-            for file_path in dat_files:
-                rc = _process_dat(
-                    file_path,
-                    disam_apply_mode,
-                    exe_el_candidates=exe_el_candidates,
-                )
-                if rc != 0:
-                    errors += 1
-            return 1 if errors else 0
-        base_dir = os.path.dirname(os.path.abspath(dat_path)) or "."
+    if os.path.isdir(dat_path):
+        dat_files = iter_files_by_ext(
+            dat_path,
+            [".dat"],
+            exclude_pred=lambda path: (
+                os.path.basename(path).lower() == "gameexe.dat"
+                or is_named_filename(os.path.basename(path), ANGOU_DAT_NAME)
+            ),
+        )
+        if not dat_files:
+            eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
+            return 1
         try:
             exe_el_candidates = list(
                 pck.iter_exe_el_candidates(
-                    base_dir,
+                    os.path.abspath(dat_path),
                     explicit_angou=explicit_angou,
                     with_sources=True,
                 )
             )
-        except ValueError as e:
-            eprint(str(e), errors="replace")
+        except ValueError as exc:
+            eprint(str(exc), errors="replace")
             return 2
-        return _process_dat(
-            dat_path,
-            disam_apply_mode,
-            exe_el_candidates=exe_el_candidates,
-        )
-    if os.path.isdir(ss_path):
-        ss_files = iter_files_by_ext(ss_path, [".ss"])
-        if not ss_files:
-            eprint(f"textmap: no .ss files found in: {ss_path}", errors="replace")
-            return 1
-        iad_cache = {}
         errors = 0
-        for file_path in ss_files:
-            rc = _process_ss(file_path, apply_mode, iad_cache=iad_cache)
+        for file_path in dat_files:
+            rc = _process_dat(
+                file_path,
+                apply_mode,
+                exe_el_candidates=exe_el_candidates,
+            )
             if rc != 0:
                 errors += 1
         return 1 if errors else 0
-    if os.path.splitext(ss_path)[1].lower() != ".ss":
-        eprint("textmap: unsupported file type (expected .ss)", errors="replace")
+    if os.path.splitext(dat_path)[1].lower() != ".dat":
+        eprint("textmap: unsupported file type (expected .dat)", errors="replace")
         return 1
-    return _process_ss(ss_path, apply_mode)
+    base_dir = os.path.dirname(os.path.abspath(dat_path)) or "."
+    try:
+        exe_el_candidates = list(
+            pck.iter_exe_el_candidates(
+                base_dir,
+                explicit_angou=explicit_angou,
+                with_sources=True,
+            )
+        )
+    except ValueError as exc:
+        eprint(str(exc), errors="replace")
+        return 2
+    return _process_dat(
+        dat_path,
+        apply_mode,
+        exe_el_candidates=exe_el_candidates,
+    )

@@ -4,7 +4,7 @@ from ._const_manager import get_const_module
 from .common import (
     exe_angou_element,
     read_bytes,
-    read_text_auto,
+    read_compile_source,
     read_angou_first_line,
     angou_to_exe_el,
     write_text,
@@ -159,11 +159,11 @@ def write_gameexe_dat(ctx):
     gameexe_ini = ctx.get("gameexe_ini") or "Gameexe.ini"
     gameexe_dat = ctx.get("gameexe_dat") or "Gameexe.dat"
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
-    charset_force = ctx.get("charset_force") or ""
     gei_path = os.path.join(scn, gameexe_ini)
+    source_texts = ctx.get("source_texts") or {}
     gei = (
-        read_text_auto(gei_path, force_charset=charset_force)
-        if read_path_exists(gei_path, kind="file")
+        read_compile_source(ctx, gei_path)
+        if gameexe_ini in source_texts or read_path_exists(gei_path, kind="file")
         else ""
     )
     ged = ""

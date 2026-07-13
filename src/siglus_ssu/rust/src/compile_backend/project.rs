@@ -316,8 +316,14 @@ fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
     fs::rename(from, to)
 }
 
-fn read_source(path: &Path, force_charset: &str) -> Result<String, String> {
-    read_text_auto(path, force_charset)
+fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, String> {
+    let name = file_name(path);
+    config
+        .context
+        .source_texts
+        .get(&name)
+        .map(String::as_str)
+        .ok_or_else(|| format!("source text not loaded: {}", path.display()))
 }
 
 fn decode_strict(bytes: &[u8], encoding: &'static encoding_rs::Encoding) -> Option<String> {
@@ -372,16 +378,6 @@ fn decode_cp932_strict(bytes: &[u8]) -> Option<String> {
     Some(out)
 }
 
-fn normalized_charset(charset: &str) -> Option<&'static str> {
-    match charset.trim().to_ascii_lowercase().as_str() {
-        "" => None,
-        "jis" | "sjis" | "shift_jis" | "shift-jis" | "cp932" | "ms932" | "windows-932"
-        | "windows932" => Some("cp932"),
-        "utf8" | "utf-8" | "utf_8" | "utf8-sig" | "utf-8-sig" => Some("utf-8"),
-        _ => None,
-    }
-}
-
 fn text_decode_penalty(text: &str) -> i32 {
     let mut score = 0i32;
     for ch in text.chars() {
@@ -427,46 +423,6 @@ fn decode_utf8_ignore(bytes: &[u8]) -> String {
         }
     }
     out
-}
-
-fn read_text_auto(path: &Path, force_charset: &str) -> Result<String, String> {
-    let bytes = fs::read(path).map_err(|error| format_path_error(path, error))?;
-    if !force_charset.is_empty() {
-        return match normalized_charset(force_charset) {
-            Some("cp932") => decode_cp932_strict(&bytes)
-                .map(normalize_text_newlines)
-                .ok_or_else(|| format!("{}: failed to decode as cp932", path.display())),
-            Some("utf-8") => decode_strict(&bytes, UTF_8)
-                .map(normalize_text_newlines)
-                .ok_or_else(|| format!("{}: failed to decode as utf-8", path.display())),
-            _ => Err(format!("unsupported charset: {force_charset}")),
-        };
-    }
-
-    let utf8 = decode_strict(&bytes, UTF_8);
-    let cp932 = decode_cp932_strict(&bytes);
-    match (utf8, cp932) {
-        (Some(text), None) => Ok(normalize_text_newlines(text)),
-        (None, Some(text)) => Ok(normalize_text_newlines(text)),
-        (Some(utf8_text), Some(cp932_text)) => {
-            if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-                return Ok(normalize_text_newlines(utf8_text));
-            }
-            let utf8_not_cp932 = encode_cp932(&utf8_text, false).is_err();
-            if utf8_not_cp932 {
-                return Ok(normalize_text_newlines(utf8_text));
-            }
-            if text_decode_penalty(&utf8_text) <= text_decode_penalty(&cp932_text) {
-                Ok(normalize_text_newlines(utf8_text))
-            } else {
-                Ok(normalize_text_newlines(cp932_text))
-            }
-        }
-        (None, None) => Err(format!(
-            "{}: failed to decode as utf-8 or cp932",
-            path.display()
-        )),
-    }
 }
 
 fn encode_shift_jis_ignore(text: &str) -> Vec<u8> {
@@ -1613,10 +1569,8 @@ fn write_gameexe_dat(config: &CompileConfig, exe_key: Option<&[u8]>) -> Result<P
     } else {
         &config.context.gameexe_ini
     };
-    let ini_path = source_path(Path::new(&config.input_dir), name);
     let mut payload = Vec::new();
-    if ini_path.is_file() {
-        let source = read_text_auto(&ini_path, &config.context.charset_force)?;
+    if let Some(source) = config.context.source_texts.get(name) {
         let options = TextCommentOptions {
             case_mode: CaseMode::Upper,
             single_quote_mode: SingleQuoteMode::None,
@@ -1629,7 +1583,7 @@ fn write_gameexe_dat(config: &CompileConfig, exe_key: Option<&[u8]>) -> Result<P
             unclosed_block_message: "Unclosed /* comment.".to_string(),
             ..TextCommentOptions::default()
         };
-        let parsed = scan_text_comments(&source, &options)
+        let parsed = scan_text_comments(source, &options)
             .map_err(|error| line_error("GEI parse error", error.line, &error.message))?;
         if !parsed.text.is_empty() {
             payload = crate::lzss::pack(&utf16le(&parsed.text), false);
@@ -1886,11 +1840,8 @@ fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<Ia
         let path = source_path(base, name);
         let display_name = file_name(&path);
         log_stage(log, "IA", &display_name)?;
-        if !path.is_file() {
-            return Err(format!("inc not found: {}", path.display()));
-        }
-        let text = read_source(&path, &config.context.charset_force)?;
-        let mut analyzer = IncAnalyzer::new(&text, data.codes.forms.global.name.as_str());
+        let text = read_source(config, &path)?;
+        let mut analyzer = IncAnalyzer::new(text, data.codes.forms.global.name.as_str());
         let mut scratch = IaScratch::default();
         analyzer
             .step1(&mut data, &mut scratch)
@@ -1924,7 +1875,7 @@ fn prepare_scene(
     mut log: Option<&mut OutputLog<'_>>,
     mut stage_times: Option<&mut Vec<(String, f64)>>,
 ) -> Result<PreparedScene, String> {
-    let source = read_source(source_path, &config.context.charset_force)?;
+    let source = read_source(config, source_path)?;
     let baseline_usage = base_ia
         .macro_defs
         .iter()
@@ -1945,7 +1896,7 @@ fn prepare_scene(
     }
     let stage_start = Instant::now();
     let file1 = ca
-        .analyze_file_1(&source)
+        .analyze_file_1(source)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
     let file2 = ca
         .analyze_file_2(&file1, &ia_data.name_set)

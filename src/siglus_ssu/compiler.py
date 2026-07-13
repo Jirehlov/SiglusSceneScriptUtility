@@ -561,23 +561,16 @@ def _write_test_shuffle_csv(csv_path, rows):
             )
 
 
-def _read_scene_ssid(path):
-    try:
-        with open_read(path) as fh:
-            line = fh.readline(1024)
-    except FilenameCaseCollisionError:
-        raise
-    except Exception:
+def _scene_ssid_from_text(text):
+    prefix = SCENE_SCRIPT_ID_PREFIX.decode("ascii")
+    line = str(text or "").split("\n", 1)[0]
+    if (not line.startswith(prefix)) or (len(line) < (len(prefix) + 4)):
         return None
-    if (not line.startswith(SCENE_SCRIPT_ID_PREFIX)) or (
-        len(line) < (len(SCENE_SCRIPT_ID_PREFIX) + 4)
-    ):
-        return None
-    raw = line[len(SCENE_SCRIPT_ID_PREFIX) : len(SCENE_SCRIPT_ID_PREFIX) + 4]
-    if len(raw) != 4 or any((b < 48) or (b > 57) for b in raw):
+    raw = line[len(prefix) : len(prefix) + 4]
+    if len(raw) != 4 or not raw.isascii() or not raw.isdigit():
         return None
     try:
-        return int(raw.decode("ascii"))
+        return int(raw)
     except Exception:
         return None
 
@@ -595,9 +588,8 @@ def _scan_dir(p):
             continue
         fp = os.path.join(p, f)
         ss.append(fp)
-        ssid = _read_scene_ssid(fp)
-        scn_ssid_map[ascii_lower(f)] = ssid
-        scn_ssid_map[ascii_lower(os.path.splitext(f)[0])] = ssid
+        scn_ssid_map[ascii_lower(f)] = None
+        scn_ssid_map[ascii_lower(os.path.splitext(f)[0])] = None
     return fs, ini, inc, ss, scn_ssid_map
 
 
@@ -634,6 +626,24 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
         if any(_is_jp_char(ch) for ch in t):
             return "utf-8"
     return "cp932"
+
+
+def _load_project_source_texts(base_dir, gameexe_ini, inc, ss, charset):
+    paths = []
+    if gameexe_ini:
+        paths.append(os.path.join(base_dir, gameexe_ini))
+    paths.extend(os.path.join(base_dir, name) for name in inc or [])
+    paths.extend(ss or [])
+    texts = {}
+    for path in paths:
+        try:
+            resolved = resolve_read_path(path, kind="file")
+            texts[os.path.basename(resolved)] = read_text_auto(
+                resolved, force_charset=charset
+            )
+        except Exception as exc:
+            raise ValueError(f"{path}: {exc}") from exc
+    return texts
 
 
 def _init_stats(ctx):
@@ -1154,8 +1164,8 @@ def _native_compile_config(
             "scene_display_names": scene_display_names,
             "inc_list": list(ctx.get("inc_list") or []),
             "ini_list": list(ctx.get("ini_list") or []),
+            "source_texts": dict(ctx.get("source_texts") or {}),
             "utf8": bool(ctx.get("utf8")),
-            "charset_force": ctx.get("charset_force"),
             "debug_outputs": bool(ctx.get("debug_outputs")),
             "lzss_mode": bool(ctx.get("lzss_mode")),
             "exe_angou_mode": bool(ctx.get("exe_angou_mode")),
@@ -1283,7 +1293,7 @@ def main(argv=None):
         ap.add_argument("output_pck")
     ap.add_argument("--tmp", dest="tmp_dir", default="")
     ap.add_argument(
-        "--charset", default="", help="Force source charset (jis/cp932 or utf8)."
+        "--charset", default="", help="Force source charset (Python codec name)."
     )
     ap.add_argument(
         "--debug",
@@ -1427,7 +1437,30 @@ def main(argv=None):
             tmp_auto = True
             tmp = _create_auto_tmp_dir(out)
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
-    use_utf8 = True if enc.lower().startswith("utf-8") else False
+    try:
+        source_texts = _load_project_source_texts(
+            inp,
+            gei_ini,
+            [] if a.dat_repack or a.gei else inc,
+            [] if a.dat_repack or a.gei else ss,
+            charset,
+        )
+    except ValueError as exc:
+        sys.stderr.write(f"{prog}: error: {exc}\n")
+        return 1
+    for path in ss:
+        name = os.path.basename(path)
+        ssid = _scene_ssid_from_text(source_texts.get(name, ""))
+        scn_ssid_map[ascii_lower(name)] = ssid
+        scn_ssid_map[ascii_lower(os.path.splitext(name)[0])] = ssid
+    use_utf8 = enc != "cp932"
+    if not use_utf8:
+        for text in source_texts.values():
+            try:
+                text.encode("cp932", "strict")
+            except UnicodeEncodeError:
+                use_utf8 = True
+                break
     ctx = {
         "project": {},
         "scn_path": inp,
@@ -1443,9 +1476,11 @@ def main(argv=None):
         "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,
         "ini_list": ini,
+        "source_texts": source_texts,
         "utf8": bool(use_utf8),
         "charset": enc,
         "charset_force": charset,
+        "debug_charset": "utf-8" if use_utf8 else "cp932",
         "debug_outputs": bool(a.debug),
         "lzss_mode": (not a.no_angou),
         "exe_angou_mode": (not a.no_angou),

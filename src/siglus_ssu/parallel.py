@@ -191,6 +191,7 @@ def _compile_one_process(
     utf8: bool,
     debug_outputs: bool,
     display_name: str,
+    source_text: str | None,
 ) -> tuple[str, str | None, dict, dict, dict]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
@@ -202,7 +203,9 @@ def _compile_one_process(
             "tmp_path": tmp_path,
             "utf8": bool(utf8),
             "charset_force": enc,
+            "debug_charset": "utf-8" if utf8 else "cp932",
             "debug_outputs": bool(debug_outputs),
+            "source_texts": {fname: source_text} if source_text is not None else {},
         }
         res = compile_one_pipeline(
             worker_ctx,
@@ -251,6 +254,7 @@ def parallel_compile(
     enc = ctx.get("charset_force") or ""
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
+    source_texts = ctx.get("source_texts") or {}
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
     errors = []
     completed = 0
@@ -270,6 +274,7 @@ def parallel_compile(
                 utf8,
                 debug_outputs,
                 format_scene_name(ss_path, ctx),
+                source_texts.get(os.path.basename(ss_path)),
             )
             for ss_path in ss_files
         ]

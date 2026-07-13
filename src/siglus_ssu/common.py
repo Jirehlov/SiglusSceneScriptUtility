@@ -1,3 +1,4 @@
+import codecs
 import os
 import sys
 import struct
@@ -844,6 +845,8 @@ def find_named_path(base_dir: str, target_name: str, recursive: bool = True) -> 
 
 def norm_charset(cs: str, keep_unknown: bool = False) -> str:
     s = str(cs or "").strip().lower()
+    if not s:
+        return ""
     if s in (
         "jis",
         "sjis",
@@ -857,7 +860,15 @@ def norm_charset(cs: str, keep_unknown: bool = False) -> str:
         return "cp932"
     if s in ("utf8", "utf-8", "utf_8", "utf8-sig", "utf-8-sig"):
         return "utf-8"
-    return str(cs or "") if keep_unknown else ""
+    try:
+        name = codecs.lookup(s).name
+    except LookupError:
+        return str(cs or "") if keep_unknown else ""
+    if name == "cp932":
+        return "cp932"
+    if name == "utf-8-sig":
+        return "utf-8"
+    return name
 
 
 def decode_text_auto(data: bytes, force_charset: str = ""):
@@ -874,7 +885,7 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
         return b.decode("cp932", "strict")
 
     def _fix(t: str) -> str:
-        return t.replace("\r\n", "\n").replace("\r", "\n")
+        return t.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
 
     cs = norm_charset(force_charset)
     if force_charset and not cs:
@@ -882,7 +893,9 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
     if cs:
         if cs == "cp932":
             return _fix(_d9()), "cp932", had_bom
-        return _fix(_d8()), "utf-8", had_bom
+        if cs == "utf-8":
+            return _fix(_d8()), "utf-8", had_bom
+        return _fix(b.decode(cs, "strict")), cs, had_bom
     t8 = t9 = None
     try:
         t8 = _d8()
@@ -927,6 +940,14 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
 def read_text_auto(path: str, force_charset: str = "") -> str:
     data = read_bytes(path)
     return decode_text_auto(data, force_charset=force_charset)[0]
+
+
+def read_compile_source(ctx: dict, path: str) -> str:
+    source_texts = ctx.get("source_texts") or {}
+    name = os.path.basename(path)
+    if name in source_texts:
+        return source_texts[name]
+    return read_text_auto(path, force_charset=ctx.get("charset_force") or "")
 
 
 def first_line_text(text: str) -> str:

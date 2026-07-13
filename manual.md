@@ -255,7 +255,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<input_dir>` | Directory containing `.ss` source files, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. |
 | `<output_pck \| output_dir>` | Output path. If the argument names an existing directory, `Scene.pck` is created inside it. Otherwise the argument is treated as the output file path; a non-existent path that does not end in `.pck` is still written as that exact file name. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
-| `--charset ENC` | Force source file encoding. CP932/Shift-JIS aliases: `jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`. UTF-8 aliases: `utf8`, `utf-8`, `utf_8`, `utf8-sig`, `utf-8-sig`. If omitted, the encoding is auto-detected. |
+| `--charset ENC` | Force one source encoding using any codec available to Python. CP932/Shift-JIS aliases (`jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`) intentionally select Windows CP932. UTF-8 aliases are also accepted. If omitted, each file is auto-detected as UTF-8 or CP932. |
 | `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan the immediate files in `input_dir` for existing Siglus scene `.dat` files, copy them, and pack them directly into a `.pck` file. Useful for packing already-compiled scripts. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 | `--no-angou` | Disable LZSS compression and XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. Cannot be combined with `--tmp`. |
@@ -328,7 +328,8 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 #### Notes
 
-- **Auto-encoding detection:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. The compiler separately scans `.ss`, `.inc`, `.ini`, and `.dat` files for a UTF-8 BOM or kana/CJK characters to derive a project-level encoding hint for compile-cache metadata and generated intermediate/debug text encoding; that hint does not force every source file to use one encoding. Use `--charset` when the automatic choice must be overridden for the whole project.
+- **Source decoding:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. Any other Python codec must be selected explicitly and is decoded strictly; invalid byte sequences fail the compile. Decoding removes one leading Unicode BOM and normalizes CRLF or lone CR to LF, but performs no Unicode normalization. Both compiler backends receive the same decoded text snapshot.
+- **Encoding-independent compilation:** Source encoding does not select a different lexer. After decoding, CP932, UTF-8, and other encodings use the fixed CP932 double-byte character classification of the official Japanese compiler. Therefore equivalent CP932 and UTF-8 sources compile identically. Characters outside that fixed set are valid inside quoted strings but are not treated as unquoted full-width text.
 - **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Cache compatibility includes the `siglus-ssu` version, source charset, and active `const.py` content/profile. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. If any `.inc` file changes, a full recompile is triggered.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene and rebuilds every scene serially. A later mismatch still generates the requested output but returns a failure status; use `--set-shuffle` to rebuild with a known seed.
 
@@ -792,74 +793,32 @@ siglus-ssu -e /path/to/SiglusEngine.exe chapter2 "#z5"
 
 ### `-m` / `--textmap` — Text Mapping for Translation
 
-Exports string tokens from `.ss` source files or compiled `.dat` files to a CSV "text map", and applies translated text back from the CSV to the source files. This provides an alternative translation workflow that avoids directly editing `.ss` files.
+Exports the string table from compiled scene `.dat` files to a CSV text map and applies translated strings back to the compiled files. Source `.ss` mutation is deliberately not supported because project macros and replacement rules can make a source-level string edit change compiled structure.
 
 #### Syntax
 
 ```
-# Export text map from .ss source(s)
-siglus-ssu -m <path_to_ss | path_to_dir>
-
-# Apply translated text map back to .ss source(s)
-siglus-ssu -m --apply <path_to_ss | path_to_dir>
-
 # Export string list from compiled .dat file(s)
-siglus-ssu -m --disam <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -m <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
 
 # Apply translated string list back to compiled .dat file(s)
-siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
 ```
 
 #### Parameters
 
 | Parameter | Description |
 |---|---|
-| `<path_to_ss \| path_to_dir>` | A single `.ss` file or a directory of `.ss` files. Exactly one path argument is required. Directory inputs are scanned recursively. |
-| `<path_to_dat \| path_to_dir>` | A single `.dat` file or a directory. Exactly one path argument is required. |
-| `--apply`, `-a` | Apply a `.ss.csv` text map back to the corresponding `.ss` file in-place. The `.ss.csv` must already exist alongside the `.ss` file. |
-| `--disam` | Export the string list from a compiled `.dat` to a `.dat.csv` file alongside the `.dat`. Works on encrypted, LZSS-compressed, or raw `.dat` files. When given a directory, `.dat` files are recursively scanned, and `Gameexe.dat` and `暗号.dat` are automatically excluded. |
-| `--disam-apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. `--apply`, `--disam`, and `--disam-apply` are mutually exclusive. |
-| `--angou <path\|angou=text\|key=bytes>` | Key source for `--disam` / `--disam-apply` on encrypted compiled `.dat` files. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). When the input is a directory, key candidates are resolved once for that directory and reused for every `.dat` file in the scan. Not valid for `.ss` text-map export/apply. |
+| `<path_to_dat \| path_to_dir>` | A single scene `.dat` file or a directory. Exactly one path argument is required. Directory inputs are scanned recursively. |
+| `--apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. Without this option, the string list is exported to a `.dat.csv` file alongside the `.dat`. Export and apply work on encrypted, LZSS-compressed, or raw `.dat` files. Directory inputs recursively scan `.dat` files and automatically exclude `Gameexe.dat` and `暗号.dat`. |
+| `--angou <path\|angou=text\|key=bytes>` | Key source for encrypted compiled `.dat` files. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). When the input is a directory, key candidates are resolved once for that directory and reused for every `.dat` file in the scan. |
 
-#### Workflow: `.ss` Files
-
-1. **Export the text map:**
-
-   ```bash
-   # Single file
-   siglus-ssu -m /path/to/scripts/chapter1.ss
-   # → writes /path/to/scripts/chapter1.ss.csv
-
-   # Entire directory
-   siglus-ssu -m /path/to/scripts/
-   # → writes one .ss.csv per .ss file
-   ```
-
-2. **Edit `chapter1.ss.csv`:** Fill in the `replacement` column with translated text.
-
-   The exported `.ss.csv` also includes a `kind` column:
-   `1 = dialogue`, `2 = speaker name`, `3 = other text`.
-
-   `replacement` is always a string value, not raw `.ss` source text. CSV quoting is handled by the CSV reader before textmap processing; any double quotes that remain in the parsed cell are literal text and are escaped as `\"` when `.ss` source is written. There is no implicit raw-literal mode based on leading or trailing quotes.
-
-3. **Apply the translated text map:**
-
-   ```bash
-   siglus-ssu -m --apply /path/to/scripts/chapter1.ss
-   # or equivalently:
-   siglus-ssu -m -a /path/to/scripts/chapter1.ss
-   ```
-
-   After applying, the tool automatically performs a **bracket content fix** on the modified file: it removes unquoted ASCII spaces inside `【】` name brackets and drops extra invalid double-quote characters after bracket content has started. Per-file fix detail is reported to stderr; the final summary is printed to stdout.
-
-   Application resolves each CSV row against the current source entry and uses the span obtained from the current parse rather than a potentially stale CSV span. Duplicate rows targeting one entry or replacements whose current spans overlap abort that file before write-back.
-
-#### Workflow: Compiled `.dat` Files
+#### Workflow
 
 1. **Export string list:**
 
    ```bash
-   siglus-ssu -m --disam /path/to/chapter1.dat
+   siglus-ssu -m /path/to/chapter1.dat
    # → writes /path/to/chapter1.dat.csv
    ```
 
@@ -868,36 +827,10 @@ siglus-ssu -m --disam-apply <path_to_dat | path_to_dir> [--angou <path|angou=tex
 3. **Apply translations:**
 
    ```bash
-   siglus-ssu -m --disam-apply /path/to/chapter1.dat
+   siglus-ssu -m --apply /path/to/chapter1.dat
    ```
 
    The `.dat` file is rewritten in-place preserving its original encryption and LZSS state.
-
-#### `.ss.csv` Format
-
-| Column | Description |
-|---|---|
-| `index` | Unique sequential token index (1-based). |
-| `line` | Line number in the source `.ss` file. |
-| `order` | Occurrence order of this token on the given line (1-based). |
-| `start` | Absolute character offset of the token's inner content. |
-| `span_start` | Absolute offset of the full token span (including quotes if any). |
-| `span_end` | Absolute offset of the end of the full token span. |
-| `quoted` | `1` if the token was quoted with `"..."` in source, `0` otherwise. |
-| `kind` | Token kind: `1 = dialogue`, `2 = speaker name`, `3 = other text`. |
-| `original` | The original string value (escape-encoded). |
-| `replacement` | Translated string value to apply back to the source file. Initially identical to `original`; never interpreted as raw `.ss` source. |
-
-Special characters in `original` and `replacement` are escape-encoded:
-
-| Escape | Meaning |
-|---|---|
-| `\\` | Literal backslash |
-| `\n` | Newline |
-| `\r` | Carriage return |
-| `\t` | Tab |
-
-For `.ss.csv`, these escapes describe the CSV text value. When applying to `.ss`, the tool serializes that value back into valid SiglusSS source and preserves literal double quotes, backslashes, newlines, and tabs. Replacement values containing carriage returns are skipped because SiglusSS source preprocessing removes physical carriage-return characters. `.dat.csv` replacement can still store carriage returns directly in the compiled string table.
 
 #### `.dat.csv` Format
 
@@ -907,6 +840,8 @@ For `.ss.csv`, these escapes describe the CSV text value. When applying to `.ss`
 | `kind` | String kind: `1 = dialogue`, `2 = speaker name`, `3 = other text`. |
 | `original` | The original string value (escape-encoded). |
 | `replacement` | The replacement string value (escape-encoded). Initially identical to `original`. |
+
+Special characters in `original` and `replacement` use `\\`, `\n`, `\r`, and `\t` for a literal backslash, newline, carriage return, and tab respectively.
 
 ---
 
@@ -1505,7 +1440,7 @@ Same-directory `.inc` files are processed in **lower-cased filename sort order**
 
 #### Decoding and line endings
 
-`-c` first decodes each source file according to the source encoding selected by `--charset` or auto-detected by the compiler. During this read, CRLF and lone CR line endings are normalized to `\n`; the CA stage also removes any remaining `\r` before character-level processing. The remaining rules of the SiglusSS language are therefore defined over this normalized LF text stream.
+`-c` first strictly decodes each source file according to the source encoding selected by `--charset` or auto-detected by the compiler. One leading Unicode BOM is removed, CRLF and lone CR line endings are normalized to `\n`, and no NFC/NFKC or other Unicode normalization is performed. The CA stage also removes any remaining `\r` before character-level processing. The remaining rules of the SiglusSS language are therefore defined over this normalized LF text stream and do not depend on the original byte encoding.
 
 #### Normative terms
 

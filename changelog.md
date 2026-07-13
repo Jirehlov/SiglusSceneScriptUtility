@@ -19,6 +19,8 @@ All notable changes to this project will be documented in this file.
 - Documented case-insensitive scene lookup and case-preserving embedded source metadata, made runtime input reads prefer exact paths before case-insensitive fallback, rejected case-colliding directory enumeration under Windows filename rules, and included the `siglus-ssu` version in persistent compile-cache compatibility checks.
 - Rejected analyze and DBS options that do not apply to the selected input or mode instead of silently ignoring them.
 - Aligned the Python and Rust frontends with the official compiler for scene-local commands, exact Windows CP932 decoding/encoding, and CP932 double-byte character classification.
+- Separated source decoding from compilation, accepted arbitrary explicit Python codecs, made both compile backends consume the same normalized Unicode snapshot, and kept CP932/UTF-8 lexical behavior identical to the official Japanese compiler.
+- Removed source `.ss` textmap export and apply; textmap now exports compiled scene `.dat` string tables by default and applies them with `--apply` while preserving encryption and LZSS state.
 - Made native LSP token validation and overlap tracking linear or logarithmic instead of quadratic on large multi-line and single-line documents, bounded its casefold cache, and preserved invalid-character diagnostics and nested macro occurrences.
 - Serialized writers of an explicit compile `--tmp` cache to prevent concurrent cache corruption.
 - Hardened CLI failures for invalid output directories, unsupported sound extraction inputs, textmap file types/decoding, and invalid analyze option combinations; sound trimming now uses an invocation-unique temporary directory without deleting pre-existing output content.
