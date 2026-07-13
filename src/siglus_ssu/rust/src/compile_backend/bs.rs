@@ -56,13 +56,12 @@ pub struct BsOutput {
 }
 
 #[derive(Debug, Clone)]
-pub struct BytecodeBuilder {
+pub struct BytecodeBuilder<'a> {
     pub stream: BinaryStream,
     codes: RuntimeCodes,
     pub last_error: BsError,
     loop_labels: Vec<(i32, i32)>,
-    ia_data: Option<IaData>,
-    strings: Vec<String>,
+    ia_data: Option<&'a IaData>,
     label_list: Vec<i32>,
     z_label_list: Vec<i32>,
     cmd_label_list: Vec<(i32, i32)>,
@@ -73,7 +72,7 @@ pub struct BytecodeBuilder {
     default_arg_fills: usize,
 }
 
-impl BytecodeBuilder {
+impl<'a> BytecodeBuilder<'a> {
     pub fn new(codes: RuntimeCodes) -> Self {
         Self {
             stream: BinaryStream::new(),
@@ -84,7 +83,6 @@ impl BytecodeBuilder {
             },
             loop_labels: Vec::new(),
             ia_data: None,
-            strings: Vec::new(),
             label_list: Vec::new(),
             z_label_list: Vec::new(),
             cmd_label_list: Vec::new(),
@@ -762,7 +760,7 @@ impl BytecodeBuilder {
     pub fn compile_root(
         &mut self,
         root: &AstNode,
-        ia_data: &IaData,
+        ia_data: &'a IaData,
         strings: &[String],
         label_count: usize,
         call_property_names: &[String],
@@ -773,8 +771,7 @@ impl BytecodeBuilder {
             line: 0,
         };
         self.loop_labels.clear();
-        self.ia_data = Some(ia_data.clone());
-        self.strings = strings.to_vec();
+        self.ia_data = Some(ia_data);
         self.label_list = vec![0; label_count];
         self.z_label_list = vec![0; self.codes.z_label_count];
         self.cmd_label_list.clear();
@@ -809,18 +806,18 @@ impl BytecodeBuilder {
             .map(|command| command.name.clone())
             .collect();
         let scene = SceneDatInput {
-            str_list: self.strings.clone(),
-            scn_bytes: self.stream.clone().into_bytes(),
-            label_list: self.label_list.clone(),
-            z_label_list: self.z_label_list.clone(),
-            cmd_label_list: self.cmd_label_list.clone(),
+            str_list: strings.to_vec(),
+            scn_bytes: std::mem::take(&mut self.stream).into_bytes(),
+            label_list: std::mem::take(&mut self.label_list),
+            z_label_list: std::mem::take(&mut self.z_label_list),
+            cmd_label_list: std::mem::take(&mut self.cmd_label_list),
             scn_prop_list,
             scn_prop_name_list,
-            scn_cmd_list: self.scn_cmd_list.clone(),
+            scn_cmd_list: std::mem::take(&mut self.scn_cmd_list),
             scn_cmd_name_list,
             call_prop_name_list: call_property_names.to_vec(),
-            namae_list: self.namae_list.clone(),
-            read_flag_list: self.read_flag_list.clone(),
+            namae_list: std::mem::take(&mut self.namae_list),
+            read_flag_list: std::mem::take(&mut self.read_flag_list),
             ..SceneDatInput::default()
         };
         Ok(BsOutput {

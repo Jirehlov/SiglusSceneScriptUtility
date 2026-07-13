@@ -873,27 +873,6 @@ fn argument_named_count(args: &super::ast::ArgumentList) -> usize {
     args.named_count
 }
 
-fn expression_depth(node: &AstNode) -> usize {
-    match &node.payload {
-        AstPayload::Unary { value, .. } => 1 + expression_depth(value),
-        AstPayload::Binary { left, right, .. } => {
-            1 + expression_depth(left).max(expression_depth(right))
-        }
-        AstPayload::Paren { expression } => 1 + expression_depth(expression),
-        AstPayload::ExpressionList { values, .. } => {
-            1 + values
-                .iter()
-                .map(expression_depth)
-                .max()
-                .unwrap_or_default()
-        }
-        AstPayload::Goto { .. }
-        | AstPayload::ElementExpression { .. }
-        | AstPayload::Literal { .. } => 1,
-        _ => 0,
-    }
-}
-
 fn visit_statement_stats(
     node: &AstNode,
     stats: &mut SourceStats,
@@ -1161,13 +1140,13 @@ fn visit_label_refs(
     }
 }
 
-fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) {
-    max_counter(&mut stats.expressions, "max_depth", expression_depth(node));
-    match &node.payload {
+fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) -> usize {
+    let depth = match &node.payload {
         AstPayload::Root(items) => {
             for item in items {
                 visit_expression_stats(item, stats, codes);
             }
+            0
         }
         AstPayload::DefCommand {
             parameters, body, ..
@@ -1180,6 +1159,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             for item in body {
                 visit_expression_stats(item, stats, codes);
             }
+            0
         }
         AstPayload::Goto { args, .. } => {
             inc_counter(
@@ -1190,11 +1170,13 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             for arg in &args.args {
                 visit_expression_stats(&arg.value, stats, codes);
             }
+            1
         }
         AstPayload::Return { value: Some(value) } => {
             visit_expression_stats(value, stats, codes);
+            0
         }
-        AstPayload::Return { value: None } => {}
+        AstPayload::Return { value: None } => 0,
         AstPayload::If { branches } => {
             for branch in branches {
                 if let Some(condition) = &branch.condition {
@@ -1204,6 +1186,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
                     visit_expression_stats(item, stats, codes);
                 }
             }
+            0
         }
         AstPayload::For {
             init,
@@ -1221,12 +1204,14 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             for item in body {
                 visit_expression_stats(item, stats, codes);
             }
+            0
         }
         AstPayload::While { condition, body } => {
             visit_expression_stats(condition, stats, codes);
             for item in body {
                 visit_expression_stats(item, stats, codes);
             }
+            0
         }
         AstPayload::Switch {
             condition,
@@ -1245,6 +1230,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
                     visit_expression_stats(item, stats, codes);
                 }
             }
+            0
         }
         AstPayload::Assign {
             left,
@@ -1259,13 +1245,19 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             );
             visit_expression_stats(left, stats, codes);
             visit_expression_stats(right, stats, codes);
+            0
         }
-        AstPayload::Command { expression } => visit_expression_stats(expression, stats, codes),
-        AstPayload::Paren { expression } => visit_expression_stats(expression, stats, codes),
+        AstPayload::Command { expression } => {
+            visit_expression_stats(expression, stats, codes);
+            0
+        }
+        AstPayload::Paren { expression } => 1 + visit_expression_stats(expression, stats, codes),
         AstPayload::ExpressionList { values, .. } => {
+            let mut max_depth = 0;
             for value in values {
-                visit_expression_stats(value, stats, codes);
+                max_depth = max_depth.max(visit_expression_stats(value, stats, codes));
             }
+            1 + max_depth
         }
         AstPayload::Unary { operator, value } => {
             inc_counter(&mut stats.expressions, "unary_ops", 1);
@@ -1274,7 +1266,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
                 operator_symbol(codes, *operator, true),
                 1,
             );
-            visit_expression_stats(value, stats, codes);
+            1 + visit_expression_stats(value, stats, codes)
         }
         AstPayload::Binary {
             operator,
@@ -1287,8 +1279,8 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
                 operator_symbol(codes, *operator, false),
                 1,
             );
-            visit_expression_stats(left, stats, codes);
-            visit_expression_stats(right, stats, codes);
+            1 + visit_expression_stats(left, stats, codes)
+                .max(visit_expression_stats(right, stats, codes))
         }
         AstPayload::ElementExpression { elements, .. } => {
             for element in elements {
@@ -1304,9 +1296,13 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
                     visit_expression_stats(&arg.value, stats, codes);
                 }
             }
+            1
         }
-        _ => {}
-    }
+        AstPayload::Literal { .. } => 1,
+        _ => 0,
+    };
+    max_counter(&mut stats.expressions, "max_depth", depth);
+    depth
 }
 
 fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {

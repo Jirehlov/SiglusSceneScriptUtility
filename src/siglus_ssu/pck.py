@@ -1591,14 +1591,14 @@ def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
     out = []
     if blob_ofs <= 0 or blob_ofs + blob_bytes > len(dat):
         return out
-    blob = dat[blob_ofs : blob_ofs + blob_bytes]
     for b_ofs, b_len in idx_pairs:
         bo = int(b_ofs)
         bl = int(b_len)
-        if bo < 0 or bl < 0 or bo + bl > len(blob):
+        if bo < 0 or bl < 0 or bo + bl > blob_bytes:
             out.append(b"")
             continue
-        out.append(blob[bo : bo + bl])
+        start = blob_ofs + bo
+        out.append(dat[start : start + bl])
     return out
 
 

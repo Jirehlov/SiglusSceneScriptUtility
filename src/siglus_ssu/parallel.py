@@ -194,19 +194,31 @@ def parallel_payload_compare(jobs, process_fn):
     )
 
 
-def _compile_one_process(
-    ss_path: str,
+_COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool] | None = None
+
+
+def _init_compile_worker(
     tmp_path: str,
     ia_data: dict,
     enc: str,
     utf8: bool,
     debug_outputs: bool,
+) -> None:
+    global _COMPILE_WORKER_STATE
+    _COMPILE_WORKER_STATE = (tmp_path, ia_data, enc, utf8, debug_outputs)
+
+
+def _compile_one_process(
+    ss_path: str,
     display_name: str,
     source_text: str | None,
 ) -> tuple[str, str | None, dict, dict, dict]:
     fname = os.path.basename(ss_path)
     nm = os.path.splitext(fname)[0]
     try:
+        if _COMPILE_WORKER_STATE is None:
+            raise RuntimeError("compile worker is not initialized")
+        tmp_path, ia_data, enc, utf8, debug_outputs = _COMPILE_WORKER_STATE
         from .common import write_bytes
         from .BS import compile_one_pipeline
 
@@ -274,16 +286,15 @@ def parallel_compile(
     global_macro_usage_delta = {}
     source_stats = empty_source_stat_counts()
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
-    with process_pool(workers) as executor:
+    with process_pool(
+        workers,
+        initializer=_init_compile_worker,
+        initargs=(tmp_path, ia_data, enc, utf8, debug_outputs),
+    ) as executor:
         futures = [
             executor.submit(
                 _compile_one_process,
                 ss_path,
-                tmp_path,
-                ia_data,
-                enc,
-                utf8,
-                debug_outputs,
                 format_scene_name(ss_path, ctx),
                 source_texts.get(os.path.basename(ss_path)),
             )
@@ -319,19 +330,14 @@ def parallel_compile(
 
 
 def _lzss_compress_task(
-    args: tuple[str, str, str, bytes],
+    args: tuple[str, bytes, str, bytes],
 ) -> tuple[str, bytes, bytes, Exception | None]:
-    nm, dat_path, lz_path, easy_code = args
+    nm, dat, lz_path, easy_code = args
     try:
-        from .common import read_bytes, write_bytes
+        from .common import write_bytes
         from . import compiler as _m
         from .native_ops import xor_cycle_inplace
 
-        try:
-            dat_path = resolve_read_path(dat_path, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            raise FileNotFoundError(f"scene dat not found: {dat_path}")
-        dat = read_bytes(dat_path)
         if not easy_code:
             raise RuntimeError("ctx.easy_angou_code is not set")
         lz = _m.lzss_pack(dat)
@@ -380,7 +386,7 @@ def parallel_lzss_compress(
         try:
             lz_path = resolve_read_path(lz_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
-            tasks.append((nm, dat_path, lz_path, easy_code))
+            tasks.append((nm, dat, lz_path, easy_code))
         else:
             results[nm] = (dat, read_bytes(lz_path))
     if not tasks:
