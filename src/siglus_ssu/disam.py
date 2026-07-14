@@ -2120,7 +2120,11 @@ def disassemble_scn_bytes(
                     else None
                 ),
             }
-            if sid is not None and not (koe_trace or payload_trace):
+            if sid is not None and payload_trace:
+                sid_i = _int_or_none(sid)
+                if sid_i is not None:
+                    name_fields["_str_id"] = sid_i
+            elif sid is not None and not koe_trace:
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     name_fields["str_id"] = sid_i

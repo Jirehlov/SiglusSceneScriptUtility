@@ -1419,6 +1419,7 @@ def _definition_record_to_native(record: DefinitionRecord) -> dict[str, Any]:
     return {
         "name": record.name,
         "path": record.path,
+        "path_identity": _path_identity(record.path) if record.path else "",
         "line": record.line,
         "kind": record.kind,
         "directive": record.directive,

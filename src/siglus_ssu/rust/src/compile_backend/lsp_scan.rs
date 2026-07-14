@@ -14,7 +14,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList, PyString};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 
 thread_local! {
     static CASEFOLD_CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
@@ -26,6 +25,7 @@ const CASEFOLD_CACHE_LIMIT: usize = 4096;
 struct LspDefinition {
     name: String,
     path: String,
+    path_identity: String,
     line: usize,
     kind: String,
     directive: String,
@@ -84,15 +84,6 @@ fn key(text: &str) -> String {
         cache.insert(text.to_string(), folded.clone());
         folded
     })
-}
-
-fn path_key(path: &str) -> String {
-    let path = PathBuf::from(path)
-        .components()
-        .as_path()
-        .to_string_lossy()
-        .to_string();
-    key(&path)
 }
 
 fn get_dict_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
@@ -168,6 +159,7 @@ fn parse_definition(item: &Bound<'_, PyDict>) -> PyResult<LspDefinition> {
     Ok(LspDefinition {
         name: item_str(item, "name")?,
         path: item_str(item, "path")?,
+        path_identity: item_str(item, "path_identity")?,
         line: item_usize(item, "line", 1)?,
         kind: item_str(item, "kind")?,
         directive: item_str(item, "directive")?,
@@ -395,8 +387,8 @@ fn macro_symbol_id(kind: &str, name: &str) -> String {
     format!("macro:{}:{}", key(kind), key(name))
 }
 
-fn local_macro_symbol_id(kind: &str, path: &str, name: &str) -> String {
-    format!("macrolocal:{}:{}:{}", key(kind), path_key(path), key(name))
+fn local_macro_symbol_id(kind: &str, path_identity: &str, name: &str) -> String {
+    format!("macrolocal:{}:{}:{}", key(kind), path_identity, key(name))
 }
 
 fn label_symbol_id(name: &str) -> String {
@@ -428,8 +420,8 @@ fn definition_symbol_id(record: &LspDefinition) -> String {
         "command" => command_symbol_id(&record.name),
         "property" => global_property_symbol_id(&record.name),
         "macro" | "define" | "replace" => {
-            if key(&record.scope) == "scene-local" && !record.path.is_empty() {
-                local_macro_symbol_id(&record.kind, &record.path, &record.name)
+            if key(&record.scope) == "scene-local" && !record.path_identity.is_empty() {
+                local_macro_symbol_id(&record.kind, &record.path_identity, &record.name)
             } else {
                 macro_symbol_id(&record.kind, &record.name)
             }
@@ -443,6 +435,11 @@ fn definition_symbol_id_for_document(
     path_identity: &str,
     project_defs: &HashMap<String, Vec<LspDefinition>>,
 ) -> String {
+    if matches!(record.kind.as_str(), "macro" | "define" | "replace")
+        && key(&record.scope) == "scene-local"
+    {
+        return local_macro_symbol_id(&record.kind, path_identity, &record.name);
+    }
     if record.kind == "command" && key(&record.scope) == "scene" {
         let name_key = key(&record.name);
         let project_command = project_defs
@@ -529,6 +526,7 @@ fn collect_definitions_node(
             let mut record = LspDefinition {
                 name: name.clone(),
                 path: path.to_string(),
+                path_identity: String::new(),
                 line: node.line.max(1),
                 kind: "label".to_string(),
                 directive: String::new(),
@@ -552,6 +550,7 @@ fn collect_definitions_node(
             let mut record = LspDefinition {
                 name: name.clone(),
                 path: path.to_string(),
+                path_identity: String::new(),
                 line: node.line.max(1),
                 kind: "z_label".to_string(),
                 directive: String::new(),
@@ -586,6 +585,7 @@ fn collect_definitions_node(
             let mut record = LspDefinition {
                 name: name.clone(),
                 path: path.to_string(),
+                path_identity: String::new(),
                 line: name_atom.line.max(1),
                 kind: "command".to_string(),
                 directive: String::new(),
@@ -605,6 +605,7 @@ fn collect_definitions_node(
                 let mut record = LspDefinition {
                     name: parameter.name.clone(),
                     path: path.to_string(),
+                    path_identity: String::new(),
                     line: parameter.name_atom.line.max(1),
                     kind: "property".to_string(),
                     directive: String::new(),
@@ -641,6 +642,7 @@ fn collect_definitions_node(
             let mut record = LspDefinition {
                 name: name.clone(),
                 path: path.to_string(),
+                path_identity: String::new(),
                 line: name_atom.line.max(1),
                 kind: "property".to_string(),
                 directive: String::new(),
@@ -868,7 +870,7 @@ fn append_occurrence_from_definition(
 fn append_macro_use_occurrences(
     out: &mut Vec<LspOccurrence>,
     source_lines: &[Vec<char>],
-    path: &str,
+    document_path: (&str, &str),
     tokens: Vec<SourceToken>,
     used_ranges: &mut UsedRanges,
     macro_maps: &[HashMap<String, LspDefinition>],
@@ -888,11 +890,17 @@ fn append_macro_use_occurrences(
             continue;
         }
         let symbol_id = record
-            .map(definition_symbol_id)
+            .map(|record| {
+                if key(&record.scope) == "scene-local" {
+                    local_macro_symbol_id(&record.kind, document_path.1, &record.name)
+                } else {
+                    definition_symbol_id(record)
+                }
+            })
             .unwrap_or_else(|| macro_symbol_id("macro", &token.text));
         out.push(LspOccurrence {
             symbol_id,
-            path: path.to_string(),
+            path: document_path.0.to_string(),
             line: token.line,
             start_char: token.start_char,
             end_char: token.end_char,
@@ -1543,7 +1551,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
     append_macro_use_occurrences(
         &mut out,
         &source_lines,
-        path,
+        (path, path_identity),
         replace_tokens(replace_uses),
         &mut used_ranges,
         &[local_macro_defs.clone(), project_macro_defs.clone()],
@@ -1591,7 +1599,11 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
             continue;
         }
         out.push(LspOccurrence {
-            symbol_id: definition_symbol_id(&record),
+            symbol_id: definition_symbol_id_for_document(
+                &record,
+                path_identity,
+                &project.definitions,
+            ),
             path: path.to_string(),
             line,
             start_char: record.start_char as usize,
@@ -1639,6 +1651,7 @@ fn add_inline_inc_definitions(
     document_symbols: &mut Vec<LspDefinition>,
     sidecar: &IncSidecar,
     path: &str,
+    path_identity: &str,
 ) {
     for decl in &sidecar.decls {
         if decl.name.is_empty() {
@@ -1650,6 +1663,7 @@ fn add_inline_inc_definitions(
             LspDefinition {
                 name: decl.name.clone(),
                 path: path.to_string(),
+                path_identity: path_identity.to_string(),
                 line: decl.line.max(1),
                 kind: decl.kind.clone(),
                 directive: decl.directive.clone(),
@@ -1833,6 +1847,7 @@ pub fn lsp_scan_document(
         &mut document_symbols,
         &scene_sidecar,
         &path,
+        &path_identity,
     );
     let commands = scene_commands(&local_defs);
     let occurrences = collect_occurrences(CollectOccurrencesInput {

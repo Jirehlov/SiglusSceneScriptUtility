@@ -106,7 +106,7 @@ def _usage(out=None):
         "    --readall      For read.sav/global.sav: unlock read or engine-managed collection flags in-place with backup\n"
         "    --apply        For global.sav: apply same-directory global.txt to G/Z/cg_table/bgm_table/chrkoe with backup\n"
         "    --word         Count dialogue units for each .dat/.ss inside a .pck and write CSV only\n"
-        "    --payload      Compare normalized decoded/decompressed scn_bytes semantics for .pck/.dat comparisons (ignores string-pool ids when text matches); expensive\n"
+        "    --payload      Compare normalized scene runtime semantics for .pck/.dat comparisons, including bytecode and routing/property metadata; expensive\n"
         "    --angou VALUE  Key source for .pck/.dat, --word, or --gei: path, angou=text, or key=bytes\n"
         "    --gei          Analyze/compare Gameexe.dat\n"
         "\n"

@@ -150,6 +150,155 @@ def _build_read_flag_defs(read_flag_list):
     return out
 
 
+def _payload_metadata_trace(meta, str_list, pack_context):
+    out = []
+
+    def emit(op, **fields):
+        event = {"op": op}
+        event.update({key: value for key, value in fields.items() if value is not None})
+        out.append(event)
+
+    for idx, offset in enumerate(meta.get("label_list") or []):
+        emit("meta_label", id=int(idx), offset=int(offset))
+    for idx, offset in enumerate(meta.get("z_label_list") or []):
+        if int(offset) > 0:
+            emit("meta_z_label", id=int(idx), offset=int(offset))
+    command_labels = sorted(
+        meta.get("cmd_label_list") or [],
+        key=lambda item: (int(item[0]), int(item[1])),
+    )
+    for command_id, offset in command_labels:
+        emit("meta_command_label", id=int(command_id), offset=int(offset))
+
+    prop_list = list(meta.get("scn_prop_list") or [])
+    prop_names = list(meta.get("scn_prop_names") or [])
+    for idx in range(max(len(prop_list), len(prop_names))):
+        item = prop_list[idx] if idx < len(prop_list) else None
+        emit(
+            "meta_scene_property",
+            id=int(idx),
+            form=int(item[0]) if item is not None else None,
+            size=int(item[1]) if item is not None else None,
+            name=str(prop_names[idx]) if idx < len(prop_names) else None,
+        )
+
+    command_list = list(meta.get("scn_cmd_list") or [])
+    command_names = list(meta.get("scn_cmd_names") or [])
+    for idx in range(max(len(command_list), len(command_names))):
+        emit(
+            "meta_scene_command",
+            id=int(idx),
+            offset=int(command_list[idx]) if idx < len(command_list) else None,
+            name=str(command_names[idx]) if idx < len(command_names) else None,
+        )
+
+    for idx, name in enumerate(meta.get("call_prop_names") or []):
+        emit("meta_call_property", id=int(idx), name=str(name))
+
+    for idx, value in enumerate(meta.get("read_flag_list") or []):
+        emit("meta_read_flag", id=int(idx), value=int(value))
+
+    context = dict(pack_context or {})
+    emit(
+        "meta_pack_property_count",
+        value=int(context.get("inc_property_cnt", 0) or 0),
+    )
+    for item in context.get("inc_property_defs") or []:
+        if not isinstance(item, dict):
+            continue
+        emit(
+            "meta_pack_property",
+            id=int(item.get("id", 0) or 0),
+            form=int(item.get("form", 0) or 0),
+            size=int(item.get("size", 0) or 0),
+            name=str(item.get("name", "") or ""),
+        )
+
+    scene_names = list(context.get("scene_names") or [])
+    current_scene = context.get("payload_scene_name")
+    emit(
+        "meta_pack_command_count",
+        value=int(context.get("inc_command_cnt", 0) or 0),
+    )
+    for item in context.get("inc_command_defs") or []:
+        if not isinstance(item, dict):
+            continue
+        scene_no = int(item.get("scn_no", -1))
+        scene = str(scene_names[scene_no]) if 0 <= scene_no < len(scene_names) else None
+        if current_scene is not None and scene is not None and scene != current_scene:
+            continue
+        emit(
+            "meta_pack_command",
+            id=int(item.get("id", 0) or 0),
+            name=str(item.get("name", "") or ""),
+            scene=scene,
+            scene_no=scene_no if scene is None else None,
+            offset=int(item.get("offset", 0) or 0),
+        )
+    return out
+
+
+def _payload_namae_trace(meta, str_list, str_idx, trace):
+    candidates = []
+    for event in trace or []:
+        if not isinstance(event, dict) or event.get("op") != "CD_NAME":
+            continue
+        try:
+            candidates.append(int(event.get("_str_id")))
+        except (TypeError, ValueError):
+            continue
+    order = sorted(
+        range(len(str_idx or [])),
+        key=lambda idx: (
+            int(str_idx[idx][0]),
+            1 if int(str_idx[idx][1]) > 0 else 0,
+            idx,
+        ),
+    )
+    expected = []
+    seen = []
+    derivable = len(order) == len(str_list or [])
+    for candidate in candidates:
+        if candidate < 0 or candidate >= len(order):
+            derivable = False
+            continue
+        physical = order[candidate]
+        if physical < 0 or physical >= len(str_list or []):
+            derivable = False
+            continue
+        value = str(str_list[physical])
+        if value not in seen:
+            seen.append(value)
+            expected.append(candidate)
+    actual = []
+    for value in meta.get("namae_list") or []:
+        try:
+            actual.append(int(value))
+        except (TypeError, ValueError):
+            derivable = False
+    valid = derivable and actual == expected
+    values = []
+    if valid:
+        for candidate in candidates:
+            if 0 <= candidate < len(str_list or []):
+                value = str(str_list[candidate])
+                if value not in values:
+                    values.append(value)
+    else:
+        values = [
+            str(str_list[value]) if 0 <= value < len(str_list or []) else None
+            for value in actual
+        ]
+    encoded = ["V" if valid else "R"]
+    for idx, value in enumerate(values):
+        if value is None:
+            encoded.append(f"I{actual[idx]:d};")
+            continue
+        size = len(value.encode("utf-16-le", "surrogatepass")) // 2
+        encoded.extend((f"S{size:d}:", value))
+    return [{"op": "meta_namae", "text": "".join(encoded)}]
+
+
 def dat_disassembly_bundle(
     blob,
     dat_path=None,
@@ -218,6 +367,13 @@ def dat_disassembly_bundle(
             dis, trace = dis_res[0], dis_res[1]
         else:
             dis, trace = dis_res, []
+        if payload_trace:
+            runtime_trace = list(trace or [])
+            trace = (
+                _payload_metadata_trace(meta, str_list, pack_context)
+                + runtime_trace
+                + _payload_namae_trace(meta, str_list, str_idx, runtime_trace)
+            )
         return {
             "header": h,
             "meta": meta,
@@ -557,13 +713,16 @@ def scn_payload_hash_bundles(
 ):
     from .native_ops import scn_payload_hash_bundles_native
 
-    native = scn_payload_hash_bundles_native(blob, pack_context=pack_context)
+    payload_context = dict(pack_context or {})
+    if scene_name is not None:
+        payload_context["payload_scene_name"] = str(scene_name)
+    native = scn_payload_hash_bundles_native(blob, pack_context=payload_context)
     if native is not None:
         return native
     bundle = dat_disassembly_bundle(
         blob,
         dat_path=dat_path,
-        pack_context=pack_context,
+        pack_context=payload_context,
         scene_no=scene_no,
         scene_name=scene_name,
         emit_text=False,
@@ -1042,9 +1201,12 @@ def compare_dat(
                 payload_status = "text_only"
             else:
                 payload_status = "real_diff"
-            print("payload compare (normalized scn_bytes semantics): " + payload_status)
+            print(
+                "payload compare (normalized scene runtime semantics): "
+                + payload_status
+            )
         else:
-            print("payload compare (normalized scn_bytes semantics): unavailable")
+            print("payload compare (normalized scene runtime semantics): unavailable")
     if disam_out_dir or disam_to_input_dir:
         disam_stats = new_disam_stats()
         out1_dir = (

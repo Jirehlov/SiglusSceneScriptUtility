@@ -1270,6 +1270,7 @@ def compare_pck(
             pack_ctx2 = None
 
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=_id_sort_key)
+    same_pack_context = pack_ctx1 == pack_ctx2
     rows = []
     payload_cmp_counts = {"same": 0, "text_only": 0, "real_diff": 0, "-": 0}
     payload_jobs = []
@@ -1288,7 +1289,11 @@ def compare_pck(
                 and (r1[1] - r1[0]) == (r2[1] - r2[0])
                 and b1[r1[0] : r1[1]] == b2[r2[0] : r2[1]]
             )
-            if same_data and row_sid1 == row_sid2:
+            if (
+                same_data
+                and row_sid1 == row_sid2
+                and (not compare_payload or same_pack_context)
+            ):
                 continue
             s1z = (r1[1] - r1[0]) if r1 else 0
             s2z = (r2[1] - r2[0]) if r2 else 0
@@ -1300,7 +1305,7 @@ def compare_pck(
             sid_text = _scene_script_id_pair(row_sid1, row_sid2)
             if compare_payload:
                 payload_cmp = "-"
-                if same_data and r1 and r2:
+                if same_data and r1 and r2 and same_pack_context:
                     payload_cmp = "same"
                     payload_cmp_counts[payload_cmp] = (
                         int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1

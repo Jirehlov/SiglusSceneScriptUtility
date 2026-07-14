@@ -1148,6 +1148,12 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             }
             0
         }
+        AstPayload::DefProperty { form, .. } => {
+            if let Some(index) = &form.index {
+                visit_expression_stats(index, stats, codes);
+            }
+            0
+        }
         AstPayload::DefCommand {
             parameters, body, ..
         } => {

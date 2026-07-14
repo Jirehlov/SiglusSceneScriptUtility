@@ -25,7 +25,8 @@ fn lzss_pack(
     data: &[u8],
     suppress_empty_tail_group: bool,
 ) -> PyResult<Py<PyBytes>> {
-    let result = lzss::pack(data, suppress_empty_tail_group);
+    let input = data.to_vec();
+    let result = py.detach(move || lzss::pack(&input, suppress_empty_tail_group));
     Ok(PyBytes::new(py, &result).into())
 }
 
