@@ -1264,10 +1264,6 @@ class TutorialBuilder:
                     target_segment = segment_lookup.get(target_segment_id)
                     if not isinstance(target_segment, dict):
                         continue
-                    if _safe_text(target_segment.get("id")) == _safe_text(
-                        segment.get("id")
-                    ):
-                        continue
                     self._add_segment_edge(segment, target_segment, kind, label)
         for scene in self.scenes:
             scene["blocks"] = []
@@ -1712,11 +1708,7 @@ class TutorialBuilder:
         node_by_id: dict,
         merge_barrier: bool = False,
     ) -> None:
-        if (
-            source_id == target_id
-            or source_id not in node_by_id
-            or target_id not in node_by_id
-        ):
+        if source_id not in node_by_id or target_id not in node_by_id:
             return
         key = (
             _safe_text(source_id),
@@ -1762,6 +1754,7 @@ class TutorialBuilder:
         merged_nodes = []
         merged_node_by_id = {}
         visited = set()
+        consumed_edge_ids = set()
         for node_id in ordered_ids:
             if node_id in visited:
                 continue
@@ -1789,6 +1782,7 @@ class TutorialBuilder:
                     members[0].get("scene_no"), -2
                 ):
                     break
+                consumed_edge_ids.add(id(edge))
                 members.append(target_node)
                 visited.add(target_id)
                 cursor_id = target_id
@@ -1814,7 +1808,9 @@ class TutorialBuilder:
         for edge in edges:
             source_id = remap.get(_safe_text(edge.get("source")))
             target_id = remap.get(_safe_text(edge.get("target")))
-            if not source_id or not target_id or source_id == target_id:
+            if not source_id or not target_id:
+                continue
+            if source_id == target_id and id(edge) in consumed_edge_ids:
                 continue
             merged_grouped[(source_id, target_id)].append(edge)
         merged_edges = []
@@ -1909,6 +1905,7 @@ class TutorialBuilder:
                 for edge in edge_list
                 if not bool(edge.get("merge_barrier"))
                 if not bool(edge.get("cross_scene"))
+                if _safe_text(edge.get("target")) != source_id
                 and _int_or(
                     node_by_id.get(_safe_text(edge.get("target")), {}).get("scene_no"),
                     -1,

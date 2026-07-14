@@ -1652,14 +1652,27 @@ html.theme-dark .stage::before {
         const selected = state.selectedNode && (state.selectedNode.id === source.id || state.selectedNode.id === target.id);
         const label = String(edge.label || "");
         const color = selected ? "rgba(37, 99, 173, 0.9)" : edge.cross_scene ? "rgba(54, 178, 156, 0.7)" : "rgba(72, 116, 158, 0.58)";
+        const parallelCount = Math.max(1, Number(edge.parallelCount || 1));
+        const parallelIndex = Number(edge.parallelIndex || 0);
+        const parallelShift = parallelCount > 1 ? (parallelIndex - (parallelCount - 1) / 2) * 24 : 0;
+        if (source.id === target.id) {
+            const { width, height } = nodeSize(source);
+            const loopLift = Math.max(52, height * 1.9) + Math.abs(parallelShift);
+            return {
+                a: { x: a.x - width * 0.28, y: a.y - height * 0.45 },
+                b: { x: a.x + width * 0.28, y: a.y - height * 0.45 },
+                cx: a.x + parallelShift,
+                cy: a.y - loopLift,
+                selected,
+                label,
+                color,
+            };
+        }
         const mx = (a.x + b.x) / 2;
         const my = (a.y + b.y) / 2;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
         const baseBend = Math.min(36, Math.max(-36, (Number(source.scene_no || 0) - Number(target.scene_no || 0)) * 0.15));
-        const parallelCount = Math.max(1, Number(edge.parallelCount || 1));
-        const parallelIndex = Number(edge.parallelIndex || 0);
-        const parallelShift = parallelCount > 1 ? (parallelIndex - (parallelCount - 1) / 2) * 24 : 0;
         const bend = baseBend + parallelShift;
         const nx = -dy || 1;
         const ny = dx || 0;
