@@ -720,7 +720,10 @@ def _process_dat(
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
-    if not argv or argv[0] in ("-h", "--help", "help"):
+    if not argv:
+        _hint_help(sys.stdout)
+        return 2
+    if argv[0] in ("-h", "--help", "help"):
         _hint_help(sys.stdout)
         return 0
     try:

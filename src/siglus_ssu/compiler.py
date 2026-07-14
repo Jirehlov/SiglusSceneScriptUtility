@@ -1408,6 +1408,15 @@ def main(argv=None):
             sys.stderr.write("test_dir not found\n")
             return 1
     files, ini, inc, ss, scn_ssid_map = _scan_dir(inp)
+    if not a.gei and not a.dat_repack and not ss:
+        sys.stderr.write(
+            f"{prog}: error: input_dir must contain at least one .ss file\n"
+        )
+        return 1
+    if a.dat_repack and not inc:
+        sys.stderr.write(
+            f"{prog}: warning: --dat-repack found no .inc files; package-level include command metadata will be omitted\n"
+        )
     angou_key = windows_filename_key(ANGOU_DAT_NAME)
     key_txt_key = windows_filename_key(KEY_TXT_NAME)
     angou_name = next(

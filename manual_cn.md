@@ -252,12 +252,12 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | 参数 | 说明 |
 |---|---|
-| `<input_dir>` | 包含 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。 |
+| `<input_dir>` | 至少包含一个 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
 | `<output_pck \| output_dir>` | 输出路径。若参数指向一个已存在目录，则在其中创建 `Scene.pck`。否则该参数会按输出文件路径处理；即使一个不存在的路径不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
 | `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`）有意统一为 Windows CP932；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
 | `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
-| `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。这对于打包已经编译好的脚本非常有用。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
+| `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。同目录 `.inc` 会用于重建包级 include 命令元数据；没有 `.inc` 时继续打包，但会打印警告并省略该元数据。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。此模式不嵌入原始 source chunk，对应官方的“easy link”式输出。不能与 `--tmp` 同用。 |
 | `--serial` | 禁用多进程并行编译，并强制编译阶段按串行方式运行。默认启用并行编译。 |
@@ -287,7 +287,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 - `binary_sizes`
 - 最后统一打印的 `top5_*` 明细：`top5_read_flags_scenes`、`top5_string_pool_scenes`、`top5_dat_scenes`
 
-当本次运行不是普通的全量 scene 编译时，项目级详细统计会直接省略，不再打印 `n/a` 占位。这包括 `--tmp`、`--dat-repack`、`--test-shuffle`、`--gei`、没有 `.ss` 输入，以及部分编译或编译失败等情况。对应阶段实际运行过时，基础的耗时与文件数汇总仍会保留。
+当本次运行不是普通的全量 scene 编译时，项目级详细统计会直接省略，不再打印 `n/a` 占位。这包括 `--tmp`、`--dat-repack`、`--test-shuffle`、`--gei`，以及部分编译或编译失败等情况。对应阶段实际运行过时，基础的耗时与文件数汇总仍会保留。
 
 #### 示例
 
@@ -356,7 +356,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 
 | 参数 | 说明 |
 |---|---|
-| `<input_pck>` | 要提取的 `.pck` 文件路径。 |
+| `<input_pck>` | 要提取的 `.pck` 文件路径。加密场景数据必须能解析到有效 key；没有有效 key 时会在创建输出目录前失败。 |
 | `<input_dir>` | 启用 `--disam` 时，用来扫描 `.dat` 的目录路径。只处理该目录当前层的 `.dat` 文件。 |
 | `<output_dir>` | 提取文件的输出目录。对所有 `-x` 模式都可省略；省略时默认输出到输入文件所在目录，若输入本身是目录，则默认输出到该目录。 |
 | `--disam` | 对 `.pck` 输入时，额外写出 `<scene>.dat.txt` 反汇编。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
@@ -444,8 +444,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--disam` | 分析 `.dat` 文件或比较两个 `.dat` 文件时，将可读反汇编写在各自输入 `.dat` 同目录下的 `<scene>.dat.txt`。命令结束前会打印反汇编总耗时。如需重建 `.ss` 输出，请使用 `-x --decompile <input_pck>`。 |
 | `--readall` | 只允许用于 `read.sav` 和 `global.sav`。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，自动创建不覆盖旧文件的 `.bak` 备份，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
-| `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。可以与 `--angou` 同用。 |
-| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行规范化场景运行时语义比较，覆盖解码/解压后的 `scn_bytes`、有效控制流目标、场景属性布局、姓名/已读标志表，以及包级属性和命令路由元数据。字符串池 shuffle 的全部影响都会被规范化，包括 `str_id` 变化和依赖 shuffle 的 `namae_list` 去重结果；未使用且以零填充的 z-label 容量也会被忽略。说话人文本仍由规范化后的 `CD_NAME` 事件和逻辑姓名表覆盖。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本运行时差异的 `real_diff`，以及 payload 比较不可用时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。当 Rust 原生 payload scanner 可用时会自动使用 Rust，否则回退到 Python。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
+| `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。可以与 `--angou` 同用。加密场景数据没有有效 key 时，会在写出 CSV 前失败。 |
+| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 的比较额外执行规范化场景运行时语义比较，覆盖解码/解压后的 `scn_bytes`、有效控制流目标、场景属性布局、姓名/已读标志表，以及包级属性和命令路由元数据。字符串池 shuffle 的全部影响都会被规范化，包括 `str_id` 变化和依赖 shuffle 的 `namae_list` 去重结果；未使用且以零填充的 z-label 容量也会被忽略。说话人文本仍由规范化后的 `CD_NAME` 事件和逻辑姓名表覆盖。`.pck` 结果会区分 `same`、仅解析文本变化的 `text_only`、非文本运行时差异的 `real_diff`，以及其他原因导致 payload 无法解析时的 `-`；`.dat` 结果使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。加密场景数据无法用可用 key 解码时，payload 比较失败。当 Rust 原生 payload scanner 可用时会自动使用 Rust，否则回退到 Python。它比普通结构比较更耗时，但能更好地区分纯翻译文本变化与真实场景行为变化。 |
 | `--angou <path\|angou=text\|key=bytes>` | `.pck`/`.dat` 分析、`.pck` 台词统计、`Gameexe.dat` 分析或单独推导 key 时使用的显式 key 来源。`--angou` 必须是命令中的最后一个选项，必须使用 `--angou VALUE` 的分离写法，且值不能为空。裸值一律视为文件或目录路径；`暗号.dat` 字面量请写成 `angou=text`，16 字节 `exe_el` key 字面量请写成 `key=bytes`，例如 `key=0xA9,0x86,...`。解密时会按顺序尝试候选：显式 `--angou`；输入 `.pck` 内嵌 `暗号.dat`；当前目录；父目录。只有高优先级来源已经解析出 key、但该 key 未通过解密校验时，才会回落到低优先级候选；缺失、格式错误或无法产出 key 的显式来源会作为输入错误报告。若 `--angou` 使用裸路径，则本次请求禁用父目录探测，回落到当前目录后停止。目录探测不递归。每个被探测目录内部顺序为 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt`、`SiglusEngine*.exe`。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。该模式可以使用 `--angou`，但会拒绝其他 analyze 修饰选项，例如 `--disam`、`--readall`、`--apply`、`--payload` 和 `--word`。 |
 
@@ -1314,7 +1314,7 @@ siglus-ssu -t <input_pck> [output_json]
 
 | 参数 | 说明 |
 |---|---|
-| `<input_pck>` | 要分析的 `Scene.pck`。 |
+| `<input_pck>` | 要分析的 `Scene.pck`。加密场景数据必须能解析到有效 key，否则命令失败且不会写出 JSON 或 viewer。 |
 | `[output_json]` | 可选的输出 JSON 路径。不提供时，默认写到输入 `.pck` 同目录，文件名为 `<input_name>.tutorial.json`。 |
 
 #### 输出内容

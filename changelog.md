@@ -25,6 +25,7 @@ All notable changes to this project will be documented in this file.
 - Serialized writers of an explicit compile `--tmp` cache to prevent concurrent cache corruption.
 - Hardened CLI failures for invalid output directories, unsupported sound extraction inputs, textmap file types/decoding, and invalid analyze option combinations; sound trimming now uses an invocation-unique temporary directory without deleting pre-existing output content.
 - Fixed the PyPI README documentation links and aligned both manuals with per-file source encoding detection and the pure-Python fallback wheel.
+- Rejected normal scene compilation without any `.ss` input, warned when `--dat-repack` has no `.inc` metadata, returned failure when required encrypted scene data cannot be decoded, and made empty database, textmap, sound, and video invocations return usage errors.
 
 
 ## [v0.3.7] - 2026-07-07

@@ -2336,7 +2336,10 @@ def missing_input_file(path: str) -> bool:
 
 def parse_main_argv(argv, help_fn, flags=("--x", "--a", "--c")):
     args = list(sys.argv[1:] if argv is None else argv)
-    if (not args) or args[0] in ("-h", "--help", "help"):
+    if not args:
+        help_fn()
+        return None, args, 2
+    if args[0] in ("-h", "--help", "help"):
         help_fn()
         return None, args, 0
     mode, args = parse_mode_flag(args, flags=flags)

@@ -707,10 +707,24 @@ class TutorialBuilder:
     def _load_scenes(self) -> None:
         with open_read(self.input_pck) as file_obj:
             blob = file_obj.read()
-        if not pck.looks_like_pck(blob):
+        if not pck.looks_like_siglus_pck(blob):
             raise RuntimeError("input is not a supported .pck file")
+        hdr = pck.parse_i32_header(blob, pck.C.PACK_HDR_FIELDS, pck.C.PACK_HDR_SIZE)
+        scene_exe_el = pck.require_pck_scene_exe_el(
+            blob,
+            input_pck=self.input_pck,
+            hdr=hdr,
+            trace_key=True,
+        )
         for index, item in enumerate(
-            pck.iter_pck_scene_dat_items(blob, input_pck=self.input_pck) or (),
+            pck.iter_pck_scene_dat_items(
+                blob,
+                input_pck=self.input_pck,
+                hdr=hdr,
+                require_exe=True,
+                scene_exe_el=scene_exe_el,
+            )
+            or (),
             1,
         ):
             scene_name = _safe_text(item.get("scene_name")) or f"scene#{index:d}"

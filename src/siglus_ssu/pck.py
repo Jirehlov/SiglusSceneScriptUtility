@@ -624,6 +624,36 @@ def _resolve_pck_scene_exe_el(
     return b""
 
 
+def require_pck_scene_exe_el(
+    blob: bytes,
+    input_pck: str = "",
+    hdr=None,
+    scn_data=None,
+    explicit_angou: str = "",
+    trace_key: bool = False,
+):
+    if not hdr:
+        hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    if int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0) == 0:
+        return b""
+    if scn_data is None:
+        _, scn_data = _read_pck_scene_lists(blob, hdr=hdr)
+    exe_el = _resolve_pck_scene_exe_el(
+        blob,
+        input_pck=input_pck,
+        hdr=hdr,
+        scn_data=scn_data,
+        explicit_angou=explicit_angou,
+        trace_key=trace_key,
+    )
+    if exe_el:
+        return exe_el
+    label = str(input_pck or "input PCK")
+    raise RuntimeError(
+        f"{label}: encrypted scene data requires a valid exe_el key source"
+    )
+
+
 def iter_pck_scene_dat_items(
     blob: bytes,
     input_pck: str = "",
@@ -631,6 +661,7 @@ def iter_pck_scene_dat_items(
     require_exe: bool = False,
     explicit_angou: str = "",
     trace_key: bool = False,
+    scene_exe_el=None,
 ):
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         return
@@ -647,14 +678,17 @@ def iter_pck_scene_dat_items(
         )
     except Exception:
         pack_context = {}
-    exe_el = _resolve_pck_scene_exe_el(
-        blob,
-        input_pck=input_pck,
-        hdr=hdr,
-        scn_data=scn_data,
-        explicit_angou=explicit_angou,
-        trace_key=trace_key,
-    )
+    if scene_exe_el is None:
+        exe_el = _resolve_pck_scene_exe_el(
+            blob,
+            input_pck=input_pck,
+            hdr=hdr,
+            scn_data=scn_data,
+            explicit_angou=explicit_angou,
+            trace_key=trace_key,
+        )
+    else:
+        exe_el = bytes(scene_exe_el)
     for scn_no, (nm, scn_blob) in enumerate(zip(scn_names, scn_data)):
         if not nm:
             continue
@@ -768,6 +802,7 @@ def _pck_cd_word_rows(
     hdr=None,
     explicit_angou: str = "",
     trace_key: bool = False,
+    scene_exe_el=None,
 ) -> dict:
     from . import dat as _dat
 
@@ -785,6 +820,8 @@ def _pck_cd_word_rows(
             hdr=hdr,
             explicit_angou=explicit_angou,
             trace_key=trace_key,
+            require_exe=True,
+            scene_exe_el=scene_exe_el,
         )
         or []
     ):
@@ -948,12 +985,23 @@ def pck_word_count(
         print("unsupported --word input: only Siglus .pck is supported")
         return 1
     hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    try:
+        scene_exe_el = require_pck_scene_exe_el(
+            blob,
+            input_pck=input_pck,
+            hdr=hdr,
+            explicit_angou=explicit_angou,
+            trace_key=True,
+        )
+    except RuntimeError as exc:
+        sys.stderr.write(str(exc) + "\n")
+        return 1
     dat_stats = _pck_cd_word_rows(
         blob,
         input_pck=input_pck,
         hdr=hdr,
         explicit_angou=explicit_angou,
-        trace_key=True,
+        scene_exe_el=scene_exe_el,
     )
     ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
     rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
@@ -1240,22 +1288,26 @@ def compare_pck(
     pack_ctx1 = None
     pack_ctx2 = None
     if compare_payload:
-        exe_el1 = _resolve_pck_scene_exe_el(
-            b1,
-            input_pck=str(p1 or ""),
-            hdr=h1,
-            scn_data=data1,
-            explicit_angou=explicit_angou,
-            trace_key=True,
-        )
-        exe_el2 = _resolve_pck_scene_exe_el(
-            b2,
-            input_pck=str(p2 or ""),
-            hdr=h2,
-            scn_data=data2,
-            explicit_angou=explicit_angou,
-            trace_key=True,
-        )
+        try:
+            exe_el1 = require_pck_scene_exe_el(
+                b1,
+                input_pck=str(p1 or ""),
+                hdr=h1,
+                scn_data=data1,
+                explicit_angou=explicit_angou,
+                trace_key=True,
+            )
+            exe_el2 = require_pck_scene_exe_el(
+                b2,
+                input_pck=str(p2 or ""),
+                hdr=h2,
+                scn_data=data2,
+                explicit_angou=explicit_angou,
+                trace_key=True,
+            )
+        except RuntimeError as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return 1
         try:
             pack_ctx1 = _build_disam_pack_context(
                 b1, hdr=h1, meta={"scn_names": names1}
@@ -1791,6 +1843,17 @@ def extract_pck(
         sys.stderr.write("Invalid pck\n")
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    try:
+        scene_exe_el = require_pck_scene_exe_el(
+            dat,
+            input_pck=input_pck,
+            hdr=hdr,
+            explicit_angou=explicit_angou,
+            trace_key=True,
+        )
+    except RuntimeError as exc:
+        sys.stderr.write(str(exc) + "\n")
+        return 1
     out_dir = os.path.join(
         output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
     )
@@ -1810,20 +1873,6 @@ def extract_pck(
                 write_bytes(out_path, raw)
         except Exception as e:
             sys.stderr.write(f"warning: failed to extract original sources: {e}\n")
-    if int(hdr.get("scn_data_exe_angou_mod", 0) or 0) != 0:
-        _, scn_data_for_key = _read_pck_scene_lists(dat, hdr=hdr)
-        exe_el = _resolve_pck_scene_exe_el(
-            dat,
-            input_pck=input_pck,
-            hdr=hdr,
-            scn_data=scn_data_for_key,
-            explicit_angou=explicit_angou,
-            trace_key=True,
-        )
-        if not exe_el:
-            sys.stderr.write(
-                "warning: scn_data_exe_angou_mod=1 but no valid exe_el key source was found; scene data may remain encrypted.\n"
-            )
     D = None
     disam_stats = None
     dat_items = []
@@ -1837,7 +1886,9 @@ def extract_pck(
             dat,
             input_pck=input_pck,
             hdr=hdr,
+            require_exe=True,
             explicit_angou=explicit_angou,
+            scene_exe_el=scene_exe_el,
         )
         or []
     ):

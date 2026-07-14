@@ -153,9 +153,11 @@ def analyze_file(
             )
             if looks_like_siglus_dat(decoded_blob):
                 blob = decoded_blob
-            elif explicit_angou:
-                sys.stderr.write("failed to decode scene .dat with --angou\n")
-                return 1
+        if not looks_like_siglus_dat(blob):
+            sys.stderr.write(
+                f"failed to decode scene .dat with available key sources: {path}\n"
+            )
+            return 1
         return dat.dat(
             path,
             blob,
@@ -318,10 +320,16 @@ def compare_files(
                 )
                 if looks_like_siglus_dat(decoded_b2):
                     b2 = decoded_b2
-            if explicit_angou and (
-                not looks_like_siglus_dat(b1) or not looks_like_siglus_dat(b2)
-            ):
-                sys.stderr.write("failed to decode scene .dat with --angou\n")
+            failed_paths = []
+            if not looks_like_siglus_dat(b1):
+                failed_paths.append(p1)
+            if not looks_like_siglus_dat(b2):
+                failed_paths.append(p2)
+            if failed_paths:
+                for failed_path in failed_paths:
+                    sys.stderr.write(
+                        f"failed to decode scene .dat with available key sources: {failed_path}\n"
+                    )
                 return 1
         return dat.compare_dat(
             p1,
