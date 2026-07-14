@@ -262,6 +262,20 @@ def _path_identity(path: str) -> str:
     return windows_filename_key(os.path.abspath(path))
 
 
+def _diagnostics_for_path(
+    diagnostics: dict[str, list[SourceDiagnostic]], path: str
+) -> list[SourceDiagnostic]:
+    path = os.path.abspath(path)
+    direct = diagnostics.get(path)
+    if direct is not None:
+        return direct
+    key = _path_identity(path)
+    for diagnostic_path, items in diagnostics.items():
+        if _path_identity(diagnostic_path) == key:
+            return items
+    return []
+
+
 def _overlay_text_for_path(overlays: dict[str, str], path: str) -> str | None:
     norm = os.path.abspath(path)
     if norm in overlays:
@@ -1374,7 +1388,10 @@ def _scan_worker_count() -> int:
         cpu_count = os.process_cpu_count()
     except AttributeError:
         cpu_count = os.cpu_count()
-    return max(1, int(cpu_count or 2) // 2)
+    worker_count = max(1, int(cpu_count or 2) // 2)
+    if sys.platform == "win32":
+        worker_count = min(worker_count, 61)
+    return worker_count
 
 
 def _init_scan_worker(
@@ -4610,7 +4627,7 @@ class SSLanguageServer:
             and doc.analysis_signature == signature
         ):
             return doc.analysis
-        extras = list(link_entry.diagnostics.get(os.path.abspath(doc.path), []))
+        extras = list(_diagnostics_for_path(link_entry.diagnostics, doc.path))
         if not extras:
             doc.analysis = base
         else:
