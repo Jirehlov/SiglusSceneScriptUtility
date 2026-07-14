@@ -3,29 +3,18 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.4.0] - TBA
+## [v0.4.0] - 2026-07-14
 - Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
-- Added LICENSE.
-- Changed internal cache, analysis, and payload digests from MD5/SHA-1 to SHA-256, invalidating old compile and LSP caches without compatibility fallback.
-- Fixed G00 type2 merging to preserve straight-alpha RGB and use the center coordinates of the selected cut.
-- Changed `--test-shuffle` to return failure when later scene verification does not match, while still building the requested output.
-- Changed `siglus-ssu test` success results from `PASS` to `EXACT` for byte-identical `.pck` files and `PAYLOAD_SAME` for different `.pck` bytes with matching normalized payloads.
-- Changed KOE character directories to use distinct percent escaping for invalid path characters, trailing spaces or dots, reserved names, and empty names.
-- Fixed `.ss` text-map identity and current-span resolution, rejected duplicate or overlapping replacements before write-back, and reduced overlap validation to `O(n log n)`.
-- Fixed disassembly table isolation across const profiles, removed the duplicate decompiler element cache, and made automatic compile temporary directories unique across concurrent runs.
-- Changed language patch presets to verify complete changes on a working copy and write atomically, with explicit `--allow-partial` recovery behavior and symbolic-link rejection.
-- Added six-field JSON language configurations and byte-identical language-patch reversion, moved runtime strings into a dedicated read-only PE section, stored configuration and undo data in an EOF overlay, synchronized compiler-inlined literal lengths when retargeting strings, and fixed charset filtering for both EAX- and ESI-based `ENUMLOGFONT` loops.
-- Changed DBS creation to reject unencodable strings, fixed TCR type-zero parsing and expected CLI format errors, and made PCK sample caches verify Git blob hashes without obsolete sidecar metadata.
-- Documented case-insensitive scene lookup and case-preserving embedded source metadata, made runtime input reads prefer exact paths before case-insensitive fallback, rejected case-colliding directory enumeration under Windows filename rules, and included the `siglus-ssu` version in persistent compile-cache compatibility checks.
-- Rejected analyze and DBS options that do not apply to the selected input or mode instead of silently ignoring them.
-- Aligned the Python and Rust frontends with the official compiler for scene-local commands, exact Windows CP932 decoding/encoding, and CP932 double-byte character classification.
-- Separated source decoding from compilation, accepted arbitrary explicit Python codecs, made both compile backends consume the same normalized Unicode snapshot, and kept CP932/UTF-8 lexical behavior identical to the official Japanese compiler.
-- Removed source `.ss` textmap export and apply; textmap now exports compiled scene `.dat` string tables by default and applies them with `--apply` while preserving encryption and LZSS state.
-- Made native LSP token validation and overlap tracking linear or logarithmic instead of quadratic on large multi-line and single-line documents, bounded its casefold cache, and preserved invalid-character diagnostics and nested macro occurrences.
-- Serialized writers of an explicit compile `--tmp` cache to prevent concurrent cache corruption.
-- Hardened CLI failures for invalid output directories, unsupported sound extraction inputs, textmap file types/decoding, and invalid analyze option combinations; sound trimming now uses an invocation-unique temporary directory without deleting pre-existing output content.
-- Fixed the PyPI README documentation links and aligned both manuals with per-file source encoding detection and the pure-Python fallback wheel.
-- Rejected normal scene compilation without any `.ss` input, warned when `--dat-repack` has no `.inc` metadata, returned failure when required encrypted scene data cannot be decoded, and made empty database, textmap, sound, and video invocations return usage errors.
+- Added reversible language patching with six-field JSON configurations, atomic full-patch application, byte-identical `--revert`, and explicit `--allow-partial` recovery.
+- Added dual-license metadata and a `LICENSE` file for the Unlicense or 0BSD.
+- Replaced source `.ss` text mapping with compiled scene `.dat` text mapping; `--apply` now preserves the original encryption and LZSS state.
+- Aligned the Python and Rust compilers with official scene-local command and Windows CP932 behavior, made both backends compile the same normalized Unicode source snapshot, and accepted explicit Python codecs through `--charset`.
+- Migrated persistent compile and LSP caches plus analysis and payload digests to SHA-256; existing caches are invalidated, and compile-cache compatibility now includes the package version.
+- Changed `siglus-ssu test` results to `EXACT` and `PAYLOAD_SAME`; `--test-shuffle` now returns failure when later-scene verification fails while retaining the built output.
+- Removed quadratic native LSP token-validation and overlap-tracking paths, bounded its casefold cache, serialized writers of an explicit compile `--tmp` cache, and hardened Windows-compatible path lookup and collision handling.
+- Tightened failure handling for missing scene input, undecodable required encrypted data, incompatible options, invalid output directories, and failed `-a --disam` writes.
+- Fixed G00 type2 merging to preserve straight-alpha RGB and use the selected cut's center coordinates.
+- Fixed tutorial graph generation and viewer rendering for self-loops, cyclic routes, and zero-valued scene identifiers.
 
 
 ## [v0.3.7] - 2026-07-07

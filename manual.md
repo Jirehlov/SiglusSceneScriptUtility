@@ -1503,7 +1503,20 @@ The rules are:
 1. `#ifdef` and `#elseifdef` test whether the name belongs to the current `name_set`; they do not evaluate a numeric truth value;
 2. the maximum nesting depth is 15; entering depth 16 is an error;
 3. unmatched `#else`, `#elseifdef`, and `#endif`, and an unterminated `#ifdef`, are ill-formed;
-4. `<word>` is not parsed by the ordinary scene identifier rule but by a wider `word-ex` rule: the first character may be an ASCII letter, a fullwidth/double-byte character, `_`, or `@`, and later characters may additionally include digits.
+4. `<word>` is not parsed by the ordinary scene identifier rule but by a wider `word-ex` rule: the first character may be an ASCII letter, a fullwidth/double-byte character, `_`, or `@`, and later characters may additionally include digits;
+5. for compatibility with the official Siglus compiler, nested conditions do not inherit exclusion from enclosing conditions. Each level records only its own name test, and character emission checks only the innermost level. `#elseifdef` and `#else` likewise update only their current level.
+
+For example:
+
+```text
+#ifdef outer_missing
+#ifdef inner_present
+kept
+#endif
+#endif
+```
+
+If `outer_missing` is absent but `inner_present` belongs to `name_set`, `kept` remains in the processed text. This differs from conventional preprocessor semantics but is normative official-compatibility behavior. A compatible implementation must preserve it rather than combine the inner state with the enclosing false state.
 
 #### `#inc_start` / `#inc_end`
 

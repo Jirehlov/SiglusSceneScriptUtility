@@ -1862,27 +1862,26 @@ class TutorialBuilder:
     def _prune_shortcut_edges(self, nodes: list[dict], edges: list[dict]) -> list[dict]:
         node_by_id = {_safe_text(node.get("id")): node for node in nodes}
         outgoing = defaultdict(list)
-        for edge in edges:
-            outgoing[_safe_text(edge.get("source"))].append(edge)
-        reachable_cache = {}
+        for edge_index, edge in enumerate(edges):
+            outgoing[_safe_text(edge.get("source"))].append((edge_index, edge))
+        keep_flags = [True] * len(edges)
 
-        def descendants(start_id: str) -> set[str]:
-            cache = reachable_cache.get(start_id)
-            if cache is not None:
-                return cache
+        def reachable_without(
+            start_id: str, target_id: str, skipped_index: int
+        ) -> bool:
+            if start_id == target_id:
+                return True
             start_node = node_by_id.get(start_id)
             if not isinstance(start_node, dict):
-                reachable_cache[start_id] = set()
-                return reachable_cache[start_id]
+                return False
             scene_no = _int_or(start_node.get("scene_no"), -1)
-            seen = set()
+            seen = {start_id}
             queue = deque([start_id])
             while queue:
                 current_id = queue.popleft()
-                if current_id in seen:
-                    continue
-                seen.add(current_id)
-                for edge in outgoing.get(current_id, ()):
+                for edge_index, edge in outgoing.get(current_id, ()):
+                    if edge_index == skipped_index or not keep_flags[edge_index]:
+                        continue
                     if bool(edge.get("cross_scene")):
                         continue
                     next_id = _safe_text(edge.get("target"))
@@ -1891,18 +1890,17 @@ class TutorialBuilder:
                         continue
                     if _int_or(next_node.get("scene_no"), -2) != scene_no:
                         continue
+                    if next_id == target_id:
+                        return True
                     if next_id not in seen:
+                        seen.add(next_id)
                         queue.append(next_id)
-            seen.discard(start_id)
-            reachable_cache[start_id] = seen
-            return seen
+            return False
 
-        keep_flags = [True] * len(edges)
-        edge_index = {id(edge): idx for idx, edge in enumerate(edges)}
         for source_id, edge_list in outgoing.items():
-            scene_edges = [
-                edge
-                for edge in edge_list
+            candidate_indices = [
+                edge_index
+                for edge_index, edge in edge_list
                 if not bool(edge.get("merge_barrier"))
                 if not bool(edge.get("cross_scene"))
                 if _safe_text(edge.get("target")) != source_id
@@ -1912,19 +1910,27 @@ class TutorialBuilder:
                 )
                 == _int_or(node_by_id.get(source_id, {}).get("scene_no"), -2)
             ]
-            if len(scene_edges) < 2:
-                continue
-            for edge in scene_edges:
-                target_id = _safe_text(edge.get("target"))
-                other_targets = [
-                    _safe_text(other_edge.get("target"))
-                    for other_edge in scene_edges
-                    if other_edge is not edge
+            for edge_index in candidate_indices:
+                if not keep_flags[edge_index]:
+                    continue
+                other_indices = [
+                    other_index
+                    for other_index in candidate_indices
+                    if other_index != edge_index and keep_flags[other_index]
                 ]
-                if other_targets and all(
-                    target_id in descendants(other_id) for other_id in other_targets
+                if not other_indices:
+                    continue
+                edge = edges[edge_index]
+                target_id = _safe_text(edge.get("target"))
+                if all(
+                    reachable_without(
+                        _safe_text(edges[other_index].get("target")),
+                        target_id,
+                        edge_index,
+                    )
+                    for other_index in other_indices
                 ):
-                    keep_flags[edge_index[id(edge)]] = False
+                    keep_flags[edge_index] = False
         return [edge for idx, edge in enumerate(edges) if keep_flags[idx]]
 
     def _assign_components(self, nodes: list[dict], edges: list[dict]) -> list[dict]:

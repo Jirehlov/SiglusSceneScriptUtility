@@ -1503,7 +1503,20 @@ scene 文本与 `.inc` 文本都支持：
 1. `#ifdef` 与 `#elseifdef` 测试的是“名字是否属于当前 `name_set`”，而不是某个数值真假；
 2. 条件嵌套最大深度为 15 层；当进入第 16 层时应报错；
 3. 缺失配对的 `#else`、`#elseifdef`、`#endif`，以及未闭合的 `#ifdef`，均是不良构；
-4. `<word>` 的提取方式不是普通 scene 标识符规则，而是一个更宽松的 `word-ex` 规则：首字符可为 ASCII 字母、全角/双字节字符、`_`、`@`；后续字符还可再包含数字。
+4. `<word>` 的提取方式不是普通 scene 标识符规则，而是一个更宽松的 `word-ex` 规则：首字符可为 ASCII 字母、全角/双字节字符、`_`、`@`；后续字符还可再包含数字；
+5. 为兼容官方 Siglus 编译器，嵌套条件不会继承外层条件的排除状态。每一层只记录自身的名字测试结果，字符输出也只检查最内层状态；`#elseifdef` 与 `#else` 同样只更新当前层。
+
+例如：
+
+```text
+#ifdef outer_missing
+#ifdef inner_present
+kept
+#endif
+#endif
+```
+
+当 `outer_missing` 不存在，而 `inner_present` 属于 `name_set` 时，`kept` 仍会保留在处理后的文本中。这不同于传统预处理器语义，但属于规范性的官方兼容行为。兼容实现必须保留该行为，不得把内层状态与外层假状态合并。
 
 #### `#inc_start` / `#inc_end`
 

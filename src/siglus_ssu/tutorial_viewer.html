@@ -1654,7 +1654,7 @@ html.theme-dark .stage::before {
         const color = selected ? "rgba(37, 99, 173, 0.9)" : edge.cross_scene ? "rgba(54, 178, 156, 0.7)" : "rgba(72, 116, 158, 0.58)";
         const parallelCount = Math.max(1, Number(edge.parallelCount || 1));
         const parallelIndex = Number(edge.parallelIndex || 0);
-        const parallelShift = parallelCount > 1 ? (parallelIndex - (parallelCount - 1) / 2) * 24 : 0;
+        const parallelShift = parallelCount > 1 ? (parallelIndex - (parallelCount - 1) / 2) * 48 : 0;
         if (source.id === target.id) {
             const { width, height } = nodeSize(source);
             const loopLift = Math.max(52, height * 1.9) + Math.abs(parallelShift);
@@ -1672,16 +1672,38 @@ html.theme-dark .stage::before {
         const my = (a.y + b.y) / 2;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
-        const baseBend = Math.min(36, Math.max(-36, (Number(source.scene_no || 0) - Number(target.scene_no || 0)) * 0.15));
+        const sourceKey = String(source.id);
+        const targetKey = String(target.id);
+        const canonicalForward = sourceKey <= targetKey;
+        const canonicalSource = canonicalForward ? source : target;
+        const canonicalTarget = canonicalForward ? target : source;
+        const direction = canonicalForward ? 1 : -1;
+        const baseBend = Math.min(36, Math.max(-36, (Number(canonicalSource.scene_no || 0) - Number(canonicalTarget.scene_no || 0)) * 0.15));
         const bend = baseBend + parallelShift;
-        const nx = -dy || 1;
-        const ny = dx || 0;
+        const nx = -dy * direction;
+        const ny = dx * direction;
         const nlen = Math.hypot(nx, ny) || 1;
         const cx = mx + (nx / nlen) * bend;
         const cy = my + (ny / nlen) * bend;
+        const sourceSize = nodeSize(source);
+        const targetSize = nodeSize(target);
+        const sourceRadius = Math.max(sourceSize.width, sourceSize.height) * 0.58;
+        const targetRadius = Math.max(targetSize.width, targetSize.height) * 0.58;
+        const startDx = cx - a.x;
+        const startDy = cy - a.y;
+        const startLength = Math.hypot(startDx, startDy) || 1;
+        const endDx = b.x - cx;
+        const endDy = b.y - cy;
+        const endLength = Math.hypot(endDx, endDy) || 1;
         return {
-            a,
-            b,
+            a: {
+                x: a.x + (startDx / startLength) * sourceRadius,
+                y: a.y + (startDy / startLength) * sourceRadius,
+            },
+            b: {
+                x: b.x - (endDx / endLength) * targetRadius,
+                y: b.y - (endDy / endLength) * targetRadius,
+            },
             cx,
             cy,
             selected,
@@ -2582,7 +2604,9 @@ html.theme-dark .stage::before {
         }));
         const parallelGroups = new Map();
         for (const edge of state.edges) {
-            const key = `${String(edge.source || "")}\u0000${String(edge.target || "")}`;
+            const source = String(edge.source || "");
+            const target = String(edge.target || "");
+            const key = source <= target ? `${source}\u0000${target}` : `${target}\u0000${source}`;
             if (!parallelGroups.has(key)) {
                 parallelGroups.set(key, []);
             }
@@ -2591,10 +2615,14 @@ html.theme-dark .stage::before {
         for (const group of parallelGroups.values()) {
             group
                 .sort((a, b) => [
+                    String(a.source || ""),
+                    String(a.target || ""),
                     String(a.label || ""),
                     String(a.kind || ""),
                     String(a.id || ""),
                 ].join("\u0000").localeCompare([
+                    String(b.source || ""),
+                    String(b.target || ""),
                     String(b.label || ""),
                     String(b.kind || ""),
                     String(b.id || ""),

@@ -940,6 +940,9 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
         print()
         print(f"wrote: {out_txt}")
         write_disam_totals(sys.stdout, disam_stats)
+    elif disam_out_dir:
+        print(f"failed to write: {path}.txt")
+        return 1
     return 0
 
 
@@ -1228,4 +1231,6 @@ def compare_dat(
         else:
             print(f"failed to write: {p2}.txt")
         write_disam_totals(sys.stdout, disam_stats)
+        if not out1 or not out2:
+            return 1
     return 0
