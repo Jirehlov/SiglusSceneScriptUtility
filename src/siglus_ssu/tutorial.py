@@ -1187,6 +1187,7 @@ class TutorialBuilder:
                 if block["id"] in scene_block_to_segment:
                     continue
                 members = [block]
+                member_ids = {block["id"]}
                 cursor = block
                 while True:
                     if _safe_text(cursor.get("choice_option")):
@@ -1205,11 +1206,12 @@ class TutorialBuilder:
                         break
                     if _safe_text(next_block.get("choice_option")):
                         break
-                    if target_id in scene_block_to_segment:
+                    if target_id in member_ids or target_id in scene_block_to_segment:
                         break
                     if len(unique_incoming.get(target_id, ())) != 1:
                         break
                     members.append(next_block)
+                    member_ids.add(target_id)
                     cursor = next_block
                 start_line, end_line = _member_line_span(members)
                 segment = {
@@ -1962,13 +1964,6 @@ class TutorialBuilder:
                 for next_id in sorted(adjacency.get(current_id, ())):
                     if next_id not in component_by_node:
                         queue.append(next_id)
-            member_set = set(members)
-            component_edges = [
-                edge
-                for edge in edges
-                if _safe_text(edge.get("source")) in member_set
-                and _safe_text(edge.get("target")) in member_set
-            ]
             scene_ids = sorted(
                 {
                     _safe_text(node_by_id[member_id].get("scene_id"))
@@ -1979,11 +1974,16 @@ class TutorialBuilder:
                 {
                     "id": f"component:{component_index + 1:d}",
                     "node_count": len(members),
-                    "edge_count": len(component_edges),
+                    "edge_count": 0,
                     "scene_count": len(scene_ids),
                     "scene_ids": scene_ids,
                 }
             )
+        for edge in edges:
+            source_component = component_by_node.get(_safe_text(edge.get("source")))
+            target_component = component_by_node.get(_safe_text(edge.get("target")))
+            if source_component is not None and source_component == target_component:
+                components[source_component]["edge_count"] += 1
         for node_id, component_index in component_by_node.items():
             node = node_by_id[node_id]
             component = components[component_index]

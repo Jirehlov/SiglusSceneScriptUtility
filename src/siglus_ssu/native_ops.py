@@ -26,6 +26,8 @@ try:
     _native_find_shuffle_seed_first = getattr(
         native_accel, "find_shuffle_seed_first", None
     )
+    _native_find_rand_skip = getattr(native_accel, "find_rand_skip", None)
+    _native_palette_bgra = getattr(native_accel, "palette_bgra", None)
     _native_compile_backend_available = getattr(
         native_accel, "compile_backend_available", None
     )
@@ -43,6 +45,8 @@ except (ImportError, AttributeError):
     _native_lzss32_unpack = None
     _native_msvcrand_shuffle_inplace = None
     _native_find_shuffle_seed_first = None
+    _native_find_rand_skip = None
+    _native_palette_bgra = None
     _native_compile_backend_available = None
     _native_compile_project = None
     _native_lsp_build_project = None
@@ -728,6 +732,70 @@ def msvcrt_rand15(state: int):
 def msvcrt_rand_byte(state: int):
     s, v = msvcrt_rand15(state)
     return s, v & 0xFF
+
+
+def _py_find_rand_skip(
+    seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
+):
+    seed = int(seed) & 0xFFFFFFFF
+    start_skip = max(0, int(start_skip))
+    pat = bytes(pattern)
+    if not pat:
+        return start_skip
+    max_scan = int(max_scan)
+    if max_scan <= 0:
+        return None
+    pat_len = len(pat)
+    state = seed
+    buf = bytearray()
+    pos = -1
+    target_end = start_skip + max_scan + pat_len - 1
+    while pos + 1 < target_end:
+        state, value = msvcrt_rand_byte(state)
+        pos += 1
+        buf.append(value)
+        if len(buf) > pat_len:
+            del buf[0]
+        if len(buf) != pat_len:
+            continue
+        start_pos = pos - (pat_len - 1)
+        if start_pos >= start_skip and bytes(buf) == pat:
+            return start_pos
+    return None
+
+
+def find_rand_skip(
+    seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
+):
+    seed = int(seed) & 0xFFFFFFFF
+    start_skip = max(0, int(start_skip))
+    pattern = bytes(pattern)
+    max_scan = int(max_scan)
+    if not pattern:
+        return start_skip
+    if max_scan <= 0:
+        return None
+    if _USE_NATIVE and _native_find_rand_skip is not None:
+        try:
+            return _native_find_rand_skip(seed, pattern, start_skip, max_scan)
+        except (OverflowError, ValueError):
+            pass
+    return _py_find_rand_skip(seed, pattern, start_skip, max_scan)
+
+
+def _py_palette_bgra(palette, indices: bytes) -> bytes:
+    out = bytearray(len(indices) * 4)
+    offset = 0
+    for index in indices:
+        struct.pack_into("<I", out, offset, palette[index])
+        offset += 4
+    return bytes(out)
+
+
+def palette_bgra(palette, indices: bytes) -> bytes:
+    if _USE_NATIVE and _native_palette_bgra is not None:
+        return _native_palette_bgra(palette, indices)
+    return _py_palette_bgra(palette, indices)
 
 
 def _py_msvcrand_shuffle_inplace(state: int, a) -> int:

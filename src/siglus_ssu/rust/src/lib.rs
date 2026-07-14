@@ -7,7 +7,7 @@ mod smd5;
 mod tile;
 mod xor;
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOverflowError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use pyo3::types::PyDict;
@@ -146,6 +146,80 @@ fn msvc_next(x: u32) -> u32 {
 fn msvc_rand15(x: &mut u32) -> u32 {
     *x = msvc_next(*x);
     (*x >> 16) & 0x7FFF
+}
+
+#[pyfunction]
+fn find_rand_skip(
+    py: Python<'_>,
+    seed: u32,
+    pattern: &[u8],
+    start_skip: usize,
+    max_scan: usize,
+) -> PyResult<Option<usize>> {
+    if pattern.is_empty() {
+        return Ok(Some(start_skip));
+    }
+    if max_scan == 0 {
+        return Ok(None);
+    }
+    let scan_len = max_scan
+        .checked_add(pattern.len() - 1)
+        .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
+    start_skip
+        .checked_add(max_scan - 1)
+        .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
+    let pattern = pattern.to_vec();
+    Ok(py.detach(move || {
+        let mut prefix = vec![0usize; pattern.len()];
+        let mut matched = 0usize;
+        for i in 1..pattern.len() {
+            while matched > 0 && pattern[i] != pattern[matched] {
+                matched = prefix[matched - 1];
+            }
+            if pattern[i] == pattern[matched] {
+                matched += 1;
+            }
+            prefix[i] = matched;
+        }
+        let mut state = seed;
+        for _ in 0..start_skip {
+            state = msvc_next(state);
+        }
+        matched = 0;
+        for pos in 0..scan_len {
+            state = msvc_next(state);
+            let value = ((state >> 16) & 0xFF) as u8;
+            while matched > 0 && value != pattern[matched] {
+                matched = prefix[matched - 1];
+            }
+            if value == pattern[matched] {
+                matched += 1;
+            }
+            if matched == pattern.len() {
+                return Some(start_skip + pos + 1 - pattern.len());
+            }
+        }
+        None
+    }))
+}
+
+#[pyfunction]
+fn palette_bgra(py: Python<'_>, palette: Vec<u32>, indices: &[u8]) -> PyResult<Py<PyBytes>> {
+    let capacity = indices
+        .len()
+        .checked_mul(4)
+        .ok_or_else(|| PyOverflowError::new_err("image is too large"))?;
+    let indices = indices.to_vec();
+    let result = py.detach(move || {
+        let mut out = Vec::with_capacity(capacity);
+        for index in indices {
+            let color = *palette.get(index as usize)?;
+            out.extend_from_slice(&color.to_le_bytes());
+        }
+        Some(out)
+    });
+    let result = result.ok_or_else(|| PyIndexError::new_err("tuple index out of range"))?;
+    Ok(PyBytes::new(py, &result).into())
 }
 
 #[derive(Clone, Copy)]
@@ -488,6 +562,8 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tile_copy, m)?)?;
     m.add_function(wrap_pyfunction!(msvcrand_shuffle_inplace, m)?)?;
     m.add_function(wrap_pyfunction!(find_shuffle_seed_first, m)?)?;
+    m.add_function(wrap_pyfunction!(find_rand_skip, m)?)?;
+    m.add_function(wrap_pyfunction!(palette_bgra, m)?)?;
     m.add_function(wrap_pyfunction!(compile_backend_available, m)?)?;
     m.add_function(wrap_pyfunction!(compile_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_build_project, m)?)?;

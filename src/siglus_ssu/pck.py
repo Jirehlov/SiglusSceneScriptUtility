@@ -579,13 +579,11 @@ def _resolve_pck_scene_exe_el(
         return b""
     base_dir = os.path.dirname(os.path.abspath(input_pck)) if input_pck else ""
     try:
-        sources = list(
-            iter_exe_el_sources(
-                explicit_angou=explicit_angou,
-                input_path=input_pck,
-                base_dir=base_dir,
-                input_blob=blob,
-            )
+        sources = iter_exe_el_sources(
+            explicit_angou=explicit_angou,
+            input_path=input_pck,
+            base_dir=base_dir,
+            input_blob=blob,
         )
     except ValueError:
         if explicit_angou:
@@ -593,7 +591,17 @@ def _resolve_pck_scene_exe_el(
         return b""
     except Exception:
         return b""
-    for src in sources:
+    while True:
+        try:
+            src = next(sources)
+        except StopIteration:
+            break
+        except ValueError:
+            if explicit_angou:
+                raise
+            return b""
+        except Exception:
+            return b""
         exe_el = src.get("exe_el") if isinstance(src, dict) else b""
         if not exe_el:
             continue

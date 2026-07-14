@@ -12,7 +12,7 @@ from .common import (
     run_batch,
 )
 from . import dbs
-from .native_ops import msvcrt_rand_byte
+from .native_ops import find_rand_skip
 from .path_policy import resolve_read_path
 
 
@@ -76,32 +76,7 @@ def _is_int_token(s) -> bool:
 def _find_rand_skip(
     seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
 ):
-    seed = int(seed) & 0xFFFFFFFF
-    start_skip = int(start_skip)
-    if start_skip < 0:
-        start_skip = 0
-    if not pattern:
-        return start_skip
-    pat = bytes(pattern)
-    pat_len = len(pat)
-    state = seed
-    buf = bytearray()
-    pos = -1
-    target_end = start_skip + max_scan + pat_len - 1
-    while pos + 1 < target_end:
-        state, b = msvcrt_rand_byte(state)
-        pos += 1
-        buf.append(b)
-        if len(buf) > pat_len:
-            del buf[0]
-        if len(buf) != pat_len:
-            continue
-        start_pos = pos - (pat_len - 1)
-        if start_pos < start_skip:
-            continue
-        if bytes(buf) == pat:
-            return start_pos
-    return None
+    return find_rand_skip(seed, pattern, start_skip, max_scan)
 
 
 def _map_out_name(csv_path: str):

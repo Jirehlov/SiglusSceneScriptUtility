@@ -25,6 +25,7 @@ from .native_ops import (
     smd5_digest,
     tile_copy,
     compile_project_native,
+    HAS_NATIVE_COMPILE_BACKEND,
 )
 from .common import (
     ascii_lower,
@@ -1526,33 +1527,35 @@ def main(argv=None):
         except (OSError, RuntimeError) as exc:
             sys.stderr.write(str(exc) + "\n")
             return 1
-    try:
-        native_rc = _try_native_compile(
-            _native_compile_config(
-                args=a,
-                ctx=ctx,
-                input_dir=inp,
-                output_dir=out,
-                scene_pck=scene_pck,
-                tmp_dir=tmp,
-                ss=ss,
-                inc=inc,
-                enc=enc,
-                charset_force=charset,
-                test_shuffle=test_shuffle,
-                force_serial_compile=force_serial_compile,
-                angou_content=angou_content,
-            ),
-            ctx,
-            tmp=tmp,
-            tmp_auto=tmp_auto,
-            debug=bool(a.debug),
-            legacy=bool(a.legacy),
-        )
-    except Exception:
-        if cache_lock is not None:
-            cache_lock.close()
-        raise
+    native_rc = None
+    if HAS_NATIVE_COMPILE_BACKEND and not a.legacy:
+        try:
+            native_rc = _try_native_compile(
+                _native_compile_config(
+                    args=a,
+                    ctx=ctx,
+                    input_dir=inp,
+                    output_dir=out,
+                    scene_pck=scene_pck,
+                    tmp_dir=tmp,
+                    ss=ss,
+                    inc=inc,
+                    enc=enc,
+                    charset_force=charset,
+                    test_shuffle=test_shuffle,
+                    force_serial_compile=force_serial_compile,
+                    angou_content=angou_content,
+                ),
+                ctx,
+                tmp=tmp,
+                tmp_auto=tmp_auto,
+                debug=bool(a.debug),
+                legacy=False,
+            )
+        except Exception:
+            if cache_lock is not None:
+                cache_lock.close()
+            raise
     if native_rc is not None:
         if cache_lock is not None:
             cache_lock.close()

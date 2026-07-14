@@ -1201,7 +1201,7 @@ def _collect_scene_symbols(
             return
         if nt == C.NT_S_SWITCH:
             node = sentence.get("Switch") or {}
-            for case in node.get("Case") or []:
+            for case in node.get("case") or []:
                 walk_block(case.get("block"), current_command)
             default = node.get("Default") or {}
             walk_block(default.get("block"), current_command)

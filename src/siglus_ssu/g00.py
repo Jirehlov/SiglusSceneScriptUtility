@@ -10,6 +10,7 @@ from .native_ops import (
     lzss32_pack,
     lzss32_unpack as lzss32,
     xor_cycle_inplace,
+    palette_bgra,
 )
 from .common import read_bytes, write_bytes
 from .path_policy import open_read, read_directory, resolve_read_path
@@ -104,12 +105,7 @@ def type1_bgra(unp: bytes, w: int, h: int) -> bytes:
         raise ValueError("type1 short")
     pal = struct.unpack_from(f"<{pc}I", unp, 2)
     idx = unp[po : po + n]
-    out = bytearray(n * 4)
-    o = 0
-    for b in idx:
-        struct.pack_into("<I", out, o, pal[b])
-        o += 4
-    return bytes(out)
+    return palette_bgra(pal, idx)
 
 
 def save_png_bgra(bgra: bytes, w: int, h: int, p: Path, trim: bool = False) -> bool:

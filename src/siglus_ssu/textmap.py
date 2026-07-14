@@ -680,10 +680,10 @@ def _process_dat(
         eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
         return 1
     str_list, out_scn = parsed
-    bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
-    kind_map = _collect_dat_string_kinds(bundle, fname)
     csv_path = dat_path + ".csv"
     if not apply_mode:
+        bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
+        kind_map = _collect_dat_string_kinds(bundle, fname)
         _write_dat_map(csv_path, str_list, kind_map)
         print(csv_path)
         return 0

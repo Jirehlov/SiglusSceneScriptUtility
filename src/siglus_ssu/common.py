@@ -715,11 +715,13 @@ def _siglus_engine_exe_el_scan(exe_bytes: bytes):
         lim = len(x) - 11
         if lim <= 0:
             continue
-        for i in range(lim):
-            if x[i : i + 3] == sig and x[i + 4 : i + 11] == tail:
+        i = x.find(sig)
+        while 0 <= i < lim:
+            if x[i + 4 : i + 11] == tail:
                 hit_off = raw + i
                 disp = struct.unpack("<b", x[i + 3 : i + 4])[0]
                 break
+            i = x.find(sig, i + 1)
         if hit_off is not None:
             break
     if hit_off is None or disp is None:

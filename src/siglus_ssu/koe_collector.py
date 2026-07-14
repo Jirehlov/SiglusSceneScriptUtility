@@ -591,25 +591,71 @@ def _format_duration_seconds_csv(duration) -> str:
     return f"{max(float(duration), 0.0):.6f}"
 
 
-def _collect_entry_durations(entries, scene_map, ovk_entry_map, read_ogg):
-    durations = {}
-    total = len(entries)
-    for idx, koe_no in enumerate(sorted(entries.keys()), 1):
-        if idx == 1 or idx % 100 == 0:
-            _progress(f"koe: reading duration {idx}/{total}: KOE({int(koe_no):09d})")
-        scene_no = koe_no // 100000
-        entry_no = koe_no % 100000
-        try:
-            ovk_path = _select_ovk(scene_map, scene_no)
-            entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
-            if entry is None:
-                raise KeyError(f"Entry not found: entry_no={entry_no}")
-            durations[koe_no] = _duration_from_ovk_entry_ogg(
-                entry, read_ogg(ovk_path, entry)
+def _write_master_csv(csv_path, entries, missing_rows, duration_by_koe):
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f, lineterminator="\r\n")
+        writer.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
+        csv_rows = []
+        for koe_no in sorted(entries.keys()):
+            entry = entries[koe_no]
+            refs = list((entry.get("refs") or {}).values())
+            duration_sec = _format_duration_seconds_csv(duration_by_koe.get(koe_no))
+            if refs:
+                refs.sort(
+                    key=lambda item: (
+                        str(item.get("name") or ""),
+                        str(item.get("text") or ""),
+                        ";".join(sorted(item.get("callsites") or [])),
+                    )
+                )
+                for ref in refs:
+                    callsites = ";".join(sorted(ref["callsites"]))
+                    csv_rows.append(
+                        (
+                            int(koe_no),
+                            str(ref["name"] or ""),
+                            str(ref["text"] or ""),
+                            callsites,
+                            [
+                                str(koe_no),
+                                ref["name"],
+                                ref["text"],
+                                duration_sec,
+                                callsites,
+                            ],
+                        )
+                    )
+                continue
+            csv_rows.append(
+                (
+                    int(koe_no),
+                    str(entry["name"] or ""),
+                    str(entry["text"] or ""),
+                    "",
+                    [
+                        str(koe_no),
+                        entry["name"],
+                        entry["text"],
+                        duration_sec,
+                        "",
+                    ],
+                )
             )
-        except Exception:
-            durations[koe_no] = None
-    return durations
+        for koe_no, name, text, callsite in missing_rows:
+            koe_no_i = _try_int(koe_no)
+            csv_rows.append(
+                (
+                    koe_no_i if koe_no_i is not None else -1,
+                    str(name or ""),
+                    str(text or ""),
+                    str(callsite or ""),
+                    [str(koe_no), name, text, "", callsite],
+                )
+            )
+        csv_rows.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        for _koe_no_i, _name, _text, _callsite, row in csv_rows:
+            writer.writerow(row)
+    return len(csv_rows)
 
 
 def main(argv=None):
@@ -751,69 +797,7 @@ def main(argv=None):
     total_rows = 0
     duration_by_koe = {}
     if single_koe_no is None:
-        duration_by_koe = _collect_entry_durations(
-            entries, scene_map, ovk_entry_map, _read_ogg_from_ovk
-        )
-        _close_current_ovk()
         csv_path = os.path.join(out_dir, "koe_master.csv")
-        with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-            w = csv.writer(f, lineterminator="\r\n")
-            w.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
-            csv_rows = []
-            for koe_no in sorted(entries.keys()):
-                e = entries[koe_no]
-                refs = list((e.get("refs") or {}).values())
-                duration_sec = _format_duration_seconds_csv(duration_by_koe.get(koe_no))
-                if refs:
-                    refs.sort(
-                        key=lambda x: (
-                            str(x.get("name") or ""),
-                            str(x.get("text") or ""),
-                            ";".join(sorted(x.get("callsites") or [])),
-                        )
-                    )
-                    for ref in refs:
-                        callsites = ";".join(sorted(ref["callsites"]))
-                        csv_rows.append(
-                            (
-                                int(koe_no),
-                                str(ref["name"] or ""),
-                                str(ref["text"] or ""),
-                                callsites,
-                                [
-                                    str(koe_no),
-                                    ref["name"],
-                                    ref["text"],
-                                    duration_sec,
-                                    callsites,
-                                ],
-                            )
-                        )
-                    continue
-                csv_rows.append(
-                    (
-                        int(koe_no),
-                        str(e["name"] or ""),
-                        str(e["text"] or ""),
-                        "",
-                        [str(koe_no), e["name"], e["text"], duration_sec, ""],
-                    )
-                )
-            for koe_no, name, text, callsite in missing_rows:
-                koe_no_i = _try_int(koe_no)
-                csv_rows.append(
-                    (
-                        koe_no_i if koe_no_i is not None else -1,
-                        str(name or ""),
-                        str(text or ""),
-                        str(callsite or ""),
-                        [str(koe_no), name, text, "", callsite],
-                    )
-                )
-            csv_rows.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-            for _koe_no_i, _name, _text, _callsite, row in csv_rows:
-                w.writerow(row)
-        total_rows = len(csv_rows)
     single_found = single_koe_no is None or single_koe_no in entries
     extracted = skipped = failed = 0
     total_duration_sec = 0.0
@@ -831,6 +815,20 @@ def main(argv=None):
                 out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
                 should_extract = not stats_only
                 duration_done = False
+                ogg = b""
+                read_error = None
+                try:
+                    scene_no = koe_no // 100000
+                    entry_no = koe_no % 100000
+                    ovk_path = _select_ovk(scene_map, scene_no)
+                    entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
+                    if entry is None:
+                        raise KeyError(f"Entry not found: entry_no={entry_no}")
+                    ogg = _read_ogg_from_ovk(ovk_path, entry)
+                    duration_by_koe[koe_no] = _duration_from_ovk_entry_ogg(entry, ogg)
+                except Exception as exc:
+                    duration_by_koe[koe_no] = None
+                    read_error = exc
                 if not is_unref and os.path.isfile(out_path):
                     (
                         total_duration_sec,
@@ -843,7 +841,7 @@ def main(argv=None):
                         _duration_from_path(out_path),
                     )
                     duration_done = True
-                elif stats_only and not is_unref and koe_no in duration_by_koe:
+                elif stats_only and not is_unref:
                     (
                         total_duration_sec,
                         duration_counted,
@@ -862,16 +860,9 @@ def main(argv=None):
                     continue
                 processed_koe += 1
                 _progress_koe(processed_koe, koe_no)
-                scene_no = koe_no // 100000
-                entry_no = koe_no % 100000
                 try:
-                    ovk_path = _select_ovk(scene_map, scene_no)
-                    entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
-                    if entry is None:
-                        raise KeyError(f"Entry not found: entry_no={entry_no}")
-                    ogg = b""
-                    if should_extract or ((not is_unref) and (not duration_done)):
-                        ogg = _read_ogg_from_ovk(ovk_path, entry)
+                    if read_error is not None:
+                        raise read_error
                     if should_extract:
                         os.makedirs(dest_dir, exist_ok=True)
                         write_bytes(out_path, ogg)
@@ -882,7 +873,7 @@ def main(argv=None):
                                 total_duration_sec,
                                 duration_counted,
                                 duration_failed,
-                                _duration_from_ovk_entry_ogg(entry, ogg),
+                                duration_by_koe.get(koe_no),
                             )
                         )
                 except Exception as ex:
@@ -949,6 +940,8 @@ def main(argv=None):
                             duration_failed += 1
     finally:
         _close_current_ovk()
+    if single_koe_no is None:
+        total_rows = _write_master_csv(csv_path, entries, missing_rows, duration_by_koe)
     eprint("")
     eprint("=== koe_collector summary ===")
     if stats_only:
