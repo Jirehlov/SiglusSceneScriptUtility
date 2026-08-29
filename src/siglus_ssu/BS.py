@@ -27,6 +27,7 @@ from .common import (
     write_text,
     write_bytes,
     read_scn_header,
+    scene_string_xor_key,
 )
 from .path_policy import read_directory, resolve_read_path
 
@@ -811,7 +812,7 @@ def build_scn_dat(plad, out_scn):
     _w_idx(b, idx)
     sec("str_list_ofs", "str_cnt", len(b), n)
     for orig in order:
-        k = (28807 * orig) & 0xFFFFFFFF
+        k = scene_string_xor_key(orig)
         for w in u16_map[orig]:
             write_u16_le(b, (w ^ k) & 0xFFFF)
     scn = bytes(out_scn.get("scn_bytes") or b"")

@@ -33,6 +33,7 @@ from .common import (
     write_status,
     write_disam_totals,
     format_exe_el_source,
+    scene_string_xor_key,
 )
 
 C = get_const_module()
@@ -63,7 +64,7 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
         if a < blob_ofs or b > blob_end:
             out.append("")
             continue
-        key = (28807 * si) & 0xFFFF
+        key = scene_string_xor_key(si)
         u16 = []
         try:
             for j in range(ln):

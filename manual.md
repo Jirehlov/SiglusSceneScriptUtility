@@ -126,6 +126,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
 | `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`2`, default: `0`). Use a non-default profile only when targeting an engine/compiler variant whose form or element tables differ from the default profile. Cannot be combined with `-c --tmp`. |
+| `--string-xor-multiplier N` | Set the multiplier used for compiled scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0x7087`). Use `0` for scene strings stored as plain UTF-16LE. Decimal and `0x` hexadecimal values are accepted. |
 
 ### Command Aliases
 

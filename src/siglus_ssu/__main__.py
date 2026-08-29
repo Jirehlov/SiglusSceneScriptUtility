@@ -29,13 +29,14 @@ def _usage(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
         "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
+        "  --string-xor-multiplier Set scene string XOR multiplier (default: 0x7087; 0 disables XOR)\n"
         "\n"
         "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
@@ -189,7 +190,7 @@ def _usage_short(out=None):
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     out.write(text)
@@ -206,6 +207,7 @@ def _consume_global_options(argv):
     legacy = False
     legacy_full = False
     const_profile = None
+    string_xor_multiplier = None
     out = []
     i = 0
     while i < len(argv):
@@ -228,6 +230,17 @@ def _consume_global_options(argv):
             const_profile = arg.split("=", 1)[1]
             i += 1
             continue
+        if arg == "--string-xor-multiplier":
+            if i + 1 >= len(argv):
+                raise ValueError("--string-xor-multiplier requires a value")
+            string_xor_multiplier = argv[i + 1]
+            i += 2
+            continue
+
+        if arg.startswith("--string-xor-multiplier="):
+            string_xor_multiplier = arg.split("=", 1)[1]
+            i += 1
+            continue
         out.append(arg)
         i += 1
     if legacy_full:
@@ -246,6 +259,21 @@ def _consume_global_options(argv):
             raise ValueError(
                 f"invalid --const-profile value: {const_profile} (expected 0, 1, or 2)"
             )
+
+    if string_xor_multiplier is not None:
+        value = str(string_xor_multiplier).strip()
+        try:
+            multiplier = int(value, 0)
+        except ValueError as exc:
+            raise ValueError(
+                f"invalid --string-xor-multiplier value: {string_xor_multiplier}"
+            ) from exc
+        if not 0 <= multiplier <= 0xFFFF:
+            raise ValueError(
+                f"invalid --string-xor-multiplier value: "
+                f"{string_xor_multiplier} (expected 0..0xFFFF)"
+            )
+        os.environ["SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"] = str(multiplier)
     return out, profile
 
 

@@ -18,10 +18,21 @@ C = get_const_module()
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
+DEFAULT_SCENE_STRING_XOR_MULTIPLIER = 0x7087
+SCENE_STRING_XOR_MULTIPLIER_ENV = "SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"
+
+def get_scene_string_xor_multiplier():
+    raw = os.environ.get(SCENE_STRING_XOR_MULTIPLIER_ENV)
+    if raw is None or not str(raw).strip():
+        return DEFAULT_SCENE_STRING_XOR_MULTIPLIER
+    return int(str(raw).strip(), 0)
+
+def scene_string_xor_key(index):
+    return (get_scene_string_xor_multiplier() * int(index)) & 0xFFFF
+
 _ASCII_LOWER_TRANS = str.maketrans(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
 )
-
 
 def ascii_lower(value):
     return str(value or "").translate(_ASCII_LOWER_TRANS)
