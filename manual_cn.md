@@ -126,6 +126,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
 | `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。不能与 `-c --tmp` 同用。 |
+| `--string-xor-multiplier N` | 设置编译场景字符串 XOR key 的乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。支持十进制和 `0x` 十六进制值。 |
 
 ### 命令别名
 
