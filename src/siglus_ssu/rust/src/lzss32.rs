@@ -196,12 +196,10 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
         return Err("lzss32: source size is not a multiple of 4".to_string());
     }
     let src_cnt = src.len() / 4;
+    let chunks = src.as_chunks::<4>().0;
     let mut dwords = Vec::with_capacity(src_cnt);
-    for chunk in src.chunks_exact(4) {
-        let arr: [u8; 4] = chunk
-            .try_into()
-            .map_err(|_| "lzss32: bad chunk".to_string())?;
-        dwords.push(u32::from_le_bytes(arr));
+    for &chunk in chunks {
+        dwords.push(u32::from_le_bytes(chunk));
     }
     let mut tree_find = LzssTreeFind::new(&dwords, WINDOW_SIZE, LOOK_AHEAD);
     let mut pack_buf = vec![0u8; 8];
