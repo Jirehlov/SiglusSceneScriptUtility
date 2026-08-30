@@ -126,7 +126,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
 | `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。不能与 `-c --tmp` 同用。 |
-| `--string-xor-multiplier N` | 设置编译场景字符串 XOR key 的乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。支持十进制和 `0x` 十六进制值。 |
+| `--string-xor-multiplier N` | 设置本次调用在编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。支持十进制和 `0x` 十六进制值。 |
 
 ### 命令别名
 
@@ -331,7 +331,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 - **源文件解码：** 若未指定 `--charset`，每个源文件都会独立尝试 UTF-8 与 CP932，并根据 BOM、严格解码结果和确定性的歧义评分选择编码。其他 Python codec 必须显式指定，并采用严格解码；非法字节序列会令编译失败。解码会移除一个开头的 Unicode BOM，并把 CRLF 或孤立 CR 归一化为 LF，但不会进行 Unicode 规范化。两个编译后端接收同一份解码后的文本快照。
 - **与编码无关的编译：** 源文件编码不会选择另一套词法规则。解码完成后，CP932、UTF-8 和其他编码都使用与官方日文编译器一致、固定的 CP932 双字节字符分类。因此，内容等价的 CP932 与 UTF-8 源文件会得到相同编译结果。固定集合以外的字符可以写在引号字符串内，但不会被当作无引号的全角文本。
-- **增量编译：** 当指定 `--tmp` 时，编译器会缓存所有 `.ss` 和 `.inc` 文件的 SHA-256 哈希。缓存兼容条件包括 `siglus-ssu` 版本、源码字符集以及当前 `const.py` 内容/profile。下次兼容运行时仅重编译已更改（或缺少对应 `.dat`）的文件，并复用已有 `.lzss` 产物。若某个场景源码发生变化，或对应 `.lzss` 缺失，则重新生成该场景的 `.lzss`。若任一 `.inc` 文件发生变化，则触发全量重编译。
+- **增量编译：** 当指定 `--tmp` 时，编译器会缓存所有 `.ss` 和 `.inc` 文件的 SHA-256 哈希。缓存兼容条件包括 `siglus-ssu` 版本、源码字符集、当前 `const.py` 内容/profile，以及场景字符串 XOR 乘数。下次兼容运行时仅重编译已更改（或缺少对应 `.dat`）的文件，并复用已有 `.lzss` 产物。若某个场景源码发生变化，或对应 `.lzss` 缺失，则重新生成该场景的 `.lzss`。若任一 `.inc` 文件发生变化，则触发全量重编译。
 - **字符串混淆：** 编译器会用 MSVC 兼容 `rand()` 种子打乱每个 `.dat` 的字符串表；字符串顺序不影响普通翻译工作。`--test-shuffle` 根据第一个 scene 寻找种子，再串行重建全部 scene；后续若有不匹配仍会生成请求的输出，但命令返回失败。已知种子可通过 `--set-shuffle` 使用。
 
 ---

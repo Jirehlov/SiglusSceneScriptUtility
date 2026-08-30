@@ -21,18 +21,27 @@ MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 DEFAULT_SCENE_STRING_XOR_MULTIPLIER = 0x7087
 SCENE_STRING_XOR_MULTIPLIER_ENV = "SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"
 
+
 def get_scene_string_xor_multiplier():
     raw = os.environ.get(SCENE_STRING_XOR_MULTIPLIER_ENV)
     if raw is None or not str(raw).strip():
         return DEFAULT_SCENE_STRING_XOR_MULTIPLIER
-    return int(str(raw).strip(), 0)
+    multiplier = int(str(raw).strip(), 0)
+    if not 0 <= multiplier <= 0xFFFF:
+        raise ValueError(
+            f"{SCENE_STRING_XOR_MULTIPLIER_ENV} must be between 0 and 0xFFFF"
+        )
+    return multiplier
+
 
 def scene_string_xor_key(index):
     return (get_scene_string_xor_multiplier() * int(index)) & 0xFFFF
 
+
 _ASCII_LOWER_TRANS = str.maketrans(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"
 )
+
 
 def ascii_lower(value):
     return str(value or "").translate(_ASCII_LOWER_TRANS)

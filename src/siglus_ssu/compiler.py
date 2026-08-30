@@ -44,8 +44,10 @@ from .common import (
     empty_macro_stat_counts,
     norm_charset,
     format_scene_name,
+    get_scene_string_xor_multiplier,
     macro_decl_kind,
     merge_macro_stat_counts,
+    scene_string_xor_key,
 )
 from .path_policy import (
     FilenameCaseCollisionError,
@@ -272,12 +274,13 @@ def _write_digest_cache(path, payload):
 
 def _compile_cache_meta(enc, charset):
     return {
-        "schema": 3,
+        "schema": 4,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
         "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
         "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+        "scene_string_xor_multiplier": get_scene_string_xor_multiplier(),
     }
 
 
@@ -511,7 +514,7 @@ def _read_scn_dat_str_pool(path):
         q = p + ln_u16 * 2
         if p < 0 or q > len(b):
             raise ValueError("bad str_list range")
-        k = (28807 * orig) & 0xFFFFFFFF
+        k = scene_string_xor_key(orig)
         ws = struct.unpack_from("<" + "H" * ln_u16, b, p)
         bb = bytearray(ln_u16 * 2)
         for i, w in enumerate(ws):
@@ -1106,6 +1109,7 @@ def _native_compile_constants_config():
             [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
         ],
         "selection_command_codes": selection_command_codes,
+        "scene_string_xor_multiplier": get_scene_string_xor_multiplier(),
     }
 
 

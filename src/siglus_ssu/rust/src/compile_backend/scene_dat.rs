@@ -132,6 +132,7 @@ pub fn build_scn_dat(
     layout: &ScnHeaderLayout,
     input: &SceneDatInput,
     rand: &mut MsvcRand,
+    string_xor_multiplier: u16,
 ) -> Vec<u8> {
     let mut out = vec![0u8; layout.header_size];
     let mut header: HashMap<&'static str, i32> = HashMap::new();
@@ -185,7 +186,7 @@ pub fn build_scn_dat(
     push_i32_pairs(&mut out, &idx);
     section(&mut header, "str_list_ofs", "str_cnt", out.len(), n);
     for &orig in &order {
-        let key = 28807u32.wrapping_mul(orig as u32);
+        let key = u32::from(string_xor_multiplier).wrapping_mul(orig as u32);
         for unit in &units[orig] {
             push_u16(&mut out, ((*unit as u32 ^ key) & 0xffff) as u16);
         }

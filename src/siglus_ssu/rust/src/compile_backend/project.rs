@@ -2090,7 +2090,12 @@ fn finalize_scene(
     prepared.scene.namae_list = namae_list;
     prepared.scene.str_sort_index = Some(string_order);
     let command_labels = prepared.scene.cmd_label_list.clone();
-    let dat = build_scn_dat(&layout, &prepared.scene, rand);
+    let dat = build_scn_dat(
+        &layout,
+        &prepared.scene,
+        rand,
+        config.constants.scene_string_xor_multiplier,
+    );
     (dat, command_labels)
 }
 

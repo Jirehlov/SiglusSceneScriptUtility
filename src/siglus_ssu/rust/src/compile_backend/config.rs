@@ -1,3 +1,4 @@
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::HashMap;
@@ -81,6 +82,7 @@ pub struct CompileConstants {
     pub message_block_command_codes: Vec<(i32, i32)>,
     pub read_flag_command_codes: Vec<(i32, i32)>,
     pub selection_command_codes: Vec<(i32, i32)>,
+    pub scene_string_xor_multiplier: u16,
 }
 
 impl CompileConstants {
@@ -407,6 +409,13 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
         message_block_command_codes: get_i32_pairs(&constants_dict, "message_block_command_codes")?,
         read_flag_command_codes: get_i32_pairs(&constants_dict, "read_flag_command_codes")?,
         selection_command_codes: get_i32_pairs(&constants_dict, "selection_command_codes")?,
+        scene_string_xor_multiplier: u16::try_from(get_i64(
+            &constants_dict,
+            "scene_string_xor_multiplier",
+        )?)
+        .map_err(|_| {
+            PyValueError::new_err("native compile scene string XOR multiplier out of range")
+        })?,
     })
 }
 

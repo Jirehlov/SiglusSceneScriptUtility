@@ -112,17 +112,21 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
 
 def _payload_native_config():
     from ._const_manager import get_const_module
+    from .common import get_scene_string_xor_multiplier
 
     C = get_const_module()
     return _payload_native_config_cached(
         getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
         str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
         str(getattr(C, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
+        get_scene_string_xor_multiplier(),
     )
 
 
 @lru_cache(maxsize=8)
-def _payload_native_config_cached(_profile, _sha512, _source_path):
+def _payload_native_config_cached(
+    _profile, _sha512, _source_path, scene_string_xor_multiplier
+):
     from ._const_manager import get_const_module
 
     C = get_const_module()
@@ -210,6 +214,7 @@ def _payload_native_config_cached(_profile, _sha512, _source_path):
         "ET_COMMAND": code("ET_COMMAND"),
         "SCN_HDR_FIELDS": list(C.SCN_HDR_FIELDS),
         "SCN_HDR_SIZE": int(C.SCN_HDR_SIZE),
+        "SCENE_STRING_XOR_MULTIPLIER": int(scene_string_xor_multiplier),
         "system_elements": elements,
         "read_flag_commands": [
             (int(parent), int(elem)) for parent, elem in C.READ_FLAG_COMMAND_CODES

@@ -72,6 +72,7 @@ struct Config {
     string_cmp_ops: HashSet<u8>,
     read_flag_commands: HashSet<(i32, i32)>,
     receiver_forms: HashSet<i32>,
+    scene_string_xor_multiplier: u16,
 }
 
 #[derive(Clone)]
@@ -240,6 +241,7 @@ impl Config {
         };
         let scn_header = ScnHeaderLayout::from_py(&config)?;
         let string_cmp_ops = get_u8_set(&config, "string_cmp_ops")?;
+        let scene_string_xor_multiplier = get_u16(&config, "SCENE_STRING_XOR_MULTIPLIER")?;
         let mut elements: HashMap<(i32, i32), Vec<ElementInfo>> = HashMap::new();
         let mut array_ret = HashMap::new();
         let mut receiver_forms = HashSet::new();
@@ -296,6 +298,7 @@ impl Config {
                 string_cmp_ops,
                 read_flag_commands,
                 receiver_forms,
+                scene_string_xor_multiplier,
             });
         }
         Err(PyValueError::new_err(
@@ -594,7 +597,13 @@ impl ParsedDat {
         let str_blob_end = h
             .str_list_ofs
             .checked_add(max_pair_end(&str_idx).checked_mul(2)?)?;
-        let strings = decode_xor_strings(blob, &str_idx, h.str_list_ofs, str_blob_end);
+        let strings = decode_xor_strings(
+            blob,
+            &str_idx,
+            h.str_list_ofs,
+            str_blob_end,
+            cfg.scene_string_xor_multiplier,
+        );
         let label_offsets = read_i32_list(blob, h.label_list_ofs, h.label_cnt).unwrap_or_default();
         let z_label_offsets =
             read_i32_list(blob, h.z_label_list_ofs, h.z_label_cnt).unwrap_or_default();
@@ -1845,6 +1854,12 @@ fn get_u8(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u8> {
     u8::try_from(v).map_err(|_| PyValueError::new_err(format!("payload config out of range {key}")))
 }
 
+fn get_u16(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
+    let v: i32 = get_i32(dict, key)?;
+    u16::try_from(v)
+        .map_err(|_| PyValueError::new_err(format!("payload config out of range {key}")))
+}
+
 fn get_string_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<String>> {
     let value = dict
         .get_item(key)?
@@ -1943,6 +1958,7 @@ fn decode_xor_strings(
     idx: &[(i32, i32)],
     blob_ofs: usize,
     blob_end: usize,
+    string_xor_multiplier: u16,
 ) -> Vec<Vec<u16>> {
     let mut out = Vec::with_capacity(idx.len());
     let blob_end = blob_end.min(data.len());
@@ -1963,7 +1979,7 @@ fn decode_xor_strings(
             out.push(Vec::new());
             continue;
         }
-        let key = ((28807u32.wrapping_mul(si as u32)) & 0xffff) as u16;
+        let key = ((u32::from(string_xor_multiplier).wrapping_mul(si as u32)) & 0xffff) as u16;
         let mut s = Vec::with_capacity(len_u16 as usize);
         for p in (a..b).step_by(2) {
             let w = u16::from_le_bytes([data[p], data[p + 1]]) ^ key;
