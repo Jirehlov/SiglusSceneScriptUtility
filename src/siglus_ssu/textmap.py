@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 import sys
 from . import CA
 from . import BS
@@ -39,9 +40,21 @@ def _csv_escape_text(s: str) -> str:
         return ""
     if not isinstance(s, str):
         s = str(s)
-    s = s.replace("\\", "\\\\")
-    s = s.replace("\r", "\\r").replace("\n", "\\n").replace("\t", "\\t")
-    return s
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\t":
+            out.append("\\t")
+        elif 0xD800 <= ord(ch) <= 0xDFFF:
+            out.append(f"\\u{ord(ch):04X}")
+        else:
+            out.append(ch)
+    return "".join(out)
 
 
 def _csv_unescape_text(s: str) -> str:
@@ -74,6 +87,18 @@ def _csv_unescape_text(s: str) -> str:
         elif nxt == "\\":
             out.append("\\")
             i += 2
+        elif nxt == "u" and i + 5 < n:
+            value = s[i + 2 : i + 6]
+            if (
+                re.fullmatch(r"[0-9A-Fa-f]{4}", value)
+                and 0xD800 <= int(value, 16) <= 0xDFFF
+            ):
+                out.append(chr(int(value, 16)))
+                i += 6
+            else:
+                out.append("\\")
+                out.append(nxt)
+                i += 2
         else:
             out.append("\\")
             out.append(nxt)

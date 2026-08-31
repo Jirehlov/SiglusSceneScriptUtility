@@ -135,7 +135,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 
 The multiplier is not auto-detected and is not saved in an extracted working directory. Pass the same value to every command that decodes, analyzes, compares, rewrites, tests, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. One invocation applies one multiplier to every scene it processes; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
 
-Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested.
+Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested. When the option is explicitly supplied to one of these no-op operations, the program prints a warning and continues. Structural `-a` analysis, `-k --single`, and non-scene modes likewise do not use it.
 
 For example, use the following commands for a title whose scene strings do not use this XOR transform:
 
@@ -259,7 +259,7 @@ Scene names written into the linked `.pck` use the same ASCII-only lowercase nor
 
 Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. Runtime input reads prefer an exact file or directory name. On every platform, a missing exact path falls back to Windows filename case matching and rejects ambiguous matches. Every directory enumeration rejects immediate entries such as `A.ss` and `a.ss` whose names collide under Windows filename lowercase rules. Output creation continues to use the target filesystem's native path semantics.
 
-It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`.
+It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`. `Gameexe.ini` is optional in both normal and `--gei` compilation: when it is absent, the compiler warns and skips `Gameexe.dat` instead of creating an empty placeholder.
 
 #### Syntax
 
@@ -290,9 +290,9 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--max-workers N` | Maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
-| `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. Cannot be combined with `--tmp`. |
+| `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. Cannot be combined with `--tmp` or `--gei`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
-| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is always treated as a directory. If it does not exist, it is created, and `Gameexe.dat` is written inside it. Cannot be combined with `--tmp`. |
+| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is always treated as a directory. If it does not exist, it is created. When the input contains `Gameexe.ini`, `Gameexe.dat` is written inside it; when it does not, the command succeeds with a warning and does not create an empty `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 
 #### Compiling Stats
 
@@ -867,7 +867,7 @@ siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=
 | `original` | The original string value (escape-encoded). |
 | `replacement` | The replacement string value (escape-encoded). Initially identical to `original`. |
 
-Special characters in `original` and `replacement` use `\\`, `\n`, `\r`, and `\t` for a literal backslash, newline, carriage return, and tab respectively.
+Special characters in `original` and `replacement` use `\\`, `\n`, `\r`, and `\t` for a literal backslash, newline, carriage return, and tab respectively. Isolated UTF-16 surrogate code units are written as `\uD800` through `\uDFFF`, so an exported CSV remains valid UTF-8 and can be applied back without changing the original UTF-16 code units.
 
 ---
 

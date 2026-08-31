@@ -251,7 +251,13 @@ def _parse_u32_token(t, opt):
     s = str(t).strip() if t is not None else ""
     if not _is_int_token(s):
         raise ValueError(f"{opt} expects a u32 integer")
-    n = int(s, 0)
+    try:
+        if s.startswith(("0x", "0X")):
+            n = int(s[2:], 16)
+        else:
+            n = int(s, 10)
+    except ValueError:
+        raise ValueError(f"{opt} expects a u32 integer") from None
     if n < 0 or n > 0xFFFFFFFF:
         raise ValueError(f"{opt} expects a u32 integer")
     return n
@@ -1251,11 +1257,15 @@ def main(argv=None):
             and (i == (len(argv) - 1) or (len(argv) - i) >= 4)
         ):
             try:
-                test_seed0 = int(str(argv[i]), 0)
-            except Exception:
-                test_seed0 = 0
+                test_seed0 = _parse_u32_token(argv[i], "--test-shuffle")
+            except ValueError as exc:
+                sys.stderr.write(f"{prog}: error: {exc}\n")
+                return 2
             test_seed0_given = True
             argv.pop(i)
+    if test_shuffle and has_option(argv, "--gei"):
+        sys.stderr.write(f"{prog}: error: --gei cannot be used with --test-shuffle\n")
+        return 2
     if has_option(argv, "--tmp"):
         bad_tmp = _tmp_incompatible_options(argv, test_shuffle=test_shuffle)
         if bad_tmp:
@@ -1574,7 +1584,12 @@ def main(argv=None):
     }
     try:
         t = time.time()
-        write_gameexe_dat(ctx)
+        gameexe_dat = write_gameexe_dat(ctx)
+        if gameexe_dat is None:
+            gameexe_ini = str(ctx.get("gameexe_ini") or "Gameexe.ini")
+            sys.stderr.write(
+                f"{prog}: warning: {gameexe_ini} not found; skipped Gameexe.dat\n"
+            )
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
             compile_list, digest_path, pending_digests, full_compile = (

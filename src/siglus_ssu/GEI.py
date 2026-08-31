@@ -161,11 +161,9 @@ def write_gameexe_dat(ctx):
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
     gei_path = os.path.join(scn, gameexe_ini)
     source_texts = ctx.get("source_texts") or {}
-    gei = (
-        read_compile_source(ctx, gei_path)
-        if gameexe_ini in source_texts or read_path_exists(gei_path, kind="file")
-        else ""
-    )
+    if gameexe_ini not in source_texts and not read_path_exists(gei_path, kind="file"):
+        return None
+    gei = read_compile_source(ctx, gei_path)
     ged = ""
     if gei:
         a = IniFileAnalizer()

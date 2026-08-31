@@ -135,7 +135,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 
 乘数不会自动检测，也不会写入提取出的工作目录。凡是会解码、分析、比较、改写、测试或重新编译该作品场景字符串的命令，都应传入同一数值。错误数值可能不破坏文件结构，却会产生不可读文本，因此程序不一定能检测出不匹配。一次调用只接受一个乘数，并应用于本次处理的全部场景；不支持在同一个 `.pck` 内按场景混用乘数。因此，一条比较命令无法正确解码使用不同乘数的两个输入。请分别分析它们，或先用同一设置重建其中一方。使用 `-c --tmp` 时，乘数会写入缓存元数据；改变乘数会触发全部缓存场景的重新编译。
 
-不会解码或重建场景字符串表的模式会忽略本选项。具体而言，`-c --dat-repack` 只会原样复制现有 `.dat`，`-c --gei` 只处理 `Gameexe.dat`，普通 `-x` 提取也不会使用该乘数，除非同时请求反汇编或反编译。
+不会解码或重建场景字符串表的模式会忽略本选项。具体而言，`-c --dat-repack` 只会原样复制现有 `.dat`，`-c --gei` 只处理 `Gameexe.dat`，普通 `-x` 提取也不会使用该乘数，除非同时请求反汇编或反编译。若在这些无效操作中显式传入本选项，程序会打印警告后继续执行。结构性 `-a` 分析、`-k --single` 以及其他非场景模式同样不会使用它。
 
 例如，对于场景字符串不使用这层 XOR 变换的作品，应保持以下命令中的数值一致：
 
@@ -259,7 +259,7 @@ siglus-ssu -lsp [--serial]
 
 编译后的 `.dat` payload 在 `.pck` 内不保留独立文件名；每个 payload 都通过规范化后的场景名寻址，因此场景查找对 ASCII 大小写不敏感。嵌入 Original Source 区域的 `.ss` 和 `.inc` 条目会保留源文件名拼写，但这些名称只是归档元数据，不是运行时场景键。运行时读取输入文件或目录时优先使用精确名称；在所有平台上，精确路径不存在时都会按 Windows 文件名大小写规则回退匹配，并拒绝多义结果。每次枚举目录都会拒绝 `A.ss` 与 `a.ss` 这类按 Windows 文件名小写规则发生碰撞的直接子项。创建输出时仍遵循目标文件系统的原生路径语义。
 
-也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。
+也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。无论普通编译还是 `--gei` 编译，`Gameexe.ini` 都不是必需输入：不存在时，编译器会警告并跳过 `Gameexe.dat`，而不是创建空占位文件。
 
 #### 语法
 
@@ -290,9 +290,9 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--max-workers N` | 最大并行工作进程数。仅在启用并行编译时生效；默认为自动。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 SHA-256 缓存（`_source_hashes.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
-| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。不能与 `--tmp` 同用。 |
+| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。不能与 `--tmp` 或 `--gei` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，写出 CSV，记录串行重建阶段每个场景对象的初态种子和终态种子。若路径是已存在目录或以路径分隔符结尾，则在其中写出 `test_shuffle_seeds.csv`。不能与 `--tmp` 同用。 |
-| `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段。输出参数始终按目录处理；如果目录不存在会自动创建，并在其中写入 `Gameexe.dat`。不能与 `--tmp` 同用。 |
+| `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段。输出参数始终按目录处理；如果目录不存在会自动创建。输入中存在 `Gameexe.ini` 时会在其中写入 `Gameexe.dat`；不存在时会打印警告并成功结束，不会创建空 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 
 #### 编译统计
 
@@ -867,7 +867,7 @@ siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=
 | `original` | 原始字符串值（转义编码）。 |
 | `replacement` | 替换后的字符串值（转义编码）。初始与 `original` 相同。 |
 
-`original` 与 `replacement` 中的特殊字符分别以 `\\`、`\n`、`\r`、`\t` 表示字面反斜杠、换行、回车和制表符。
+`original` 与 `replacement` 中的特殊字符分别以 `\\`、`\n`、`\r`、`\t` 表示字面反斜杠、换行、回车和制表符。孤立 UTF-16 代理项会写成 `\uD800` 至 `\uDFFF`，使导出的 CSV 始终是有效 UTF-8，并能在应用时无损恢复原始 UTF-16 码元。
 
 ---
 

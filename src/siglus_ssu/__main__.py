@@ -3,6 +3,9 @@ import sys
 from importlib import import_module
 
 
+_SCENE_STRING_XOR_MULTIPLIER_ENV = "SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"
+
+
 def _prog():
     p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
     if not p or p in {"__main__.py", "__main__"}:
@@ -78,9 +81,9 @@ def _usage(out=None):
         "    --max-workers   Limit parallel workers (default: auto; parallel only)\n"
         "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial (not with --tmp)\n"
         "    --tmp           Use specific temp directory (not with --debug/--dat-repack/--no-angou/--no-lzss/--set-shuffle/--test-shuffle/--csv/--gei/--const-profile)\n"
-        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order (not with --tmp)\n"
+        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order (not with --tmp/--gei)\n"
         "    --csv           With --test-shuffle, write per-object initial/final seeds to CSV (not with --tmp)\n"
-        "    --gei           Only generate Gameexe.dat; output is always a directory (not with --tmp)\n"
+        "    --gei           Only generate Gameexe.dat when Gameexe.ini exists; missing input is warned and skipped (not with --tmp/--test-shuffle)\n"
         "\n"
         "Extract mode:\n"
         f"  {p} -x <input_pck> [output_dir] [--angou VALUE]\n"
@@ -196,6 +199,98 @@ def _usage_short(out=None):
     out.write(text)
 
 
+def _has_cli_option(argv, option):
+    for item in argv or []:
+        value = str(item)
+        if value == option or value.startswith(option + "="):
+            return True
+    return False
+
+
+def _string_xor_multiplier_unused_reason(mode, args):
+    if mode in ("-c", "--compile"):
+        if _has_cli_option(args, "--gei") and not _has_cli_option(
+            args, "--test-shuffle"
+        ):
+            return "with --gei because Gameexe.dat has no scene string table"
+        if _has_cli_option(args, "--dat-repack"):
+            return "with --dat-repack because existing .dat files are copied unchanged"
+        return ""
+    if mode in ("-x", "--extract"):
+        if _has_cli_option(args, "--disam") or _has_cli_option(args, "--decompile"):
+            return ""
+        if _has_cli_option(args, "--gei"):
+            return "with --gei because Gameexe.dat has no scene string table"
+        return "during extraction without --disam or --decompile"
+    if mode in ("-a", "--analyze"):
+        if (
+            _has_cli_option(args, "--disam")
+            or _has_cli_option(args, "--payload")
+            or _has_cli_option(args, "--word")
+        ):
+            return ""
+        if _has_cli_option(args, "--gei"):
+            return "with --gei because Gameexe.dat has no scene string table"
+        return "during structural analysis without --disam, --payload, or --word"
+    if mode in ("-k", "--koe"):
+        if _has_cli_option(args, "--single"):
+            return "with --single because no scene input is scanned"
+        return ""
+    if mode in (
+        "-lsp",
+        "init",
+        "--init",
+        "-d",
+        "--db",
+        "-e",
+        "--exec",
+        "--execute",
+        "-g",
+        "--g00",
+        "-s",
+        "--sound",
+        "-v",
+        "--video",
+        "-p",
+        "--patch",
+    ):
+        return f"in {mode} mode because it does not process scene string tables"
+    return ""
+
+
+def _warn_unused_string_xor_multiplier(mode, args, multiplier_explicit):
+    if not multiplier_explicit:
+        return
+    reason = _string_xor_multiplier_unused_reason(mode, args)
+    if reason:
+        sys.stderr.write(
+            f"{_prog()}: warning: --string-xor-multiplier has no effect {reason}\n"
+        )
+
+
+def _parse_scene_string_xor_multiplier(value):
+    text = str(value).strip()
+    if text.startswith(("0x", "0X")):
+        digits = text[2:]
+        base = 16
+        valid = bool(digits) and all(ch in "0123456789abcdefABCDEF" for ch in digits)
+    else:
+        digits = text
+        base = 10
+        valid = bool(digits) and all("0" <= ch <= "9" for ch in digits)
+    if not valid:
+        raise ValueError(f"invalid --string-xor-multiplier value: {value}")
+    try:
+        multiplier = int(digits, base)
+    except ValueError:
+        raise ValueError(f"invalid --string-xor-multiplier value: {value}") from None
+    if not 0 <= multiplier <= 0xFFFF:
+        raise ValueError(
+            f"invalid --string-xor-multiplier value: {value} (expected 0..0xFFFF)"
+        )
+    return multiplier
+
+
 def _drop_const_module():
     sys.modules.pop("siglus_ssu.const", None)
     pkg = sys.modules.get("siglus_ssu")
@@ -261,20 +356,9 @@ def _consume_global_options(argv):
             )
 
     if string_xor_multiplier is not None:
-        value = str(string_xor_multiplier).strip()
-        try:
-            multiplier = int(value, 0)
-        except ValueError as exc:
-            raise ValueError(
-                f"invalid --string-xor-multiplier value: {string_xor_multiplier}"
-            ) from exc
-        if not 0 <= multiplier <= 0xFFFF:
-            raise ValueError(
-                f"invalid --string-xor-multiplier value: "
-                f"{string_xor_multiplier} (expected 0..0xFFFF)"
-            )
-        os.environ["SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"] = str(multiplier)
-    return out, profile
+        multiplier = _parse_scene_string_xor_multiplier(string_xor_multiplier)
+        os.environ[_SCENE_STRING_XOR_MULTIPLIER_ENV] = str(multiplier)
+    return out, profile, string_xor_multiplier is not None
 
 
 def _run_mode(module_name, args):
@@ -324,11 +408,13 @@ MODE_MODULES = {
 }
 
 
-def main(argv=None):
+def _main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     try:
-        argv, const_profile = _consume_global_options(argv)
+        argv, const_profile, string_xor_multiplier_explicit = _consume_global_options(
+            argv
+        )
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2
@@ -348,6 +434,7 @@ def main(argv=None):
     ):
         _usage()
         return 0
+    _warn_unused_string_xor_multiplier(mode, argv[1:], string_xor_multiplier_explicit)
     if mode in ("init", "--init"):
         from ._const_manager import (
             _fallback_const_path,
@@ -414,6 +501,17 @@ def main(argv=None):
     sys.stderr.write(f"{_prog()}: unknown mode: {mode}\n")
     _usage_short()
     return 2
+
+
+def main(argv=None):
+    previous_multiplier = os.environ.get(_SCENE_STRING_XOR_MULTIPLIER_ENV)
+    try:
+        return _main(argv)
+    finally:
+        if previous_multiplier is None:
+            os.environ.pop(_SCENE_STRING_XOR_MULTIPLIER_ENV, None)
+        else:
+            os.environ[_SCENE_STRING_XOR_MULTIPLIER_ENV] = previous_multiplier
 
 
 if __name__ == "__main__":

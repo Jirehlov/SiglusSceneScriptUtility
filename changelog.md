@@ -3,11 +3,6 @@
 All notable changes to this project will be documented in this file.
 
 
-## [Unreleased]
-- Added global `--string-xor-multiplier N` support across scene-string encoding and decoding, including the Python and Rust backends, text maps, payload analysis, shuffle testing, and incremental-cache invalidation. The default remains `0x7087`; use `0` for plain UTF-16LE scene strings.
-- Declared Rust 1.88 as the minimum toolchain version for native-extension builds.
-
-
 ## [v0.4.0] - 2026-07-14
 - Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
 - Added reversible language patching with six-field JSON configurations, atomic full-patch application, byte-identical `--revert`, and explicit `--allow-partial` recovery.

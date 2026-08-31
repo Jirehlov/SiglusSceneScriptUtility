@@ -1565,32 +1565,39 @@ fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
     Ok(None)
 }
 
-fn write_gameexe_dat(config: &CompileConfig, exe_key: Option<&[u8]>) -> Result<PathBuf, String> {
-    let name = if config.context.gameexe_ini.is_empty() {
+fn gameexe_ini_name(config: &CompileConfig) -> &str {
+    if config.context.gameexe_ini.is_empty() {
         "Gameexe.ini"
     } else {
         &config.context.gameexe_ini
+    }
+}
+
+fn write_gameexe_dat(
+    config: &CompileConfig,
+    exe_key: Option<&[u8]>,
+) -> Result<Option<PathBuf>, String> {
+    let name = gameexe_ini_name(config);
+    let Some(source) = config.context.source_texts.get(name) else {
+        return Ok(None);
     };
     let mut payload = Vec::new();
-    if let Some(source) = config.context.source_texts.get(name) {
-        let options = TextCommentOptions {
-            case_mode: CaseMode::Upper,
-            single_quote_mode: SingleQuoteMode::None,
-            double_escape_chars: "\\\"".to_string(),
-            block_comment_enter_advance: 2,
-            newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
-            invalid_escape_message: "Invalid escape (\\). Use '\\\\' to write a backslash."
-                .to_string(),
-            unclosed_double_message: "Unclosed double quote.".to_string(),
-            unclosed_block_message: "Unclosed /* comment.".to_string(),
-            ..TextCommentOptions::default()
-        };
-        let parsed = scan_text_comments(source, &options)
-            .map_err(|error| line_error("GEI parse error", error.line, &error.message))?;
-        if !parsed.text.is_empty() {
-            payload = crate::lzss::pack(&utf16le(&parsed.text), false);
-            crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
-        }
+    let options = TextCommentOptions {
+        case_mode: CaseMode::Upper,
+        single_quote_mode: SingleQuoteMode::None,
+        double_escape_chars: "\\\"".to_string(),
+        block_comment_enter_advance: 2,
+        newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
+        invalid_escape_message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
+        unclosed_double_message: "Unclosed double quote.".to_string(),
+        unclosed_block_message: "Unclosed /* comment.".to_string(),
+        ..TextCommentOptions::default()
+    };
+    let parsed = scan_text_comments(source, &options)
+        .map_err(|error| line_error("GEI parse error", error.line, &error.message))?;
+    if !parsed.text.is_empty() {
+        payload = crate::lzss::pack(&utf16le(&parsed.text), false);
+        crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
     }
     let mode = i32::from(exe_key.is_some());
     if let Some(key) = exe_key {
@@ -1634,7 +1641,7 @@ fn write_gameexe_dat(config: &CompileConfig, exe_key: Option<&[u8]>) -> Result<P
             false,
         )?;
     }
-    Ok(output)
+    Ok(Some(output))
 }
 
 fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
@@ -2132,8 +2139,21 @@ fn compile_project_inner(
     stage_times: &mut Vec<(String, f64)>,
 ) -> Result<ProjectOutput, String> {
     let stage_start = Instant::now();
-    let exe_key = resolve_exe_key(config)?;
-    write_gameexe_dat(config, exe_key.as_deref())?;
+    let has_gameexe_ini = config
+        .context
+        .source_texts
+        .contains_key(gameexe_ini_name(config));
+    let exe_key = if has_gameexe_ini || !config.options.gei {
+        resolve_exe_key(config)?
+    } else {
+        None
+    };
+    if write_gameexe_dat(config, exe_key.as_deref())?.is_none() {
+        stdout.push_line(&format!(
+            "siglus-ssu -c: warning: {} not found; skipped Gameexe.dat",
+            gameexe_ini_name(config)
+        ))?;
+    }
     record_stage_time(stage_times, "GEI", stage_start);
     if config.options.gei {
         return Ok(ProjectOutput {
