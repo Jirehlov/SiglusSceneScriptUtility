@@ -8,6 +8,7 @@ import shutil
 import csv
 import tempfile
 from contextlib import suppress
+import siglus_ssu as _runtime
 from ._const_manager import get_const_module, package_version
 from .BS import (
     compile_all,
@@ -44,7 +45,6 @@ from .common import (
     empty_macro_stat_counts,
     norm_charset,
     format_scene_name,
-    get_scene_string_xor_multiplier,
     macro_decl_kind,
     merge_macro_stat_counts,
     scene_string_xor_key,
@@ -286,7 +286,7 @@ def _compile_cache_meta(enc, charset):
         "charset_force": charset,
         "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
         "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
-        "scene_string_xor_multiplier": get_scene_string_xor_multiplier(),
+        "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
 
 
@@ -1115,7 +1115,7 @@ def _native_compile_constants_config():
             [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
         ],
         "selection_command_codes": selection_command_codes,
-        "scene_string_xor_multiplier": get_scene_string_xor_multiplier(),
+        "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
 
 
@@ -1228,11 +1228,6 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug, legacy):
     if ok and (not debug) and tmp and tmp_auto:
         shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1
-
-
-def _env_truthy(name: str) -> bool:
-    value = os.environ.get(name, "")
-    return str(value).lower() in {"1", "true", "yes", "on"}
 
 
 def main(argv=None):
@@ -1363,9 +1358,7 @@ def main(argv=None):
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
-    a.legacy = bool(
-        getattr(a, "legacy", False) or _env_truthy("SIGLUS_SSU_LEGACY_COMPILE")
-    )
+    a.legacy = bool(getattr(a, "legacy", False) or _runtime._LEGACY_COMPILE)
     charset_arg = getattr(a, "charset", "") or ""
     charset = norm_charset(charset_arg)
     if charset_arg and not charset:
@@ -1521,18 +1514,11 @@ def main(argv=None):
     angou_content = None
     angou_path = ctx["angou_path"]
     if (not a.no_angou) and angou_path:
-        try:
-            angou_content = (
-                read_text_auto(angou_path, force_charset=charset)
-                .splitlines()[0]
-                .strip("\r\n")
-            )
-        except FilenameCaseCollisionError:
-            raise
-        except Exception:
-            angou_content = ""
+        lines = read_text_auto(angou_path, force_charset=charset).splitlines()
+        angou_content = lines[0] if lines else ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None
+    ctx["exe_angou_str"] = angou_content or ""
     _record_angou(ctx, angou_content)
     cache_lock = None
     if getattr(a, "tmp_dir", ""):

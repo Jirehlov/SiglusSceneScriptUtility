@@ -3,16 +3,10 @@ import os
 import struct
 import math
 
-
-def legacy_mode_enabled() -> bool:
-    value = os.environ.get("SIGLUS_SSU_LEGACY", "")
-    return value.lower() in {"1", "true", "yes", "on"}
+import siglus_ssu as _runtime
 
 
-_LEGACY_MODE = legacy_mode_enabled()
 try:
-    if _LEGACY_MODE:
-        raise ImportError("Legacy mode requested")
     from . import native_accel
 
     _native_lzss_pack = native_accel.lzss_pack
@@ -71,11 +65,11 @@ HAS_NATIVE_PAYLOAD = bool(_USE_NATIVE and callable(_native_scn_payload_hash_bund
 
 
 def is_native_available() -> bool:
-    return _USE_NATIVE
+    return _USE_NATIVE and not _runtime._LEGACY_FULL
 
 
 def compile_project_native(config):
-    if not HAS_NATIVE_COMPILE_BACKEND:
+    if not HAS_NATIVE_COMPILE_BACKEND or _runtime._LEGACY_FULL:
         return {
             "handled": False,
             "fallback_kind": "unavailable",
@@ -92,17 +86,17 @@ def compile_project_native(config):
 
 
 def native_lsp_scan_available() -> bool:
-    return HAS_NATIVE_LSP_SCAN
+    return HAS_NATIVE_LSP_SCAN and not _runtime._LEGACY_FULL
 
 
 def build_lsp_project_native(config):
-    if not HAS_NATIVE_LSP_SCAN:
+    if not HAS_NATIVE_LSP_SCAN or _runtime._LEGACY_FULL:
         return None
     return _native_lsp_build_project(config)
 
 
 def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False):
-    if not HAS_NATIVE_LSP_SCAN or project is None:
+    if not HAS_NATIVE_LSP_SCAN or _runtime._LEGACY_FULL or project is None:
         return None
     from .path_policy import windows_filename_key
 
@@ -112,14 +106,13 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
 
 def _payload_native_config():
     from ._const_manager import get_const_module
-    from .common import get_scene_string_xor_multiplier
 
     C = get_const_module()
     return _payload_native_config_cached(
         getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
         str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
         str(getattr(C, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
-        get_scene_string_xor_multiplier(),
+        _runtime._SCENE_STRING_XOR_MULTIPLIER,
     )
 
 
@@ -229,7 +222,7 @@ def _payload_native_config_cached(
 
 
 def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
-    if not HAS_NATIVE_PAYLOAD:
+    if not HAS_NATIVE_PAYLOAD or _runtime._LEGACY_FULL:
         return None
     try:
         return _native_scn_payload_hash_bundles(
@@ -671,19 +664,19 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
 
 
 def lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
-    if _USE_NATIVE:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
         return _native_lzss_pack(src, suppress_empty_tail_group)
     return _py_lzss_pack(src, suppress_empty_tail_group)
 
 
 def lzss_unpack(src: bytes) -> bytes:
-    if _USE_NATIVE:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
         return _native_lzss_unpack(src)
     return _py_lzss_unpack(src)
 
 
 def lzss32_pack(src: bytes) -> bytes:
-    if _USE_NATIVE and _native_lzss32_pack is not None:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_lzss32_pack is not None:
         try:
             return _native_lzss32_pack(src)
         except Exception:
@@ -692,7 +685,7 @@ def lzss32_pack(src: bytes) -> bytes:
 
 
 def lzss32_unpack(src: bytes) -> bytes:
-    if _USE_NATIVE and _native_lzss32_unpack is not None:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_lzss32_unpack is not None:
         try:
             return _native_lzss32_unpack(src)
         except Exception:
@@ -701,7 +694,7 @@ def lzss32_unpack(src: bytes) -> bytes:
 
 
 def xor_cycle_inplace(b, code, st=0):
-    if _USE_NATIVE and isinstance(b, bytearray):
+    if _USE_NATIVE and not _runtime._LEGACY_FULL and isinstance(b, bytearray):
         _native_xor_cycle_inplace(
             b, bytes(code) if not isinstance(code, bytes) else code, st
         )
@@ -710,13 +703,13 @@ def xor_cycle_inplace(b, code, st=0):
 
 
 def smd5_digest(data: bytes) -> bytes:
-    if _USE_NATIVE:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
         return _native_smd5_digest(data if data else b"")
     return _py_smd5_digest(data)
 
 
 def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
-    if _USE_NATIVE:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
         d_arr = bytearray(d) if isinstance(d, memoryview) else d
         s_bytes = bytes(s) if isinstance(s, memoryview) else s
         t_bytes = bytes(t) if not isinstance(t, bytes) else t
@@ -780,7 +773,7 @@ def find_rand_skip(
         return start_skip
     if max_scan <= 0:
         return None
-    if _USE_NATIVE and _native_find_rand_skip is not None:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_find_rand_skip is not None:
         try:
             return _native_find_rand_skip(seed, pattern, start_skip, max_scan)
         except (OverflowError, ValueError):
@@ -798,7 +791,7 @@ def _py_palette_bgra(palette, indices: bytes) -> bytes:
 
 
 def palette_bgra(palette, indices: bytes) -> bytes:
-    if _USE_NATIVE and _native_palette_bgra is not None:
+    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_palette_bgra is not None:
         return _native_palette_bgra(palette, indices)
     return _py_palette_bgra(palette, indices)
 
@@ -830,7 +823,11 @@ def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
 
 
 def msvcrand_shuffle_inplace(state: int, a) -> int:
-    if _USE_NATIVE and _native_msvcrand_shuffle_inplace is not None:
+    if (
+        _USE_NATIVE
+        and not _runtime._LEGACY_FULL
+        and _native_msvcrand_shuffle_inplace is not None
+    ):
         try:
             return int(_native_msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
         except Exception:
@@ -846,7 +843,11 @@ def find_shuffle_seed_first(
     chunk=None,
     progress_iv=None,
 ):
-    if not (_USE_NATIVE and _native_find_shuffle_seed_first is not None):
+    if not (
+        _USE_NATIVE
+        and not _runtime._LEGACY_FULL
+        and _native_find_shuffle_seed_first is not None
+    ):
         return None
     try:
         pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]

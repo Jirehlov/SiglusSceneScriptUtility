@@ -1542,7 +1542,6 @@ fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
     if let Some(content) = config
         .angou_content
         .as_deref()
-        .map(str::trim)
         .filter(|value| !value.is_empty())
     {
         let key = exe_angou_element(&encode_shift_jis_ignore(content), &config.constants.exe_org);

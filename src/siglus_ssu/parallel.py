@@ -4,6 +4,7 @@ import os
 import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+import siglus_ssu as _runtime
 from .path_policy import resolve_read_path
 
 
@@ -16,16 +17,6 @@ def get_max_workers(max_workers: int | None = None) -> int:
         cpu_count = os.cpu_count()
     cpu_count = int(cpu_count or 4)
     return max(1, min(cpu_count // 2, 16))
-
-
-def _env_or(name, parse, default):
-    value = os.environ.get(name)
-    if value is None or value == "":
-        return default
-    try:
-        return parse(value)
-    except Exception:
-        return default
 
 
 def _flush_stdio_before_process_pool() -> None:
@@ -47,6 +38,14 @@ def _multiprocessing_main():
         main_module.__spec__ = old_spec
 
 
+def _init_process(legacy_compile, legacy_full, multiplier, initializer, initargs):
+    _runtime._LEGACY_COMPILE = legacy_compile
+    _runtime._LEGACY_FULL = legacy_full
+    _runtime._SCENE_STRING_XOR_MULTIPLIER = multiplier
+    if initializer is not None:
+        initializer(*initargs)
+
+
 @contextmanager
 def process_pool(max_workers: int, initializer=None, initargs=()):
     from concurrent.futures import ProcessPoolExecutor
@@ -55,8 +54,14 @@ def process_pool(max_workers: int, initializer=None, initargs=()):
     with _multiprocessing_main():
         with ProcessPoolExecutor(
             max_workers=max_workers,
-            initializer=initializer,
-            initargs=tuple(initargs or ()),
+            initializer=_init_process,
+            initargs=(
+                _runtime._LEGACY_COMPILE,
+                _runtime._LEGACY_FULL,
+                _runtime._SCENE_STRING_XOR_MULTIPLIER,
+                initializer,
+                tuple(initargs or ()),
+            ),
         ) as executor:
             yield executor
 
@@ -108,8 +113,14 @@ def parallel_process_completed_map(
     with _multiprocessing_main():
         executor = ProcessPoolExecutor(
             max_workers=workers,
-            initializer=initializer,
-            initargs=tuple(initargs or ()),
+            initializer=_init_process,
+            initargs=(
+                _runtime._LEGACY_COMPILE,
+                _runtime._LEGACY_FULL,
+                _runtime._SCENE_STRING_XOR_MULTIPLIER,
+                initializer,
+                tuple(initargs or ()),
+            ),
         )
         futures = {}
         pending = set()
@@ -183,11 +194,9 @@ def parallel_process_map(
 
 
 def parallel_payload_compare(jobs, process_fn):
-    workers = _env_or("SSU_PAYLOAD_COMPARE_WORKERS", int, 0)
     return parallel_process_map(
         process_fn,
         jobs,
-        max_workers=workers,
         chunksize=1,
         fallback_to_serial=True,
     )
@@ -611,19 +620,13 @@ def find_shuffle_seed_parallel(
     target = [(int(o), int(ln)) for o, ln in target_idx_pairs]
     n = len(target)
     if workers is None:
-        workers = _env_or("SSU_TEST_SHUFFLE_WORKERS", int, 0)
-        if not workers:
-            workers = get_max_workers(None)
+        workers = get_max_workers(None)
     workers = max(1, int(workers))
     if chunk is None:
-        chunk = _env_or("SSU_TEST_SHUFFLE_CHUNK", int, 0)
-        if not chunk:
-            chunk = 200
+        chunk = 200
     chunk = max(1, int(chunk))
     if progress_iv is None:
-        progress_iv = _env_or("SSU_TEST_SHUFFLE_PROGRESS", float, 0.0)
-        if progress_iv <= 0:
-            progress_iv = 1.0
+        progress_iv = 1.0
     seed0 = int(seed0) & 0xFFFFFFFF
     prefix = "[test-shuffle]"
     try:
@@ -632,6 +635,7 @@ def find_shuffle_seed_parallel(
         find_shuffle_seed_first = getattr(_native_ops, "find_shuffle_seed_first", None)
         has_native_scan = bool(
             getattr(_native_ops, "HAS_NATIVE_FIND_SHUFFLE_SEED", False)
+            and not _runtime._LEGACY_FULL
         )
     except Exception:
         find_shuffle_seed_first = None

@@ -4,14 +4,11 @@ import sys
 from array import array
 from dataclasses import dataclass
 from typing import Iterator, List, Tuple
+import siglus_ssu as _runtime
 from .common import read_u32_le_from_file
-from .native_ops import legacy_mode_enabled
 from .path_policy import open_read
 
-_LEGACY_MODE = legacy_mode_enabled()
 try:
-    if _LEGACY_MODE:
-        raise ImportError("Legacy mode requested")
     from . import native_accel
 
     _native_nwa_decode_pcm = getattr(native_accel, "nwa_decode_pcm", None)
@@ -466,7 +463,11 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
     _nwa_pack_mod(h.pack_mod)
-    if _USE_NATIVE_NWA and _native_nwa_decode_pcm is not None:
+    if (
+        _USE_NATIVE_NWA
+        and not _runtime._LEGACY_FULL
+        and _native_nwa_decode_pcm is not None
+    ):
         pcm = _native_nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):
             raise TypeError("native_accel.nwa_decode_pcm returned non-bytes")

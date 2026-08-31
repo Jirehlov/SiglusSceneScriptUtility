@@ -2,8 +2,7 @@ import os
 import sys
 from importlib import import_module
 
-
-_SCENE_STRING_XOR_MULTIPLIER_ENV = "SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"
+import siglus_ssu as _runtime
 
 
 def _prog():
@@ -338,11 +337,6 @@ def _consume_global_options(argv):
             continue
         out.append(arg)
         i += 1
-    if legacy_full:
-        os.environ["SIGLUS_SSU_LEGACY"] = "1"
-        os.environ["SIGLUS_SSU_LEGACY_COMPILE"] = "1"
-    elif legacy:
-        os.environ["SIGLUS_SSU_LEGACY_COMPILE"] = "1"
     profile = None
     if const_profile is not None:
         value = str(const_profile).strip()
@@ -355,10 +349,17 @@ def _consume_global_options(argv):
                 f"invalid --const-profile value: {const_profile} (expected 0, 1, or 2)"
             )
 
+    multiplier = 0x7087
     if string_xor_multiplier is not None:
         multiplier = _parse_scene_string_xor_multiplier(string_xor_multiplier)
-        os.environ[_SCENE_STRING_XOR_MULTIPLIER_ENV] = str(multiplier)
-    return out, profile, string_xor_multiplier is not None
+    return (
+        out,
+        profile,
+        legacy or legacy_full,
+        legacy_full,
+        multiplier,
+        string_xor_multiplier is not None,
+    )
 
 
 def _run_mode(module_name, args):
@@ -408,13 +409,21 @@ MODE_MODULES = {
 }
 
 
-def _main(argv=None):
+def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
+    _runtime._LEGACY_COMPILE = False
+    _runtime._LEGACY_FULL = False
+    _runtime._SCENE_STRING_XOR_MULTIPLIER = 0x7087
     try:
-        argv, const_profile, string_xor_multiplier_explicit = _consume_global_options(
-            argv
-        )
+        (
+            argv,
+            const_profile,
+            _runtime._LEGACY_COMPILE,
+            _runtime._LEGACY_FULL,
+            _runtime._SCENE_STRING_XOR_MULTIPLIER,
+            string_xor_multiplier_explicit,
+        ) = _consume_global_options(argv)
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2
@@ -501,17 +510,6 @@ def _main(argv=None):
     sys.stderr.write(f"{_prog()}: unknown mode: {mode}\n")
     _usage_short()
     return 2
-
-
-def main(argv=None):
-    previous_multiplier = os.environ.get(_SCENE_STRING_XOR_MULTIPLIER_ENV)
-    try:
-        return _main(argv)
-    finally:
-        if previous_multiplier is None:
-            os.environ.pop(_SCENE_STRING_XOR_MULTIPLIER_ENV, None)
-        else:
-            os.environ[_SCENE_STRING_XOR_MULTIPLIER_ENV] = previous_multiplier
 
 
 if __name__ == "__main__":

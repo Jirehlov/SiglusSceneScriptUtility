@@ -4,6 +4,7 @@ import sys
 import struct
 import hashlib
 import re
+import siglus_ssu as _runtime
 from ._const_manager import get_const_module
 from .path_policy import (
     FilenameCaseCollisionError,
@@ -18,24 +19,10 @@ C = get_const_module()
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
-DEFAULT_SCENE_STRING_XOR_MULTIPLIER = 0x7087
-SCENE_STRING_XOR_MULTIPLIER_ENV = "SIGLUS_SSU_SCENE_STRING_XOR_MULTIPLIER"
-
-
-def get_scene_string_xor_multiplier():
-    raw = os.environ.get(SCENE_STRING_XOR_MULTIPLIER_ENV)
-    if raw is None or not str(raw).strip():
-        return DEFAULT_SCENE_STRING_XOR_MULTIPLIER
-    multiplier = int(str(raw).strip(), 0)
-    if not 0 <= multiplier <= 0xFFFF:
-        raise ValueError(
-            f"{SCENE_STRING_XOR_MULTIPLIER_ENV} must be between 0 and 0xFFFF"
-        )
-    return multiplier
 
 
 def scene_string_xor_key(index):
-    return (get_scene_string_xor_multiplier() * int(index)) & 0xFFFF
+    return (_runtime._SCENE_STRING_XOR_MULTIPLIER * int(index)) & 0xFFFF
 
 
 _ASCII_LOWER_TRANS = str.maketrans(
