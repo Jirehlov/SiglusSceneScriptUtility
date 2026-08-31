@@ -16,6 +16,7 @@
    - [方式二：从源码安装](#方式二从源码安装)
 3. [基本用法](#基本用法)
    - [全局选项](#全局选项)
+   - [场景字符串 XOR 乘数](#场景字符串-xor-乘数)
    - [命令别名](#命令别名)
    - [获取帮助](#获取帮助)
 4. [模式参考](#模式参考)
@@ -84,7 +85,7 @@ siglus-ssu init
 
 - **Python 3.12+**
 - **uv** — 项目管理器（[安装指南](https://github.com/astral-sh/uv)）
-- **Rust 工具链** — 构建原生扩展所需（[rustup.rs](https://rustup.rs/)）
+- **Rust 1.88+ 工具链** — 构建原生扩展所需（[rustup.rs](https://rustup.rs/)）
 
 #### 步骤
 
@@ -114,7 +115,7 @@ siglus-ssu init
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
 ```
 
 ### 全局选项
@@ -126,7 +127,31 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
 | `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。不能与 `-c --tmp` 同用。 |
-| `--string-xor-multiplier N` | 设置本次调用在编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。支持十进制和 `0x` 十六进制值。 |
+| `--string-xor-multiplier N` | 设置本次调用在编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
+
+### 场景字符串 XOR 乘数
+
+`--string-xor-multiplier N` 只改变已编译场景 `.dat` 字符串表中逐字符串的 XOR 变换。它不会关闭 LZSS 压缩或包/场景加密。`--no-angou` 控制这些外层处理，但它既不能替代本选项，也不会关闭场景字符串 XOR 变换。默认值 `0x7087` 保持引入本选项之前的行为。只有在目标作品的场景字符串确实以未 XOR 的 UTF-16LE 存储时才使用 `0`。本选项不会修改 `SiglusEngine.exe`，也不会改变 `-p --altkey` 使用的 key；重建后的场景只有在目标引擎变体采用相同场景字符串乘数时才能正常工作。
+
+乘数不会自动检测，也不会写入提取出的工作目录。凡是会解码、分析、比较、改写、测试或重新编译该作品场景字符串的命令，都应传入同一数值。错误数值可能不破坏文件结构，却会产生不可读文本，因此程序不一定能检测出不匹配。一次调用只接受一个乘数，并应用于本次处理的全部场景；不支持在同一个 `.pck` 内按场景混用乘数。因此，一条比较命令无法正确解码使用不同乘数的两个输入。请分别分析它们，或先用同一设置重建其中一方。使用 `-c --tmp` 时，乘数会写入缓存元数据；改变乘数会触发全部缓存场景的重新编译。
+
+不会解码或重建场景字符串表的模式会忽略本选项。具体而言，`-c --dat-repack` 只会原样复制现有 `.dat`，`-c --gei` 只处理 `Gameexe.dat`，普通 `-x` 提取也不会使用该乘数，除非同时请求反汇编或反编译。
+
+例如，对于场景字符串不使用这层 XOR 变换的作品，应保持以下命令中的数值一致：
+
+```bash
+# 提取并反汇编场景字符串
+siglus-ssu --string-xor-multiplier 0 -x --disam /path/to/Scene.pck /path/to/output_parent/
+
+# 从已提取的编译场景中导出字符串
+siglus-ssu --string-xor-multiplier 0 -m /path/to/extracted/chapter1.dat
+
+# 编辑 chapter1.dat.csv 后，使用相同设置将其应用回场景
+siglus-ssu --string-xor-multiplier 0 -m --apply /path/to/extracted/chapter1.dat
+
+# 如果改为处理 .ss 源码，也要使用该作品的相同设置编译
+siglus-ssu --string-xor-multiplier 0 -c /path/to/source/ /path/to/Scene_translated.pck
+```
 
 ### 命令别名
 

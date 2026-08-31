@@ -16,6 +16,7 @@
    - [Option 2: Install from Source](#option-2-install-from-source)
 3. [General Usage](#general-usage)
    - [Global Options](#global-options)
+   - [Scene String XOR Multiplier](#scene-string-xor-multiplier)
    - [Command Aliases](#command-aliases)
    - [Getting Help](#getting-help)
 4. [Modes Reference](#modes-reference)
@@ -84,7 +85,7 @@ siglus-ssu init
 
 - **Python 3.12+**
 - **uv** — project manager ([installation guide](https://github.com/astral-sh/uv))
-- **Rust toolchain** — required to build the native extension ([rustup.rs](https://rustup.rs/))
+- **Rust 1.88+ toolchain** — required to build the native extension ([rustup.rs](https://rustup.rs/))
 
 #### Steps
 
@@ -114,7 +115,7 @@ siglus-ssu init
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
 ```
 
 ### Global Options
@@ -126,7 +127,31 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] (-
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
 | `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`2`, default: `0`). Use a non-default profile only when targeting an engine/compiler variant whose form or element tables differ from the default profile. Cannot be combined with `-c --tmp`. |
-| `--string-xor-multiplier N` | Set the per-invocation multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0x7087`). In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Decimal and `0x` hexadecimal values are accepted. |
+| `--string-xor-multiplier N` | Set the per-invocation multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0x7087`). In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+
+### Scene String XOR Multiplier
+
+`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. The default value, `0x7087`, preserves the behavior used before this option was introduced. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
+
+The multiplier is not auto-detected and is not saved in an extracted working directory. Pass the same value to every command that decodes, analyzes, compares, rewrites, tests, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. One invocation applies one multiplier to every scene it processes; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
+
+Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested.
+
+For example, use the following commands for a title whose scene strings do not use this XOR transform:
+
+```bash
+# Extract and disassemble scene strings
+siglus-ssu --string-xor-multiplier 0 -x --disam /path/to/Scene.pck /path/to/output_parent/
+
+# Export strings from an extracted compiled scene
+siglus-ssu --string-xor-multiplier 0 -m /path/to/extracted/chapter1.dat
+
+# After editing chapter1.dat.csv, apply it with the same setting
+siglus-ssu --string-xor-multiplier 0 -m --apply /path/to/extracted/chapter1.dat
+
+# If working from .ss source instead, compile it with the same title setting
+siglus-ssu --string-xor-multiplier 0 -c /path/to/source/ /path/to/Scene_translated.pck
+```
 
 ### Command Aliases
 

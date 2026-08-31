@@ -36,7 +36,7 @@ def _usage(out=None):
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
         "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
-        "  --string-xor-multiplier Set scene string XOR multiplier (default: 0x7087; 0 disables XOR)\n"
+        "  --string-xor-multiplier Set scene-string XOR multiplier (0..0xFFFF; default: 0x7087; 0 disables this XOR only)\n"
         "\n"
         "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
