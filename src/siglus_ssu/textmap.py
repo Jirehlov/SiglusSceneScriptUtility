@@ -36,10 +36,6 @@ TEXTMAP_KIND_OTHER = 3
 
 
 def _csv_escape_text(s: str) -> str:
-    if s is None:
-        return ""
-    if not isinstance(s, str):
-        s = str(s)
     out = []
     for ch in s:
         if ch == "\\":

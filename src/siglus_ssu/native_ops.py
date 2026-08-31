@@ -8,60 +8,10 @@ import siglus_ssu as _runtime
 
 try:
     from . import native_accel
+except (ImportError, OSError):
+    native_accel = None
 
-    _native_lzss_pack = native_accel.lzss_pack
-    _native_lzss_unpack = native_accel.lzss_unpack
-    _native_lzss32_pack = getattr(native_accel, "lzss32_pack", None)
-    _native_lzss32_unpack = getattr(native_accel, "lzss32_unpack", None)
-    _native_xor_cycle_inplace = native_accel.xor_cycle_inplace
-    _native_smd5_digest = native_accel.smd5_digest
-    _native_tile_copy = native_accel.tile_copy
-    _native_msvcrand_shuffle_inplace = native_accel.msvcrand_shuffle_inplace
-    _native_find_shuffle_seed_first = getattr(
-        native_accel, "find_shuffle_seed_first", None
-    )
-    _native_find_rand_skip = getattr(native_accel, "find_rand_skip", None)
-    _native_palette_bgra = getattr(native_accel, "palette_bgra", None)
-    _native_compile_backend_available = getattr(
-        native_accel, "compile_backend_available", None
-    )
-    _native_compile_project = getattr(native_accel, "compile_project", None)
-    _native_lsp_build_project = getattr(native_accel, "lsp_build_project", None)
-    _native_lsp_scan_document = getattr(native_accel, "lsp_scan_document", None)
-    _native_scn_payload_config = getattr(native_accel, "scn_payload_config", None)
-    _native_scn_payload_hash_bundles = getattr(
-        native_accel, "scn_payload_hash_bundles", None
-    )
-    _USE_NATIVE = True
-except (ImportError, AttributeError):
-    _USE_NATIVE = False
-    _native_lzss32_pack = None
-    _native_lzss32_unpack = None
-    _native_msvcrand_shuffle_inplace = None
-    _native_find_shuffle_seed_first = None
-    _native_find_rand_skip = None
-    _native_palette_bgra = None
-    _native_compile_backend_available = None
-    _native_compile_project = None
-    _native_lsp_build_project = None
-    _native_lsp_scan_document = None
-    _native_scn_payload_config = None
-    _native_scn_payload_hash_bundles = None
-HAS_NATIVE_FIND_SHUFFLE_SEED = bool(
-    _USE_NATIVE and (_native_find_shuffle_seed_first is not None)
-)
-HAS_NATIVE_COMPILE_BACKEND = bool(
-    _USE_NATIVE
-    and callable(_native_compile_backend_available)
-    and _native_compile_backend_available()
-    and callable(_native_compile_project)
-)
-HAS_NATIVE_LSP_SCAN = bool(
-    HAS_NATIVE_COMPILE_BACKEND
-    and callable(_native_lsp_build_project)
-    and callable(_native_lsp_scan_document)
-)
-HAS_NATIVE_PAYLOAD = bool(_USE_NATIVE and callable(_native_scn_payload_hash_bundles))
+_USE_NATIVE = native_accel is not None
 
 
 def is_native_available() -> bool:
@@ -69,39 +19,34 @@ def is_native_available() -> bool:
 
 
 def compile_project_native(config):
-    if not HAS_NATIVE_COMPILE_BACKEND or _runtime._LEGACY_FULL:
+    if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return {
             "handled": False,
             "fallback_kind": "unavailable",
             "reason": "native extension is not available",
         }
-    try:
-        return _native_compile_project(config)
-    except Exception as exc:
-        return {
-            "handled": False,
-            "fallback_kind": "error",
-            "reason": str(exc),
-        }
+    return native_accel.compile_project(config)
 
 
 def native_lsp_scan_available() -> bool:
-    return HAS_NATIVE_LSP_SCAN and not _runtime._LEGACY_FULL
+    return _USE_NATIVE and not _runtime._LEGACY_FULL
 
 
 def build_lsp_project_native(config):
-    if not HAS_NATIVE_LSP_SCAN or _runtime._LEGACY_FULL:
+    if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
-    return _native_lsp_build_project(config)
+    return native_accel.lsp_build_project(config)
 
 
 def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False):
-    if not HAS_NATIVE_LSP_SCAN or _runtime._LEGACY_FULL or project is None:
+    if not _USE_NATIVE or _runtime._LEGACY_FULL or project is None:
         return None
     from .path_policy import windows_filename_key
 
     path_identity = windows_filename_key(os.path.abspath(path))
-    return _native_lsp_scan_document(project, path, path_identity, text, bool(run_bs))
+    return native_accel.lsp_scan_document(
+        project, path, path_identity, text, bool(run_bs)
+    )
 
 
 def _payload_native_config():
@@ -213,25 +158,19 @@ def _payload_native_config_cached(
             (int(parent), int(elem)) for parent, elem in C.READ_FLAG_COMMAND_CODES
         ],
     }
-    if callable(_native_scn_payload_config):
-        try:
-            return _native_scn_payload_config(config)
-        except Exception:
-            pass
-    return config
+    if not _USE_NATIVE:
+        return config
+    return native_accel.scn_payload_config(config)
 
 
 def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
-    if not HAS_NATIVE_PAYLOAD or _runtime._LEGACY_FULL:
+    if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
-    try:
-        return _native_scn_payload_hash_bundles(
-            blob if isinstance(blob, bytes) else bytes(blob),
-            _payload_native_config(),
-            pack_context if isinstance(pack_context, dict) else None,
-        )
-    except Exception:
-        return None
+    return native_accel.scn_payload_hash_bundles(
+        blob if isinstance(blob, bytes) else bytes(blob),
+        _payload_native_config(),
+        pack_context if isinstance(pack_context, dict) else None,
+    )
 
 
 class _LzssTree:
@@ -665,37 +604,31 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
 
 def lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
-        return _native_lzss_pack(src, suppress_empty_tail_group)
+        return native_accel.lzss_pack(src, suppress_empty_tail_group)
     return _py_lzss_pack(src, suppress_empty_tail_group)
 
 
 def lzss_unpack(src: bytes) -> bytes:
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
-        return _native_lzss_unpack(src)
+        return native_accel.lzss_unpack(src)
     return _py_lzss_unpack(src)
 
 
 def lzss32_pack(src: bytes) -> bytes:
-    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_lzss32_pack is not None:
-        try:
-            return _native_lzss32_pack(src)
-        except Exception:
-            pass
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
+        return native_accel.lzss32_pack(src)
     return _py_lzss32_pack(src)
 
 
 def lzss32_unpack(src: bytes) -> bytes:
-    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_lzss32_unpack is not None:
-        try:
-            return _native_lzss32_unpack(src)
-        except Exception:
-            pass
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
+        return native_accel.lzss32_unpack(src)
     return _py_lzss32_unpack(src)
 
 
 def xor_cycle_inplace(b, code, st=0):
     if _USE_NATIVE and not _runtime._LEGACY_FULL and isinstance(b, bytearray):
-        _native_xor_cycle_inplace(
+        native_accel.xor_cycle_inplace(
             b, bytes(code) if not isinstance(code, bytes) else code, st
         )
     else:
@@ -704,7 +637,7 @@ def xor_cycle_inplace(b, code, st=0):
 
 def smd5_digest(data: bytes) -> bytes:
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
-        return _native_smd5_digest(data if data else b"")
+        return native_accel.smd5_digest(data if data else b"")
     return _py_smd5_digest(data)
 
 
@@ -713,7 +646,7 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         d_arr = bytearray(d) if isinstance(d, memoryview) else d
         s_bytes = bytes(s) if isinstance(s, memoryview) else s
         t_bytes = bytes(t) if not isinstance(t, bytes) else t
-        _native_tile_copy(
+        native_accel.tile_copy(
             d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim
         )
         if isinstance(d, memoryview):
@@ -773,11 +706,8 @@ def find_rand_skip(
         return start_skip
     if max_scan <= 0:
         return None
-    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_find_rand_skip is not None:
-        try:
-            return _native_find_rand_skip(seed, pattern, start_skip, max_scan)
-        except (OverflowError, ValueError):
-            pass
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
+        return native_accel.find_rand_skip(seed, pattern, start_skip, max_scan)
     return _py_find_rand_skip(seed, pattern, start_skip, max_scan)
 
 
@@ -791,8 +721,8 @@ def _py_palette_bgra(palette, indices: bytes) -> bytes:
 
 
 def palette_bgra(palette, indices: bytes) -> bytes:
-    if _USE_NATIVE and not _runtime._LEGACY_FULL and _native_palette_bgra is not None:
-        return _native_palette_bgra(palette, indices)
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
+        return native_accel.palette_bgra(palette, indices)
     return _py_palette_bgra(palette, indices)
 
 
@@ -823,15 +753,8 @@ def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
 
 
 def msvcrand_shuffle_inplace(state: int, a) -> int:
-    if (
-        _USE_NATIVE
-        and not _runtime._LEGACY_FULL
-        and _native_msvcrand_shuffle_inplace is not None
-    ):
-        try:
-            return int(_native_msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
-        except Exception:
-            return _py_msvcrand_shuffle_inplace(state, a)
+    if _USE_NATIVE and not _runtime._LEGACY_FULL:
+        return int(native_accel.msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
     return _py_msvcrand_shuffle_inplace(state, a)
 
 
@@ -843,20 +766,13 @@ def find_shuffle_seed_first(
     chunk=None,
     progress_iv=None,
 ):
-    if not (
-        _USE_NATIVE
-        and not _runtime._LEGACY_FULL
-        and _native_find_shuffle_seed_first is not None
-    ):
+    if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
-    try:
-        pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
-        return _native_find_shuffle_seed_first(
-            pairs,
-            int(seed0) & 0xFFFFFFFF,
-            workers,
-            chunk,
-            progress_iv,
-        )
-    except Exception:
-        return None
+    pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
+    return native_accel.find_shuffle_seed_first(
+        pairs,
+        int(seed0) & 0xFFFFFFFF,
+        workers,
+        chunk,
+        progress_iv,
+    )

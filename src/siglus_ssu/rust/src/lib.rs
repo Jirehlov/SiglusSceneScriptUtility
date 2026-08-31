@@ -492,11 +492,6 @@ fn find_shuffle_seed_first(
 }
 
 #[pyfunction]
-fn compile_backend_available() -> PyResult<bool> {
-    Ok(compile_backend::available())
-}
-
-#[pyfunction]
 fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
     match catch_unwind(AssertUnwindSafe(|| {
         compile_backend::compile_project(py, config)
@@ -564,7 +559,6 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(find_shuffle_seed_first, m)?)?;
     m.add_function(wrap_pyfunction!(find_rand_skip, m)?)?;
     m.add_function(wrap_pyfunction!(palette_bgra, m)?)?;
-    m.add_function(wrap_pyfunction!(compile_backend_available, m)?)?;
     m.add_function(wrap_pyfunction!(compile_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_build_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_scan_document, m)?)?;

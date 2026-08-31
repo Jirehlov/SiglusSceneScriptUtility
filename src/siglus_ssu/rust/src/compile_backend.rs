@@ -19,10 +19,6 @@ mod sa;
 mod scene_dat;
 mod source_angou;
 
-pub fn available() -> bool {
-    true
-}
-
 fn usize_map_to_dict<'py>(
     py: Python<'py>,
     map: &std::collections::BTreeMap<String, usize>,

@@ -26,7 +26,7 @@ from .native_ops import (
     smd5_digest,
     tile_copy,
     compile_project_native,
-    HAS_NATIVE_COMPILE_BACKEND,
+    is_native_available,
 )
 from .common import (
     ascii_lower,
@@ -251,13 +251,10 @@ def _parse_u32_token(t, opt):
     s = str(t).strip() if t is not None else ""
     if not _is_int_token(s):
         raise ValueError(f"{opt} expects a u32 integer")
-    try:
-        if s.startswith(("0x", "0X")):
-            n = int(s[2:], 16)
-        else:
-            n = int(s, 10)
-    except ValueError:
-        raise ValueError(f"{opt} expects a u32 integer") from None
+    if s.startswith(("0x", "0X")):
+        n = int(s[2:], 16)
+    else:
+        n = int(s, 10)
     if n < 0 or n > 0xFFFFFFFF:
         raise ValueError(f"{opt} expects a u32 integer")
     return n
@@ -579,10 +576,7 @@ def _scene_ssid_from_text(text):
     raw = line[len(prefix) : len(prefix) + 4]
     if len(raw) != 4 or not raw.isascii() or not raw.isdigit():
         return None
-    try:
-        return int(raw)
-    except Exception:
-        return None
+    return int(raw)
 
 
 def _scan_dir(p):
@@ -1358,7 +1352,7 @@ def main(argv=None):
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
-    a.legacy = bool(getattr(a, "legacy", False) or _runtime._LEGACY_COMPILE)
+    a.legacy = a.legacy or _runtime._LEGACY_COMPILE
     charset_arg = getattr(a, "charset", "") or ""
     charset = norm_charset(charset_arg)
     if charset_arg and not charset:
@@ -1528,7 +1522,7 @@ def main(argv=None):
             sys.stderr.write(str(exc) + "\n")
             return 1
     native_rc = None
-    if HAS_NATIVE_COMPILE_BACKEND and not a.legacy:
+    if is_native_available() and not a.legacy:
         try:
             native_rc = _try_native_compile(
                 _native_compile_config(
@@ -1704,11 +1698,7 @@ def main(argv=None):
                             )
                         targets.append(_read_scn_dat_idx_pairs(exp_dat))
                     seed0 = int(test_seed0) & 0xFFFFFFFF
-                    try:
-                        from .native_ops import is_native_available
-                    except Exception:
-                        is_native_available = None
-                    if callable(is_native_available) and is_native_available():
+                    if is_native_available():
                         sys.stderr.write(f"{test_shuffle_prefix} Accelerated by Rust\n")
                     sys.stderr.write(
                         f"{test_shuffle_prefix} parallel scan starting at seed={seed0}\n"
@@ -1802,7 +1792,7 @@ def main(argv=None):
             link_pack(ctx)
         ok = not test_shuffle_failed
     except Exception as e:
-        msg = str(e) if e is not None else ""
+        msg = str(e)
         if not msg:
             msg = "UNK_ERROR at unknown:0"
         sys.stderr.write(msg + "\n")

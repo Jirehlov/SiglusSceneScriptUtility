@@ -198,75 +198,6 @@ def _usage_short(out=None):
     out.write(text)
 
 
-def _has_cli_option(argv, option):
-    for item in argv or []:
-        value = str(item)
-        if value == option or value.startswith(option + "="):
-            return True
-    return False
-
-
-def _string_xor_multiplier_unused_reason(mode, args):
-    if mode in ("-c", "--compile"):
-        if _has_cli_option(args, "--gei") and not _has_cli_option(
-            args, "--test-shuffle"
-        ):
-            return "with --gei because Gameexe.dat has no scene string table"
-        if _has_cli_option(args, "--dat-repack"):
-            return "with --dat-repack because existing .dat files are copied unchanged"
-        return ""
-    if mode in ("-x", "--extract"):
-        if _has_cli_option(args, "--disam") or _has_cli_option(args, "--decompile"):
-            return ""
-        if _has_cli_option(args, "--gei"):
-            return "with --gei because Gameexe.dat has no scene string table"
-        return "during extraction without --disam or --decompile"
-    if mode in ("-a", "--analyze"):
-        if (
-            _has_cli_option(args, "--disam")
-            or _has_cli_option(args, "--payload")
-            or _has_cli_option(args, "--word")
-        ):
-            return ""
-        if _has_cli_option(args, "--gei"):
-            return "with --gei because Gameexe.dat has no scene string table"
-        return "during structural analysis without --disam, --payload, or --word"
-    if mode in ("-k", "--koe"):
-        if _has_cli_option(args, "--single"):
-            return "with --single because no scene input is scanned"
-        return ""
-    if mode in (
-        "-lsp",
-        "init",
-        "--init",
-        "-d",
-        "--db",
-        "-e",
-        "--exec",
-        "--execute",
-        "-g",
-        "--g00",
-        "-s",
-        "--sound",
-        "-v",
-        "--video",
-        "-p",
-        "--patch",
-    ):
-        return f"in {mode} mode because it does not process scene string tables"
-    return ""
-
-
-def _warn_unused_string_xor_multiplier(mode, args, multiplier_explicit):
-    if not multiplier_explicit:
-        return
-    reason = _string_xor_multiplier_unused_reason(mode, args)
-    if reason:
-        sys.stderr.write(
-            f"{_prog()}: warning: --string-xor-multiplier has no effect {reason}\n"
-        )
-
-
 def _parse_scene_string_xor_multiplier(value):
     text = str(value).strip()
     if text.startswith(("0x", "0X")):
@@ -279,10 +210,7 @@ def _parse_scene_string_xor_multiplier(value):
         valid = bool(digits) and all("0" <= ch <= "9" for ch in digits)
     if not valid:
         raise ValueError(f"invalid --string-xor-multiplier value: {value}")
-    try:
-        multiplier = int(digits, base)
-    except ValueError:
-        raise ValueError(f"invalid --string-xor-multiplier value: {value}") from None
+    multiplier = int(digits, base)
     if not 0 <= multiplier <= 0xFFFF:
         raise ValueError(
             f"invalid --string-xor-multiplier value: {value} (expected 0..0xFFFF)"
@@ -358,7 +286,6 @@ def _consume_global_options(argv):
         legacy or legacy_full,
         legacy_full,
         multiplier,
-        string_xor_multiplier is not None,
     )
 
 
@@ -422,7 +349,6 @@ def main(argv=None):
             _runtime._LEGACY_COMPILE,
             _runtime._LEGACY_FULL,
             _runtime._SCENE_STRING_XOR_MULTIPLIER,
-            string_xor_multiplier_explicit,
         ) = _consume_global_options(argv)
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
@@ -443,7 +369,6 @@ def main(argv=None):
     ):
         _usage()
         return 0
-    _warn_unused_string_xor_multiplier(mode, argv[1:], string_xor_multiplier_explicit)
     if mode in ("init", "--init"):
         from ._const_manager import (
             _fallback_const_path,

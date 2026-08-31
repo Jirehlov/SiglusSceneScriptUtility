@@ -950,10 +950,8 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
 def decode_scn_dat_with_candidates(blob: bytes, candidates=None, trace: bool = False):
     if looks_like_siglus_dat(blob):
         return bytes(blob), b""
-    try:
-        from . import textmap as _textmap
-    except Exception:
-        return bytes(blob), b""
+    from . import textmap as _textmap
+
     cands = list(candidates or [])
     if not cands:
         cands = [b""]

@@ -10,12 +10,8 @@ from .path_policy import open_read
 
 try:
     from . import native_accel
-
-    _native_nwa_decode_pcm = getattr(native_accel, "nwa_decode_pcm", None)
-    _USE_NATIVE_NWA = _native_nwa_decode_pcm is not None
-except (ImportError, AttributeError, OSError):
-    _native_nwa_decode_pcm = None
-    _USE_NATIVE_NWA = False
+except (ImportError, OSError):
+    native_accel = None
 
 
 def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
@@ -463,12 +459,8 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
     _nwa_pack_mod(h.pack_mod)
-    if (
-        _USE_NATIVE_NWA
-        and not _runtime._LEGACY_FULL
-        and _native_nwa_decode_pcm is not None
-    ):
-        pcm = _native_nwa_decode_pcm(data)
+    if native_accel is not None and not _runtime._LEGACY_FULL:
+        pcm = native_accel.nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):
             raise TypeError("native_accel.nwa_decode_pcm returned non-bytes")
         pcm_b = bytes(pcm)

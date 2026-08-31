@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 import siglus_ssu as _runtime
+from .native_ops import find_shuffle_seed_first, is_native_available
 from .path_policy import resolve_read_path
 
 
@@ -629,18 +630,7 @@ def find_shuffle_seed_parallel(
         progress_iv = 1.0
     seed0 = int(seed0) & 0xFFFFFFFF
     prefix = "[test-shuffle]"
-    try:
-        from . import native_ops as _native_ops
-
-        find_shuffle_seed_first = getattr(_native_ops, "find_shuffle_seed_first", None)
-        has_native_scan = bool(
-            getattr(_native_ops, "HAS_NATIVE_FIND_SHUFFLE_SEED", False)
-            and not _runtime._LEGACY_FULL
-        )
-    except Exception:
-        find_shuffle_seed_first = None
-        has_native_scan = False
-    if has_native_scan and callable(find_shuffle_seed_first):
+    if is_native_available():
         r = find_shuffle_seed_first(
             target,
             seed0,

@@ -1025,10 +1025,7 @@ def write_status(text: str) -> None:
 
 
 def format_elapsed_seconds(seconds) -> str:
-    try:
-        return f"{float(seconds):.3f}s"
-    except Exception:
-        return "0.000s"
+    return f"{float(seconds):.3f}s"
 
 
 def new_disam_stats() -> dict:
@@ -1042,35 +1039,25 @@ def new_disam_stats() -> dict:
 
 
 def add_elapsed_seconds(stats, key: str, seconds) -> None:
-    if not isinstance(stats, dict):
+    if stats is None:
         return
-    try:
-        elapsed = max(0.0, float(seconds))
-    except Exception:
-        return
-    try:
-        stats[str(key or "")] = float(stats.get(key, 0.0) or 0.0) + elapsed
-    except Exception:
-        return
+    stats[key] = float(stats.get(key, 0.0) or 0.0) + max(0.0, float(seconds))
 
 
 def write_disam_totals(out, stats) -> None:
     if out is None:
         out = sys.stdout
-    try:
+    out.write(
+        f"Total disassembly time: {format_elapsed_seconds(stats.get('disassembly_seconds', 0.0))}\n"
+    )
+    if float(stats.get("decompile_hints_seconds", 0.0) or 0.0) > 0.0:
         out.write(
-            f"Total disassembly time: {format_elapsed_seconds((stats or {}).get('disassembly_seconds', 0.0))}\n"
+            f"Total decompile hints time: {format_elapsed_seconds(stats.get('decompile_hints_seconds', 0.0))}\n"
         )
-        if float((stats or {}).get("decompile_hints_seconds", 0.0) or 0.0) > 0.0:
-            out.write(
-                f"Total decompile hints time: {format_elapsed_seconds((stats or {}).get('decompile_hints_seconds', 0.0))}\n"
-            )
-        if float((stats or {}).get("decompile_seconds", 0.0) or 0.0) > 0.0:
-            out.write(
-                f"Total decompile time: {format_elapsed_seconds((stats or {}).get('decompile_seconds', 0.0))}\n"
-            )
-    except Exception:
-        return
+    if float(stats.get("decompile_seconds", 0.0) or 0.0) > 0.0:
+        out.write(
+            f"Total decompile time: {format_elapsed_seconds(stats.get('decompile_seconds', 0.0))}\n"
+        )
 
 
 def ensure_parent_dir(path: str) -> None:
@@ -1165,23 +1152,13 @@ def parse_exe_el_key_text(text: str) -> bytes:
         return b""
     m = re.findall(r"0x([0-9a-fA-F]{2})", t, flags=re.IGNORECASE)
     if len(m) >= 16:
-        try:
-            return bytes(int(x, 16) & 255 for x in m[:16])
-        except Exception:
-            return b""
+        return bytes(int(x, 16) for x in m[:16])
     m = re.findall(r"\b([0-9a-fA-F]{2})\b", t)
     if len(m) >= 16:
-        try:
-            return bytes(int(x, 16) & 255 for x in m[:16])
-        except Exception:
-            return b""
+        return bytes(int(x, 16) for x in m[:16])
     m = re.findall(r"\b(\d{1,3})\b", t)
     if len(m) >= 16:
-        try:
-            out = bytes(int(x) & 255 for x in m[:16])
-            return out if len(out) == 16 else b""
-        except Exception:
-            return b""
+        return bytes(int(x) & 255 for x in m[:16])
     return b""
 
 
@@ -1586,25 +1563,12 @@ def log_stage(stage, file_path, ctx=None):
 
 
 def record_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(timings.get(stage, 0.0)) + float(elapsed)
-    except Exception:
-        pass
+    timings = ctx.setdefault("stats", {}).setdefault("stage_time", {})
+    timings[stage] = timings.get(stage, 0.0) + elapsed
 
 
 def set_stage_time(ctx, stage, elapsed):
-    try:
-        if not isinstance(ctx, dict):
-            return
-        stats = ctx.setdefault("stats", {})
-        timings = stats.setdefault("stage_time", {})
-        timings[stage] = float(elapsed)
-    except Exception:
-        pass
+    ctx.setdefault("stats", {}).setdefault("stage_time", {})[stage] = elapsed
 
 
 def eprint(msg: str, errors: str = "backslashreplace") -> None:
