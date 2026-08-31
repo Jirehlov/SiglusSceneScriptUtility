@@ -194,15 +194,6 @@ def parallel_process_map(
         return [process_fn(item) for item in item_list]
 
 
-def parallel_payload_compare(jobs, process_fn):
-    return parallel_process_map(
-        process_fn,
-        jobs,
-        chunksize=1,
-        fallback_to_serial=True,
-    )
-
-
 _COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool] | None = None
 
 

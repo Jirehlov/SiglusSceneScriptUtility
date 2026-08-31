@@ -28,10 +28,6 @@ def compile_project_native(config):
     return native_accel.compile_project(config)
 
 
-def native_lsp_scan_available() -> bool:
-    return _USE_NATIVE and not _runtime._LEGACY_FULL
-
-
 def build_lsp_project_native(config):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None

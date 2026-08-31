@@ -394,7 +394,7 @@ def _native_compile_cache_config(
         charset=charset,
         ss=ss,
         inc=inc,
-        incremental=bool(getattr(args, "tmp_dir", "")),
+        incremental=bool(args.tmp_dir),
     )
     dat_paths, lzss_paths = _native_cache_read_paths(
         tmp_dir,
@@ -403,7 +403,7 @@ def _native_compile_cache_config(
         use_lzss=not args.no_angou and not args.no_lzss,
     )
     lzss_remove_paths = []
-    if getattr(args, "tmp_dir", "") and not args.no_angou:
+    if args.tmp_dir and not args.no_angou:
         bs_dir = os.path.join(tmp_dir, "bs")
         if full_compile:
             try:
@@ -424,8 +424,8 @@ def _native_compile_cache_config(
                 except (FileNotFoundError, NotADirectoryError):
                     pass
     full_compile_stats = (
-        (not getattr(args, "dat_repack", False))
-        and not getattr(args, "tmp_dir", "")
+        (not args.dat_repack)
+        and not args.tmp_dir
         and (not test_shuffle)
         and bool(ss)
         and len(compile_list) == len(ss or [])
@@ -494,17 +494,13 @@ def _read_scn_dat_header_bytes(path):
     return b, h
 
 
-def _read_scn_dat_str_index(path):
-    return _read_scn_dat(path)
-
-
 def _read_scn_dat_idx_pairs(path):
-    _, _, idx = _read_scn_dat_str_index(path)
+    _, _, idx = _read_scn_dat(path)
     return list(idx)
 
 
 def _read_scn_dat_str_pool(path):
-    b, h, idx = _read_scn_dat_str_index(path)
+    b, h, idx = _read_scn_dat(path)
     order = sorted(range(len(idx)), key=lambda o: idx[o][0])
     base = h.get("str_list_ofs", 0)
     out = []
@@ -1182,9 +1178,7 @@ def _native_compile_config(
     }
 
 
-def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug, legacy):
-    if legacy:
-        return None
+def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
     result = compile_project_native(config)
     if not isinstance(result, dict):
         sys.stderr.write(
@@ -1353,19 +1347,17 @@ def main(argv=None):
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
     a.legacy = a.legacy or _runtime._LEGACY_COMPILE
-    charset_arg = getattr(a, "charset", "") or ""
+    charset_arg = a.charset or ""
     charset = norm_charset(charset_arg)
     if charset_arg and not charset:
         sys.stderr.write(f"{prog}: error: unsupported --charset: {charset_arg}\n")
         return 2
-    test_shuffle_csv_path = _resolve_test_shuffle_csv_path(
-        getattr(a, "csv_path", "") or ""
-    )
+    test_shuffle_csv_path = _resolve_test_shuffle_csv_path(a.csv_path or "")
     if test_shuffle_csv_path and not test_shuffle:
         sys.stderr.write(f"{prog}: error: --csv requires --test-shuffle\n")
         return 2
     user_seed = None
-    if getattr(a, "set_shuffle", None) is not None:
+    if a.set_shuffle is not None:
         try:
             user_seed = _parse_u32_token(a.set_shuffle, "--set-shuffle")
         except ValueError as exc:
@@ -1405,7 +1397,7 @@ def main(argv=None):
         return 1
     if test_shuffle:
         try:
-            test_dir = resolve_read_path(getattr(a, "test_dir", "") or "", kind="dir")
+            test_dir = resolve_read_path(a.test_dir or "", kind="dir")
         except (FileNotFoundError, NotADirectoryError):
             sys.stderr.write("test_dir not found\n")
             return 1
@@ -1436,7 +1428,7 @@ def main(argv=None):
     tmp = ""
     tmp_auto = False
     if not a.gei:
-        if getattr(a, "tmp_dir", ""):
+        if a.tmp_dir:
             try:
                 tmp = resolve_read_path(a.tmp_dir, kind="dir")
                 for _ in walk_read_directory(tmp):
@@ -1515,7 +1507,7 @@ def main(argv=None):
     ctx["exe_angou_str"] = angou_content or ""
     _record_angou(ctx, angou_content)
     cache_lock = None
-    if getattr(a, "tmp_dir", ""):
+    if a.tmp_dir:
         try:
             cache_lock = _CompileCacheLock(tmp)
         except (OSError, RuntimeError) as exc:
@@ -1544,7 +1536,6 @@ def main(argv=None):
                 tmp=tmp,
                 tmp_auto=tmp_auto,
                 debug=bool(a.debug),
-                legacy=False,
             )
         except Exception:
             if cache_lock is not None:
@@ -1580,10 +1571,10 @@ def main(argv=None):
                     charset=charset,
                     ss=ss,
                     inc=inc,
-                    incremental=bool(getattr(a, "tmp_dir", "")),
+                    incremental=bool(a.tmp_dir),
                 )
             )
-            if getattr(a, "tmp_dir", "") and not a.no_angou:
+            if a.tmp_dir and not a.no_angou:
                 bs_dir = os.path.join(tmp, "bs")
                 if full_compile and os.path.isdir(bs_dir):
                     _, entries = read_directory(bs_dir)
@@ -1599,7 +1590,7 @@ def main(argv=None):
                         if os.path.isfile(lp):
                             with suppress(OSError):
                                 os.remove(lp)
-            if getattr(a, "dat_repack", False):
+            if a.dat_repack:
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
                 dats = []
@@ -1629,8 +1620,8 @@ def main(argv=None):
             if test_shuffle:
                 compile_list = ss
             full_compile_stats = (
-                (not getattr(a, "dat_repack", False))
-                and not getattr(a, "tmp_dir", "")
+                (not a.dat_repack)
+                and not a.tmp_dir
                 and (not test_shuffle)
                 and bool(ss)
                 and len(compile_list) == len(ss)

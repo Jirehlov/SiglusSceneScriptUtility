@@ -33,7 +33,7 @@ from .common import (
 )
 from .native_ops import (
     build_lsp_project_native,
-    native_lsp_scan_available,
+    is_native_available,
     scan_lsp_document_native,
 )
 from .path_policy import (
@@ -1453,7 +1453,7 @@ def _native_lsp_project_config(
     project: ProjectContext,
     overlays: dict[str, str],
 ) -> dict[str, Any] | None:
-    if not native_lsp_scan_available() or project.build_error is not None:
+    if not is_native_available() or project.build_error is not None:
         return None
     try:
         from .compiler import _native_compile_constants_config

@@ -157,7 +157,7 @@ def main(argv=None):
         last_err = None
         for cand in cands:
             src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-            exe_el = src.get("exe_el") if isinstance(src, dict) else cand
+            exe_el = src.get("exe_el")
             sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
             try:
                 out_path = GEI.restore_gameexe_ini(in_path, out_dir, exe_el=exe_el)

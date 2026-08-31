@@ -429,7 +429,7 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
     last_err = None
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el") if isinstance(src, dict) else cand
+        exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         try:
             info, txt = GEI.read_gameexe_dat(gameexe_path, exe_el=exe_el)

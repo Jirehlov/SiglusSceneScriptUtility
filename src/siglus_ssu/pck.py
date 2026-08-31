@@ -1393,11 +1393,13 @@ def compare_pck(
             else:
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text))
     if compare_payload and payload_jobs:
-        from .parallel import parallel_payload_compare
+        from .parallel import parallel_process_map
 
-        for row_index, payload_cmp in parallel_payload_compare(
-            payload_jobs,
+        for row_index, payload_cmp in parallel_process_map(
             _payload_compare_scene_task,
+            payload_jobs,
+            chunksize=1,
+            fallback_to_serial=True,
         ):
             payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
             row = list(rows[int(row_index)])

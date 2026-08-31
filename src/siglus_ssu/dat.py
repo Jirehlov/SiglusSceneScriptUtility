@@ -151,7 +151,7 @@ def _build_read_flag_defs(read_flag_list):
     return out
 
 
-def _payload_metadata_trace(meta, str_list, pack_context):
+def _payload_metadata_trace(meta, pack_context):
     out = []
 
     def emit(op, **fields):
@@ -346,7 +346,7 @@ def dat_disassembly_bundle(
         read_flag_defs = (
             [] if payload_trace else _build_read_flag_defs(meta.get("read_flag_list"))
         )
-        dis_res = disam.disassemble_scn_bytes(
+        dis, trace = disam.disassemble_scn_bytes(
             scn,
             str_list,
             label_list,
@@ -364,14 +364,10 @@ def dat_disassembly_bundle(
             emit_text=emit_text,
             trace_profile=trace_profile,
         )
-        if isinstance(dis_res, tuple) and len(dis_res) >= 2:
-            dis, trace = dis_res[0], dis_res[1]
-        else:
-            dis, trace = dis_res, []
         if payload_trace:
             runtime_trace = list(trace or [])
             trace = (
-                _payload_metadata_trace(meta, str_list, pack_context)
+                _payload_metadata_trace(meta, pack_context)
                 + runtime_trace
                 + _payload_namae_trace(meta, str_list, str_idx, runtime_trace)
             )
@@ -957,7 +953,7 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None, trace: bool = F
         cands = [b""]
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el") if isinstance(src, dict) else cand
+        exe_el = src.get("exe_el")
         if trace:
             sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         try:
@@ -999,7 +995,7 @@ def _gei_decode_txt(path, explicit_angou: str = ""):
     last = None
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el") if isinstance(src, dict) else cand
+        exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
         last = (info, txt)

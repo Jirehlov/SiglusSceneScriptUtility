@@ -53,11 +53,9 @@ def _csv_escape_text(s: str) -> str:
     return "".join(out)
 
 
-def _csv_unescape_text(s: str) -> str:
+def _csv_unescape_text(s: str | None) -> str:
     if s is None:
         return ""
-    if not isinstance(s, str):
-        s = str(s)
     out = []
     i = 0
     n = len(s)
@@ -131,14 +129,6 @@ def _encode_quoted(value: str) -> str:
 
 
 def _merge_textmap_kind(cur_kind, new_kind):
-    try:
-        cur_kind = int(cur_kind)
-    except Exception:
-        cur_kind = None
-    try:
-        new_kind = int(new_kind)
-    except Exception:
-        new_kind = None
     if new_kind not in (
         TEXTMAP_KIND_DIALOGUE,
         TEXTMAP_KIND_NAME,
@@ -687,7 +677,7 @@ def _process_dat(
     used_exe_el = b""
     for cand in candidates:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el") if isinstance(src, dict) else cand
+        exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         parsed, _plain_blob, enc = _parse_scn_dat_with_decrypt(blob, exe_el)
         if parsed:
