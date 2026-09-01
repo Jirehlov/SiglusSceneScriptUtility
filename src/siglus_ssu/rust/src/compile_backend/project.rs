@@ -1574,12 +1574,9 @@ fn gameexe_ini_name(config: &CompileConfig) -> &str {
 
 fn write_gameexe_dat(
     config: &CompileConfig,
+    source: &str,
     exe_key: Option<&[u8]>,
-) -> Result<Option<PathBuf>, String> {
-    let name = gameexe_ini_name(config);
-    let Some(source) = config.context.source_texts.get(name) else {
-        return Ok(None);
-    };
+) -> Result<(), String> {
     let mut payload = Vec::new();
     let options = TextCommentOptions {
         case_mode: CaseMode::Upper,
@@ -1613,24 +1610,19 @@ fn write_gameexe_dat(
     fs::write(&output, dat).map_err(|error| format_path_error(&output, error))?;
     if let Some(key) = exe_key
         && !config.tmp_dir.is_empty()
-        && key.len() == 16
-        && config.constants.exe_angou_a_idx.len() >= 8
-        && config.constants.exe_angou_b_idx.len() >= 8
     {
         let mut lines = Vec::new();
         for index in 0..8 {
-            let key_index = config.constants.exe_angou_a_idx[index];
             lines.push(format!(
                 "#define\tKN_EXE_ANGOU_DATA{index:02}A\t0x{:02X}",
-                key.get(key_index).copied().unwrap_or_default()
+                key[config.constants.exe_angou_a_idx[index]]
             ));
         }
         lines.push(String::new());
         for index in 0..8 {
-            let key_index = config.constants.exe_angou_b_idx[index];
             lines.push(format!(
                 "#define\tKN_EXE_ANGOU_DATA{index:02}B\t0x{:02X}",
-                key.get(key_index).copied().unwrap_or_default()
+                key[config.constants.exe_angou_b_idx[index]]
             ));
         }
         lines.push(String::new());
@@ -1640,7 +1632,7 @@ fn write_gameexe_dat(
             false,
         )?;
     }
-    Ok(Some(output))
+    Ok(())
 }
 
 fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
@@ -2138,19 +2130,18 @@ fn compile_project_inner(
     stage_times: &mut Vec<(String, f64)>,
 ) -> Result<ProjectOutput, String> {
     let stage_start = Instant::now();
-    let has_gameexe_ini = config
-        .context
-        .source_texts
-        .contains_key(gameexe_ini_name(config));
-    let exe_key = if has_gameexe_ini || !config.options.gei {
+    let gameexe_ini = gameexe_ini_name(config);
+    let gameexe_source = config.context.source_texts.get(gameexe_ini);
+    let exe_key = if gameexe_source.is_some() || !config.options.gei {
         resolve_exe_key(config)?
     } else {
         None
     };
-    if write_gameexe_dat(config, exe_key.as_deref())?.is_none() {
+    if let Some(source) = gameexe_source {
+        write_gameexe_dat(config, source, exe_key.as_deref())?;
+    } else {
         stdout.push_line(&format!(
-            "siglus-ssu -c: warning: {} not found; skipped Gameexe.dat",
-            gameexe_ini_name(config)
+            "siglus-ssu -c: warning: {gameexe_ini} not found; skipped Gameexe.dat"
         ))?;
     }
     record_stage_time(stage_times, "GEI", stage_start);

@@ -59,11 +59,6 @@ from .path_policy import (
 )
 
 
-def _create_auto_tmp_dir(output_dir):
-    prefix = "tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_"
-    return tempfile.mkdtemp(prefix=prefix, dir=output_dir)
-
-
 class _CompileCacheLock:
     def __init__(self, directory):
         self.file = open(os.path.join(directory, "_compile.lock"), "a+b")
@@ -1373,7 +1368,10 @@ def main(argv=None):
             os.makedirs(tmp, exist_ok=True)
         else:
             tmp_auto = True
-            tmp = _create_auto_tmp_dir(out)
+            tmp = tempfile.mkdtemp(
+                prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
+                dir=out,
+            )
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     try:
         source_texts = _load_project_source_texts(
