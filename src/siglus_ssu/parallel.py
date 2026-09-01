@@ -61,7 +61,7 @@ def process_pool(max_workers: int, initializer=None, initargs=()):
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
                 initializer,
-                tuple(initargs or ()),
+                initargs,
             ),
         ) as executor:
             yield executor
@@ -120,7 +120,7 @@ def parallel_process_completed_map(
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
                 initializer,
-                tuple(initargs or ()),
+                initargs,
             ),
         )
         futures = {}
@@ -229,17 +229,17 @@ def _compile_one_process(
 
         worker_ctx = {
             "tmp_path": tmp_path,
-            "utf8": bool(utf8),
+            "utf8": utf8,
             "charset_force": enc,
             "debug_charset": "utf-8" if utf8 else "cp932",
-            "debug_outputs": bool(debug_outputs),
+            "debug_outputs": debug_outputs,
             "source_texts": {fname: source_text} if source_text is not None else {},
         }
         res = compile_one_pipeline(
             worker_ctx,
             ss_path,
             ia_data=ia_data,
-            debug_outputs=bool(debug_outputs),
+            debug_outputs=debug_outputs,
             tmp_path=tmp_path,
             log=False,
             record_time=False,
@@ -249,9 +249,9 @@ def _compile_one_process(
         return (
             display_name,
             None,
-            res.get("scene_macro_counts") or {},
-            res.get("global_macro_usage_delta") or {},
-            res.get("source_stats") or {},
+            res["scene_macro_counts"],
+            res["global_macro_usage_delta"],
+            res["source_stats"],
         )
     except Exception as e:
         return (display_name, str(e), {}, {}, {})
@@ -271,13 +271,6 @@ def parallel_compile(
     from ._const_manager import get_const_module
     from .common import format_scene_name
 
-    if not ss_files:
-        return {
-            "parallel": True,
-            "scene_macro_counts": empty_macro_stat_counts(),
-            "global_macro_usage_delta": {},
-            "source_stats": empty_source_stat_counts(),
-        }
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
@@ -323,16 +316,16 @@ def parallel_compile(
                 future.result()
             )
             completed += 1
-            if error:
+            if error is not None:
                 errors.append((display_name, error))
                 print(f"  [{completed}/{total}] FAIL: {display_name}")
             else:
-                merge_macro_stat_counts(scene_macro_counts, macro_counts or {})
-                merge_source_stat_counts(source_stats, scene_source_stats or {})
-                for key, value in (usage_delta or {}).items():
-                    global_macro_usage_delta[key] = int(
-                        global_macro_usage_delta.get(key, 0) or 0
-                    ) + int(value or 0)
+                merge_macro_stat_counts(scene_macro_counts, macro_counts)
+                merge_source_stat_counts(source_stats, scene_source_stats)
+                for key, value in usage_delta.items():
+                    global_macro_usage_delta[key] = (
+                        global_macro_usage_delta.get(key, 0) + value
+                    )
                 print(f"  [{completed}/{total}] OK: {display_name}")
     if errors:
         for display_name, err in errors:

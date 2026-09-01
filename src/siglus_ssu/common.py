@@ -22,7 +22,7 @@ MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 
 
 def scene_string_xor_key(index):
-    return (_runtime._SCENE_STRING_XOR_MULTIPLIER * int(index)) & 0xFFFF
+    return (_runtime._SCENE_STRING_XOR_MULTIPLIER * index) & 0xFFFF
 
 
 _ASCII_LOWER_TRANS = str.maketrans(
@@ -1061,10 +1061,6 @@ def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
-def write_encoded_text(path: str, text: str, enc: str) -> None:
-    write_bytes(path, str(text or "").encode(enc))
-
-
 def parse_i32_header(dat: bytes, fields, size: int, offset: int = 0) -> dict:
     if (not dat) or len(dat) < offset + int(size or 0):
         return {}
@@ -1606,11 +1602,6 @@ def _read_struct_le(st: struct.Struct, buf, off, *, strict: bool, default):
                 f"buffer too small for {st.size} bytes at offset {off_i} (len={blen})"
             ) from exc
         return False, default, off_i
-
-
-def read_u16_le(buf, off, *, strict: bool = False, default=None):
-    _ok, v, _ = _read_struct_le(_U16_LE, buf, off, strict=strict, default=default)
-    return v
 
 
 def read_u32_le(buf, off, *, strict: bool = False, default=None):

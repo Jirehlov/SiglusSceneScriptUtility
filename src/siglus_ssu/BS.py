@@ -538,9 +538,9 @@ def _collect_tree_stats(root, stats):
 
 
 def _collect_label_stats(plad, mad, header, stats):
-    info = (mad or {}).get("ma_label_info") or {}
-    defs = set(int(k) for k in (info.get("def") or {}).keys())
-    zdefs = set(int(k) for k in (info.get("zdef") or {}).keys())
+    info = mad.get("ma_label_info") or {}
+    defs = set(int(k) for k in (info.get("def") or {}))
+    zdefs = set(int(k) for k in (info.get("zdef") or {}))
     label_refs = []
     z_refs = []
     for item in info.get("goto") or []:
@@ -560,18 +560,15 @@ def _collect_label_stats(plad, mad, header, stats):
     labels["z_defs"] += len(zdefs)
     labels["z_refs"] += len(z_refs)
     labels["z_unused"] += len((zdefs - {0}) - set(z_refs))
-    source_label_slots = len((plad or {}).get("label_list") or [])
-    try:
-        label_cnt = int((header or {}).get("label_cnt", 0) or 0)
-    except (TypeError, ValueError):
-        label_cnt = 0
+    source_label_slots = len(plad.get("label_list") or [])
+    label_cnt = header.get("label_cnt", 0)
     labels["generated"] += max(0, label_cnt - source_label_slots)
 
 
-def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, piad, dat_bytes):
+def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     stats = empty_source_stat_counts()
     stats["scene_count"] = 1
-    pre = (pcad or {}).get("preprocess_stats") or {}
+    pre = pcad["preprocess_stats"]
     out_pre = stats["preprocess"]
     for key in ("ifdef", "elseifdef", "else", "endif", "excluded_lines"):
         out_pre[key] = int(pre.get(key, 0) or 0)
@@ -587,30 +584,21 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, piad, dat_bytes):
     directives["scene_inc_commands"] = inc["scene_commands"]
     directives["property_directives_total"] = inc["scene_properties"]
     directives["command_directives_total"] = inc["scene_commands"]
-    strings = list((plad or {}).get("str_list") or [])
-    utf16_units = sum(
-        len(str(x or "").encode("utf-16le", "surrogatepass")) // 2 for x in strings
-    )
+    strings = plad["str_list"]
+    utf16_units = sum(len(x.encode("utf-16le", "surrogatepass")) // 2 for x in strings)
     stats["strings"]["entries"] = len(strings)
     stats["strings"]["utf16_units"] = utf16_units
     stats["strings"]["top_scenes"].append(
-        {"name": str(nm or ""), "utf16_units": utf16_units, "entries": len(strings)}
+        {"name": nm, "utf16_units": utf16_units, "entries": len(strings)}
     )
-    stats["_unique_strings"] = set(str(x) for x in strings)
-    root = (psad or {}).get("root")
-    inc_command_cnt = int(
-        (pcad or {}).get(
-            "global_inc_command_cnt", (piad or {}).get("inc_command_cnt", 0)
-        )
-        or 0
-    )
+    stats["_unique_strings"] = set(strings)
+    root = psad.get("root")
+    inc_command_cnt = pcad["global_inc_command_cnt"]
     _collect_statement_stats(root, plad, stats, inc_command_cnt)
     _collect_tree_stats(root, stats)
     header = read_scn_header(dat_bytes)
     _collect_label_stats(plad, psad, header, stats)
-    stats["expressions"]["default_arg_fills"] = int(
-        (pbsd or {}).get("default_arg_fills", 0) or 0
-    )
+    stats["expressions"]["default_arg_fills"] = pbsd["default_arg_fills"]
     return stats
 
 
@@ -1959,10 +1947,8 @@ def compile_one_pipeline(
 
     enc = ctx.get("debug_charset") or ("utf-8" if ctx.get("utf8") else "cp932")
     scn = read_compile_source(ctx, ss_path)
-    base = ia_data
-    if not isinstance(base, dict):
-        base = ctx.get("ia_data")
-    if not isinstance(base, dict):
+    base = ia_data if ia_data is not None else ctx.get("ia_data")
+    if base is None:
         base = build_ia_data(ctx)
         ctx["ia_data"] = base
     baseline_usage = {}
@@ -2058,7 +2044,6 @@ def compile_one_pipeline(
         lad,
         mad,
         bsd,
-        iad,
         bsd.get("out_scn", b""),
     )
     return {
@@ -2087,7 +2072,7 @@ def compile_one(ctx, ss_path):
 
 
 def compile_all(ctx, only=None, max_workers=None, parallel=True):
-    if not isinstance(ctx.get("ia_data"), dict):
+    if ctx.get("ia_data") is None:
         ctx["ia_data"] = build_ia_data(ctx)
     ss_files = list(find_ss(ctx, only))
     if not ss_files:
@@ -2103,16 +2088,13 @@ def compile_all(ctx, only=None, max_workers=None, parallel=True):
         start = time.time()
         result = parallel_compile(ctx, ss_files, max_workers)
         set_stage_time(ctx, "Compiling", time.time() - start)
-        result.setdefault("parallel", True)
-        result.setdefault("scene_macro_counts", empty_macro_stat_counts())
-        result.setdefault("global_macro_usage_delta", {})
         return result
     scene_macro_counts = empty_macro_stat_counts()
     source_stats = empty_source_stat_counts()
     for p in ss_files:
         res = compile_one(ctx, p)
-        merge_macro_stat_counts(scene_macro_counts, res.get("scene_macro_counts") or {})
-        merge_source_stat_counts(source_stats, res.get("source_stats") or {})
+        merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
+        merge_source_stat_counts(source_stats, res["source_stats"])
     return {
         "parallel": False,
         "scene_macro_counts": scene_macro_counts,

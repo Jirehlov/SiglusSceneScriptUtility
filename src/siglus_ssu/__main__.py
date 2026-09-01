@@ -199,7 +199,7 @@ def _usage_short(out=None):
 
 
 def _parse_scene_string_xor_multiplier(value):
-    text = str(value).strip()
+    text = value.strip()
     if text.startswith(("0x", "0X")):
         digits = text[2:]
         base = 16

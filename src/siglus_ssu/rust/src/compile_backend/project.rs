@@ -1564,14 +1564,6 @@ fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
     Ok(None)
 }
 
-fn gameexe_ini_name(config: &CompileConfig) -> &str {
-    if config.context.gameexe_ini.is_empty() {
-        "Gameexe.ini"
-    } else {
-        &config.context.gameexe_ini
-    }
-}
-
 fn write_gameexe_dat(
     config: &CompileConfig,
     source: &str,
@@ -2130,7 +2122,11 @@ fn compile_project_inner(
     stage_times: &mut Vec<(String, f64)>,
 ) -> Result<ProjectOutput, String> {
     let stage_start = Instant::now();
-    let gameexe_ini = gameexe_ini_name(config);
+    let gameexe_ini = if config.context.gameexe_ini.is_empty() {
+        "Gameexe.ini"
+    } else {
+        &config.context.gameexe_ini
+    };
     let gameexe_source = config.context.source_texts.get(gameexe_ini);
     let exe_key = if gameexe_source.is_some() || !config.options.gei {
         resolve_exe_key(config)?

@@ -489,11 +489,6 @@ def _read_scn_dat_header_bytes(path):
     return b, h
 
 
-def _read_scn_dat_idx_pairs(path):
-    _, _, idx = _read_scn_dat(path)
-    return list(idx)
-
-
 def _read_scn_dat_str_pool(path):
     b, h, idx = _read_scn_dat(path)
     order = sorted(range(len(idx)), key=lambda o: idx[o][0])
@@ -698,17 +693,17 @@ def _finalize_source_stats(ctx, compile_stats):
     source_stats = compile_stats["source_stats"]
     iad = ctx["ia_data"]
     directives = source_stats["directives"]
-    global_props = int(iad.get("inc_property_cnt", 0) or 0)
-    global_cmds = int(iad.get("inc_command_cnt", 0) or 0)
-    scene_props = int(directives.get("scene_inc_properties", 0) or 0)
-    scene_cmds = int(directives.get("scene_inc_commands", 0) or 0)
+    global_props = iad["inc_property_cnt"]
+    global_cmds = iad["inc_command_cnt"]
+    scene_props = directives["scene_inc_properties"]
+    scene_cmds = directives["scene_inc_commands"]
     directives["global_inc_properties"] = global_props
     directives["global_inc_commands"] = global_cmds
     directives["property_directives_total"] = global_props + scene_props
     directives["command_directives_total"] = global_cmds + scene_cmds
     strings = source_stats["strings"]
-    strings["unique"] = len(source_stats.get("_unique_strings") or set())
-    strings["unique_speaker_names"] = len(source_stats.get("_unique_speakers") or set())
+    strings["unique"] = len(source_stats["_unique_strings"])
+    strings["unique_speaker_names"] = len(source_stats["_unique_speakers"])
     return source_stats
 
 
@@ -1490,9 +1485,9 @@ def main(argv=None):
     try:
         t = time.time()
         if write_gameexe_dat(ctx) is None:
-            gameexe_ini = str(ctx.get("gameexe_ini") or "Gameexe.ini")
             sys.stderr.write(
-                f"{prog}: warning: {gameexe_ini} not found; skipped Gameexe.dat\n"
+                f"{prog}: warning: {ctx.get('gameexe_ini') or 'Gameexe.ini'} not found; "
+                "skipped Gameexe.dat\n"
             )
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
@@ -1567,7 +1562,7 @@ def main(argv=None):
                 if test_shuffle:
                     bs_dir = os.path.join(tmp, "bs")
                     os.makedirs(bs_dir, exist_ok=True)
-                    if not isinstance(ctx.get("ia_data"), dict):
+                    if ctx.get("ia_data") is None:
                         ctx["ia_data"] = build_ia_data(ctx)
                     compile_list = ss
                     if not compile_list:
@@ -1615,7 +1610,7 @@ def main(argv=None):
                             raise FileNotFoundError(
                                 f"expected dat not found: {exp_dat}"
                             )
-                        targets.append(_read_scn_dat_idx_pairs(exp_dat))
+                        targets.append(_read_scn_dat(exp_dat)[2])
                     seed0 = int(test_seed0) & 0xFFFFFFFF
                     if is_native_available():
                         sys.stderr.write(f"{test_shuffle_prefix} Accelerated by Rust\n")
@@ -1653,7 +1648,7 @@ def main(argv=None):
                                 f"generated dat not found: {my_dat}"
                             )
                         try:
-                            my_idx = _read_scn_dat_idx_pairs(my_dat)
+                            my_idx = _read_scn_dat(my_dat)[2]
                         except Exception:
                             my_idx = None
                         if my_idx != targets[i]:

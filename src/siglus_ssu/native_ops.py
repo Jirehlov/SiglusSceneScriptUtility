@@ -163,7 +163,7 @@ def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
     return native_accel.scn_payload_hash_bundles(
         bytes(blob),
         _payload_native_config(),
-        pack_context if isinstance(pack_context, dict) else None,
+        pack_context,
     )
 
 

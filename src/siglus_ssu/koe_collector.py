@@ -303,15 +303,11 @@ def _normalize_voice_text(text):
     return s
 
 
-def _entry_ref_key(name, text):
-    return str(name or ""), str(text or "")
-
-
 def _add_entry_ref(entry, chara_no, name, text, callsite):
     name = str(name or "")
     text = str(text or "")
     ref = entry["refs"].setdefault(
-        _entry_ref_key(name, text),
+        (name, text),
         {"name": name, "text": text, "callsites": set(), "chara_no": -1},
     )
     ref["callsites"].add(callsite)
