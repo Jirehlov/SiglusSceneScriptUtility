@@ -163,17 +163,16 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
     total_scn = 0
     total_lzss = 0
     dat_rows = []
-    for i, name in enumerate(scn_names or []):
-        dat = dat_list[i] if i < len(dat_list or []) else b""
-        lz = lzss_list[i] if i < len(lzss_list or []) else b""
-        dat_size = len(dat or b"")
+    for i, name in enumerate(scn_names):
+        dat = dat_list[i]
+        dat_size = len(dat)
         header = read_scn_header(dat)
         scn_size = int(header.get("scn_size", 0) or 0)
-        lzss_size = len(lz or b"") if lzss_mode else 0
+        lzss_size = len(lzss_list[i]) if lzss_mode else 0
         total_dat += dat_size
         total_scn += scn_size
         total_lzss += lzss_size
-        dat_rows.append({"name": str(name or ""), "dat_bytes": dat_size})
+        dat_rows.append({"name": name, "dat_bytes": dat_size})
     dat_rows.sort(
         key=lambda x: (
             -int(x.get("dat_bytes", 0) or 0),

@@ -42,11 +42,6 @@ from .path_policy import (
 )
 
 
-def _cleanup_tmp_dir(tmp_dir: str, remove_owned: bool = False) -> None:
-    if remove_owned and tmp_dir and os.path.isdir(tmp_dir):
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-
 def _analyze_one(path: str) -> int:
     ext = os.path.splitext(path)[1].lower()
     try:
@@ -740,11 +735,6 @@ class _RunningPlayback:
     paused_total: float = 0.0
 
 
-def _ensure_ffplay_available(ffplay_path: str) -> None:
-    if not ffplay_path:
-        raise RuntimeError("ffplay not found in PATH")
-
-
 def _make_playback_entry(path: str, root: str = "") -> _PlaybackEntry:
     display_name = (
         os.path.relpath(path, root)
@@ -978,18 +968,10 @@ def _parse_player_command(command: str, has_playlist: bool):
     raise ValueError(f"unknown command: {text}")
 
 
-def _get_playlist_page_size() -> int:
-    return max(int(shutil.get_terminal_size(fallback=(120, 30)).lines) - 8, 1)
-
-
 def _clamp_playlist_offset(total: int, offset: int, rows: int) -> int:
     rows = max(int(rows), 1)
     max_offset = max(int(total) - rows, 0)
     return min(max(int(offset), 0), max_offset)
-
-
-def _center_playlist_offset(total: int, current_index: int, rows: int) -> int:
-    return _clamp_playlist_offset(total, current_index - rows // 2, rows)
 
 
 def _default_play_gameexe_path(inp: str) -> str:
@@ -1027,12 +1009,6 @@ def _default_play_gameexe_path(inp: str) -> str:
         )
         return wildcard_matches[0]
     return exact
-
-
-def _resolve_play_gameexe_path(inp: str, trim_path: str = "") -> str:
-    if trim_path:
-        return trim_path
-    return _default_play_gameexe_path(inp)
 
 
 def _build_playback_plan(entry: _PlaybackEntry, trim_table) -> _PlaybackPlan:
@@ -1122,16 +1098,6 @@ def _stop_running_playback(current: _RunningPlayback | None) -> None:
             shutil.rmtree(current.plan.tmp_dir, ignore_errors=True)
 
 
-def _spawn_running_playback(
-    entry: _PlaybackEntry,
-    trim_table,
-    ffplay_path: str,
-) -> _RunningPlayback:
-    _ensure_ffplay_available(ffplay_path)
-    plan = _build_playback_plan(entry, trim_table)
-    return _start_playback_process(plan, ffplay_path)
-
-
 def _switch_playback(
     entries,
     current_index: int,
@@ -1140,7 +1106,10 @@ def _switch_playback(
     ffplay_path: str,
     reporter=eprint,
 ):
-    running = _spawn_running_playback(entries[current_index], trim_table, ffplay_path)
+    if not ffplay_path:
+        raise RuntimeError("ffplay not found in PATH")
+    plan = _build_playback_plan(entries[current_index], trim_table)
+    running = _start_playback_process(plan, ffplay_path)
     old = current
     current = running
     _stop_running_playback(old)
@@ -1218,13 +1187,12 @@ class _PlayerScreen:
         return start, end
 
     def _playlist_entry_rows(self) -> int:
-        return _get_playlist_page_size()
+        return max(int(shutil.get_terminal_size(fallback=(120, 30)).lines) - 8, 1)
 
     def focus_current(self, total: int, current_index: int) -> None:
-        self.list_offset = _center_playlist_offset(
-            total,
-            current_index,
-            self._playlist_entry_rows(),
+        rows = self._playlist_entry_rows()
+        self.list_offset = _clamp_playlist_offset(
+            total, current_index - rows // 2, rows
         )
 
     def scroll_lines(self, total: int, delta: int) -> None:
@@ -1813,7 +1781,9 @@ def main(argv=None) -> int:
         except (FileNotFoundError, NotADirectoryError):
             eprint(f"input not found: {argv[0]}")
             return 1
-        trim_path = _resolve_play_gameexe_path(inp, argv[1] if len(argv) == 2 else "")
+        trim_path = (
+            argv[1] if len(argv) == 2 and argv[1] else _default_play_gameexe_path(inp)
+        )
         try:
             trim_path = resolve_read_path(trim_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
@@ -1864,7 +1834,6 @@ def main(argv=None) -> int:
     trim_table = None
     ffmpeg_path = ""
     tmp_dir = ""
-    tmp_dir_owned = False
     os.makedirs(out_root, exist_ok=True)
     files, rc = collect_batch_files(
         inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
@@ -1892,7 +1861,6 @@ def main(argv=None) -> int:
                 tmp_dir = tempfile.mkdtemp(prefix=".tmp_ffmpeg_", dir=out_root)
             except OSError:
                 tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
-            tmp_dir_owned = True
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
@@ -1907,5 +1875,6 @@ def main(argv=None) -> int:
         return n, n
 
     exit_code = run_batch(files, _proc)
-    _cleanup_tmp_dir(tmp_dir, remove_owned=tmp_dir_owned)
+    if tmp_dir:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return exit_code

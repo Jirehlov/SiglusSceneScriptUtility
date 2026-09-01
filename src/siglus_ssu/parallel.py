@@ -435,11 +435,10 @@ def parallel_lzss_compress(
     dat_list = []
     lzss_list = []
     for nm in scn_names:
-        if nm in results:
-            dat, lz = results[nm]
-            enc_names.append(nm)
-            dat_list.append(dat)
-            lzss_list.append(lz)
+        dat, lz = results[nm]
+        enc_names.append(nm)
+        dat_list.append(dat)
+        lzss_list.append(lz)
     print("[PARALLEL] LZSS compression complete")
     return (enc_names, dat_list, lzss_list)
 
