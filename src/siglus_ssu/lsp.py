@@ -1409,10 +1409,6 @@ def _scan_worker_project() -> ProjectContext:
     return project
 
 
-def _scan_worker_native_project() -> Any:
-    return _SCAN_WORKER_NATIVE_PROJECT
-
-
 def _command_records(result: AnalysisResult) -> list[DefinitionRecord]:
     return [
         rec
@@ -1598,7 +1594,7 @@ def _link_scan_worker(
     path: str,
     text: str,
 ) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]]:
-    native_result = _native_link_scan_result(_scan_worker_native_project(), path, text)
+    native_result = _native_link_scan_result(_SCAN_WORKER_NATIVE_PROJECT, path, text)
     if native_result is not None:
         return native_result
     return _link_scan_result(

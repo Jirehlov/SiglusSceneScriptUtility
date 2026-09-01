@@ -471,7 +471,7 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None):
 
 def iter_pck_angou_dat_items(blob: bytes, hdr=None):
     cands = []
-    for item in _iter_pck_original_source_items(blob, hdr=hdr) or []:
+    for item in _iter_pck_original_source_items(blob, hdr=hdr):
         nm = os.path.basename(str(item.get("name") or ""))
         if not is_named_filename(nm, ANGOU_DAT_NAME):
             continue
@@ -481,14 +481,9 @@ def iter_pck_angou_dat_items(blob: bytes, hdr=None):
         yield {"name": name, "raw": raw}
 
 
-def _iter_pck_angou_sources(blob: bytes, hdr=None):
-    for item in iter_pck_angou_dat_items(blob, hdr=hdr) or []:
-        yield bytes(item.get("raw") or b"")
-
-
 def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
-    for raw in _iter_pck_angou_sources(blob, hdr=hdr) or []:
-        line = decode_angou_first_line(raw)
+    for item in iter_pck_angou_dat_items(blob, hdr=hdr):
+        line = decode_angou_first_line(item["raw"])
         if line:
             return line
     if input_pck:
@@ -1867,7 +1862,7 @@ def extract_pck(
     sys.stdout.write(f"Output: {out_dir}\n")
     if int(hdr.get("original_source_header_size", 0) or 0) > 0:
         try:
-            for item in _iter_pck_original_source_items(dat, hdr=hdr) or []:
+            for item in _iter_pck_original_source_items(dat, hdr=hdr):
                 raw = bytes(item.get("raw") or b"")
                 rel = _safe_relpath(str(item.get("name") or ""))
                 if not rel:

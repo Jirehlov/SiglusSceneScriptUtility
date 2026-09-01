@@ -321,10 +321,6 @@ def merge_source_stat_counts(dst, src):
     return dst
 
 
-def _u16_len(text):
-    return len(str(text or "").encode("utf-16le", "surrogatepass")) // 2
-
-
 def _string_for_atom(plad, atom):
     if not isinstance(atom, dict):
         return ""
@@ -592,7 +588,9 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, piad, dat_bytes):
     directives["property_directives_total"] = inc["scene_properties"]
     directives["command_directives_total"] = inc["scene_commands"]
     strings = list((plad or {}).get("str_list") or [])
-    utf16_units = sum(_u16_len(x) for x in strings)
+    utf16_units = sum(
+        len(str(x or "").encode("utf-16le", "surrogatepass")) // 2 for x in strings
+    )
     stats["strings"]["entries"] = len(strings)
     stats["strings"]["utf16_units"] = utf16_units
     stats["strings"]["top_scenes"].append(

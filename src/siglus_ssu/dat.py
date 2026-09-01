@@ -77,24 +77,11 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
     return out
 
 
-def _disassembly_ended_unexpectedly(dis):
-    return (not dis) or ("CD_EOF" not in dis[-1])
-
-
 def _build_decompile_hints(bundles):
     def _hint_status(bundle):
-        name = ""
-        try:
-            name = os.path.basename(str((bundle or {}).get("dat_path") or ""))
-        except Exception:
-            name = ""
-        if not name:
-            try:
-                name = str((bundle or {}).get("scene_name") or "")
-            except Exception:
-                name = ""
-        if not name:
-            name = "<unknown>"
+        name = os.path.basename(str(bundle.get("dat_path") or "")) or str(
+            bundle.get("scene_name") or "<unknown>"
+        )
         write_status(f"Building hints {name} ...")
 
     try:
@@ -421,7 +408,7 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     dis = bundle.get("dis") or []
     so = int(h.get("scn_ofs", 0) or 0)
     ss = int(h.get("scn_size", 0) or 0)
-    ended_unexpectedly = _disassembly_ended_unexpectedly(dis)
+    ended_unexpectedly = (not dis) or ("CD_EOF" not in dis[-1])
     if isinstance(stats, dict):
         stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
         if ended_unexpectedly:

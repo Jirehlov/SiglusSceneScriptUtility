@@ -154,8 +154,6 @@ def _payload_native_config_cached(
             (int(parent), int(elem)) for parent, elem in C.READ_FLAG_COMMAND_CODES
         ],
     }
-    if not _USE_NATIVE:
-        return config
     return native_accel.scn_payload_config(config)
 
 

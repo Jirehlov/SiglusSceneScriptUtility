@@ -1103,14 +1103,6 @@ def _control_process(process: subprocess.Popen, action: str) -> None:
         return
 
 
-def _pause_process(process: subprocess.Popen) -> None:
-    _control_process(process, "suspend")
-
-
-def _resume_process(process: subprocess.Popen) -> None:
-    _control_process(process, "resume")
-
-
 def _stop_running_playback(current: _RunningPlayback | None) -> None:
     if current is None:
         return
@@ -1474,7 +1466,7 @@ def _handle_player_action(
         if current is None:
             return current_index, current, None
         if current.paused:
-            _resume_process(current.process)
+            _control_process(current.process, "resume")
             if current.paused_at is not None:
                 current.paused_total += max(time.monotonic() - current.paused_at, 0.0)
             current.paused = False
@@ -1483,7 +1475,7 @@ def _handle_player_action(
                 f"resumed [{current_index + 1}/{len(entries)}] {current.plan.entry.display_name}"
             )
             return current_index, current, None
-        _pause_process(current.process)
+        _control_process(current.process, "suspend")
         current.paused = True
         current.paused_at = time.monotonic()
         reporter(
