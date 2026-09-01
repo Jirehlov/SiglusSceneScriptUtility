@@ -83,13 +83,7 @@ def _parse_flix_pck(blob: bytes) -> dict:
         if pos + ln > idx_abs:
             return {}
         b = blob[pos : pos + ln]
-        try:
-            nm = b.decode("utf-16le", "surrogatepass")
-        except Exception:
-            try:
-                nm = b.decode("utf-16le", "ignore")
-            except Exception:
-                nm = ""
+        nm = b.decode("utf-16le", "surrogatepass")
         names.append(nm)
         pos += ln
     if pos < idx_abs:

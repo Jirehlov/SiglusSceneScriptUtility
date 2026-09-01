@@ -1396,7 +1396,7 @@ class _Decompiler:
                 self.pack_context.get("inc_command_cnt", 0) or 0
             )
         if self.global_command_count is None:
-            self.global_command_count = self._infer_global_command_count()
+            self.global_command_count = _infer_bundle_global_command_count(self.bundle)
         self.local_command_ids = {
             int(v.get("cmd_id", -1))
             for v in self.local_command_by_ofs.values()
@@ -2218,9 +2218,6 @@ class _Decompiler:
                 continue
             out[ofs_i] = {"cmd_id": -1, "offset": ofs_i, "name": name}
         return out
-
-    def _infer_global_command_count(self):
-        return _infer_bundle_global_command_count(self.bundle)
 
     def _active_z_label_count(self):
         last = -1

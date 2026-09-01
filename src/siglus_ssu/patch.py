@@ -670,10 +670,6 @@ def _find_bytes_all(data: bytes, needle: bytes, start: int = 0, end: int | None 
         pos = i + 1
 
 
-def _find_utf16z_offsets(data: bytes, text: str):
-    return _find_bytes_all(data, _utf16z(text))
-
-
 def _find_va_refs(data: bytes, layout, va: int):
     needle = struct.pack("<I", int(va) & 0xFFFFFFFF)
     hits = []
@@ -973,7 +969,7 @@ def _restore_lang_overlay(data: bytes, expected_config=None):
 def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = True):
     active = []
     for text in texts:
-        for off in _find_utf16z_offsets(data, text):
+        for off in _find_bytes_all(data, _utf16z(text)):
             va = pe32_file_off_to_va(layout, off)
             if va is None:
                 continue

@@ -163,7 +163,7 @@ def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
     return native_accel.scn_payload_hash_bundles(
-        blob if isinstance(blob, bytes) else bytes(blob),
+        bytes(blob),
         _payload_native_config(),
         pack_context if isinstance(pack_context, dict) else None,
     )
@@ -522,8 +522,6 @@ _SMD5_K = tuple(int(abs(math.sin(i + 1)) * (1 << 32)) & 0xFFFFFFFF for i in rang
 
 
 def _py_smd5_digest(data: bytes) -> bytes:
-    if data is None:
-        data = b""
     total = len(data)
     alpha = (total + 1) & 0x3F
     add_cnt = 1 + (56 - alpha) + 8 if alpha <= 56 else 1 + (56 + (64 - alpha)) + 8
@@ -624,16 +622,14 @@ def lzss32_unpack(src: bytes) -> bytes:
 
 def xor_cycle_inplace(b, code, st=0):
     if _USE_NATIVE and not _runtime._LEGACY_FULL and isinstance(b, bytearray):
-        native_accel.xor_cycle_inplace(
-            b, bytes(code) if not isinstance(code, bytes) else code, st
-        )
+        native_accel.xor_cycle_inplace(b, bytes(code), st)
     else:
         _py_xor_cycle_inplace(b, code, st)
 
 
 def smd5_digest(data: bytes) -> bytes:
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
-        return native_accel.smd5_digest(data if data else b"")
+        return native_accel.smd5_digest(data)
     return _py_smd5_digest(data)
 
 
@@ -641,9 +637,8 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
         d_arr = bytearray(d) if isinstance(d, memoryview) else d
         s_bytes = bytes(s) if isinstance(s, memoryview) else s
-        t_bytes = bytes(t) if not isinstance(t, bytes) else t
         native_accel.tile_copy(
-            d_arr, s_bytes, bx, by, t_bytes, tx, ty, repx, repy, bool(rev), lim
+            d_arr, s_bytes, bx, by, bytes(t), tx, ty, repx, repy, bool(rev), lim
         )
         if isinstance(d, memoryview):
             d[:] = d_arr
@@ -661,18 +656,8 @@ def msvcrt_rand_byte(state: int):
     return s, v & 0xFF
 
 
-def _py_find_rand_skip(
-    seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
-):
-    seed = int(seed) & 0xFFFFFFFF
-    start_skip = max(0, int(start_skip))
-    pat = bytes(pattern)
-    if not pat:
-        return start_skip
-    max_scan = int(max_scan)
-    if max_scan <= 0:
-        return None
-    pat_len = len(pat)
+def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int, max_scan: int):
+    pat_len = len(pattern)
     state = seed
     buf = bytearray()
     pos = -1
@@ -686,7 +671,7 @@ def _py_find_rand_skip(
         if len(buf) != pat_len:
             continue
         start_pos = pos - (pat_len - 1)
-        if start_pos >= start_skip and bytes(buf) == pat:
+        if start_pos >= start_skip and bytes(buf) == pattern:
             return start_pos
     return None
 

@@ -643,11 +643,9 @@ def find_shuffle_seed_parallel(
     _flush_stdio_before_process_pool()
 
     def _fmt_eta(sec: float) -> str:
-        if (not isinstance(sec, (int, float))) or (not math.isfinite(sec)) or sec <= 0:
+        if not math.isfinite(sec) or sec <= 0:
             return "00:00:00"
         s = int(round(sec))
-        if s < 0:
-            s = 0
         h = s // 3600
         m = (s % 3600) // 60
         ss = s % 60
