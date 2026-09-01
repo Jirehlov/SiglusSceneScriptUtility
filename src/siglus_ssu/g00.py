@@ -265,10 +265,6 @@ def _decode_g00_main_layer(p: Path, cut_index=None):
     )["center"]
 
 
-def _decode_g00_main_image_pil(p: Path, cut_index=None):
-    return _decode_g00_main_layer(p, cut_index)[0]
-
-
 def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
     if len(g00_paths) < 2:
         raise ValueError("need >=2 input g00")

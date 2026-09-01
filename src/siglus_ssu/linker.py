@@ -159,8 +159,6 @@ def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True)
 
 
 def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
-    if not isinstance(ctx, dict):
-        return
     total_dat = 0
     total_scn = 0
     total_lzss = 0

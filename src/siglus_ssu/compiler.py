@@ -110,7 +110,7 @@ SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
 
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
-    sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
+    sa = ctx.get("source_angou")
     if not sa:
         raise ValueError(
             "source_angou_encrypt requires ctx['source_angou'] (dict with codes and header_size)"
@@ -647,8 +647,6 @@ def _load_project_source_texts(base_dir, gameexe_ini, inc, ss, charset):
 
 
 def _init_stats(ctx):
-    if not isinstance(ctx, dict):
-        return
     stats = ctx.setdefault("stats", {})
     stats.setdefault("stage_time", {})
     stats.setdefault("inc_files", 0)
@@ -671,9 +669,7 @@ def _set_compile_file_stats(
     compiled_scene_files,
     full_compile_stats,
 ):
-    if not isinstance(ctx, dict):
-        return
-    stats = ctx.setdefault("stats", {})
+    stats = ctx["stats"]
     stats["inc_files"] = int(inc_files or 0)
     stats["scene_files"] = int(scene_files or 0)
     stats["compiled_scene_files"] = int(compiled_scene_files or 0)
@@ -681,31 +677,23 @@ def _set_compile_file_stats(
 
 
 def _set_macro_stats(ctx, macro_counts):
-    if not isinstance(ctx, dict):
-        return
-    ctx.setdefault("stats", {})["macro_counts"] = macro_counts
+    ctx["stats"]["macro_counts"] = macro_counts
 
 
 def _set_read_flag_stats(
     ctx, read_flags, read_flags_scenes, top5_read_flags_scenes=None
 ):
-    if not isinstance(ctx, dict):
-        return
-    stats = ctx.setdefault("stats", {})
+    stats = ctx["stats"]
     stats["read_flags"] = read_flags
     stats["read_flags_scenes"] = read_flags_scenes
     stats["top5_read_flags_scenes"] = top5_read_flags_scenes
 
 
 def _set_source_stats(ctx, source_stats):
-    if not isinstance(ctx, dict):
-        return
-    ctx.setdefault("stats", {})["source_stats"] = source_stats
+    ctx["stats"]["source_stats"] = source_stats
 
 
 def _collect_macro_stats(ctx, compile_stats):
-    if not isinstance(ctx, dict):
-        return None
     iad = ctx.get("ia_data")
     if not isinstance(iad, dict):
         return None
@@ -751,7 +739,7 @@ def _collect_read_flag_stats(bs_dir, scene_paths):
 
 
 def _finalize_source_stats(ctx, compile_stats):
-    if not isinstance(ctx, dict) or not isinstance(compile_stats, dict):
+    if not isinstance(compile_stats, dict):
         return None
     source_stats = compile_stats.get("source_stats")
     if not isinstance(source_stats, dict):
@@ -949,14 +937,8 @@ def _print_top_stats(stats):
         )
 
 
-def _record_angou(ctx, content):
-    if not isinstance(ctx, dict):
-        return
-    ctx.setdefault("stats", {})["angou_content"] = content
-
-
 def _print_summary(ctx, ok=False):
-    stats = ctx.get("stats") if isinstance(ctx, dict) else None
+    stats = ctx.get("stats")
     if not isinstance(stats, dict):
         return
     timings = stats.get("stage_time") or {}
@@ -1505,7 +1487,7 @@ def main(argv=None):
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None
     ctx["exe_angou_str"] = angou_content or ""
-    _record_angou(ctx, angou_content)
+    ctx["stats"]["angou_content"] = angou_content
     cache_lock = None
     if a.tmp_dir:
         try:
@@ -1637,9 +1619,7 @@ def main(argv=None):
                 if test_shuffle:
                     bs_dir = os.path.join(tmp, "bs")
                     os.makedirs(bs_dir, exist_ok=True)
-                    if isinstance(ctx, dict) and not isinstance(
-                        ctx.get("ia_data"), dict
-                    ):
+                    if not isinstance(ctx.get("ia_data"), dict):
                         ctx["ia_data"] = build_ia_data(ctx)
                     compile_list = ss
                     if not compile_list:

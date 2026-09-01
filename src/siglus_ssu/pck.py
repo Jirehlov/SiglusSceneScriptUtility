@@ -1664,7 +1664,7 @@ def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
 
 
 def source_angou_decrypt(enc: bytes, ctx: dict):
-    sa = ctx.get("source_angou") if isinstance(ctx, dict) else None
+    sa = ctx.get("source_angou")
     if not sa:
         raise RuntimeError("source_angou: missing ctx.source_angou")
     eg = parse_code(sa.get("easy_code"))

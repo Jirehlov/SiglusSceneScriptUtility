@@ -660,8 +660,7 @@ def build_ia_data(ctx):
             ],
             key=ascii_lower,
         )
-        if isinstance(ctx, dict):
-            ctx["inc_list"] = inc_list
+        ctx["inc_list"] = inc_list
     iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
     ia2 = []
     start = time.time()
@@ -1960,19 +1959,14 @@ def compile_one_pipeline(
     def fmt_err(code, line):
         return f"{code} at {display_name}:{int(line or 0)}"
 
-    enc = (
-        ctx.get("debug_charset") or ("utf-8" if ctx.get("utf8") else "cp932")
-        if isinstance(ctx, dict)
-        else "cp932"
-    )
+    enc = ctx.get("debug_charset") or ("utf-8" if ctx.get("utf8") else "cp932")
     scn = read_compile_source(ctx, ss_path)
     base = ia_data
-    if not isinstance(base, dict) and isinstance(ctx, dict):
+    if not isinstance(base, dict):
         base = ctx.get("ia_data")
     if not isinstance(base, dict):
         base = build_ia_data(ctx)
-        if isinstance(ctx, dict):
-            ctx["ia_data"] = base
+        ctx["ia_data"] = base
     baseline_usage = {}
     for rep in list(base.get("macro_defs") or []):
         kind = macro_decl_kind(rep)
@@ -1990,8 +1984,8 @@ def compile_one_pipeline(
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
     if record_time:
         record_stage_time(ctx, "CA", time.time() - t)
-    tmp = tmp_path or (ctx.get("tmp_path") if isinstance(ctx, dict) else None) or "."
-    if debug_outputs and isinstance(ctx, dict) and ctx.get("debug_outputs"):
+    tmp = tmp_path or ctx.get("tmp_path") or "."
+    if debug_outputs and ctx.get("debug_outputs"):
         write_text(
             os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), enc=enc
         )
@@ -2095,7 +2089,7 @@ def compile_one(ctx, ss_path):
 
 
 def compile_all(ctx, only=None, max_workers=None, parallel=True):
-    if isinstance(ctx, dict) and not isinstance(ctx.get("ia_data"), dict):
+    if not isinstance(ctx.get("ia_data"), dict):
         ctx["ia_data"] = build_ia_data(ctx)
     ss_files = list(find_ss(ctx, only))
     if not ss_files:
