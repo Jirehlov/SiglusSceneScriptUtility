@@ -22,18 +22,6 @@ def _gan_read_i32(blob, ofs):
     return read_i32_le_advancing(blob, ofs, default=None)
 
 
-def _gan_decode_mb(b):
-    if not b:
-        return ""
-    try:
-        return b.decode("shift_jis", errors="replace")
-    except Exception:
-        try:
-            return b.decode("utf-8", errors="replace")
-        except Exception:
-            return repr(b)
-
-
 def _gan_parse(blob, want_disasm=True, max_ins=200000):
     out = {
         "ok": True,
@@ -98,9 +86,8 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
                 out["ok"] = False
                 out["errors"].append(f"invalid string length {ln!r} at {hx(ofs0)}")
                 break
-            sraw = blob[ofs : ofs + ln]
+            s = blob[ofs : ofs + ln].decode("shift_jis", errors="replace")
             ofs += ln
-            s = _gan_decode_mb(sraw)
             out["g00_file_name"] = s
             _add_ins(ofs0, code, ln, s)
             continue

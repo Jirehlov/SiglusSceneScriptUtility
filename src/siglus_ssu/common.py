@@ -1174,10 +1174,7 @@ def read_exe_el_key(path: str) -> bytes:
     try:
         t, _, _ = decode_text_auto(b)
     except Exception:
-        try:
-            t = b.decode("utf-8", "ignore")
-        except Exception:
-            t = ""
+        t = b.decode("utf-8", "ignore")
     return parse_exe_el_key_text(t)
 
 

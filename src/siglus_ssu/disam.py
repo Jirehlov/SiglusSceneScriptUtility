@@ -1515,9 +1515,6 @@ def disassemble_scn_bytes(
             _restore_state(saved)
         return None
 
-    def _command_named_values(info, arg_values, named_ids):
-        return named_command_value_map(info, arg_values, named_ids)
-
     scn_len = len(scn)
 
     def read_u8(p):
@@ -2216,7 +2213,7 @@ def disassemble_scn_bytes(
             named_values = {}
             if not payload_trace:
                 arg_values = _peek_arg_list(arg_forms, _pop_arg_value)
-                named_values = _command_named_values(info, arg_values, named_ids)
+                named_values = named_command_value_map(info, arg_values, named_ids)
             if render_text:
                 ename = (" " + qname) if qname else ""
                 rf_s = f" read_flag={int(read_flag):d}" if read_flag is not None else ""

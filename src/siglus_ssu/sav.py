@@ -12,10 +12,7 @@ _GLOBAL_APPLY_CHRKOE_RE = re.compile(r"^chrkoe\[(\d+)\]\.look_flag\s*:\s*(.*?)\s
 
 
 def _zstr_u16(b):
-    try:
-        s = bytes(b).decode("utf-16le", "replace")
-    except Exception:
-        return ""
+    s = bytes(b).decode("utf-16le", "replace")
     n = s.find("\x00")
     if n >= 0:
         s = s[:n]
@@ -23,10 +20,7 @@ def _zstr_u16(b):
 
 
 def _zstr_a(b):
-    try:
-        s = bytes(b).decode("cp932", "replace")
-    except Exception:
-        s = bytes(b).decode("latin1", "replace")
+    s = bytes(b).decode("cp932", "replace")
     n = s.find("\x00")
     if n >= 0:
         s = s[:n]
@@ -423,12 +417,7 @@ class _SaveStreamReader:
         ln = self.i32()
         if ln <= 0:
             return ""
-        n = ln * 2
-        b = self._read(n)
-        try:
-            return b.decode("utf-16le", "replace")
-        except Exception:
-            return b.decode("latin1", "replace")
+        return self._read(ln * 2).decode("utf-16le", "replace")
 
     def c_size(self):
         return (int(self.i32()), int(self.i32()))

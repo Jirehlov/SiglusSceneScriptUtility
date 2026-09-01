@@ -128,16 +128,12 @@ def get_elm_owner(code):
         return 0
 
 
-def _copy_replace_tree(rt):
-    return copy_replace_tree(rt)
-
-
 def copy_ia_data(base):
     if not isinstance(base, dict):
         return build_empty_ia_data(new_replace_tree())
     return {
         "form_table": copy.deepcopy(base.get("form_table")),
-        "replace_tree": _copy_replace_tree(base.get("replace_tree")),
+        "replace_tree": copy_replace_tree(base.get("replace_tree")),
         "name_set": set(base.get("name_set") or []),
         "macro_defs": list(base.get("macro_defs") or []),
         "macro_map": dict(base.get("macro_map") or {}),

@@ -73,12 +73,6 @@ def _is_int_token(s) -> bool:
         return False
 
 
-def _find_rand_skip(
-    seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
-):
-    return find_rand_skip(seed, pattern, start_skip, max_scan)
-
-
 def _map_out_name(csv_path: str):
     name = os.path.basename(csv_path)
     base = name[:-4] if name.lower().endswith(".csv") else name
@@ -282,7 +276,7 @@ def main(argv=None):
         m_type = int(opt_type) if opt_type is not None else int(exp_m_type)
         seed = int(opt_seed) & 0xFFFFFFFF
         skip0 = int(test_skip0) if test_skip0_given else 0
-        found = _find_rand_skip(seed, pat, start_skip=skip0)
+        found = find_rand_skip(seed, pat, start_skip=skip0)
         if found is None:
             eprint("error: test-shuffle failed to locate rand-skip")
             return 1
