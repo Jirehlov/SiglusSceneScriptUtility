@@ -39,10 +39,6 @@ TNMSERR_BS_NEED_REFERENCE = 4
 TNMSERR_BS_NEED_VALUE = 5
 
 
-def absp(p):
-    return os.path.abspath(os.path.expanduser(p)) if p else p
-
-
 def _form_code(name):
     forms = C._FORM_CODE
     if not isinstance(forms, dict):
@@ -120,13 +116,6 @@ def _to_int(v):
         return 0
 
 
-def get_elm_owner(code):
-    try:
-        return (int(code) >> 24) & 0xFF
-    except (TypeError, ValueError):
-        return 0
-
-
 def copy_ia_data(base):
     return {
         "form_table": copy.deepcopy(base["form_table"]),
@@ -143,47 +132,9 @@ def copy_ia_data(base):
     }
 
 
-def _op_code(atom):
-    atom = atom if isinstance(atom, dict) else {}
-    try:
-        return int(atom.get("opt", -1))
-    except (TypeError, ValueError):
-        return -1
-
-
-def _operator_symbol(atom, unary, operator_tables):
-    tables = operator_tables or build_operator_render_tables()
-    table = tables[2] if unary else tables[3]
-    op = _op_code(atom)
-    text = table.get(op)
-    return str(text) if text is not None else str(op)
-
-
-def _assign_operator_symbol(atom, operator_tables):
-    op = _op_code(atom)
-    try:
-        if op == int(getattr(C, "OP_NONE", -1)):
-            return "="
-    except (TypeError, ValueError):
-        pass
-    text = _operator_symbol(atom, False, operator_tables)
-    return text + "=" if text != str(op) else text
-
-
-def _merge_counter_map(dst, src):
-    if not isinstance(dst, dict) or not isinstance(src, dict):
-        return dst
-    for k, v in src.items():
-        dst[k] = int(dst.get(k, 0) or 0) + int(v or 0)
-    return dst
-
-
 def _merge_int_section(dst, src, keys):
-    if not isinstance(dst, dict) or not isinstance(src, dict):
-        return dst
     for k in keys:
-        dst[k] = int(dst.get(k, 0) or 0) + int(src.get(k, 0) or 0)
-    return dst
+        dst[k] += src[k]
 
 
 def empty_source_stat_counts():
@@ -238,9 +189,9 @@ def empty_source_stat_counts():
             "max_depth": 0,
             "named_args": 0,
             "default_arg_fills": 0,
-            "assign_ops": {},
-            "unary_op_kinds": {},
-            "binary_op_kinds": {},
+            "assign_ops": Counter(),
+            "unary_op_kinds": Counter(),
+            "binary_op_kinds": Counter(),
         },
         "_unique_strings": set(),
         "_unique_speakers": set(),
@@ -248,30 +199,21 @@ def empty_source_stat_counts():
 
 
 def merge_source_stat_counts(dst, src):
-    if not isinstance(dst, dict):
-        dst = empty_source_stat_counts()
-    if not isinstance(src, dict):
-        return dst
-    dst["scene_count"] = int(dst.get("scene_count", 0) or 0) + int(
-        src.get("scene_count", 0) or 0
-    )
-    dp = dst.setdefault("preprocess", {})
-    sp = src.get("preprocess") or {}
+    dst["scene_count"] += src["scene_count"]
+    dp = dst["preprocess"]
+    sp = src["preprocess"]
     _merge_int_section(
         dp, sp, ("ifdef", "elseifdef", "else", "endif", "excluded_lines")
     )
-    dp["max_ifdef_depth"] = max(
-        int(dp.get("max_ifdef_depth", 0) or 0),
-        int(sp.get("max_ifdef_depth", 0) or 0),
-    )
+    dp["max_ifdef_depth"] = max(dp["max_ifdef_depth"], sp["max_ifdef_depth"])
     _merge_int_section(
-        dst.setdefault("inc", {}),
-        src.get("inc") or {},
+        dst["inc"],
+        src["inc"],
         ("blocks", "ends", "lines", "scene_properties", "scene_commands"),
     )
     _merge_int_section(
-        dst.setdefault("directives", {}),
-        src.get("directives") or {},
+        dst["directives"],
+        src["directives"],
         (
             "global_inc_properties",
             "global_inc_commands",
@@ -284,87 +226,43 @@ def merge_source_stat_counts(dst, src):
             "scene_command_definitions",
         ),
     )
-    ds = dst.setdefault("strings", {})
-    ss = src.get("strings") or {}
+    ds = dst["strings"]
+    ss = src["strings"]
     _merge_int_section(
         ds, ss, ("entries", "utf16_units", "dialogue_text_lines", "speaker_names")
     )
-    ds.setdefault("top_scenes", []).extend(list(ss.get("top_scenes") or []))
-    _merge_counter_map(dst.setdefault("statements", {}), src.get("statements") or {})
+    ds["top_scenes"].extend(ss["top_scenes"])
+    dst["statements"].update(src["statements"])
     _merge_int_section(
-        dst.setdefault("labels", {}),
-        src.get("labels") or {},
+        dst["labels"],
+        src["labels"],
         ("defs", "refs", "unused", "z_defs", "z_refs", "z_unused", "generated"),
     )
-    de = dst.setdefault("expressions", {})
-    se = src.get("expressions") or {}
+    de = dst["expressions"]
+    se = src["expressions"]
     _merge_int_section(
         de, se, ("unary_ops", "binary_ops", "named_args", "default_arg_fills")
     )
-    de["max_depth"] = max(
-        int(de.get("max_depth", 0) or 0), int(se.get("max_depth", 0) or 0)
-    )
-    _merge_counter_map(de.setdefault("assign_ops", {}), se.get("assign_ops") or {})
-    _merge_counter_map(
-        de.setdefault("unary_op_kinds", {}), se.get("unary_op_kinds") or {}
-    )
-    _merge_counter_map(
-        de.setdefault("binary_op_kinds", {}), se.get("binary_op_kinds") or {}
-    )
-    dst.setdefault("_unique_strings", set()).update(src.get("_unique_strings") or set())
-    dst.setdefault("_unique_speakers", set()).update(
-        src.get("_unique_speakers") or set()
-    )
-    return dst
-
-
-def _string_for_atom(plad, atom):
-    if not isinstance(atom, dict):
-        return ""
-    try:
-        idx = int(atom.get("opt", -1))
-    except (TypeError, ValueError):
-        return ""
-    sl = (plad or {}).get("str_list") or []
-    return str(sl[idx]) if 0 <= idx < len(sl) else ""
-
-
-def _inc_counter(mapping, key, amount=1):
-    if not key:
-        key = "<unknown>"
-    mapping[key] = int(mapping.get(key, 0) or 0) + int(amount or 0)
-
-
-def _block_sentences(block):
-    if isinstance(block, dict):
-        if isinstance(block.get("sentense_list"), list):
-            return list(block.get("sentense_list") or [])
-        if isinstance(block.get("sentense"), list):
-            return list(block.get("sentense") or [])
-        if "block" in block:
-            return _block_sentences(block.get("block"))
-    if isinstance(block, list):
-        return list(block)
-    return []
+    de["max_depth"] = max(de["max_depth"], se["max_depth"])
+    de["assign_ops"].update(se["assign_ops"])
+    de["unary_op_kinds"].update(se["unary_op_kinds"])
+    de["binary_op_kinds"].update(se["binary_op_kinds"])
+    dst["_unique_strings"].update(src["_unique_strings"])
+    dst["_unique_speakers"].update(src["_unique_speakers"])
 
 
 def _exp_depth(node):
-    if not isinstance(node, dict):
-        return 0
-    nt = node.get("node_type")
+    nt = node["node_type"]
     if nt == C.NT_EXP_OPR1:
-        return 1 + _exp_depth(node.get("exp_1"))
+        return 1 + _exp_depth(node["exp_1"])
     if nt == C.NT_EXP_OPR2:
-        return 1 + max(_exp_depth(node.get("exp_1")), _exp_depth(node.get("exp_2")))
+        return 1 + max(_exp_depth(node["exp_1"]), _exp_depth(node["exp_2"]))
     if nt == C.NT_EXP_SIMPLE:
-        return _exp_depth(node.get("smp_exp"))
+        return _exp_depth(node["smp_exp"])
     if nt == C.NT_SMP_KAKKO:
-        return 1 + _exp_depth(node.get("exp"))
+        return 1 + _exp_depth(node["exp"])
     if nt == C.NT_SMP_EXP_LIST:
-        return 1 + max(
-            [_exp_depth(x) for x in ((node.get("exp_list") or {}).get("exp") or [])]
-            or [0]
-        )
+        return 1 + max(_exp_depth(x) for x in node["exp_list"]["exp"])
     if nt in (C.NT_SMP_GOTO, C.NT_SMP_ELM_EXP, C.NT_SMP_LITERAL):
         return 1
     return 0
@@ -378,13 +276,12 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
     operator_tables = build_operator_render_tables()
 
     def visit_block(block):
-        for sen in _block_sentences(block):
+        sentences = block["sentense_list"] if isinstance(block, dict) else block
+        for sen in sentences:
             visit_sentence(sen)
 
     def visit_sentence(sen):
-        if not isinstance(sen, dict):
-            return
-        nt = sen.get("node_type")
+        nt = sen["node_type"]
         if nt == C.NT_S_LABEL:
             statements["label"] += 1
             return
@@ -397,20 +294,15 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
         if nt == C.NT_S_DEF_CMD:
             statements["command_def"] += 1
             directives["command_definitions"] += 1
-            node = sen.get("def_cmd") or {}
-            try:
-                cmd_id = int(node.get("cmd_id", -1))
-            except (TypeError, ValueError):
-                cmd_id = -1
-            if 0 <= cmd_id < int(inc_command_cnt or 0):
+            node = sen["def_cmd"]
+            if 0 <= node["cmd_id"] < inc_command_cnt:
                 directives["global_command_implementations"] += 1
             else:
                 directives["scene_command_definitions"] += 1
-            visit_block(node.get("block"))
+            visit_block(node["block"])
             return
         if nt == C.NT_S_GOTO:
-            gt = sen.get("Goto") or {}
-            gnt = gt.get("node_type")
+            gnt = sen["Goto"]["node_type"]
             if gnt == C.NT_GOTO_GOSUB:
                 statements["gosub"] += 1
             elif gnt == C.NT_GOTO_GOSUBSTR:
@@ -423,24 +315,23 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
             return
         if nt == C.NT_S_IF:
             statements["if"] += 1
-            for sub in (sen.get("If") or {}).get("sub", []) or []:
-                at = ((sub.get("If") or {}).get("atom") or {}) if sub else {}
-                if at.get("type") == C.LA_T["ELSEIF"]:
+            for sub in sen["If"]["sub"]:
+                if sub["If"]["atom"]["type"] == C.LA_T["ELSEIF"]:
                     statements["elseif"] += 1
-                elif at.get("type") == C.LA_T["ELSE"]:
+                elif sub["If"]["atom"]["type"] == C.LA_T["ELSE"]:
                     statements["else"] += 1
-                visit_block(sub.get("block") if isinstance(sub, dict) else None)
+                visit_block(sub["block"])
             return
         if nt == C.NT_S_FOR:
             statements["for"] += 1
-            node = sen.get("For") or {}
-            visit_block(node.get("init"))
-            visit_block(node.get("loop"))
-            visit_block(node.get("block"))
+            node = sen["For"]
+            visit_block(node["init"])
+            visit_block(node["loop"])
+            visit_block(node["block"])
             return
         if nt == C.NT_S_WHILE:
             statements["while"] += 1
-            visit_block((sen.get("While") or {}).get("block"))
+            visit_block(sen["While"]["block"])
             return
         if nt == C.NT_S_CONTINUE:
             statements["continue"] += 1
@@ -450,23 +341,19 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
             return
         if nt == C.NT_S_SWITCH:
             statements["switch"] += 1
-            sw = sen.get("Switch") or {}
-            for cs in sw.get("case", []) or []:
+            sw = sen["Switch"]
+            for cs in sw["case"]:
                 statements["case"] += 1
-                visit_block(cs.get("block") if isinstance(cs, dict) else None)
-            if sw.get("Default"):
+                visit_block(cs["block"])
+            if sw["Default"] is not None:
                 statements["default"] += 1
-                visit_block((sw.get("Default") or {}).get("block"))
+                visit_block(sw["Default"]["block"])
             return
         if nt == C.NT_S_ASSIGN:
             statements["assign"] += 1
-            assign = sen.get("assign") or {}
-            _inc_counter(
-                expressions["assign_ops"],
-                _assign_operator_symbol(
-                    ((assign.get("equal") or {}).get("atom") or {}), operator_tables
-                ),
-            )
+            op = sen["assign"]["equal"]["atom"]["opt"]
+            symbol = "=" if op == C.OP_NONE else operator_tables[3][op] + "="
+            expressions["assign_ops"][symbol] += 1
             return
         if nt == C.NT_S_COMMAND:
             statements["command_call"] += 1
@@ -477,12 +364,10 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
             return
         if nt == C.NT_S_NAME:
             statements["name"] += 1
-            name = _string_for_atom(
-                plad, ((sen.get("name") or {}).get("name") or {}).get("atom") or {}
-            )
+            name = plad["str_list"][sen["name"]["name"]["atom"]["opt"]]
             strings["speaker_names"] += 1
             if name:
-                stats.setdefault("_unique_speakers", set()).add(name)
+                stats["_unique_speakers"].add(name)
             return
         if nt == C.NT_S_EOF:
             statements["eof"] += 1
@@ -499,30 +384,20 @@ def _collect_tree_stats(root, stats):
             nt = node.get("node_type")
             if nt == C.NT_EXP_OPR1:
                 expressions["unary_ops"] += 1
-                _inc_counter(
-                    expressions["unary_op_kinds"],
-                    _operator_symbol(
-                        ((node.get("opr") or {}).get("atom") or {}),
-                        True,
-                        operator_tables,
-                    ),
-                )
+                expressions["unary_op_kinds"][
+                    operator_tables[2][node["opr"]["atom"]["opt"]]
+                ] += 1
             elif nt == C.NT_EXP_OPR2:
                 expressions["binary_ops"] += 1
-                _inc_counter(
-                    expressions["binary_op_kinds"],
-                    _operator_symbol(
-                        ((node.get("opr") or {}).get("atom") or {}),
-                        False,
-                        operator_tables,
-                    ),
-                )
+                expressions["binary_op_kinds"][
+                    operator_tables[3][node["opr"]["atom"]["opt"]]
+                ] += 1
             if nt in (C.NT_EXP_SIMPLE, C.NT_EXP_OPR1, C.NT_EXP_OPR2):
                 expressions["max_depth"] = max(
-                    int(expressions.get("max_depth", 0) or 0), _exp_depth(node)
+                    expressions["max_depth"], _exp_depth(node)
                 )
-            if "named_arg_cnt" in node and isinstance(node.get("arg"), list):
-                expressions["named_args"] += int(node.get("named_arg_cnt", 0) or 0)
+            if "named_arg_cnt" in node:
+                expressions["named_args"] += node["named_arg_cnt"]
             for key, value in node.items():
                 if key in ("atom", "_elm_chain"):
                     continue
@@ -535,21 +410,18 @@ def _collect_tree_stats(root, stats):
 
 
 def _collect_label_stats(plad, mad, header, stats):
-    info = mad.get("ma_label_info") or {}
-    defs = set(int(k) for k in (info.get("def") or {}))
-    zdefs = set(int(k) for k in (info.get("zdef") or {}))
+    info = mad["ma_label_info"]
+    defs = set(info["def"])
+    zdefs = set(info["zdef"])
     label_refs = []
     z_refs = []
-    for item in info.get("goto") or []:
-        if not isinstance(item, dict):
-            continue
+    for item in info["goto"]:
         if "z" in item:
-            z_refs.append(int(item.get("z", -1)))
-        elif "label" in item:
-            label_refs.append(int(item.get("label", -1)))
-    for item in info.get("lit") or []:
-        if isinstance(item, dict):
-            label_refs.append(int(item.get("label", -1)))
+            z_refs.append(item["z"])
+        else:
+            label_refs.append(item["label"])
+    for item in info["lit"]:
+        label_refs.append(item["label"])
     labels = stats["labels"]
     labels["defs"] += len(defs)
     labels["refs"] += len(label_refs)
@@ -557,8 +429,8 @@ def _collect_label_stats(plad, mad, header, stats):
     labels["z_defs"] += len(zdefs)
     labels["z_refs"] += len(z_refs)
     labels["z_unused"] += len((zdefs - {0}) - set(z_refs))
-    source_label_slots = len(plad.get("label_list") or [])
-    label_cnt = header.get("label_cnt", 0)
+    source_label_slots = len(plad["label_list"])
+    label_cnt = header["label_cnt"]
     labels["generated"] += max(0, label_cnt - source_label_slots)
 
 
@@ -568,14 +440,14 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     pre = pcad["preprocess_stats"]
     out_pre = stats["preprocess"]
     for key in ("ifdef", "elseifdef", "else", "endif", "excluded_lines"):
-        out_pre[key] = int(pre.get(key, 0) or 0)
-    out_pre["max_ifdef_depth"] = int(pre.get("max_ifdef_depth", 0) or 0)
+        out_pre[key] = pre[key]
+    out_pre["max_ifdef_depth"] = pre["max_ifdef_depth"]
     inc = stats["inc"]
-    inc["blocks"] = int(pre.get("inc_start", 0) or 0)
-    inc["ends"] = int(pre.get("inc_end", 0) or 0)
-    inc["lines"] = int(pre.get("inc_lines", 0) or 0)
-    inc["scene_properties"] = int(pre.get("scene_inc_properties", 0) or 0)
-    inc["scene_commands"] = int(pre.get("scene_inc_commands", 0) or 0)
+    inc["blocks"] = pre["inc_start"]
+    inc["ends"] = pre["inc_end"]
+    inc["lines"] = pre["inc_lines"]
+    inc["scene_properties"] = pre["scene_inc_properties"]
+    inc["scene_commands"] = pre["scene_inc_commands"]
     directives = stats["directives"]
     directives["scene_inc_properties"] = inc["scene_properties"]
     directives["scene_inc_commands"] = inc["scene_commands"]
@@ -589,7 +461,7 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
         {"name": nm, "utf16_units": utf16_units, "entries": len(strings)}
     )
     stats["_unique_strings"] = set(strings)
-    root = psad.get("root")
+    root = psad["root"]
     inc_command_cnt = pcad["global_inc_command_cnt"]
     _collect_statement_stats(root, plad, stats, inc_command_cnt)
     _collect_tree_stats(root, stats)
@@ -1673,9 +1545,9 @@ class BS:
         for el in elm_list.get("element") or []:
             if not s.bs_element(el):
                 return False
-            if get_elm_owner((el or {}).get("element_code", 0)) == int(
-                C.ELM_OWNER_CALL_PROP
-            ) and not is_value((el or {}).get("node_form")):
+            if (
+                (_to_int((el or {}).get("element_code", 0)) >> 24) & 0xFF
+            ) == C.ELM_OWNER_CALL_PROP and not is_value((el or {}).get("node_form")):
                 s.scn_push_u8(C.CD_PROPERTY)
         return True
 
@@ -1904,23 +1776,6 @@ def get_error_code(s):
     return "UNK_ERROR"
 
 
-def find_ss(ctx, only=None):
-    if only:
-        return [absp(x) for x in only]
-    sp = ctx.get("scn_path")
-    if not sp:
-        return []
-    try:
-        _, entries = read_directory(sp)
-    except (FileNotFoundError, NotADirectoryError):
-        return []
-    ss_files = []
-    for entry in entries:
-        if entry.is_file() and ascii_lower(entry.name).endswith(".ss"):
-            ss_files.append(entry.path)
-    return sorted(ss_files, key=lambda x: ascii_lower(os.path.basename(x)))
-
-
 def compile_one_pipeline(
     ctx,
     ss_path,
@@ -2032,12 +1887,12 @@ def compile_one_pipeline(
         lad,
         mad,
         bsd,
-        bsd.get("out_scn", b""),
+        bsd["out_scn"],
     )
     return {
         "nm": nm,
         "fname": fname,
-        "out_scn": bsd.get("out_scn", b""),
+        "out_scn": bsd["out_scn"],
         "scene_macro_counts": scene_macro_counts,
         "global_macro_usage_delta": global_macro_usage_delta,
         "source_stats": source_stats,
@@ -2062,7 +1917,26 @@ def compile_one(ctx, ss_path):
 def compile_all(ctx, only=None, max_workers=None, parallel=True):
     if ctx.get("ia_data") is None:
         ctx["ia_data"] = build_ia_data(ctx)
-    ss_files = list(find_ss(ctx, only))
+    if only:
+        ss_files = [
+            os.path.abspath(os.path.expanduser(path)) if path else path for path in only
+        ]
+    else:
+        ss_files = []
+        scn_path = ctx.get("scn_path")
+        if scn_path:
+            try:
+                _, entries = read_directory(scn_path)
+            except (FileNotFoundError, NotADirectoryError):
+                entries = []
+            ss_files = sorted(
+                (
+                    entry.path
+                    for entry in entries
+                    if entry.is_file() and ascii_lower(entry.name).endswith(".ss")
+                ),
+                key=lambda path: ascii_lower(os.path.basename(path)),
+            )
     if not ss_files:
         return {
             "parallel": False,

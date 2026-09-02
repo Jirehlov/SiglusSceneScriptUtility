@@ -269,8 +269,13 @@ def _write_digest_cache(path, payload):
         raise
 
 
-def _compile_cache_meta(enc, charset):
-    return {
+def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, incremental):
+    compile_list = list(ss or [])
+    digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
+    cur_inc = {}
+    cur_ss = {}
+    full_compile = True
+    cache_meta = {
         "schema": 4,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
@@ -279,15 +284,6 @@ def _compile_cache_meta(enc, charset):
         "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
-
-
-def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, incremental):
-    compile_list = list(ss or [])
-    digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
-    cur_inc = {}
-    cur_ss = {}
-    full_compile = True
-    cache_meta = _compile_cache_meta(enc, charset)
     for f in inc or []:
         p = os.path.join(input_dir, f)
         try:
@@ -513,15 +509,6 @@ def _read_scn_dat_str_pool(path):
     return out
 
 
-def _resolve_test_shuffle_csv_path(csv_path):
-    p = str(csv_path or "").strip()
-    if not p:
-        return ""
-    if os.path.isdir(p) or p.endswith(os.sep) or (os.altsep and p.endswith(os.altsep)):
-        p = os.path.join(p, "test_shuffle_seeds.csv")
-    return os.path.abspath(p)
-
-
 def _write_test_shuffle_csv(csv_path, rows):
     if not csv_path:
         return
@@ -582,11 +569,6 @@ def _scan_dir(p):
     return fs, ini, inc, ss, scn_ssid_map
 
 
-def _is_jp_char(ch):
-    o = ord(ch)
-    return (0x3040 <= o <= 0x30FF) or (0x4E00 <= o <= 0x9FFF) or (0x3400 <= o <= 0x4DBF)
-
-
 def _guess_charset_from_files(base_dir, ini, inc, ss):
     paths = []
     for p in ss or []:
@@ -612,7 +594,12 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
             t = b.decode("utf-8", "strict")
         except UnicodeDecodeError:
             continue
-        if any(_is_jp_char(ch) for ch in t):
+        if any(
+            0x3040 <= ord(ch) <= 0x30FF
+            or 0x4E00 <= ord(ch) <= 0x9FFF
+            or 0x3400 <= ord(ch) <= 0x4DBF
+            for ch in t
+        ):
             return "utf-8"
     return "cp932"
 
@@ -633,21 +620,6 @@ def _load_project_source_texts(base_dir, gameexe_ini, inc, ss, charset):
         except Exception as exc:
             raise ValueError(f"{path}: {exc}") from exc
     return texts
-
-
-def _init_stats(ctx):
-    stats = ctx.setdefault("stats", {})
-    stats.setdefault("stage_time", {})
-    stats.setdefault("inc_files", 0)
-    stats.setdefault("scene_files", 0)
-    stats.setdefault("compiled_scene_files", 0)
-    stats.setdefault("full_compile_stats", False)
-    stats.setdefault("macro_counts", None)
-    stats.setdefault("read_flags", None)
-    stats.setdefault("read_flags_scenes", None)
-    stats.setdefault("top5_read_flags_scenes", None)
-    stats.setdefault("source_stats", None)
-    stats.setdefault("binary_size_stats", None)
 
 
 def _collect_macro_stats(ctx, compile_stats):
@@ -673,11 +645,11 @@ def _collect_read_flag_stats(bs_dir, scene_paths):
     total = 0
     scene_total = 0
     scene_counts = []
-    for scene_path in scene_paths or []:
+    for scene_path in scene_paths:
         nm = os.path.splitext(os.path.basename(scene_path))[0]
         dat_path = os.path.join(bs_dir, nm + ".dat")
         _blob, header = _read_scn_dat_header_bytes(dat_path)
-        cnt = int((header or {}).get("read_flag_cnt", 0) or 0)
+        cnt = header["read_flag_cnt"]
         total += cnt
         if cnt > 0:
             scene_total += 1
@@ -705,212 +677,178 @@ def _finalize_source_stats(ctx, compile_stats):
 
 
 def _sorted_counter_text(counter, sep="="):
-    if not isinstance(counter, dict) or not counter:
+    if not counter:
         return "none"
-    items = sorted(counter.items(), key=lambda item: str(item[0]))
-    return " ".join(f"{name}{sep}{int(count or 0)}" for name, count in items)
+    return " ".join(f"{name}{sep}{count}" for name, count in sorted(counter.items()))
 
 
-def _filtered_counter_text(counter, exclude, sep="="):
-    if not isinstance(counter, dict) or not counter:
-        return "none"
-    excluded = set(exclude or ())
-    return _sorted_counter_text(
-        {k: v for k, v in counter.items() if k not in excluded}, sep
-    )
-
-
-def _top_scene_text(items, value_key, extra_key=None, limit=5):
-    if not isinstance(items, list) or not items:
+def _top_scene_text(items, value_key, extra_key=None):
+    if not items:
         return "none"
     rows = sorted(
-        [x for x in items if isinstance(x, dict)],
+        items,
         key=lambda item: (
-            -int(item.get(value_key, 0) or 0),
-            ascii_lower(item.get("name", "")),
-            str(item.get("name", "")),
+            -item[value_key],
+            ascii_lower(item["name"]),
+            item["name"],
         ),
     )
     out = []
-    for item in rows[:limit]:
-        name = str(item.get("name", ""))
-        value = int(item.get(value_key, 0) or 0)
+    for item in rows[:5]:
+        name = item["name"]
+        value = item[value_key]
         if extra_key:
-            out.append(
-                f"{name}({value}, {extra_key}={int(item.get(extra_key, 0) or 0)})"
-            )
+            out.append(f"{name}({value}, {extra_key}={item[extra_key]})")
         else:
             out.append(f"{name}({value})")
-    return ", ".join(out) if out else "none"
+    return ", ".join(out)
 
 
 def _print_source_stats(source_stats):
-    if not isinstance(source_stats, dict):
-        return
-    directives = source_stats.get("directives") or {}
-    pre = source_stats.get("preprocess") or {}
-    inc = source_stats.get("inc") or {}
-    strings = source_stats.get("strings") or {}
-    statements = source_stats.get("statements") or {}
-    labels = source_stats.get("labels") or {}
-    expressions = source_stats.get("expressions") or {}
+    directives = source_stats["directives"]
+    pre = source_stats["preprocess"]
+    inc = source_stats["inc"]
+    strings = source_stats["strings"]
+    statements = source_stats["statements"]
+    labels = source_stats["labels"]
+    expressions = source_stats["expressions"]
     print(
         "#property: "
-        f"global={int(directives.get('global_inc_properties', 0) or 0)} "
-        f"scene_local={int(directives.get('scene_inc_properties', 0) or 0)}"
+        f"global={directives.get('global_inc_properties', 0)} "
+        f"scene_local={directives.get('scene_inc_properties', 0)}"
     )
     print(
         "#command: "
-        f"global={int(directives.get('global_inc_commands', 0) or 0)} "
-        f"scene_local={int(directives.get('scene_inc_commands', 0) or 0)} "
-        f"global_impl={int(directives.get('global_command_implementations', 0) or 0)} "
-        f"scene_defs={int(directives.get('scene_command_definitions', 0) or 0)}"
+        f"global={directives.get('global_inc_commands', 0)} "
+        f"scene_local={directives.get('scene_inc_commands', 0)} "
+        f"global_impl={directives.get('global_command_implementations', 0)} "
+        f"scene_defs={directives.get('scene_command_definitions', 0)}"
     )
     print(
         "preprocessor: "
-        f"ifdef={int(pre.get('ifdef', 0) or 0)} "
-        f"elseifdef={int(pre.get('elseifdef', 0) or 0)} "
-        f"else={int(pre.get('else', 0) or 0)} "
-        f"endif={int(pre.get('endif', 0) or 0)} "
-        f"max_depth={int(pre.get('max_ifdef_depth', 0) or 0)} "
-        f"excluded_lines={int(pre.get('excluded_lines', 0) or 0)}"
+        f"ifdef={pre.get('ifdef', 0)} "
+        f"elseifdef={pre.get('elseifdef', 0)} "
+        f"else={pre.get('else', 0)} "
+        f"endif={pre.get('endif', 0)} "
+        f"max_depth={pre.get('max_ifdef_depth', 0)} "
+        f"excluded_lines={pre.get('excluded_lines', 0)}"
     )
     print(
         "inc_blocks: "
-        f"start={int(inc.get('blocks', 0) or 0)} "
-        f"end={int(inc.get('ends', 0) or 0)} "
-        f"lines={int(inc.get('lines', 0) or 0)}"
+        f"start={inc.get('blocks', 0)} "
+        f"end={inc.get('ends', 0)} "
+        f"lines={inc.get('lines', 0)}"
     )
     print(
         "labels: "
-        f"defs={int(labels.get('defs', 0) or 0)} "
-        f"refs={int(labels.get('refs', 0) or 0)} "
-        f"unused={int(labels.get('unused', 0) or 0)} "
-        f"z_defs={int(labels.get('z_defs', 0) or 0)} "
-        f"z_refs={int(labels.get('z_refs', 0) or 0)} "
-        f"z_unused={int(labels.get('z_unused', 0) or 0)} "
-        f"generated={int(labels.get('generated', 0) or 0)}"
+        f"defs={labels.get('defs', 0)} "
+        f"refs={labels.get('refs', 0)} "
+        f"unused={labels.get('unused', 0)} "
+        f"z_defs={labels.get('z_defs', 0)} "
+        f"z_refs={labels.get('z_refs', 0)} "
+        f"z_unused={labels.get('z_unused', 0)} "
+        f"generated={labels.get('generated', 0)}"
     )
     print(
         "statements: "
-        + _filtered_counter_text(
-            statements,
-            (
-                "assign",
-                "command_def",
-                "eof",
-                "label",
-                "name",
-                "text",
-                "z_label",
-            ),
+        + _sorted_counter_text(
+            {
+                key: value
+                for key, value in statements.items()
+                if key
+                not in (
+                    "assign",
+                    "command_def",
+                    "eof",
+                    "label",
+                    "name",
+                    "text",
+                    "z_label",
+                )
+            }
         )
     )
     print(
         "expressions: "
-        f"max_depth={int(expressions.get('max_depth', 0) or 0)} "
-        f"named_args={int(expressions.get('named_args', 0) or 0)} "
-        f"default_arg_fills={int(expressions.get('default_arg_fills', 0) or 0)}"
+        f"max_depth={expressions.get('max_depth', 0)} "
+        f"named_args={expressions.get('named_args', 0)} "
+        f"default_arg_fills={expressions.get('default_arg_fills', 0)}"
     )
-    print(
-        "assign_ops: " + _sorted_counter_text(expressions.get("assign_ops") or {}, ":")
-    )
-    print(
-        "unary_ops: "
-        + _sorted_counter_text(expressions.get("unary_op_kinds") or {}, ":")
-    )
-    print(
-        "binary_ops: "
-        + _sorted_counter_text(expressions.get("binary_op_kinds") or {}, ":")
-    )
+    print("assign_ops: " + _sorted_counter_text(expressions["assign_ops"], ":"))
+    print("unary_ops: " + _sorted_counter_text(expressions["unary_op_kinds"], ":"))
+    print("binary_ops: " + _sorted_counter_text(expressions["binary_op_kinds"], ":"))
     print(
         "strings: "
-        f"entries={int(strings.get('entries', 0) or 0)} "
-        f"unique={int(strings.get('unique', 0) or 0)} "
-        f"utf16_units={int(strings.get('utf16_units', 0) or 0)}"
+        f"entries={strings.get('entries', 0)} "
+        f"unique={strings.get('unique', 0)} "
+        f"utf16_units={strings.get('utf16_units', 0)}"
     )
     print(
         "dialogue: "
-        f"text_lines={int(strings.get('dialogue_text_lines', 0) or 0)} "
-        f"speaker_names={int(strings.get('speaker_names', 0) or 0)} "
-        f"unique_speaker_names={int(strings.get('unique_speaker_names', 0) or 0)}"
-    )
-
-
-def _print_binary_size_stats(binary_stats):
-    if not isinstance(binary_stats, dict):
-        return
-    dat_bytes = int(binary_stats.get("dat_bytes", 0) or 0)
-    lzss_bytes = int(binary_stats.get("lzss_bytes", 0) or 0)
-    ratio = binary_stats.get("lzss_ratio")
-    ratio_text = f"{float(ratio):.3f}" if ratio is not None else "n/a"
-    print(
-        "binary_sizes: "
-        f"dat_bytes={dat_bytes} "
-        f"scn_bytes={int(binary_stats.get('scn_bytes', 0) or 0)} "
-        f"lzss_bytes={lzss_bytes} "
-        f"lzss_ratio={ratio_text}"
+        f"text_lines={strings.get('dialogue_text_lines', 0)} "
+        f"speaker_names={strings.get('speaker_names', 0)} "
+        f"unique_speaker_names={strings.get('unique_speaker_names', 0)}"
     )
 
 
 def _print_top_stats(stats):
-    macro_counts = stats.get("macro_counts")
-    if isinstance(macro_counts, dict):
-        top5 = stats.get("top5_read_flags_scenes")
-        if isinstance(top5, list) and top5:
-            print(
-                "top5_read_flags_scenes: "
-                + ", ".join(f"{name}({int(count or 0)})" for name, count in top5)
-            )
-        else:
-            print("top5_read_flags_scenes: none")
-    source_stats = stats.get("source_stats")
-    if isinstance(source_stats, dict):
-        strings = source_stats.get("strings") or {}
+    top5 = stats["top5_read_flags_scenes"]
+    if top5:
         print(
-            "top5_string_pool_scenes: "
-            + _top_scene_text(strings.get("top_scenes") or [], "utf16_units", "entries")
+            "top5_read_flags_scenes: "
+            + ", ".join(f"{name}({count})" for name, count in top5)
         )
-    binary_stats = stats.get("binary_size_stats")
-    if isinstance(binary_stats, dict):
-        print(
-            "top5_dat_scenes: "
-            + _top_scene_text(binary_stats.get("top_dat_scenes") or [], "dat_bytes")
+    else:
+        print("top5_read_flags_scenes: none")
+    print(
+        "top5_string_pool_scenes: "
+        + _top_scene_text(
+            stats["source_stats"]["strings"]["top_scenes"],
+            "utf16_units",
+            "entries",
         )
+    )
+    print(
+        "top5_dat_scenes: "
+        + _top_scene_text(stats["binary_size_stats"]["top_dat_scenes"], "dat_bytes")
+    )
 
 
 def _print_summary(ctx, ok=False):
     stats = ctx["stats"]
-    timings = stats.get("stage_time") or {}
-    angou = stats.get("angou_content", "")
+    timings = stats["stage_time"]
+    angou = stats["angou_content"]
     has_compile_stats = (
         bool(timings)
-        or int(stats.get("inc_files", 0) or 0) > 0
-        or int(stats.get("scene_files", 0) or 0) > 0
-        or int(stats.get("compiled_scene_files", 0) or 0) > 0
+        or stats["inc_files"] > 0
+        or stats["scene_files"] > 0
+        or stats["compiled_scene_files"] > 0
     )
     if has_compile_stats:
         print("=== Compiling Stats ===")
         for k in sorted(timings.keys()):
             print(f"{k}: {timings[k]:.3f}s")
-        print(f"inc_files: {int(stats.get('inc_files', 0) or 0)}")
-        print(f"scene_files: {int(stats.get('scene_files', 0) or 0)}")
-        print(f"compiled_scene_files: {int(stats.get('compiled_scene_files', 0) or 0)}")
-        if ok and bool(stats.get("full_compile_stats")):
-            macro_counts = stats.get("macro_counts")
-            if isinstance(macro_counts, dict):
-                for kind in MACRO_STAT_KINDS:
-                    bucket = macro_counts.get(kind) or {}
-                    print(
-                        f"#{kind}: total={int(bucket.get('total', 0) or 0)} unused={int(bucket.get('unused', 0) or 0)}"
-                    )
-                print(f"read_flags: {int(stats.get('read_flags', 0) or 0)}")
-                print(
-                    f"read_flags_scenes: {int(stats.get('read_flags_scenes', 0) or 0)}"
-                )
-                _print_source_stats(stats.get("source_stats"))
-                _print_binary_size_stats(stats.get("binary_size_stats"))
-                _print_top_stats(stats)
+        print(f"inc_files: {stats['inc_files']}")
+        print(f"scene_files: {stats['scene_files']}")
+        print(f"compiled_scene_files: {stats['compiled_scene_files']}")
+        if ok and stats["full_compile_stats"]:
+            for kind in MACRO_STAT_KINDS:
+                bucket = stats["macro_counts"][kind]
+                print(f"#{kind}: total={bucket['total']} unused={bucket['unused']}")
+            print(f"read_flags: {stats['read_flags']}")
+            print(f"read_flags_scenes: {stats['read_flags_scenes']}")
+            _print_source_stats(stats["source_stats"])
+            binary_stats = stats["binary_size_stats"]
+            ratio = binary_stats["lzss_ratio"]
+            ratio_text = f"{float(ratio):.3f}" if ratio is not None else "n/a"
+            print(
+                "binary_sizes: "
+                f"dat_bytes={binary_stats['dat_bytes']} "
+                f"scn_bytes={binary_stats['scn_bytes']} "
+                f"lzss_bytes={binary_stats['lzss_bytes']} "
+                f"lzss_ratio={ratio_text}"
+            )
+            _print_top_stats(stats)
     if angou is not None:
         print("=== \u6697\u53f7.dat ===")
         print(angou)
@@ -1274,7 +1212,17 @@ def main(argv=None):
     if charset_arg and not charset:
         sys.stderr.write(f"{prog}: error: unsupported --charset: {charset_arg}\n")
         return 2
-    test_shuffle_csv_path = _resolve_test_shuffle_csv_path(a.csv_path or "")
+    test_shuffle_csv_path = str(a.csv_path or "").strip()
+    if test_shuffle_csv_path and (
+        os.path.isdir(test_shuffle_csv_path)
+        or test_shuffle_csv_path.endswith(os.sep)
+        or (os.altsep and test_shuffle_csv_path.endswith(os.altsep))
+    ):
+        test_shuffle_csv_path = os.path.join(
+            test_shuffle_csv_path, "test_shuffle_seeds.csv"
+        )
+    if test_shuffle_csv_path:
+        test_shuffle_csv_path = os.path.abspath(test_shuffle_csv_path)
     if test_shuffle_csv_path and not test_shuffle:
         sys.stderr.write(f"{prog}: error: --csv requires --test-shuffle\n")
         return 2
@@ -1389,6 +1337,19 @@ def main(argv=None):
             except UnicodeEncodeError:
                 use_utf8 = True
                 break
+    stats = {
+        "stage_time": {},
+        "inc_files": 0,
+        "scene_files": 0,
+        "compiled_scene_files": 0,
+        "full_compile_stats": False,
+        "macro_counts": None,
+        "read_flags": None,
+        "read_flags_scenes": None,
+        "top5_read_flags_scenes": None,
+        "source_stats": None,
+        "binary_size_stats": None,
+    }
     ctx = {
         "project": {},
         "scn_path": inp,
@@ -1420,9 +1381,8 @@ def main(argv=None):
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "source_angou": C.SOURCE_ANGOU,
         "defined_names": set(),
+        "stats": stats,
     }
-    _init_stats(ctx)
-    stats = ctx["stats"]
     angou_content = None
     angou_path = ctx["angou_path"]
     if (not a.no_angou) and angou_path:
