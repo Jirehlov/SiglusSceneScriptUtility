@@ -286,6 +286,7 @@ def _consume_global_options(argv):
         legacy or legacy_full,
         legacy_full,
         multiplier,
+        string_xor_multiplier is not None,
     )
 
 
@@ -336,6 +337,23 @@ MODE_MODULES = {
 }
 
 
+def _uses_string_xor_multiplier(mode, args):
+    options = {str(arg).partition("=")[0] for arg in args}
+    match MODE_MODULES.get(mode):
+        case "compiler":
+            return not options & {"--gei", "--dat-repack"}
+        case "extract":
+            return bool(options & {"--disam", "--decompile"})
+        case "analyze":
+            return bool(options & {"--disam", "--payload", "--word"})
+        case "koe_collector":
+            return "--single" not in options
+        case "textmap" | "tutorial" | "test":
+            return True
+        case _:
+            return False
+
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
@@ -349,6 +367,7 @@ def main(argv=None):
             _runtime._LEGACY_COMPILE,
             _runtime._LEGACY_FULL,
             _runtime._SCENE_STRING_XOR_MULTIPLIER,
+            string_xor_multiplier_explicit,
         ) = _consume_global_options(argv)
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
@@ -369,6 +388,14 @@ def main(argv=None):
     ):
         _usage()
         return 0
+    if (
+        string_xor_multiplier_explicit
+        and (mode in MODE_MODULES or mode in ("-lsp", "init", "--init"))
+        and not _uses_string_xor_multiplier(mode, argv[1:])
+    ):
+        sys.stderr.write(
+            f"{_prog()}: warning: --string-xor-multiplier has no effect for this operation\n"
+        )
     if mode in ("init", "--init"):
         from ._const_manager import (
             _fallback_const_path,

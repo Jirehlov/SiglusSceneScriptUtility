@@ -25,7 +25,14 @@ def compile_project_native(config):
             "fallback_kind": "unavailable",
             "reason": "native extension is not available",
         }
-    return native_accel.compile_project(config)
+    try:
+        return native_accel.compile_project(config)
+    except Exception as exc:
+        return {
+            "handled": False,
+            "fallback_kind": "error",
+            "reason": str(exc),
+        }
 
 
 def build_lsp_project_native(config):
@@ -160,11 +167,14 @@ def _payload_native_config_cached(
 def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
-    return native_accel.scn_payload_hash_bundles(
-        bytes(blob),
-        _payload_native_config(),
-        pack_context,
-    )
+    try:
+        return native_accel.scn_payload_hash_bundles(
+            bytes(blob),
+            _payload_native_config(),
+            pack_context,
+        )
+    except Exception:
+        return None
 
 
 class _LzssTree:
