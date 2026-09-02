@@ -16,7 +16,6 @@ from .common import (
     empty_macro_stat_counts,
     format_scene_name,
     log_stage,
-    macro_decl_kind,
     merge_macro_stat_counts,
     record_stage_time,
     set_stage_time,
@@ -129,20 +128,18 @@ def get_elm_owner(code):
 
 
 def copy_ia_data(base):
-    if not isinstance(base, dict):
-        return build_empty_ia_data(new_replace_tree())
     return {
-        "form_table": copy.deepcopy(base.get("form_table")),
-        "replace_tree": copy_replace_tree(base.get("replace_tree")),
-        "name_set": set(base.get("name_set") or []),
-        "macro_defs": list(base.get("macro_defs") or []),
-        "macro_map": dict(base.get("macro_map") or {}),
-        "property_list": [copy.deepcopy(p) for p in base.get("property_list") or []],
-        "command_list": [copy.deepcopy(c) for c in base.get("command_list") or []],
-        "property_cnt": int(base.get("property_cnt", 0) or 0),
-        "command_cnt": int(base.get("command_cnt", 0) or 0),
-        "inc_property_cnt": int(base.get("inc_property_cnt", 0) or 0),
-        "inc_command_cnt": int(base.get("inc_command_cnt", 0) or 0),
+        "form_table": copy.deepcopy(base["form_table"]),
+        "replace_tree": copy_replace_tree(base["replace_tree"]),
+        "name_set": set(base["name_set"]),
+        "macro_defs": list(base["macro_defs"]),
+        "macro_map": dict(base["macro_map"]),
+        "property_list": [copy.deepcopy(p) for p in base["property_list"]],
+        "command_list": [copy.deepcopy(c) for c in base["command_list"]],
+        "property_cnt": base["property_cnt"],
+        "command_cnt": base["command_cnt"],
+        "inc_property_cnt": base["inc_property_cnt"],
+        "inc_command_cnt": base["inc_command_cnt"],
     }
 
 
@@ -602,28 +599,23 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     return stats
 
 
-def summarize_scene_macro_stats(iad, base=None, baseline_usage=None):
+def summarize_scene_macro_stats(iad, base, baseline_usage):
     counts = empty_macro_stat_counts()
     usage_delta = {}
-    macro_defs = list((iad or {}).get("macro_defs") or [])
-    base_defs = list((base or {}).get("macro_defs") or [])
+    macro_defs = iad["macro_defs"]
+    base_defs = base["macro_defs"]
     base_count = len(base_defs)
-    baseline_usage = baseline_usage if isinstance(baseline_usage, dict) else {}
     for rep in macro_defs[base_count:]:
-        kind = macro_decl_kind(rep)
-        if not kind:
-            continue
+        kind = rep["decl_type"]
         bucket = counts[kind]
         bucket["total"] += 1
-        if int((rep or {}).get("used_count", 0) or 0) <= 0:
+        if rep["used_count"] <= 0:
             bucket["unused"] += 1
     for rep in base_defs:
-        kind = macro_decl_kind(rep)
-        name = str((rep or {}).get("name") or "")
-        if (not kind) or (not name):
-            continue
-        used_before = int(baseline_usage.get((kind, name), 0) or 0)
-        used_after = int((rep or {}).get("used_count", 0) or 0)
+        kind = rep["decl_type"]
+        name = rep["name"]
+        used_before = baseline_usage[(kind, name)]
+        used_after = rep["used_count"]
         if used_after > used_before:
             usage_delta[(kind, name)] = used_after - used_before
     return counts, usage_delta
@@ -1951,15 +1943,11 @@ def compile_one_pipeline(
     if base is None:
         base = build_ia_data(ctx)
         ctx["ia_data"] = base
-    baseline_usage = {}
-    for rep in list(base.get("macro_defs") or []):
-        kind = macro_decl_kind(rep)
-        name = str((rep or {}).get("name") or "")
-        if (not kind) or (not name):
-            continue
-        baseline_usage[(kind, name)] = int((rep or {}).get("used_count", 0) or 0)
+    baseline_usage = {
+        (rep["decl_type"], rep["name"]): rep["used_count"] for rep in base["macro_defs"]
+    }
     iad = copy_ia_data(base)
-    pcad = {"global_inc_command_cnt": int((base or {}).get("inc_command_cnt", 0) or 0)}
+    pcad = {"global_inc_command_cnt": base["inc_command_cnt"]}
     ca = CharacterAnalizer()
     if log:
         log_stage("CA", ss_path, ctx)
@@ -2036,7 +2024,7 @@ def compile_one_pipeline(
     if record_time:
         record_stage_time(ctx, "BS", time.time() - t)
     scene_macro_counts, global_macro_usage_delta = summarize_scene_macro_stats(
-        iad, base=base, baseline_usage=baseline_usage
+        iad, base, baseline_usage
     )
     source_stats = collect_scene_source_stats(
         nm,

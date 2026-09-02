@@ -34,33 +34,14 @@ def ascii_lower(value):
     return str(value or "").translate(_ASCII_LOWER_TRANS)
 
 
-def macro_decl_kind(rep):
-    kind = str((rep or {}).get("decl_type") or "")
-    if kind in MACRO_STAT_KINDS:
-        return kind
-    tp = str((rep or {}).get("type") or "")
-    if tp in ("replace", "define", "macro"):
-        return tp
-    return ""
-
-
 def empty_macro_stat_counts():
     return {kind: {"total": 0, "unused": 0} for kind in MACRO_STAT_KINDS}
 
 
 def merge_macro_stat_counts(dst, src):
-    if not isinstance(dst, dict) or not isinstance(src, dict):
-        return dst
     for kind in MACRO_STAT_KINDS:
-        bucket = dst.setdefault(kind, {"total": 0, "unused": 0})
-        other = src.get(kind) or {}
-        bucket["total"] = int(bucket.get("total", 0) or 0) + int(
-            other.get("total", 0) or 0
-        )
-        bucket["unused"] = int(bucket.get("unused", 0) or 0) + int(
-            other.get("unused", 0) or 0
-        )
-    return dst
+        dst[kind]["total"] += src[kind]["total"]
+        dst[kind]["unused"] += src[kind]["unused"]
 
 
 def invert_form_code_map(const_module=None):

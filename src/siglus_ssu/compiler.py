@@ -45,7 +45,6 @@ from .common import (
     empty_macro_stat_counts,
     norm_charset,
     format_scene_name,
-    macro_decl_kind,
     merge_macro_stat_counts,
     scene_string_xor_key,
 )
@@ -656,16 +655,14 @@ def _collect_macro_stats(ctx, compile_stats):
     macro_counts = empty_macro_stat_counts()
     is_parallel = compile_stats["parallel"]
     usage_delta = compile_stats["global_macro_usage_delta"]
-    for rep in list(iad.get("macro_defs") or []):
-        kind = macro_decl_kind(rep)
-        name = str((rep or {}).get("name") or "")
-        if not kind:
-            continue
+    for rep in iad["macro_defs"]:
+        kind = rep["decl_type"]
+        name = rep["name"]
         bucket = macro_counts[kind]
         bucket["total"] += 1
-        used = int((rep or {}).get("used_count", 0) or 0)
-        if is_parallel and name:
-            used += int(usage_delta.get((kind, name), 0) or 0)
+        used = rep["used_count"]
+        if is_parallel:
+            used += usage_delta.get((kind, name), 0)
         if used <= 0:
             bucket["unused"] += 1
     merge_macro_stat_counts(macro_counts, compile_stats["scene_macro_counts"])
