@@ -64,7 +64,7 @@ def _read_validated_const(path: Path | None = None) -> tuple[Path, bytes, str]:
     for p in candidates:
         try:
             p = Path(resolve_read_path(p, kind="file"))
-        except (FileNotFoundError, NotADirectoryError):
+        except OSError:
             continue
         with open_read(p) as f:
             data = f.read()
