@@ -1040,18 +1040,15 @@ class BS:
                     or (gt.get("label") or {}).get("label_id", 0)
                     or 0
                 )
-                s.scn_push_u8(C.CD_GOTO)
-                s.scn_push_i32(lid)
-                return True
             else:
                 lid = int(
                     ((gt.get("z_label") or {}).get("atom") or {}).get("subopt", 0)
                     or (gt.get("z_label") or {}).get("opt", 0)
                     or 0
                 )
-                s.scn_push_u8(C.CD_GOTO)
-                s.scn_push_i32(lid)
-                return True
+            s.scn_push_u8(C.CD_GOTO)
+            s.scn_push_i32(lid)
+            return True
         if nt in (C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
             if not s.bs_goto_exp(gt):
                 return False
@@ -1583,25 +1580,19 @@ class BS:
                 s.out_scn["read_flag_list"].append(
                     {"line_no": int((el[-1] or {}).get("node_line", 0) if el else 0)}
                 )
-            if need_value:
-                nf = elm_exp.get("node_form")
-                if is_value(nf):
-                    pass
-                elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
-                    s.scn_push_u8(C.CD_PROPERTY)
-                else:
-                    return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         elif et == C.ET_PROPERTY:
             if not s.bs_elm_list(elm_list):
                 return False
-            if need_value:
-                nf = elm_exp.get("node_form")
-                if is_value(nf):
-                    pass
-                elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
-                    s.scn_push_u8(C.CD_PROPERTY)
-                else:
-                    return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
+        else:
+            return True
+        if need_value:
+            nf = elm_exp.get("node_form")
+            if is_value(nf):
+                pass
+            elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
+                s.scn_push_u8(C.CD_PROPERTY)
+            else:
+                return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         return True
 
     def bs_arg(s, arg, need_value):

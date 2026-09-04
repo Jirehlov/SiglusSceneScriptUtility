@@ -625,11 +625,11 @@ def _parse_config_payload(raw, major, minor, *, size_t_size=4):
     return out
 
 
-def _try_parse_global_payload(raw, major, minor):
+def _try_parse_payload(parser, raw, major, minor):
     last_err = None
     for sz in (4, 8):
         try:
-            d = _parse_global_payload(raw, major, minor, size_t_size=sz)
+            d = parser(raw, major, minor, size_t_size=sz)
             return d, {"size_t_size": sz}, None
         except Exception as e:
             last_err = str(e)
@@ -649,17 +649,6 @@ def _try_parse_global_payload_with_layout(raw, major, minor):
     return None, None, None, last_err or "eof"
 
 
-def _try_parse_config_payload(raw, major, minor):
-    last_err = None
-    for sz in (4, 8):
-        try:
-            d = _parse_config_payload(raw, major, minor, size_t_size=sz)
-            return d, {"size_t_size": sz}, None
-        except Exception as e:
-            last_err = str(e)
-    return None, None, last_err or "eof"
-
-
 def _parse_global_or_config(blob):
     k = _try_parse_global_or_config(blob)
     if k is None:
@@ -667,10 +656,8 @@ def _parse_global_or_config(blob):
     enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
     raw = _unpack_tnm_data(enc)
     sha256_hex = content_digest(raw)
-    if k["kind"] == "global":
-        payload, variant, err = _try_parse_global_payload(raw, k["major"], k["minor"])
-    else:
-        payload, variant, err = _try_parse_config_payload(raw, k["major"], k["minor"])
+    parser = _parse_global_payload if k["kind"] == "global" else _parse_config_payload
+    payload, variant, err = _try_parse_payload(parser, raw, k["major"], k["minor"])
     return {
         **k,
         "unpacked_size": len(raw),

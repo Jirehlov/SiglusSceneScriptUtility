@@ -1,5 +1,6 @@
 from ._const_manager import get_const_module
 from .CA import is_zen
+from .common import to_i32
 
 C = get_const_module()
 
@@ -90,10 +91,6 @@ def la_analize(pcad):
 
     def find_label(name):
         return label_map.get(name, -1)
-
-    def to_i32(v):
-        v = int(v) & 0xFFFFFFFF
-        return v if v < 0x80000000 else v - 0x100000000
 
     def fallback_span(start, end, line):
         line_index = max(0, min(int(line or 1) - 1, len(line_starts) - 1))

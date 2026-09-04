@@ -219,6 +219,11 @@ def int_or_none(value):
         return None
 
 
+def to_i32(value):
+    value = int(value) & 0xFFFFFFFF
+    return value if value < 0x80000000 else value - 0x100000000
+
+
 def mark_named_usage(iad, name):
     macro_map = (iad or {}).get("macro_map")
     if not isinstance(macro_map, dict):

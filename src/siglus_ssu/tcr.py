@@ -87,7 +87,6 @@ def tcr(blob: bytes) -> int:
     print(f"max: {int(info.get('max') or 0):d}")
     print(f"cnt: {int(info.get('cnt') or 0):d}")
     print(f"header_size: {_HDR_SIZE:d}")
-    nz = 0
     try:
         nz = sum(1 for x in (info.get("offsets") or ()) if int(x) != 0)
     except Exception:

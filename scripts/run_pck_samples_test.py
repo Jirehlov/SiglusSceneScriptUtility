@@ -26,16 +26,12 @@ _TEST_SUMMARY_RE = re.compile(
 )
 
 
-def _token() -> str:
-    return os.environ.get("GITHUB_TOKEN", "").strip()
-
-
 def _headers(accept: str = "application/vnd.github+json") -> dict[str, str]:
     headers = {
         "Accept": accept,
         "User-Agent": "siglus-ssu-pck-samples-test",
     }
-    token = _token()
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
     if token:
         headers["Authorization"] = f"Bearer {token}"
     return headers

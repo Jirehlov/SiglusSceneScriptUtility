@@ -326,7 +326,6 @@ def _write_support_inc_lines(root, lines):
 def _copy_arg_layout(layout):
     out = []
     for it in layout or []:
-        form = 0
         try:
             if isinstance(it, dict):
                 form = int(it.get("form", 0) or 0)
@@ -3966,7 +3965,6 @@ class _Decompiler:
         return ec_i is not None and ec_i == int(C.ELM_GLOBAL_MSG_BLOCK)
 
     def _pick_return_form(self, _cmd_id, forms, body_range):
-        hint = None
         try:
             hint = (self.global_command_hints or {}).get(int(_cmd_id))
         except Exception:

@@ -664,7 +664,6 @@ def new_expression_state(
                                     continue
                             except Exception:
                                 continue
-                            ec_match = False
                             try:
                                 ec_match = int(nxt.get("ec")) == int(
                                     info_hint.get("ec")

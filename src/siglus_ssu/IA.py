@@ -13,14 +13,10 @@ from .common import (
     next_else_ifdef_state,
     next_elseif_ifdef_state,
     scan_text_comments,
+    to_i32,
 )
 
 C = get_const_module()
-
-
-def _to_i32(value):
-    value = int(value) & 0xFFFFFFFF
-    return value if value < 0x80000000 else value - 0x100000000
 
 
 class IncAnalyzer:
@@ -149,7 +145,7 @@ class IncAnalyzer:
             return i, 0, 0
         num = 0
         while i < n and is_num(t[i]):
-            num = _to_i32(num * 10 + (ord(t[i]) - 48))
+            num = to_i32(num * 10 + (ord(t[i]) - 48))
             i += 1
         return i, num, 1
 
@@ -166,7 +162,7 @@ class IncAnalyzer:
         i, v, ok = self._get_num(i)
         if not ok:
             return i, 0, 0
-        return i, _to_i32(v * sign), 1
+        return i, to_i32(v * sign), 1
 
     def _get_dq(self, i):
         i, ok = self._chk_moji(i, '"')
