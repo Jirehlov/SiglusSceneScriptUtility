@@ -161,6 +161,10 @@ The CLI also accepts a few convenience aliases:
 - `siglus-ssu version` behaves the same as `siglus-ssu --version`
 - `siglus-ssu --init ...` behaves the same as `siglus-ssu init ...`
 
+After selecting a mode, `--` ends option parsing so that a positional path beginning with `-` can be passed unchanged, for example `siglus-ssu test -- --sample.pck`.
+
+Long options must be written in full. Only explicitly documented aliases are accepted; arbitrary unique prefixes are rejected.
+
 ### Python Module API
 
 This project supports the `siglus-ssu` command-line interface only. Importing or calling `siglus_ssu` modules from external Python code is not a supported API, and internal module names, functions, globals, and return shapes may change without compatibility guarantees.
@@ -287,7 +291,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | Disable LZSS compression and XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
 | `--serial` | Disable multi-process parallel compilation and force the compile stage to run serially. Parallel compilation is enabled by default. |
-| `--max-workers N` | Maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
+| `--max-workers N` | Positive maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. Cannot be combined with `--tmp` or `--gei`. |

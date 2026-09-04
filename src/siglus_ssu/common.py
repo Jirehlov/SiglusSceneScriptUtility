@@ -174,9 +174,42 @@ def build_empty_ia_data(replace_tree, defined_names=None):
 def has_option(argv, opt):
     for item in argv or []:
         s = str(item)
+        if s == "--":
+            break
         if s == opt or s.startswith(opt + "="):
             return True
     return False
+
+
+def split_end_of_options(argv):
+    args = list(argv or [])
+    try:
+        index = args.index("--")
+    except ValueError:
+        return args, None
+    return args[:index], args[index + 1 :]
+
+
+def is_option_token(value):
+    text = str(value)
+    if len(text) <= 1 or not text.startswith("-"):
+        return False
+    try:
+        int(text, 0)
+        return False
+    except ValueError:
+        try:
+            float(text)
+            return False
+        except ValueError:
+            return True
+
+
+def first_option_token(argv):
+    for value in argv or []:
+        if is_option_token(value):
+            return str(value)
+    return None
 
 
 def int_or_none(value):
@@ -1185,7 +1218,7 @@ def format_exe_el_source(src) -> str:
 
 
 def consume_angou_option(argv):
-    args = list(argv or [])
+    args, positional_args = split_end_of_options(argv)
     out = []
     value = ""
     i = 0
@@ -1195,6 +1228,8 @@ def consume_angou_option(argv):
             if value:
                 raise ValueError("--angou specified more than once")
             if i + 1 >= len(args):
+                raise ValueError("--angou requires a value")
+            if is_option_token(args[i + 1]):
                 raise ValueError("--angou requires a value")
             if i + 2 != len(args):
                 raise ValueError("--angou must be the final option")
@@ -1209,6 +1244,8 @@ def consume_angou_option(argv):
             raise ValueError("--angou requires a separate value")
         out.append(a)
         i += 1
+    if positional_args is not None:
+        out.extend(("--", *positional_args))
     return out, value
 
 
@@ -1671,17 +1708,17 @@ def parse_gei_disam_args(
     disam = False
     decompile = False
     if "--gei" in args:
-        args.remove("--gei")
+        args = [arg for arg in args if arg != "--gei"]
         gei = True
     if "--disam" in args:
-        args.remove("--disam")
+        args = [arg for arg in args if arg != "--disam"]
         disam = True
         if disam_action is not None:
             disam_action()
     if "--decompile" in args:
         if disam:
             raise ValueError("--disam and --decompile are mutually exclusive")
-        args.remove("--decompile")
+        args = [arg for arg in args if arg != "--decompile"]
         disam = True
         decompile = True
         if decompile_action is not None:
@@ -2249,7 +2286,8 @@ def format_named_command_args(info, arg_exprs, named_ids):
 
 
 def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
-    found = [f for f in flags if f in argv]
+    option_args, positional_args = split_end_of_options(argv)
+    found = [f for f in flags if f in option_args]
     if len(found) != 1:
         eprint("error: choose exactly one of " + ", ".join(flags))
         hint_help()
@@ -2261,7 +2299,10 @@ def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
         mode = flag[1:]
     else:
         mode = flag
-    return mode, [a for a in argv if a not in flags]
+    args = [a for a in option_args if a not in flags]
+    if positional_args is not None:
+        args.extend(("--", *positional_args))
+    return mode, args
 
 
 def missing_input_file(path: str) -> bool:

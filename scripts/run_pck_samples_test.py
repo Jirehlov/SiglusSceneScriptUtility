@@ -281,7 +281,8 @@ def _run_siglus_test(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
-        description="Download pck-samples files and run siglus-ssu test on all .pck files."
+        description="Download pck-samples files and run siglus-ssu test on all .pck files.",
+        allow_abbrev=False,
     )
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--ref", default=DEFAULT_REF)

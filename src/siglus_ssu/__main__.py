@@ -39,6 +39,7 @@ def _usage(out=None):
         "  --legacy-full   Disable all Rust native acceleration\n"
         "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
         "  --string-xor-multiplier Set scene-string XOR multiplier (0..0xFFFF; default: 0x7087; 0 disables this XOR only)\n"
+        "  --              After a mode, treat all remaining arguments as positional\n"
         "\n"
         "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
@@ -77,7 +78,7 @@ def _usage(out=None):
         "    --no-angou      Disable encryption/compression (not with --tmp)\n"
         "    --no-lzss       Disable scene LZSS and omit source chunks (official easy link; not with --tmp)\n"
         "    --serial        Disable parallel compilation\n"
-        "    --max-workers   Limit parallel workers (default: auto; parallel only)\n"
+        "    --max-workers   Limit parallel workers to a positive integer (default: auto; parallel only)\n"
         "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial (not with --tmp)\n"
         "    --tmp           Use specific temp directory (not with --debug/--dat-repack/--no-angou/--no-lzss/--set-shuffle/--test-shuffle/--csv/--gei/--const-profile)\n"
         "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order (not with --tmp/--gei)\n"
@@ -234,6 +235,9 @@ def _consume_global_options(argv):
     i = 0
     while i < len(argv):
         arg = argv[i]
+        if arg == "--":
+            out.extend(argv[i:])
+            break
         if arg == "--legacy":
             legacy = True
             i += 1
@@ -338,6 +342,8 @@ MODE_MODULES = {
 
 
 def _uses_string_xor_multiplier(mode, args):
+    if "--" in args:
+        args = args[: args.index("--")]
     options = {str(arg).partition("=")[0] for arg in args}
     match MODE_MODULES.get(mode):
         case "compiler":
@@ -383,8 +389,11 @@ def main(argv=None):
         _usage()
         return 0
     mode = argv[0]
+    mode_args = argv[1:]
+    if "--" in mode_args:
+        mode_args = mode_args[: mode_args.index("--")]
     if len(argv) > 1 and (
-        argv[1] == "help" or any(a in ("-h", "--help") for a in argv[1:])
+        argv[1] == "help" or any(a in ("-h", "--help") for a in mode_args)
     ):
         _usage()
         return 0
@@ -405,7 +414,17 @@ def main(argv=None):
 
         force = False
         ref = None
-        it = iter(argv[1:])
+        init_args = argv[1:]
+        if "--" in init_args:
+            marker = init_args.index("--")
+            positional_args = init_args[marker + 1 :]
+            init_args = init_args[:marker]
+            if positional_args:
+                sys.stderr.write(
+                    f"{_prog()}: unexpected init argument: {positional_args[0]}\n"
+                )
+                return 2
+        it = iter(init_args)
         for a in it:
             if a in ("--force", "-f"):
                 force = True
@@ -413,6 +432,9 @@ def main(argv=None):
                 try:
                     ref = next(it)
                 except StopIteration:
+                    sys.stderr.write(f"{_prog()}: --ref requires a value\n")
+                    return 2
+                if str(ref).startswith("-"):
                     sys.stderr.write(f"{_prog()}: --ref requires a value\n")
                     return 2
             elif a in ("-h", "--help", "help"):

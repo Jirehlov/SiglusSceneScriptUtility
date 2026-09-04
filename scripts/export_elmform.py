@@ -506,7 +506,8 @@ def build_elmform(exe_path: Path, output_path: Path) -> tuple[int, int, list[int
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Export SiglusCompiler form and element tables to elmform.py."
+        description="Export SiglusCompiler form and element tables to elmform.py.",
+        allow_abbrev=False,
     )
     parser.add_argument("exe_path", help="Path to SiglusCompiler.exe")
     parser.add_argument(

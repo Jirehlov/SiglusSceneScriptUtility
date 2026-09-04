@@ -161,6 +161,10 @@ CLI 也接受几个便利用法：
 - `siglus-ssu version` 等同于 `siglus-ssu --version`
 - `siglus-ssu --init ...` 等同于 `siglus-ssu init ...`
 
+选择模式后，`--` 会结束选项解析，使以 `-` 开头的路径能够作为位置参数原样传入，例如 `siglus-ssu test -- --sample.pck`。
+
+长选项必须完整输入。只有文档明确列出的别名会被接受；任意唯一前缀会被拒绝。
+
 ### Python 模块 API
 
 本项目只支持 `siglus-ssu` 命令行接口。不支持从外部 Python 代码导入或调用 `siglus_ssu` 模块；内部模块名、函数、全局变量和返回结构都可能变化，且不提供兼容性保证。
@@ -287,7 +291,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | 禁用 LZSS 压缩和 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。此模式不嵌入原始 source chunk，对应官方的“easy link”式输出。不能与 `--tmp` 同用。 |
 | `--serial` | 禁用多进程并行编译，并强制编译阶段按串行方式运行。默认启用并行编译。 |
-| `--max-workers N` | 最大并行工作进程数。仅在启用并行编译时生效；默认为自动。 |
+| `--max-workers N` | 最大并行工作进程数，必须为正整数。仅在启用并行编译时生效；默认为自动。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 SHA-256 缓存（`_source_hashes.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。不能与 `--tmp` 或 `--gei` 同用。 |

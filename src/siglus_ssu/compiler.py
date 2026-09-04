@@ -47,6 +47,7 @@ from .common import (
     format_scene_name,
     merge_macro_stat_counts,
     scene_string_xor_key,
+    split_end_of_options,
 )
 from .path_policy import (
     FilenameCaseCollisionError,
@@ -1090,6 +1091,7 @@ def main(argv=None):
         argv = sys.argv[1:]
     else:
         argv = list(argv)
+    argv, positional_args = split_end_of_options(argv)
     if "--test-shuffle" in argv:
         i = argv.index("--test-shuffle")
         argv.pop(i)
@@ -1141,7 +1143,7 @@ def main(argv=None):
         def error(self, message):
             raise ValueError(message)
 
-    ap = _ArgParser(prog=prog, add_help=False)
+    ap = _ArgParser(prog=prog, add_help=False, allow_abbrev=False)
     if test_shuffle:
         ap.add_argument("input_dir")
         ap.add_argument("output_pck")
@@ -1201,10 +1203,16 @@ def main(argv=None):
     )
     ap.add_argument("--csv", dest="csv_path", default="")
     ap.add_argument("--gei", action="store_true", help="Only generate Gameexe.dat.")
+    parse_argv = argv
+    if positional_args is not None:
+        parse_argv = [*argv, "--", *positional_args]
     try:
-        a = ap.parse_args(argv)
+        a = ap.parse_args(parse_argv)
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
+        return 2
+    if a.max_workers is not None and a.max_workers <= 0:
+        sys.stderr.write(f"{prog}: error: --max-workers must be greater than zero\n")
         return 2
     a.legacy = a.legacy or _runtime._LEGACY_COMPILE
     charset_arg = a.charset or ""

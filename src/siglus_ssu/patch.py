@@ -1424,7 +1424,9 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     ap = argparse.ArgumentParser(
-        prog="siglus-ssu -p", description="Patch SiglusEngine.exe."
+        prog="siglus-ssu -p",
+        description="Patch SiglusEngine.exe.",
+        allow_abbrev=False,
     )
     ap.add_argument("input", help="input exe path")
     ap.add_argument("key", nargs="?", help="key file, key=bytes, or angou=text")

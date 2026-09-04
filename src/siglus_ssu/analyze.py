@@ -11,6 +11,8 @@ from .common import (
     parse_gei_disam_args,
     consume_angou_option,
     iter_exe_el_sources,
+    split_end_of_options,
+    first_option_token,
 )
 from .path_policy import open_read, read_file_stat, resolve_read_path
 from . import pck
@@ -360,9 +362,10 @@ def main(argv=None):
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
+    args, positional_args = split_end_of_options(args)
     word = False
     if "--word" in args:
-        args.remove("--word")
+        args = [arg for arg in args if arg != "--word"]
         word = True
     if word and ("--disam" in args or "--decompile" in args):
         return 2
@@ -383,16 +386,22 @@ def main(argv=None):
         return 2
     readall = False
     if "--readall" in args:
-        args.remove("--readall")
+        args = [arg for arg in args if arg != "--readall"]
         readall = True
     apply = False
     if "--apply" in args:
-        args.remove("--apply")
+        args = [arg for arg in args if arg != "--apply"]
         apply = True
     compare_payload = False
     if "--payload" in args:
-        args.remove("--payload")
+        args = [arg for arg in args if arg != "--payload"]
         compare_payload = True
+    unknown_option = first_option_token(args)
+    if unknown_option is not None:
+        sys.stderr.write(f"analyze: unknown option: {unknown_option}\n")
+        return 2
+    if positional_args is not None:
+        args.extend(positional_args)
     if apply and (compare_payload or _disam):
         return 2
     if word:

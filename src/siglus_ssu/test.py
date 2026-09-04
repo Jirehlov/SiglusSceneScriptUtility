@@ -18,6 +18,8 @@ from .common import (
     looks_like_siglus_pck,
     parse_i32_header,
     read_bytes,
+    split_end_of_options,
+    first_option_token,
 )
 from .path_policy import FilenameCaseCollisionError, read_directory, resolve_read_path
 
@@ -569,6 +571,10 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     argv = list(argv)
+    if argv and argv[0] in ("-h", "--help", "help"):
+        _usage(sys.stdout)
+        return 0
+    argv, positional_args = split_end_of_options(argv)
     serial = False
     filtered = []
     for arg in argv:
@@ -577,11 +583,16 @@ def main(argv=None):
         else:
             filtered.append(arg)
     argv = filtered
-    if len(argv) != 1 or argv[0] in ("-h", "--help", "help"):
-        _usage(
-            sys.stdout if argv and argv[0] in ("-h", "--help", "help") else sys.stderr
-        )
-        return 0 if argv and argv[0] in ("-h", "--help", "help") else 2
+    unknown_option = first_option_token(argv)
+    if unknown_option is not None:
+        sys.stderr.write(f"unknown option: {unknown_option}\n")
+        _usage(sys.stderr)
+        return 2
+    if positional_args is not None:
+        argv.extend(positional_args)
+    if len(argv) != 1:
+        _usage(sys.stderr)
+        return 2
     try:
         input_path = resolve_read_path(argv[0])
     except (FileNotFoundError, NotADirectoryError):

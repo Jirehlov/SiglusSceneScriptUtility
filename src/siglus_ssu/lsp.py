@@ -30,6 +30,7 @@ from .common import (
     content_digest,
     content_digest_file,
     read_text_auto,
+    split_end_of_options,
 )
 from .native_ops import (
     build_lsp_project_native,
@@ -5709,6 +5710,7 @@ def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
     argv = list(argv)
+    argv, positional_args = split_end_of_options(argv)
     serial = False
     for arg in argv:
         if arg in {"-h", "--help"}:
@@ -5722,6 +5724,9 @@ def main(argv: list[str] | None = None) -> int:
             serial = True
             continue
         sys.stderr.write(f"Unknown argument: {arg}\n")
+        return 2
+    if positional_args:
+        sys.stderr.write(f"Unknown argument: {positional_args[0]}\n")
         return 2
     server = SSLanguageServer(serial=serial)
     return server.run()

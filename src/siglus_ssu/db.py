@@ -10,6 +10,9 @@ from .common import (
     prepare_batch_paths,
     missing_input_file,
     run_batch,
+    split_end_of_options,
+    first_option_token,
+    is_option_token,
 )
 from . import dbs
 from .native_ops import find_rand_skip
@@ -107,10 +110,11 @@ def main(argv=None):
     mode, argv, rc = parse_main_argv(argv, hint_help)
     if rc is not None:
         return rc
+    argv, positional_args = split_end_of_options(argv)
     opt_type = None
-    if "--type" in argv:
+    while "--type" in argv:
         i = argv.index("--type")
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
             eprint("error: --type requires a value")
             hint_help()
             return 2
@@ -123,9 +127,9 @@ def main(argv=None):
         del argv[i : i + 2]
     opt_seed = 1
     opt_seed_given = False
-    if "--set-shuffle" in argv:
+    while "--set-shuffle" in argv:
         i = argv.index("--set-shuffle")
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
             eprint("error: --set-shuffle requires a value")
             hint_help()
             return 2
@@ -141,6 +145,10 @@ def main(argv=None):
     test_skip0 = 0
     test_skip0_given = False
     if "--test-shuffle" in argv:
+        if argv.count("--test-shuffle") != 1:
+            eprint("error: --test-shuffle specified more than once")
+            hint_help()
+            return 2
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
@@ -151,6 +159,13 @@ def main(argv=None):
                 test_skip0 = 0
             test_skip0_given = True
             argv.pop(i)
+    unknown_option = first_option_token(argv)
+    if unknown_option is not None:
+        eprint(f"error: unknown option: {unknown_option}")
+        hint_help()
+        return 2
+    if positional_args is not None:
+        argv.extend(positional_args)
     if mode != "c":
         invalid_options = []
         if opt_type is not None:

@@ -8,6 +8,9 @@ from .common import (
     parse_main_argv,
     prepare_batch_paths,
     run_batch,
+    split_end_of_options,
+    first_option_token,
+    is_option_token,
 )
 from . import video
 from .path_policy import resolve_read_path
@@ -132,7 +135,14 @@ def main(argv=None):
     mode, argv, rc = parse_main_argv(argv, hint_help)
     if rc is not None:
         return rc
+    argv, positional_args = split_end_of_options(argv)
     if mode == "a":
+        unknown_option = first_option_token(argv)
+        if unknown_option is not None:
+            eprint(f"error: unknown option: {unknown_option}")
+            return 2
+        if positional_args is not None:
+            argv.extend(positional_args)
         if len(argv) != 1:
             eprint("error: expected 1 input file for --a")
             hint_help()
@@ -179,7 +189,7 @@ def main(argv=None):
         while i < len(argv):
             a = argv[i]
             if a == "--mode":
-                if i + 1 >= len(argv):
+                if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
                     eprint("error: --mode expects a value")
                     return 2
                 try:
@@ -191,7 +201,7 @@ def main(argv=None):
                 i += 2
                 continue
             if a == "--flags":
-                if i + 1 >= len(argv):
+                if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
                     eprint("error: --flags expects a value")
                     return 2
                 try:
@@ -203,19 +213,27 @@ def main(argv=None):
                 i += 2
                 continue
             if a == "--refer":
-                if i + 1 >= len(argv):
+                if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
                     eprint("error: --refer expects a path to .omv")
                     return 2
                 refer_path = argv[i + 1]
                 i += 2
                 continue
+            if is_option_token(a):
+                eprint(f"error: unknown option: {a}")
+                return 2
             positional.append(a)
             i += 1
+        if positional_args is not None:
+            positional.extend(positional_args)
         if len(positional) != 2:
             eprint("error: expected <input_ogv> <output_omv_or_dir> for --c")
             hint_help()
             return 2
         outp = positional[1]
+        if not str(outp).strip():
+            eprint("error: output path must not be empty")
+            return 2
         try:
             inp = resolve_read_path(positional[0], kind="file")
         except (FileNotFoundError, NotADirectoryError):
@@ -228,14 +246,12 @@ def main(argv=None):
         )
         if treat_dir:
             dir_path = outp.rstrip("/\\") or outp
-            os.makedirs(dir_path, exist_ok=True)
             stem = os.path.splitext(os.path.basename(inp))[0]
             outp2 = os.path.join(dir_path, stem + ".omv")
+            out_dir = dir_path
         else:
             outp2 = outp
             out_dir = os.path.dirname(outp2)
-            if out_dir:
-                os.makedirs(out_dir, exist_ok=True)
         if refer_path is not None:
             try:
                 refer_path = resolve_read_path(refer_path, kind="file")
@@ -259,6 +275,8 @@ def main(argv=None):
                     flags_hi24 = int(uniq[0]) if uniq else 0
                 else:
                     flags_hi24 = _build_hi24_ranges(hi24)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
         _warn_lossy_ogv_streams(inp)
         try:
             video.build_omv_from_ogv(
@@ -269,6 +287,12 @@ def main(argv=None):
             return 1
         print(fmt_kv("wrote", outp2))
         return 0
+    unknown_option = first_option_token(argv)
+    if unknown_option is not None:
+        eprint(f"error: unknown option: {unknown_option}")
+        return 2
+    if positional_args is not None:
+        argv.extend(positional_args)
     inp, out_root, src_is_dir, rc = prepare_batch_paths(
         argv, hint_help, "error: expected <input> <output_dir> for --x"
     )

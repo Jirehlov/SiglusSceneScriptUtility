@@ -29,6 +29,9 @@ from .common import (
     run_batch,
     consume_angou_option,
     format_exe_el_source,
+    split_end_of_options,
+    first_option_token,
+    is_option_token,
 )
 from . import sound
 from . import GEI
@@ -1679,10 +1682,17 @@ def main(argv=None) -> int:
     )
     if rc is not None:
         return rc
+    argv, positional_args = split_end_of_options(argv)
     if mode == "a":
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
+        unknown_option = first_option_token(argv)
+        if unknown_option is not None:
+            eprint(f"error: unknown option: {unknown_option}")
+            return 2
+        if positional_args is not None:
+            argv.extend(positional_args)
         if len(argv) == 1:
             try:
                 inp = resolve_read_path(argv[0], kind="file")
@@ -1705,6 +1715,12 @@ def main(argv=None) -> int:
         if "--trim" in argv:
             eprint("error: --trim is only valid with --x")
             return 2
+        unknown_option = first_option_token(argv)
+        if unknown_option is not None:
+            eprint(f"error: unknown option: {unknown_option}")
+            return 2
+        if positional_args is not None:
+            argv.extend(positional_args)
         inp, out_root, src_is_dir, rc = prepare_batch_paths(
             argv, _hint_help, "error: expected <input> <output_dir> for --c"
         )
@@ -1767,6 +1783,12 @@ def main(argv=None) -> int:
 
         return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
     if mode == "play":
+        unknown_option = first_option_token(argv)
+        if unknown_option is not None:
+            eprint(f"error: unknown option: {unknown_option}")
+            return 2
+        if positional_args is not None:
+            argv.extend(positional_args)
         if len(argv) not in (1, 2):
             eprint(
                 "error: expected <input_file|input_dir> [Gameexe.dat|Gameexe.ini] for --play"
@@ -1816,13 +1838,24 @@ def main(argv=None) -> int:
             return 1
     trim_path = ""
     if "--trim" in argv:
+        if argv.count("--trim") != 1:
+            eprint("error: --trim specified more than once")
+            _hint_help()
+            return 2
         i = argv.index("--trim")
-        if i + 1 >= len(argv):
+        if i + 1 >= len(argv) or is_option_token(argv[i + 1]):
             eprint("error: --trim expects a path")
             _hint_help()
             return 2
         trim_path = argv[i + 1]
         del argv[i : i + 2]
+    unknown_option = first_option_token(argv)
+    if unknown_option is not None:
+        eprint(f"error: unknown option: {unknown_option}")
+        _hint_help()
+        return 2
+    if positional_args is not None:
+        argv.extend(positional_args)
     inp, out_root, src_is_dir, rc = prepare_batch_paths(
         argv,
         _hint_help,
@@ -1834,7 +1867,7 @@ def main(argv=None) -> int:
     trim_table = None
     ffmpeg_path = ""
     tmp_dir = ""
-    os.makedirs(out_root, exist_ok=True)
+    needs_ffmpeg = False
     files, rc = collect_batch_files(
         inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
     )
@@ -1857,10 +1890,12 @@ def main(argv=None) -> int:
             if not ffmpeg_path:
                 eprint("ffmpeg not found in PATH")
                 return 1
-            try:
-                tmp_dir = tempfile.mkdtemp(prefix=".tmp_ffmpeg_", dir=out_root)
-            except OSError:
-                tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
+    os.makedirs(out_root, exist_ok=True)
+    if needs_ffmpeg:
+        try:
+            tmp_dir = tempfile.mkdtemp(prefix=".tmp_ffmpeg_", dir=out_root)
+        except OSError:
+            tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
 
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""

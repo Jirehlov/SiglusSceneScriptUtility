@@ -12,7 +12,13 @@ from .native_ops import (
     xor_cycle_inplace,
     palette_bgra,
 )
-from .common import read_bytes, write_bytes
+from .common import (
+    first_option_token,
+    is_option_token,
+    read_bytes,
+    split_end_of_options,
+    write_bytes,
+)
 from .path_policy import open_read, read_directory, resolve_read_path
 
 C = get_const_module()
@@ -1606,26 +1612,31 @@ def _parse_compose_args(args):
     type_opt = None
     refer_arg = None
     rest = []
-    i = 1
-    while i < len(args):
-        a = args[i]
+    option_args, positional_args = split_end_of_options(args[1:])
+    i = 0
+    while i < len(option_args):
+        a = option_args[i]
         if a in ("--type", "--t"):
-            if i + 1 >= len(args):
+            if i + 1 >= len(option_args) or is_option_token(option_args[i + 1]):
                 return None
             try:
-                type_opt = int(args[i + 1], 0)
+                type_opt = int(option_args[i + 1], 0)
             except Exception:
                 return None
             i += 2
             continue
         if a == "--refer":
-            if i + 1 >= len(args):
+            if i + 1 >= len(option_args) or is_option_token(option_args[i + 1]):
                 return None
-            refer_arg = args[i + 1]
+            refer_arg = option_args[i + 1]
             i += 2
             continue
+        if is_option_token(a):
+            return None
         rest.append(a)
         i += 1
+    if positional_args is not None:
+        rest.extend(positional_args)
     if len(rest) not in (1, 2):
         return None
     return type_opt, refer_arg, rest[0], rest[1] if len(rest) == 2 else None
@@ -1637,21 +1648,30 @@ def _parse_merge_args(args):
     layers = []
     output_dir = None
     trim = False
-    i = 1
-    while i < len(args):
-        a = args[i]
-        if a == "--trim" and not trim:
+    option_args, positional_args = split_end_of_options(args[1:])
+    i = 0
+    while i < len(option_args):
+        a = option_args[i]
+        if a == "--trim":
             trim = True
             i += 1
             continue
         if a in ("--o", "-o", "--output", "--output-dir"):
-            if i + 1 >= len(args) or output_dir is not None:
+            if (
+                i + 1 >= len(option_args)
+                or is_option_token(option_args[i + 1])
+                or output_dir is not None
+            ):
                 return None
-            output_dir = args[i + 1]
+            output_dir = option_args[i + 1]
             i += 2
             continue
+        if is_option_token(a):
+            return None
         layers.append(a)
         i += 1
+    if positional_args is not None:
+        layers.extend(positional_args)
     return (layers, output_dir, trim) if len(layers) >= 2 else None
 
 
@@ -1662,22 +1682,27 @@ def main(argv=None):
     if not args or args[0] in ("-h", "--help", "help"):
         return 2
     if args[0] == "--a":
-        if len(args) != 2:
+        option_args, positional_args = split_end_of_options(args[1:])
+        if first_option_token(option_args) is not None:
+            return 2
+        if positional_args is not None:
+            option_args.extend(positional_args)
+        if len(option_args) != 1:
             return 2
         try:
-            analyze_one(resolve_read_path(args[1], kind="file"))
+            analyze_one(resolve_read_path(option_args[0], kind="file"))
         except (EOFError, OSError, ValueError, struct.error) as exc:
             print(f"[!] {exc}", file=sys.stderr)
             return 1
         return 0
     if args[0] == "--x":
-        trim = False
-        rest = []
-        for a in args[1:]:
-            if a == "--trim" and not trim:
-                trim = True
-            else:
-                rest.append(a)
+        option_args, positional_args = split_end_of_options(args[1:])
+        trim = "--trim" in option_args
+        rest = [a for a in option_args if a != "--trim"]
+        if first_option_token(rest) is not None:
+            return 2
+        if positional_args is not None:
+            rest.extend(positional_args)
         return run_extract(rest[0], rest[1], trim=trim) if len(rest) == 2 else 2
     if args[0] == "--c":
         parsed = _parse_compose_args(args)

@@ -12,6 +12,8 @@ from .common import (
     write_bytes,
     consume_angou_option,
     iter_exe_el_sources,
+    split_end_of_options,
+    is_option_token,
 )
 from .path_policy import (
     FilenameCaseCollisionError,
@@ -662,6 +664,7 @@ def main(argv=None):
     except ValueError as e:
         eprint(str(e))
         return 2
+    args, positional_args = split_end_of_options(args)
     usage_normal = (
         "usage: siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir>"
     )
@@ -679,7 +682,7 @@ def main(argv=None):
             i += 1
             continue
         if arg == "--single":
-            if i + 1 >= len(args):
+            if i + 1 >= len(args) or is_option_token(args[i + 1]):
                 eprint(usage_single)
                 return 2
             single_koe_no = _try_int(args[i + 1])
@@ -695,8 +698,13 @@ def main(argv=None):
                 return 2
             i += 1
             continue
+        if is_option_token(arg):
+            eprint(f"error: unknown option: {arg}")
+            return 2
         pos.append(arg)
         i += 1
+    if positional_args is not None:
+        pos.extend(positional_args)
     if single_koe_no is None:
         if len(pos) != 3:
             eprint(usage_normal)

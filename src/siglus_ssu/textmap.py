@@ -26,6 +26,7 @@ from .common import (
     I32_PAIR_STRUCT,
     read_scn_metadata,
     format_exe_el_source,
+    split_end_of_options,
 )
 from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
 
@@ -742,6 +743,7 @@ def main(argv=None):
     except ValueError as exc:
         eprint(str(exc), errors="replace")
         return 2
+    argv, positional_args = split_end_of_options(argv)
     apply_mode = False
     args = []
     for arg in argv:
@@ -753,6 +755,8 @@ def main(argv=None):
             return 2
         else:
             args.append(arg)
+    if positional_args is not None:
+        args.extend(positional_args)
     if len(args) != 1:
         eprint("textmap: expected exactly 1 path argument", errors="replace")
         _hint_help()

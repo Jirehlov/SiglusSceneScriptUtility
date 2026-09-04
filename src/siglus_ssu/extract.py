@@ -9,6 +9,8 @@ from .common import (
     new_disam_stats,
     write_disam_totals,
     format_exe_el_source,
+    split_end_of_options,
+    first_option_token,
 )
 from . import GEI
 from . import pck
@@ -92,11 +94,14 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     args = list(argv)
+    if not args or args[0] in ("-h", "--help", "help"):
+        return 2
     try:
         args, explicit_angou = consume_angou_option(args)
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
+    args, positional_args = split_end_of_options(args)
     try:
         args, gei, dat_txt, decompile = parse_gei_disam_args(
             args,
@@ -108,7 +113,13 @@ def main(argv=None):
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
         return 2
-    if not args or args[0] in ("-h", "--help", "help"):
+    unknown_option = first_option_token(args)
+    if unknown_option is not None:
+        sys.stderr.write(f"extract: unknown option: {unknown_option}\n")
+        return 2
+    if positional_args is not None:
+        args.extend(positional_args)
+    if not args:
         return 2
     if explicit_angou:
         try:

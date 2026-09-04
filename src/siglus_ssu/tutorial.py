@@ -18,6 +18,8 @@ from .common import (
     eprint,
     int_or_none as _int_or_none,
     is_trace_command_base as _is_trace_command_base,
+    split_end_of_options,
+    first_option_token,
 )
 from .path_policy import open_read, resolve_read_path
 
@@ -2472,6 +2474,14 @@ def main(argv=None):
     if args[0] in ("-h", "--help", "help"):
         _usage(sys.stdout)
         return 0
+    args, positional_args = split_end_of_options(args)
+    unknown_option = first_option_token(args)
+    if unknown_option is not None:
+        eprint(f"tutorial: unknown option: {unknown_option}", errors="replace")
+        _usage()
+        return 2
+    if positional_args is not None:
+        args.extend(positional_args)
     if len(args) not in (1, 2):
         _usage()
         return 2

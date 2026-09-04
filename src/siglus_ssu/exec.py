@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import datetime
+from .common import split_end_of_options, first_option_token
 from .path_policy import resolve_read_path
 
 
@@ -18,6 +19,13 @@ def main(argv=None):
     if argv is None:
         argv = sys.argv[1:]
     args = list(argv)
+    args, positional_args = split_end_of_options(args)
+    unknown_option = first_option_token(args)
+    if unknown_option is not None:
+        sys.stderr.write(f"Unknown option: {unknown_option}\n")
+        return 2
+    if positional_args is not None:
+        args.extend(positional_args)
     if len(args) != 3:
         return 2
     engine_path, ss_name, zlabel = args
