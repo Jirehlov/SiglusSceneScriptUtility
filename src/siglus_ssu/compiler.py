@@ -1395,7 +1395,11 @@ def main(argv=None):
     angou_content = None
     angou_path = ctx["angou_path"]
     if (not a.no_angou) and angou_path:
-        lines = read_text_auto(angou_path, force_charset=charset).splitlines()
+        try:
+            lines = read_text_auto(angou_path, force_charset=charset).splitlines()
+        except (OSError, UnicodeError) as exc:
+            sys.stderr.write(f"{prog}: error: {angou_path}: {exc}\n")
+            return 1
         angou_content = lines[0] if lines else ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None

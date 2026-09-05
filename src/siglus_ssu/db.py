@@ -152,7 +152,8 @@ def main(argv=None):
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
-        if i < len(argv) and _is_int_token(argv[i]) and (len(argv) - i) >= 4:
+        remaining_count = len(argv) - i + len(positional_args or ())
+        if i < len(argv) and _is_int_token(argv[i]) and remaining_count >= 4:
             try:
                 test_skip0 = int(str(argv[i]).strip(), 0)
             except Exception:

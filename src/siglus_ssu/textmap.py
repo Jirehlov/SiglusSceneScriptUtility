@@ -34,29 +34,26 @@ C = get_const_module()
 TEXTMAP_KIND_DIALOGUE = 1
 TEXTMAP_KIND_NAME = 2
 TEXTMAP_KIND_OTHER = 3
+_CSV_SURROGATE_RE = re.compile(r"[\ud800-\udfff]")
 
 
 def _csv_escape_text(s: str) -> str:
-    out = []
-    for ch in s:
-        if ch == "\\":
-            out.append("\\\\")
-        elif ch == "\r":
-            out.append("\\r")
-        elif ch == "\n":
-            out.append("\\n")
-        elif ch == "\t":
-            out.append("\\t")
-        elif 0xD800 <= ord(ch) <= 0xDFFF:
-            out.append(f"\\u{ord(ch):04X}")
-        else:
-            out.append(ch)
-    return "".join(out)
+    s = (
+        s.replace("\\", "\\\\")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t")
+    )
+    if s.isascii():
+        return s
+    return _CSV_SURROGATE_RE.sub(lambda m: f"\\u{ord(m[0]):04X}", s)
 
 
 def _csv_unescape_text(s: str | None) -> str:
     if s is None:
         return ""
+    if "\\" not in s:
+        return s
     out = []
     i = 0
     n = len(s)
@@ -540,12 +537,13 @@ def _write_dat_map(csv_path: str, str_list, kind_map):
             s = str_list[i]
             if s == "":
                 continue
+            escaped = _csv_escape_text(s)
             w.writerow(
                 [
                     i,
                     int(kind_map.get(i, TEXTMAP_KIND_OTHER) or TEXTMAP_KIND_OTHER),
-                    _csv_escape_text(s),
-                    _csv_escape_text(s),
+                    escaped,
+                    escaped,
                 ]
             )
 
