@@ -330,71 +330,7 @@ class MA:
         s.psad["command_in"] = 0
         if not s.ma_ss((s.psad or {}).get("root")):
             return 0, s.psad
-        s.psad["ma_label_info"] = s._collect_label_info((s.psad or {}).get("root"))
         return 1, s.psad
-
-    @staticmethod
-    def _collect_label_info(root):
-        defs = {}
-        zdefs = {}
-        gref = []
-        lref = []
-        st = [root] if root else []
-        while st:
-            n = st.pop()
-            if isinstance(n, dict):
-                nt = n.get("node_type")
-                if nt == C.NT_S_LABEL:
-                    a = (n.get("label") or {}).get("label") or n.get("label") or {}
-                    at = (
-                        a.get("atom") if isinstance(a, dict) and "atom" in a else a
-                    ) or {}
-                    if at.get("type") == C.LA_T["LABEL"]:
-                        defs[int(at.get("opt", -1))] = int(at.get("id", 0))
-                elif nt == C.NT_S_Z_LABEL:
-                    z = n.get("z_label") or {}
-                    a = z.get("z_label") or z
-                    at = (
-                        a.get("atom") if isinstance(a, dict) and "atom" in a else a
-                    ) or {}
-                    if at.get("type") == C.LA_T["Z_LABEL"]:
-                        zdefs[int(at.get("opt", -1))] = int(at.get("subopt", -1))
-                elif nt == C.NT_S_GOTO:
-                    g = n.get("Goto") or {}
-                    at = None
-                    if g.get("node_sub_type") == C.NT_GOTO_LABEL:
-                        at = (g.get("label") or {}).get("atom") or {}
-                        gref.append(
-                            {
-                                "k": int(g.get("node_type", 0)),
-                                "label": int(at.get("opt", -1)),
-                                "id": int(at.get("id", 0)),
-                            }
-                        )
-                    elif g.get("node_sub_type") == C.NT_GOTO_Z_LABEL:
-                        at = (g.get("z_label") or {}).get("atom") or {}
-                        gref.append(
-                            {
-                                "k": int(g.get("node_type", 0)),
-                                "z": int(at.get("opt", -1)),
-                                "label": int(at.get("subopt", -1)),
-                                "id": int(at.get("id", 0)),
-                            }
-                        )
-                a = n.get("atom") or {}
-                if (
-                    a.get("type") == C.LA_T["LABEL"]
-                    and int(n.get("node_form", 0) or 0) == C.FM_LABEL
-                ):
-                    lref.append(
-                        {"label": int(a.get("opt", -1)), "id": int(a.get("id", 0))}
-                    )
-                for v in n.values():
-                    st.append(v)
-            elif isinstance(n, list):
-                for v in n:
-                    st.append(v)
-        return {"def": defs, "zdef": zdefs, "goto": gref, "lit": lref}
 
     def ma_ss(s, ss):
         for sen in (ss or {}).get("sentense_list", []):

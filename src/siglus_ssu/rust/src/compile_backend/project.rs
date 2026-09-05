@@ -1106,12 +1106,7 @@ fn visit_label_refs(
             }
         }
         AstPayload::Literal { atom } => {
-            if node.form == ctx.codes.forms.label.code
-                && node
-                    .first_atom()
-                    .map(|value| value.atom_type != ctx.codes.la.label)
-                    .unwrap_or(true)
-            {
+            if atom.atom_type == ctx.codes.la.label {
                 label_refs.push(atom.opt);
             }
         }

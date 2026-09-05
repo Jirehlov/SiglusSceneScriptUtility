@@ -268,12 +268,13 @@ def _exp_depth(node):
     return 0
 
 
-def _collect_statement_stats(root, plad, stats, inc_command_cnt):
+def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables):
     strings = stats["strings"]
     statements = stats["statements"]
     directives = stats["directives"]
     expressions = stats["expressions"]
-    operator_tables = build_operator_render_tables()
+    label_defs = set()
+    z_defs = set()
 
     def visit_block(block):
         sentences = block["sentense_list"] if isinstance(block, dict) else block
@@ -284,9 +285,11 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
         nt = sen["node_type"]
         if nt == C.NT_S_LABEL:
             statements["label"] += 1
+            label_defs.add(sen["label"]["label"]["atom"]["opt"])
             return
         if nt == C.NT_S_Z_LABEL:
             statements["z_label"] += 1
+            z_defs.add(sen["z_label"]["z_label"]["atom"]["opt"])
             return
         if nt == C.NT_S_DEF_PROP:
             statements["property_def"] += 1
@@ -373,15 +376,31 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt):
             statements["eof"] += 1
 
     visit_block(root)
+    return label_defs, z_defs
 
 
-def _collect_tree_stats(root, stats):
+def _collect_tree_stats(root, stats, operator_tables):
     expressions = stats["expressions"]
-    operator_tables = build_operator_render_tables()
+    labels = stats["labels"]
+    label_refs = set()
+    z_refs = set()
 
     def visit(node):
         if isinstance(node, dict):
             nt = node.get("node_type")
+            if nt in (C.NT_GOTO_GOTO, C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
+                if node["node_sub_type"] == C.NT_GOTO_Z_LABEL:
+                    labels["z_refs"] += 1
+                    z_refs.add(node["z_label"]["atom"]["opt"])
+                else:
+                    labels["refs"] += 1
+                    label_refs.add(node["label"]["atom"]["opt"])
+                expressions["max_depth"] = max(expressions["max_depth"], 1)
+            elif nt == C.NT_SMP_LITERAL:
+                atom = node["Literal"]["atom"]
+                if atom["type"] == C.LA_T["LABEL"]:
+                    labels["refs"] += 1
+                    label_refs.add(atom["opt"])
             if nt == C.NT_EXP_OPR1:
                 expressions["unary_ops"] += 1
                 expressions["unary_op_kinds"][
@@ -407,31 +426,7 @@ def _collect_tree_stats(root, stats):
                 visit(value)
 
     visit(root)
-
-
-def _collect_label_stats(plad, mad, header, stats):
-    info = mad["ma_label_info"]
-    defs = set(info["def"])
-    zdefs = set(info["zdef"])
-    label_refs = []
-    z_refs = []
-    for item in info["goto"]:
-        if "z" in item:
-            z_refs.append(item["z"])
-        else:
-            label_refs.append(item["label"])
-    for item in info["lit"]:
-        label_refs.append(item["label"])
-    labels = stats["labels"]
-    labels["defs"] += len(defs)
-    labels["refs"] += len(label_refs)
-    labels["unused"] += len(defs - set(label_refs))
-    labels["z_defs"] += len(zdefs)
-    labels["z_refs"] += len(z_refs)
-    labels["z_unused"] += len((zdefs - {0}) - set(z_refs))
-    source_label_slots = len(plad["label_list"])
-    label_cnt = header["label_cnt"]
-    labels["generated"] += max(0, label_cnt - source_label_slots)
+    return label_refs, z_refs
 
 
 def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
@@ -463,10 +458,18 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     stats["_unique_strings"] = set(strings)
     root = psad["root"]
     inc_command_cnt = pcad["global_inc_command_cnt"]
-    _collect_statement_stats(root, plad, stats, inc_command_cnt)
-    _collect_tree_stats(root, stats)
+    operator_tables = build_operator_render_tables()
+    label_defs, z_defs = _collect_statement_stats(
+        root, plad, stats, inc_command_cnt, operator_tables
+    )
+    label_refs, z_refs = _collect_tree_stats(root, stats, operator_tables)
+    labels = stats["labels"]
+    labels["defs"] = len(label_defs)
+    labels["unused"] = len(label_defs - label_refs)
+    labels["z_defs"] = len(z_defs)
+    labels["z_unused"] = len(z_defs - {0} - z_refs)
     header = read_scn_header(dat_bytes)
-    _collect_label_stats(plad, psad, header, stats)
+    labels["generated"] = max(0, header["label_cnt"] - len(plad["label_list"]))
     stats["expressions"]["default_arg_fills"] = pbsd["default_arg_fills"]
     return stats
 
