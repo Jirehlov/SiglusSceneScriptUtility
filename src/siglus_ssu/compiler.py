@@ -1096,10 +1096,11 @@ def main(argv=None):
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
+        remaining_count = len(argv) - i + len(positional_args or ())
         if (
             i < len(argv)
             and _is_int_token(argv[i])
-            and (i == (len(argv) - 1) or (len(argv) - i) >= 4)
+            and (remaining_count == 1 or remaining_count >= 4)
         ):
             try:
                 test_seed0 = _parse_u32_token(argv[i], "--test-shuffle")
