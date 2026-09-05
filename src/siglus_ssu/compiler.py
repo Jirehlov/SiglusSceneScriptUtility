@@ -36,6 +36,7 @@ from .common import (
     content_digest_file,
     read_bytes,
     read_text_auto,
+    first_line_text,
     write_text,
     parse_code,
     ANGOU_DAT_NAME,
@@ -1396,11 +1397,12 @@ def main(argv=None):
     angou_path = ctx["angou_path"]
     if (not a.no_angou) and angou_path:
         try:
-            lines = read_text_auto(angou_path, force_charset=charset).splitlines()
+            angou_content = first_line_text(
+                read_text_auto(angou_path, force_charset=charset)
+            )
         except (OSError, UnicodeError) as exc:
             sys.stderr.write(f"{prog}: error: {angou_path}: {exc}\n")
             return 1
-        angou_content = lines[0] if lines else ""
     if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
         angou_content = None
     ctx["exe_angou_str"] = angou_content or ""
