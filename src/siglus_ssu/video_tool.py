@@ -47,6 +47,17 @@ def _warn_lossy_ogv_streams(path):
     )
 
 
+def _confirm_overwrite(path):
+    if not os.path.lexists(path):
+        return True
+    eprint(f"warning: output file already exists: {path}")
+    eprint("Overwrite? [y/N]")
+    try:
+        return input().strip().lower() in {"y", "yes"}
+    except (EOFError, OSError, KeyboardInterrupt):
+        return False
+
+
 def _analyze_one(path):
     if os.path.splitext(path)[1].lower() != ".omv":
         eprint("error: unsupported file type (expected .omv)")
@@ -275,6 +286,9 @@ def main(argv=None):
                     flags_hi24 = int(uniq[0]) if uniq else 0
                 else:
                     flags_hi24 = _build_hi24_ranges(hi24)
+        if not _confirm_overwrite(outp2):
+            eprint("Not overwriting - exiting")
+            return 1
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         _warn_lossy_ogv_streams(inp)
@@ -309,6 +323,8 @@ def main(argv=None):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
         stem = os.path.splitext(os.path.basename(src_path))[0]
         out_path = os.path.join(out_root, rel_dir, stem + ".ogv")
+        if not _confirm_overwrite(out_path):
+            raise ValueError("Not overwriting")
         video.extract_ogv_from_omv(src_path, out_path)
         return 1, out_path
 

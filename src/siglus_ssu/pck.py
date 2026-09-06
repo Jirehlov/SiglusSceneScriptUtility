@@ -1183,6 +1183,8 @@ def _payload_compare_scene_task(args):
             pack_context=pack_ctx2,
             scene_name=scene_name,
         )
+        if any(c and c.get("status") == "INCOMPLETE" for c in (c1, c2)):
+            return int(row_index), "INCOMPLETE"
         if not c1 or not c2:
             return int(row_index), "-"
         full1 = c1.get("full") or {}
@@ -1321,7 +1323,13 @@ def compare_pck(
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=_id_sort_key)
     same_pack_context = pack_ctx1 == pack_ctx2
     rows = []
-    payload_cmp_counts = {"same": 0, "text_only": 0, "real_diff": 0, "-": 0}
+    payload_cmp_counts = {
+        "same": 0,
+        "text_only": 0,
+        "real_diff": 0,
+        "-": 0,
+        "INCOMPLETE": 0,
+    }
     payload_jobs = []
     for k in keys:
         l1 = sm1.get(k, [])
@@ -1466,17 +1474,17 @@ def compare_pck(
         if compare_payload:
             if show_ids:
                 print(
-                    "START1      LAST1       SIZE1       START2      LAST2       SIZE2       ID         PAYLOAD    %-*s"
+                    "START1      LAST1       SIZE1       START2      LAST2       SIZE2       ID         PAYLOAD     %-*s"
                     % (C.NAME_W, "NAME")
                 )
                 print(
-                    f"----------  ----------  ----------  ----------  ----------  ----------  ---------  ---------  {'-' * C.NAME_W}"
+                    f"----------  ----------  ----------  ----------  ----------  ----------  ---------  ----------  {'-' * C.NAME_W}"
                 )
                 for nm, a1, l1x, s1z, a2, l2x, s2z, sid_text, payload_cmp in allrows[
                     :5000
                 ]:
                     print(
-                        "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-9s  %-9s  %-*s"
+                        "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-9s  %-10s  %-*s"
                         % (
                             a1,
                             l1x,
@@ -1492,17 +1500,17 @@ def compare_pck(
                     )
             else:
                 print(
-                    "START1      LAST1       SIZE1       START2      LAST2       SIZE2       PAYLOAD    %-*s"
+                    "START1      LAST1       SIZE1       START2      LAST2       SIZE2       PAYLOAD     %-*s"
                     % (C.NAME_W, "NAME")
                 )
                 print(
-                    f"----------  ----------  ----------  ----------  ----------  ----------  ---------  {'-' * C.NAME_W}"
+                    f"----------  ----------  ----------  ----------  ----------  ----------  ----------  {'-' * C.NAME_W}"
                 )
                 for nm, a1, l1x, s1z, a2, l2x, s2z, _sid_text, payload_cmp in allrows[
                     :5000
                 ]:
                     print(
-                        "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-9s  %-*s"
+                        "%-10s  %-10s  %10d  %-10s  %-10s  %10d  %-10s  %-*s"
                         % (
                             a1,
                             l1x,
@@ -1547,15 +1555,16 @@ def compare_pck(
         if compare_payload and rows:
             print()
             print(
-                "scene_data payload: same=%d text_only=%d real_diff=%d unavailable=%d"
+                "scene_data payload: same=%d text_only=%d real_diff=%d unavailable=%d INCOMPLETE=%d"
                 % (
                     int(payload_cmp_counts.get("same", 0) or 0),
                     int(payload_cmp_counts.get("text_only", 0) or 0),
                     int(payload_cmp_counts.get("real_diff", 0) or 0),
                     int(payload_cmp_counts.get("-", 0) or 0),
+                    int(payload_cmp_counts.get("INCOMPLETE", 0) or 0),
                 )
             )
-    return 0
+    return 1 if payload_cmp_counts["INCOMPLETE"] else 0
 
 
 def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):

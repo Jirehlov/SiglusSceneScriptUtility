@@ -397,7 +397,11 @@ fn scn_payload_hash_bundles_with_config(
         return Ok(None);
     };
     let mut scanner = Scanner::new(cfg, &pack, parsed);
-    scanner.scan();
+    if !scanner.scan() {
+        let out = PyDict::new(py);
+        out.set_item("status", "INCOMPLETE")?;
+        return Ok(Some(out.into()));
+    }
     Ok(Some(scanner.hasher.finish(py)?))
 }
 
@@ -789,7 +793,7 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn scan(&mut self) {
+    fn scan(&mut self) -> bool {
         self.emit_metadata();
         let mut i = 0usize;
         while i < self.dat.scn.len() {
@@ -813,7 +817,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_nl {
                 let Some(v) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 i += 4;
                 self.cur_line = Some(v);
@@ -826,10 +830,10 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_push {
                 let Some(form) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some(value) = self.read_i32(i + 4) else {
-                    break;
+                    return false;
                 };
                 i += 8;
                 let text = if form == c.fm_str {
@@ -847,7 +851,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_pop {
                 let Some(form) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 i += 4;
                 self.emit(Event {
@@ -862,7 +866,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_copy {
                 let Some(form) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 i += 4;
                 self.emit(Event {
@@ -903,10 +907,10 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_dec_prop {
                 let Some(form) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some(prop_id) = self.read_i32(i + 4) else {
-                    break;
+                    return false;
                 };
                 i += 8;
                 let mut size = None;
@@ -939,7 +943,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_goto || op == c.cd_goto_true || op == c.cd_goto_false {
                 let Some(label_id) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 i += 4;
                 self.emit(Event {
@@ -954,10 +958,10 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_gosub || op == c.cd_gosubstr {
                 let Some(label_id) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some((next, args)) = self.read_arg_layout(i + 4) else {
-                    break;
+                    return false;
                 };
                 i = next;
                 self.emit(Event {
@@ -977,7 +981,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_return {
                 let Some((next, args)) = self.read_arg_layout(i) else {
-                    break;
+                    return false;
                 };
                 i = next;
                 self.emit(Event {
@@ -994,13 +998,13 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_assign {
                 let Some(left) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some(right) = self.read_i32(i + 4) else {
-                    break;
+                    return false;
                 };
                 if self.read_i32(i + 8).is_none() {
-                    break;
+                    return false;
                 }
                 i += 12;
                 self.emit(Event {
@@ -1017,10 +1021,10 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_operate_1 {
                 let Some(form) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some(opr) = self.read_u8(i + 4) else {
-                    break;
+                    return false;
                 };
                 i += 5;
                 self.emit(Event {
@@ -1037,13 +1041,13 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_operate_2 {
                 let Some(left) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some(right) = self.read_i32(i + 4) else {
-                    break;
+                    return false;
                 };
                 let Some(opr) = self.read_u8(i + 8) else {
-                    break;
+                    return false;
                 };
                 i += 9;
                 self.emit(Event {
@@ -1064,7 +1068,7 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_text {
                 let Some(read_flag) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 i += 4;
                 let text = self
@@ -1106,29 +1110,24 @@ impl<'a> Scanner<'a> {
             }
             if op == c.cd_command {
                 let Some(_arg_list_id) = self.read_i32(i) else {
-                    break;
+                    return false;
                 };
                 let Some((next, args)) = self.read_arg_layout(i + 4) else {
-                    break;
+                    return false;
                 };
                 let Some(named_cnt) = self.read_i32(next) else {
-                    break;
+                    return false;
                 };
                 let named_cnt = named_cnt.max(0) as usize;
                 let mut p = next + 4;
-                let mut ok = true;
                 for _ in 0..named_cnt {
                     if self.read_i32(p).is_none() {
-                        ok = false;
-                        break;
+                        return false;
                     }
                     p += 4;
                 }
-                if !ok {
-                    break;
-                }
                 let Some(ret_form) = self.read_i32(p) else {
-                    break;
+                    return false;
                 };
                 i = p + 4;
                 let resolved = self.resolve_command(args.len(), ret_form);
@@ -1139,7 +1138,7 @@ impl<'a> Scanner<'a> {
                     && self.cfg.read_flag_commands.contains(&(parent, ec))
                 {
                     let Some(rf) = self.read_i32(i) else {
-                        break;
+                        return false;
                     };
                     i += 4;
                     read_flag = Some(rf);
@@ -1171,6 +1170,9 @@ impl<'a> Scanner<'a> {
                 }
                 continue;
             }
+            if op != c.cd_eof {
+                return false;
+            }
             self.emit(Event {
                 op: opname,
                 line: self.cur_line,
@@ -1179,6 +1181,7 @@ impl<'a> Scanner<'a> {
             break;
         }
         self.emit_namae_metadata();
+        true
     }
 
     fn emit_namae_metadata(&mut self) {

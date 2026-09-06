@@ -2428,7 +2428,10 @@ fn compile_project_inner(
         }
     }
 
-    if inc_command_defined.iter().any(|value| *value) {
+    if scene_records
+        .iter()
+        .any(|record| !record.command_labels.is_empty())
+    {
         for (index, defined) in inc_command_defined
             .iter()
             .take(base_ia.inc_command_cnt.max(0) as usize)

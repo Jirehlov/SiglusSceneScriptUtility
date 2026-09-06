@@ -1016,6 +1016,7 @@ def disassemble_scn_bytes(
     with_trace=False,
     emit_text=True,
     trace_profile=None,
+    parse_status=None,
 ):
     z_label_list = z_label_list or []
     pack_context = dict(pack_context or {})
@@ -1611,6 +1612,7 @@ def disassemble_scn_bytes(
     cur_line = None
     expr_state.clear()
     call_slot_next = 0
+    complete = False
     while i < len(scn):
         ofs = i
         if ofs in cmd_label_offsets:
@@ -2278,10 +2280,15 @@ def disassemble_scn_bytes(
         if op == cd_eof:
             _emit(lambda: f"{ofs:08X}: {opname}")
             _trace(opname, ofs)
+            complete = True
             break
         _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)
         break
+    else:
+        complete = True
+    if parse_status is not None:
+        parse_status["complete"] = complete
     if trace is not None and trace and not payload_trace:
         tail = trace[-1]
         if scene_no is not None:

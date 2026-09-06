@@ -333,6 +333,7 @@ def dat_disassembly_bundle(
         read_flag_defs = (
             [] if payload_trace else _build_read_flag_defs(meta.get("read_flag_list"))
         )
+        parse_status = {}
         dis, trace = disam.disassemble_scn_bytes(
             scn,
             str_list,
@@ -350,6 +351,7 @@ def dat_disassembly_bundle(
             with_trace=True,
             emit_text=emit_text,
             trace_profile=trace_profile,
+            parse_status=parse_status,
         )
         if payload_trace:
             runtime_trace = list(trace or [])
@@ -374,6 +376,7 @@ def dat_disassembly_bundle(
             "read_flag_defs": read_flag_defs,
             "trace": trace,
             "dis": dis,
+            "complete": parse_status["complete"],
         }
     except Exception:
         return None
@@ -714,6 +717,8 @@ def scn_payload_hash_bundles(
     )
     if not isinstance(bundle, dict):
         return None
+    if not bundle.get("complete"):
+        return {"status": "INCOMPLETE"}
     return _payload_trace_hash_bundles(bundle.get("trace") or [])
 
 
@@ -1168,10 +1173,13 @@ def compare_dat(
         m1.get("call_prop_names") or [],
         m2.get("call_prop_names") or [],
     )
+    payload_status = None
     if compare_payload:
         c1 = scn_payload_hash_bundles(b1)
         c2 = scn_payload_hash_bundles(b2)
-        if c1 and c2:
+        if any(c and c.get("status") == "INCOMPLETE" for c in (c1, c2)):
+            payload_status = "INCOMPLETE"
+        elif c1 and c2:
             full1 = c1.get("full") or {}
             full2 = c2.get("full") or {}
             no_text1 = c1.get("no_text") or {}
@@ -1186,12 +1194,9 @@ def compare_dat(
                 payload_status = "text_only"
             else:
                 payload_status = "real_diff"
-            print(
-                "payload compare (normalized scene runtime semantics): "
-                + payload_status
-            )
         else:
-            print("payload compare (normalized scene runtime semantics): unavailable")
+            payload_status = "unavailable"
+        print("payload compare (normalized scene runtime semantics): " + payload_status)
     if disam_out_dir or disam_to_input_dir:
         disam_stats = new_disam_stats()
         out1_dir = (
@@ -1215,4 +1220,4 @@ def compare_dat(
         write_disam_totals(sys.stdout, disam_stats)
         if not out1 or not out2:
             return 1
-    return 0
+    return 1 if payload_status == "INCOMPLETE" else 0

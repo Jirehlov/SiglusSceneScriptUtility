@@ -1,7 +1,9 @@
 import os
 import shutil
 import struct
+import tempfile
 from collections import namedtuple
+from contextlib import contextmanager
 from .path_policy import (
     FilenameCaseCollisionError,
     open_read,
@@ -117,6 +119,19 @@ _OUTER_TEMPLATE = (
 )
 
 
+@contextmanager
+def _open_video_output(input_path, output_path):
+    if os.path.exists(output_path) and os.path.samefile(input_path, output_path):
+        with tempfile.TemporaryFile() as buffer:
+            yield buffer
+            buffer.seek(0)
+            with open(output_path, "wb") as output:
+                shutil.copyfileobj(buffer, output, length=1024 * 1024)
+    else:
+        with open(output_path, "wb") as output:
+            yield output
+
+
 def _read_exact(file_obj, n_bytes):
     data = file_obj.read(n_bytes)
     if len(data) != n_bytes:
@@ -192,11 +207,15 @@ def find_oggs_offset(path, start_off=0, *, chunk_size=1024 * 1024):
 
 
 def extract_ogv_from_omv(omv_path, out_ogv_path):
+    omv_path = resolve_read_path(omv_path, kind="file")
     oggs_off = find_oggs_offset(omv_path, 0)
     out_dir = os.path.dirname(out_ogv_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open_read(omv_path) as fin, open(out_ogv_path, "wb") as fout:
+    with (
+        _open_video_output(omv_path, out_ogv_path) as fout,
+        open_read(omv_path) as fin,
+    ):
         fin.seek(oggs_off)
         shutil.copyfileobj(fin, fout, length=1024 * 1024)
 
@@ -407,7 +426,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, mode=None, flags_hi24=0):
     out_dir = os.path.dirname(out_omv_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open(out_omv_path, "wb") as out:
+    with _open_video_output(ogv_path, out_omv_path) as out:
         out.write(header)
         out.writelines(
             TABLEA_STRUCT.pack(
