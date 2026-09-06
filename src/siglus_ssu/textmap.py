@@ -466,7 +466,10 @@ def locate_tokens(source_text: str, tokens, iad):
 
 
 def _read_map(csv_path: str):
-    csv.field_size_limit(sys.maxsize)
+    try:
+        csv.field_size_limit(sys.maxsize)
+    except OverflowError:
+        csv.field_size_limit(2**31 - 1)
     with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
 

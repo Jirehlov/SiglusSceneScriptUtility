@@ -46,7 +46,7 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
         blob_end = int(blob_end)
     except (TypeError, ValueError):
         return out
-    if blob_ofs < 0 or blob_end <= blob_ofs or blob_ofs > len(dat):
+    if blob_ofs < 0 or blob_end < blob_ofs or blob_ofs > len(dat):
         return out
     blob_end = max(0, min(blob_end, len(dat)))
     for si, (ofs_u16, ln_u16) in enumerate(idx_pairs or []):
