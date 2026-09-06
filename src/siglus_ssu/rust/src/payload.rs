@@ -159,6 +159,7 @@ enum Field<'a> {
     LabelId(i32),
     LeftForm(i32),
     Name(Vec<u16>),
+    NamedIds(&'a [i32]),
     Offset(i32),
     Opr(i32),
     PropId(i32),
@@ -1119,11 +1120,13 @@ impl<'a> Scanner<'a> {
                     return false;
                 };
                 let named_cnt = named_cnt.max(0) as usize;
+                let mut named_ids = Vec::new();
                 let mut p = next + 4;
                 for _ in 0..named_cnt {
-                    if self.read_i32(p).is_none() {
+                    let Some(named_id) = self.read_i32(p) else {
                         return false;
-                    }
+                    };
+                    named_ids.push(named_id);
                     p += 4;
                 }
                 let Some(ret_form) = self.read_i32(p) else {
@@ -1148,6 +1151,7 @@ impl<'a> Scanner<'a> {
                     line: self.cur_line,
                     fields: vec![
                         Field::ArgLayout(&args),
+                        Field::NamedIds(&named_ids),
                         Field::RetForm(ret_form),
                         Field::ReadFlag(read_flag),
                         Field::ElementCode(element_code),
@@ -2049,6 +2053,7 @@ fn encode_event(event: &Event<'_>, omit_text: bool) -> Vec<u8> {
             Field::LabelId(v) => pairs.push(("label_id", JsonValue::Int(*v as i64))),
             Field::LeftForm(v) => pairs.push(("left_form", JsonValue::Int(*v as i64))),
             Field::Name(v) => pairs.push(("name", JsonValue::Text(v))),
+            Field::NamedIds(v) => pairs.push(("named_ids", JsonValue::Ints(v))),
             Field::Offset(v) => pairs.push(("offset", JsonValue::Int(*v as i64))),
             Field::Opr(v) => pairs.push(("opr", JsonValue::Int(*v as i64))),
             Field::PropId(v) => pairs.push(("prop_id", JsonValue::Int(*v as i64))),
@@ -2085,6 +2090,7 @@ enum JsonValue<'a> {
     ArgLayout(&'a [ArgInfo]),
     Ascii(&'a str),
     Int(i64),
+    Ints(&'a [i32]),
     Text(&'a [u16]),
 }
 
@@ -2093,6 +2099,16 @@ fn write_json_value(out: &mut Vec<u8>, value: &JsonValue<'_>) {
         JsonValue::ArgLayout(args) => write_arg_layout(out, args),
         JsonValue::Ascii(s) => write_ascii_string(out, s),
         JsonValue::Int(v) => out.extend_from_slice(v.to_string().as_bytes()),
+        JsonValue::Ints(values) => {
+            out.push(b'[');
+            for (idx, value) in values.iter().enumerate() {
+                if idx > 0 {
+                    out.extend_from_slice(b", ");
+                }
+                out.extend_from_slice(value.to_string().as_bytes());
+            }
+            out.push(b']');
+        }
         JsonValue::Text(s) => write_u16_string(out, s),
     }
 }

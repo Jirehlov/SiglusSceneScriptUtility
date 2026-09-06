@@ -16,7 +16,7 @@ from .common import (
 )
 from . import dbs
 from .native_ops import find_rand_skip
-from .path_policy import resolve_read_path
+from .path_policy import resolve_read_path, windows_filename_key
 
 
 def _analyze_one(path):
@@ -262,6 +262,17 @@ def main(argv=None):
         if os.path.splitext(out_root)[1].lower() == ".dbs":
             eprint("error: output must be a directory when input is a directory")
             return 2
+        outputs = {}
+        for csv_path in files:
+            out_path = _map_out_path(inp, out_root, csv_path, src_is_dir)
+            key = windows_filename_key(os.path.abspath(out_path))
+            previous = outputs.get(key)
+            if previous is not None:
+                eprint(
+                    f"error: output path collision: {previous!r} and {csv_path!r} -> {out_path!r}"
+                )
+                return 1
+            outputs[key] = csv_path
         os.makedirs(out_root, exist_ok=True)
         m_type = int(opt_type) if opt_type is not None else 1
         dbs.reset_msvcrt_rand(opt_seed)

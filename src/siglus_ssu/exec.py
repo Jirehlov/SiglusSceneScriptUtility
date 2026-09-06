@@ -56,8 +56,6 @@ def main(argv=None):
     ss = ss_name
     if ss.lower().endswith(".ss"):
         ss = ss[:-3]
-    else:
-        ss = os.path.splitext(ss)[0]
     engine_dir = os.path.dirname(os.path.abspath(engine_path))
     work_dir = os.path.join(
         engine_dir, "work_" + datetime.datetime.now().strftime("%Y%m%d")

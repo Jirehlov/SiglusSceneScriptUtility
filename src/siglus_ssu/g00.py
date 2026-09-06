@@ -1497,10 +1497,15 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
         _print_create_report(
             out_path, t, new_bytes, source=source_hint, layout=report_layout
         )
-    write_bytes(str(out_path), new_bytes)
-    if do_update and new_bytes == base_bytes and out_path == base_path:
+    if (
+        do_update
+        and new_bytes == base_bytes
+        and out_path.exists()
+        and out_path.samefile(base_path)
+    ):
         print("    Output: in-place")
     else:
+        write_bytes(str(out_path), new_bytes)
         print(f"    Output: {out_path}")
     return 0
 
@@ -1587,7 +1592,13 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
                 out_path, t, new_bytes, source=source_hint, layout=report_layout
             )
         total += 1
-        write_bytes(str(out_path), new_bytes)
+        if not (
+            do_update
+            and new_bytes == base_bytes
+            and out_path.exists()
+            and out_path.samefile(base_path)
+        ):
+            write_bytes(str(out_path), new_bytes)
         print(f"    Output: {out_path}")
     if do_update:
         print(f"Done. Targets={total} UPDATED={changed} SAME={same}")

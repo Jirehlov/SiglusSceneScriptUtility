@@ -2278,15 +2278,12 @@ def format_named_command_args(info, arg_exprs, named_ids):
     if not name_by_id:
         return args
     out = list(args[:pos_cnt])
-    ordered_ids = list(reversed(ids))
-    for expr, nid in zip(args[pos_cnt:], ordered_ids):
+    for expr, nid in zip(args[pos_cnt:], reversed(ids)):
         try:
             nm = name_by_id.get(int(nid))
         except Exception:
             nm = None
         out.append(f"{nm}={expr}" if nm else expr)
-    if len(args) > pos_cnt + len(ordered_ids):
-        out.extend(args[pos_cnt + len(ordered_ids) :])
     return out
 
 

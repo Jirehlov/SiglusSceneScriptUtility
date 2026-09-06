@@ -2241,6 +2241,7 @@ def disassemble_scn_bytes(
                 cmd_fields.update(
                     {
                         "arg_layout": _clone_arg_layout(arg_forms),
+                        "named_ids": list(named_ids),
                         "ret_form": int(ret_form),
                         "read_flag": (
                             int(read_flag) if read_flag is not None else None
@@ -2255,7 +2256,6 @@ def disassemble_scn_bytes(
                     cmd_fields.update(
                         {
                             "arg_list_id": int(arg_list_id),
-                            "named_ids": list(named_ids),
                             "read_flag_line": (
                                 int(rf_line) if rf_line is not None else None
                             ),

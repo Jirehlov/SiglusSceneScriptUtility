@@ -290,27 +290,21 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             o2 = base2 + idx * 4
             v1 = struct.unpack_from("<I", s1["data_blob"], o1)[0]
             v2 = struct.unpack_from("<I", s2["data_blob"], o2)[0]
-            if v1 != v2:
-                r = idx // cc
-                c = idx % cc
-                col_call_no, dt = c1[c]
-                ch = chr(dt & 0xFF)
-                if ch == "S":
-                    sv1 = _dbs_get_str(t1, sblob1, int(v1))
-                    sv2 = _dbs_get_str(t2, sblob2, int(v2))
-                    print(
-                        f"  r={r:d} c={c:d} col_call_no={col_call_no:d}: {sv1!r} -> {sv2!r}"
-                    )
-                else:
-                    iv1 = struct.unpack("<i", struct.pack("<I", v1))[0]
-                    iv2 = struct.unpack("<i", struct.pack("<I", v2))[0]
-                    print(
-                        f"  r={r:d} c={c:d} col_call_no={col_call_no:d}: {iv1:d} -> {iv2:d}"
-                    )
-                dif_cnt += 1
-                if dif_cnt >= 20:
-                    print("  ... (stopped after 20 diffs)")
-                    break
+            r, c = divmod(idx, cc)
+            col_call_no, dt = c1[c]
+            if chr(dt & 0xFF) == "S":
+                v1 = _dbs_get_str(t1, sblob1, int(v1))
+                v2 = _dbs_get_str(t2, sblob2, int(v2))
+            elif v1 != v2:
+                v1 = struct.unpack("<i", struct.pack("<I", v1))[0]
+                v2 = struct.unpack("<i", struct.pack("<I", v2))[0]
+            if v1 == v2:
+                continue
+            print(f"  r={r:d} c={c:d} col_call_no={col_call_no:d}: {v1!r} -> {v2!r}")
+            dif_cnt += 1
+            if dif_cnt >= 20:
+                print("  ... (stopped after 20 diffs)")
+                break
         if dif_cnt == 0:
             print("  (no diffs found in scanned region)")
         if total > limit:
