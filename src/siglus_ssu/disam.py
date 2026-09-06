@@ -2285,8 +2285,6 @@ def disassemble_scn_bytes(
         _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)
         break
-    else:
-        complete = True
     if parse_status is not None:
         parse_status["complete"] = complete
     if trace is not None and trace and not payload_trace:

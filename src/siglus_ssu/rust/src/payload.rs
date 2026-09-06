@@ -1182,10 +1182,10 @@ impl<'a> Scanner<'a> {
                 line: self.cur_line,
                 fields: vec![],
             });
-            break;
+            self.emit_namae_metadata();
+            return true;
         }
-        self.emit_namae_metadata();
-        true
+        false
     }
 
     fn emit_namae_metadata(&mut self) {

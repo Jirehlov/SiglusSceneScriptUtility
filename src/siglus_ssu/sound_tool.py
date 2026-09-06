@@ -1610,12 +1610,26 @@ def _extract_one(
     trim_table=None,
     ffmpeg_path: str = "",
     tmp_dir: str = "",
+    output_claims=None,
 ) -> int:
     bn = os.path.basename(src_path)
     base_name, ext = os.path.splitext(bn)
     ext = ext.lower()
     out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
     os.makedirs(out_dir, exist_ok=True)
+
+    def _write_output(out_name, data):
+        out_path = os.path.join(out_dir, out_name)
+        if output_claims is not None:
+            key = os.path.normcase(os.path.abspath(out_path))
+            previous = output_claims.get(key)
+            if previous is not None:
+                eprint(
+                    f"warning: output collision: {out_path} from {src_path} overwrites {previous}"
+                )
+            else:
+                output_claims[key] = src_path
+        write_bytes(out_path, data)
     if ext == ".owp":
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
         if trim_table is not None:
@@ -1632,7 +1646,7 @@ def _extract_one(
                 ffmpeg_path=ffmpeg_path,
                 tmp_dir=tmp_dir,
             )
-        write_bytes(os.path.join(out_dir, base_name + ".ogg"), ogg)
+        _write_output(base_name + ".ogg", ogg)
         return 1
     if ext == ".nwa":
         if trim_table is not None:
@@ -1650,7 +1664,7 @@ def _extract_one(
                 )
         else:
             wav = sound.decode_nwa_to_wav_bytes(src_path)
-        write_bytes(os.path.join(out_dir, base_name + ".wav"), wav)
+        _write_output(base_name + ".wav", wav)
         return 1
     if ext == ".ovk":
         entries = sound.read_ovk_table(src_path)
@@ -1663,7 +1677,7 @@ def _extract_one(
                 out_name = f"{base_name}_{entry_no}.ogg"
             else:
                 out_name = f"{base_name}.ogg"
-            write_bytes(os.path.join(out_dir, out_name), ogg)
+            _write_output(out_name, ogg)
             wrote += 1
         return wrote
     raise RuntimeError("unsupported file type (expected .owp, .nwa, or .ovk)")
@@ -1897,6 +1911,8 @@ def main(argv=None) -> int:
         except OSError:
             tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
 
+    output_claims = {}
+
     def _proc(src_path):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
         n = _extract_one(
@@ -1906,6 +1922,7 @@ def main(argv=None) -> int:
             trim_table=trim_table,
             ffmpeg_path=ffmpeg_path,
             tmp_dir=tmp_dir,
+            output_claims=output_claims,
         )
         return n, n
 
