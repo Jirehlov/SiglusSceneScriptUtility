@@ -1336,7 +1336,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             + lzss_pack(bytes(new_unp), suppress_empty_tail_group=True)
         )
     if t == 2:
-        bw, bh, cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
+        bw, bh, _cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
         if not cuts:
             raise ValueError("type2 no cuts")
         planned = _plan_type2_updates(unp, cuts, updates)

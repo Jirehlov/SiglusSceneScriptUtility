@@ -1768,7 +1768,7 @@ def main(argv=None) -> int:
                 if len(items) >= 2:
                     tasks.append(("ovk", items, rel_dir, base2))
                     continue
-                for no, src_path in items:
+                for _no, src_path in items:
                     base = os.path.splitext(os.path.basename(src_path))[0]
                     tasks.append(("owp", src_path, rel_dir, base))
         else:

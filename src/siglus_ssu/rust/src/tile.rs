@@ -17,13 +17,13 @@ pub fn copy(
     }
 
     let x0 = if repx <= 0 {
-        ((-repx) as usize) % tx
+        repx.unsigned_abs() as usize % tx
     } else {
         (tx - ((repx as usize) % tx)) % tx
     };
 
     let y0 = if repy <= 0 {
-        ((-repy) as usize) % ty
+        repy.unsigned_abs() as usize % ty
     } else {
         (ty - ((repy as usize) % ty)) % ty
     };
