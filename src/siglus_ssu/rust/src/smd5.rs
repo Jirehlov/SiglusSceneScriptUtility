@@ -62,9 +62,6 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
             nokori = 0;
             data_cnt = 0;
         } else {
-            if data_cnt != 0 {
-                break;
-            }
             let mut block = [0u8; 64];
             block.copy_from_slice(&add_data[..64]);
             blk = block;

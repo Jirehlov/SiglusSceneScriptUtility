@@ -125,19 +125,15 @@ def normalize_ss_quoted_literal_source(text):
 
 
 def unique_out_path(path):
-    try:
-        if not path:
-            return path
-        if not os.path.exists(path):
-            return path
-        root, ext = os.path.splitext(path)
-        for i in range(1, 1000):
-            p = f"{root}.{i:d}{ext}"
-            if not os.path.exists(p):
-                return p
+    if not path or not os.path.exists(path):
         return path
-    except (OSError, TypeError, ValueError):
-        return path
+    root, ext = os.path.splitext(path)
+    i = 1
+    while True:
+        candidate = f"{root}.{i:d}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        i += 1
 
 
 def normalize_atom(a):
@@ -1925,8 +1921,6 @@ def decode_utf16le_strings(
     if strict_blob_end and blob_end > len(dat):
         return out
     blob_end = max(0, min(blob_end, len(dat)))
-    if blob_end < blob_ofs:
-        return out
 
     def _handle(kind: str, si: int, exc, mode: str):
         if mode == "raise":
@@ -1947,7 +1941,7 @@ def decode_utf16le_strings(
             continue
         a = blob_ofs + o * 2
         b = a + ln * 2
-        if a < 0 or b > blob_end:
+        if b > blob_end:
             _handle("out-of-range", si, None, on_error)
             continue
         try:

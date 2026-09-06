@@ -61,7 +61,7 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
             continue
         a = blob_ofs + o * 2
         b = a + ln * 2
-        if a < blob_ofs or b > blob_end:
+        if b > blob_end:
             out.append("")
             continue
         key = scene_string_xor_key(si)
@@ -646,7 +646,7 @@ def _scn_string_indices_valid(blob):
         if blob_ofs < 0 or blob_ofs > len(blob):
             return False
         blob_end = blob_ofs + max_pair_end(pairs) * 2
-        if blob_end < blob_ofs or blob_end > len(blob):
+        if blob_end > len(blob):
             return False
         for offset, length in pairs:
             offset = int(offset)
@@ -655,7 +655,7 @@ def _scn_string_indices_valid(blob):
                 return False
             start = blob_ofs + offset * 2
             end = start + length * 2
-            if start < blob_ofs or end < start or end > blob_end:
+            if end > blob_end:
                 return False
         return True
     except (TypeError, ValueError, OverflowError, struct.error):

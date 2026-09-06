@@ -508,8 +508,6 @@ def _py_lzss_unpack(src: bytes) -> bytes:
                 for j in range(ln):
                     if len(out) >= org:
                         break
-                    if st + j >= len(out):
-                        raise ValueError("lzss back")
                     out.append(out[st + j])
             fl >>= 1
     return bytes(out)
@@ -553,8 +551,6 @@ def _py_smd5_digest(data: bytes) -> bytes:
             nokori = 0
             data_cnt = 0
         else:
-            if data_cnt != 0:
-                break
             blk = bytes(add_data[:64])
         X = struct.unpack("<16I", blk)
         a, b, c, d = st
@@ -591,16 +587,23 @@ def _py_smd5_digest(data: bytes) -> bytes:
 
 
 def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
-    if not d or not s:
+    if not d or not s or tx <= 0 or ty <= 0:
         return
     x0 = ((-repx) % tx) if repx <= 0 else ((tx - (repx % tx)) % tx)
     y0 = ((-repy) % ty) if repy <= 0 else ((ty - (repy % ty)) % ty)
     for y in range(by):
         tyi = (y0 + y) % ty
         for x in range(bx):
-            v = t[tyi * tx + ((x0 + x) % tx)]
+            mask_idx = tyi * tx + ((x0 + x) % tx)
+            if mask_idx >= len(t):
+                continue
+            v = t[mask_idx]
             i = (y * bx + x) * 4
-            if (v >= lim) if not rev else (v < lim):
+            if (
+                i + 4 <= len(d)
+                and i + 4 <= len(s)
+                and ((v >= lim) if not rev else (v < lim))
+            ):
                 d[i : i + 4] = s[i : i + 4]
 
 

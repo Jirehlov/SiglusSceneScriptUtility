@@ -320,9 +320,6 @@ pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
                         break;
                     }
                     let idx = st + j;
-                    if idx >= out.len() {
-                        return Err("lzss back".to_string());
-                    }
                     out.push(out[idx]);
                 }
             }

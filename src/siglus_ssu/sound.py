@@ -485,7 +485,7 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
         else:
             end = int(offsets[unit_no + 1])
             unit_smp_cnt = h.unit_sample_cnt
-        if start < 0 or end < start or end > len(mv):
+        if end < start or end > len(mv):
             raise ValueError("Invalid NWA unit offsets")
         chunk = _nwa_unpack_unit_16(mv[start:end], unit_smp_cnt, h)
         if dst >= len(out):

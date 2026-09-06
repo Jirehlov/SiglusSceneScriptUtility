@@ -1975,7 +1975,7 @@ fn decode_xor_strings(
         }
         let a = blob_ofs.checked_add((ofs_u16 as usize).saturating_mul(2))?;
         let b = a.checked_add((len_u16 as usize).saturating_mul(2))?;
-        if a < blob_ofs || b > blob_end {
+        if b > blob_end {
             return None;
         }
         let key = ((u32::from(string_xor_multiplier).wrapping_mul(si as u32)) & 0xffff) as u16;
