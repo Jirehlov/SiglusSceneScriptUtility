@@ -630,8 +630,7 @@ def _scn_payload_bounds(blob):
 
 def _scn_string_indices_valid(blob):
     try:
-        meta = dat_sections(blob)[1]
-        header = meta.get("header") or {}
+        header = build_sections(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)[0]
         count = int(header.get("str_index_cnt", 0) or 0)
         pairs = read_struct_list(
             blob,

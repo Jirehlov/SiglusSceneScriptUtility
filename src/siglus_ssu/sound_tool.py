@@ -1630,6 +1630,7 @@ def _extract_one(
             else:
                 output_claims[key] = src_path
         write_bytes(out_path, data)
+
     if ext == ".owp":
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
         if trim_table is not None:
