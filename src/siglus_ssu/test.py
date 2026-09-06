@@ -172,7 +172,15 @@ def _payload_stdout(stdout_text: str) -> str:
         if len(parts) <= payload_index:
             continue
         payload = str(parts[payload_index]).strip()
-        if payload in {"text_only", "real_diff", "diff", "-", "--", "unavailable"}:
+        if payload in {
+            "text_only",
+            "real_diff",
+            "diff",
+            "-",
+            "--",
+            "unavailable",
+            "INCOMPLETE",
+        }:
             rows.append(line)
     lines = []
     if rows:

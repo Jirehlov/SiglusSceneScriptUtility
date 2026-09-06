@@ -608,7 +608,7 @@ impl ParsedDat {
             h.str_list_ofs,
             str_blob_end,
             cfg.scene_string_xor_multiplier,
-        );
+        )?;
         let label_offsets = read_i32_list(blob, h.label_list_ofs, h.label_cnt).unwrap_or_default();
         let z_label_offsets =
             read_i32_list(blob, h.z_label_list_ofs, h.z_label_cnt).unwrap_or_default();
@@ -1966,25 +1966,17 @@ fn decode_xor_strings(
     blob_ofs: usize,
     blob_end: usize,
     string_xor_multiplier: u16,
-) -> Vec<Vec<u16>> {
+) -> Option<Vec<Vec<u16>>> {
     let mut out = Vec::with_capacity(idx.len());
     let blob_end = blob_end.min(data.len());
     for (si, &(ofs_u16, len_u16)) in idx.iter().enumerate() {
         if ofs_u16 < 0 || len_u16 < 0 {
-            out.push(Vec::new());
-            continue;
+            return None;
         }
-        let Some(a) = blob_ofs.checked_add((ofs_u16 as usize).saturating_mul(2)) else {
-            out.push(Vec::new());
-            continue;
-        };
-        let Some(b) = a.checked_add((len_u16 as usize).saturating_mul(2)) else {
-            out.push(Vec::new());
-            continue;
-        };
+        let a = blob_ofs.checked_add((ofs_u16 as usize).saturating_mul(2))?;
+        let b = a.checked_add((len_u16 as usize).saturating_mul(2))?;
         if a < blob_ofs || b > blob_end {
-            out.push(Vec::new());
-            continue;
+            return None;
         }
         let key = ((u32::from(string_xor_multiplier).wrapping_mul(si as u32)) & 0xffff) as u16;
         let mut s = Vec::with_capacity(len_u16 as usize);
@@ -1994,7 +1986,7 @@ fn decode_xor_strings(
         }
         out.push(s);
     }
-    out
+    Some(out)
 }
 
 fn decode_plain_strings(

@@ -628,6 +628,41 @@ def _scn_payload_bounds(blob):
     return so, ss
 
 
+def _scn_string_indices_valid(blob):
+    try:
+        meta = dat_sections(blob)[1]
+        header = meta.get("header") or {}
+        count = int(header.get("str_index_cnt", 0) or 0)
+        pairs = read_struct_list(
+            blob,
+            header.get("str_index_list_ofs", 0),
+            count,
+            I32_PAIR_STRUCT,
+        )
+        if len(pairs) != count:
+            return False
+        if not pairs:
+            return True
+        blob_ofs = int(header.get("str_list_ofs", 0) or 0)
+        if blob_ofs < 0 or blob_ofs > len(blob):
+            return False
+        blob_end = blob_ofs + max_pair_end(pairs) * 2
+        if blob_end < blob_ofs or blob_end > len(blob):
+            return False
+        for offset, length in pairs:
+            offset = int(offset)
+            length = int(length)
+            if offset < 0 or length < 0:
+                return False
+            start = blob_ofs + offset * 2
+            end = start + length * 2
+            if start < blob_ofs or end < start or end > blob_end:
+                return False
+        return True
+    except (TypeError, ValueError, OverflowError, struct.error):
+        return False
+
+
 def _payload_trace_normalize_value(ev, key, value):
     if key == "value" and ev.get("text") is not None:
         return None
@@ -703,6 +738,8 @@ def scn_payload_hash_bundles(
     payload_context = dict(pack_context or {})
     if scene_name is not None:
         payload_context["payload_scene_name"] = str(scene_name)
+    if not _scn_string_indices_valid(blob):
+        return {"status": "INCOMPLETE"}
     native = scn_payload_hash_bundles_native(blob, pack_context=payload_context)
     if native is not None:
         return native
