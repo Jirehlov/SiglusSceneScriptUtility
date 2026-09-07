@@ -1,8 +1,5 @@
 use super::ast::{AstNode, AstPayload, GotoKind};
-use super::bs::{
-    BytecodeBuilder, TNMSERR_BS_BREAK_NO_LOOP, TNMSERR_BS_CONTINUE_NO_LOOP,
-    TNMSERR_BS_ILLEGAL_DEFAULT_ARG, TNMSERR_BS_NEED_REFERENCE, TNMSERR_BS_NEED_VALUE,
-};
+use super::bs::BytecodeBuilder;
 use super::ca::{CharacterAnalyzer, PreprocessStats, cp932_code};
 use super::codes::RuntimeCodes;
 use super::config::CompileConfig;
@@ -44,7 +41,7 @@ pub struct CompileFailure {
     pub stage_times: Vec<(String, f64)>,
 }
 
-type LogStreamer<'a> = dyn FnMut(&str) -> Result<(), String> + 'a;
+type LogStreamer<'a> = dyn FnMut(&str, &str) -> Result<(), String> + 'a;
 
 struct OutputLog<'a> {
     streamer: &'a mut LogStreamer<'a>,
@@ -56,11 +53,11 @@ impl<'a> OutputLog<'a> {
     }
 
     fn push_line(&mut self, line: &str) -> Result<(), String> {
-        (self.streamer)(line)
+        (self.streamer)("stdout", line)
     }
 
-    fn into_string(self) -> String {
-        String::new()
+    fn push_warning(&mut self, line: &str) -> Result<(), String> {
+        (self.streamer)("stderr", line)
     }
 }
 
@@ -1413,17 +1410,6 @@ fn scene_semantic_error(
     scene_error(code, display_name, line)
 }
 
-fn bs_error_code(kind: i32) -> &'static str {
-    match kind {
-        TNMSERR_BS_ILLEGAL_DEFAULT_ARG => "TNMSERR_BS_ILLEGAL_DEFAULT_ARG",
-        TNMSERR_BS_CONTINUE_NO_LOOP => "TNMSERR_BS_CONTINUE_NO_LOOP",
-        TNMSERR_BS_BREAK_NO_LOOP => "TNMSERR_BS_BREAK_NO_LOOP",
-        TNMSERR_BS_NEED_REFERENCE => "TNMSERR_BS_NEED_REFERENCE",
-        TNMSERR_BS_NEED_VALUE => "TNMSERR_BS_NEED_VALUE",
-        _ => "UNK_ERROR",
-    }
-}
-
 fn decode_key_text_auto(bytes: &[u8]) -> String {
     let utf8 = decode_strict(bytes, UTF_8);
     let cp932 = decode_cp932_strict(bytes);
@@ -1998,7 +1984,7 @@ fn prepare_scene(
         )
         .map_err(|_| {
             scene_error(
-                bs_error_code(bytecode.last_error.kind),
+                bytecode.last_error.code(),
                 display_name,
                 bytecode.last_error.line,
             )
@@ -2131,7 +2117,7 @@ fn compile_project_inner(
     if let Some(source) = gameexe_source {
         write_gameexe_dat(config, source, exe_key.as_deref())?;
     } else {
-        stdout.push_line(&format!(
+        stdout.push_warning(&format!(
             "siglus-ssu -c: warning: {gameexe_ini} not found; skipped Gameexe.dat"
         ))?;
     }
@@ -2652,12 +2638,9 @@ fn compile_project_with_log(
 ) -> Result<ProjectOutput, CompileFailure> {
     let mut stage_times = Vec::new();
     match compile_project_inner(config, &mut stdout, &mut stage_times) {
-        Ok(mut output) => {
-            output.stdout = stdout.into_string();
-            Ok(output)
-        }
+        Ok(output) => Ok(output),
         Err(stderr) => Err(CompileFailure {
-            stdout: stdout.into_string(),
+            stdout: String::new(),
             stderr,
             stage_times,
         }),
@@ -2669,7 +2652,7 @@ pub fn compile_project_streaming<F>(
     streamer: &mut F,
 ) -> Result<ProjectOutput, CompileFailure>
 where
-    F: FnMut(&str) -> Result<(), String>,
+    F: FnMut(&str, &str) -> Result<(), String>,
 {
     compile_project_with_log(config, OutputLog::streaming(streamer))
 }

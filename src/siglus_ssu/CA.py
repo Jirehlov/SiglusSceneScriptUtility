@@ -397,7 +397,6 @@ class CharacterAnalizer:
     def _analize_macro(self, text, p, macro, default_rt, added_rt):
         real = []
         kak = 0
-        ac = 0
         if p < len(text) and text[p] == "(":
             p += 1
             st = p
@@ -434,7 +433,7 @@ class CharacterAnalizer:
                         if st == p:
                             self.error(
                                 self.m_line,
-                                "The " + str(ac) + "-th macro argument is empty.",
+                                f"The {len(real)}-th macro argument is empty.",
                             )
                             return 0, p, ""
                         real.append(text[st:p])
@@ -449,7 +448,7 @@ class CharacterAnalizer:
                         elif st == p:
                             self.error(
                                 self.m_line,
-                                "The " + str(ac) + "-th macro argument is empty.",
+                                f"The {len(real)}-th macro argument is empty.",
                             )
                             return 0, p, ""
                         else:

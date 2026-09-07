@@ -163,7 +163,7 @@ impl SyntaxAnalyzer {
             pos = next;
         }
         let Some((next, _close)) = self.accept(pos, self.codes.la.close_brace) else {
-            return self.fail("TNMSERR_SA_BLOCK_NO_CLOSE_BRACE", pos);
+            return self.fail("TNMSERR_SA_BLOCK_NO_CLOSE_BRACE", index);
         };
         Ok(Some((next, statements)))
     }

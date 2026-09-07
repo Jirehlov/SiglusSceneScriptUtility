@@ -100,11 +100,7 @@ impl<'a> BitReader<'a> {
             0
         };
         let w = (b0 as u32) | ((b1 as u32) << 8);
-        let mask = if nbits == 32 {
-            u32::MAX
-        } else {
-            (1u32 << nbits) - 1
-        };
+        let mask = (1u32 << nbits) - 1;
         let val = (w >> (self.bit as u32)) & mask;
         let bit2 = (self.bit as u32) + (nbits as u32);
         self.bp += (bit2 >> 3) as usize;
@@ -118,9 +114,9 @@ fn apply_delta(br: &mut BitReader<'_>, nowsmp: &mut i32, nbits: u8, sign_bit: u3
     let mut code = br.get(nbits);
     if (code & sign_bit) != 0 {
         code &= sign_bit - 1;
-        *nowsmp -= (code as i32) << (shift as i32);
+        *nowsmp = nowsmp.wrapping_sub((code as i32) << (shift as i32));
     } else {
-        *nowsmp += (code as i32) << (shift as i32);
+        *nowsmp = nowsmp.wrapping_add((code as i32) << (shift as i32));
     }
 }
 
@@ -232,19 +228,7 @@ fn decode_sample(
     }
 }
 
-fn unpack_unit_16_into(
-    chunk: &[u8],
-    src_smp_cnt: usize,
-    header: &NwaHeader,
-    pack_mod: u8,
-    dst: &mut [u8],
-) {
-    let write_cnt = dst.len().min(src_smp_cnt.saturating_mul(2));
-    if write_cnt == 0 {
-        return;
-    }
-    let mut out_i = 0usize;
-
+fn unpack_unit_16_into(chunk: &[u8], header: &NwaHeader, pack_mod: u8, dst: &mut [u8]) {
     let m = 3u8 + pack_mod;
 
     if header.channels == 1 {
@@ -252,16 +236,9 @@ fn unpack_unit_16_into(
         let mut br = BitReader::new(chunk, 2);
         let mut zero_cnt: usize = 0;
 
-        for _ in 0..src_smp_cnt {
+        for out in dst.as_chunks_mut::<2>().0 {
             decode_sample(&mut br, &mut nowsmp, m, header.zero_mod, &mut zero_cnt);
-
-            if out_i + 2 > write_cnt {
-                break;
-            }
-            let s = (nowsmp as i16).to_le_bytes();
-            dst[out_i] = s[0];
-            dst[out_i + 1] = s[1];
-            out_i += 2;
+            out.copy_from_slice(&(nowsmp as i16).to_le_bytes());
         }
         return;
     }
@@ -271,7 +248,7 @@ fn unpack_unit_16_into(
     let mut br = BitReader::new(chunk, 4);
     let mut zero_cnt: usize = 0;
 
-    for i in 0..src_smp_cnt {
+    for (i, out) in dst.as_chunks_mut::<2>().0.iter_mut().enumerate() {
         let nowsmp: &mut i32 = if (i & 1) == 0 {
             &mut nowsmp_l
         } else {
@@ -280,13 +257,7 @@ fn unpack_unit_16_into(
 
         decode_sample(&mut br, nowsmp, m, header.zero_mod, &mut zero_cnt);
 
-        if out_i + 2 > write_cnt {
-            break;
-        }
-        let s = (*nowsmp as i16).to_le_bytes();
-        dst[out_i] = s[0];
-        dst[out_i + 1] = s[1];
-        out_i += 2;
+        out.copy_from_slice(&(*nowsmp as i16).to_le_bytes());
     }
 }
 
@@ -317,6 +288,20 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
     let pack_mod = remap_pack_mod(h.pack_mod)?;
 
     let unit_cnt = h.unit_cnt as usize;
+    let total_samples = if unit_cnt == 0 {
+        0
+    } else {
+        (unit_cnt - 1)
+            .checked_mul(h.unit_sample_cnt as usize)
+            .and_then(|value| value.checked_add(h.last_sample_cnt as usize))
+            .ok_or_else(|| "NWA sample count overflow".to_string())?
+    };
+    let expected_size = total_samples
+        .checked_mul(2)
+        .ok_or_else(|| "NWA output size overflow".to_string())?;
+    if expected_size != original_size {
+        return Err("NWA sample size mismatch".into());
+    }
     let table_off = NWA_HEADER_SIZE;
     let table_size = unit_cnt
         .checked_mul(4)
@@ -335,7 +320,10 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
         ]));
     }
 
-    let mut out = vec![0u8; original_size];
+    let mut out = Vec::new();
+    out.try_reserve_exact(original_size)
+        .map_err(|_| "NWA output is too large".to_string())?;
+    out.resize(original_size, 0);
     let mut dst = 0usize;
 
     for unit_no in 0..unit_cnt {
@@ -355,24 +343,10 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
             return Err("Invalid NWA unit offsets".into());
         }
 
-        if dst >= out.len() {
-            break;
-        }
-
-        let decoded_len = unit_smp_cnt.saturating_mul(2);
-        let write_len = decoded_len.min(out.len() - dst);
-        if write_len == 0 {
-            break;
-        }
+        let write_len = unit_smp_cnt * 2;
 
         let chunk = &data[start..end];
-        unpack_unit_16_into(
-            chunk,
-            unit_smp_cnt,
-            &h,
-            pack_mod,
-            &mut out[dst..dst + write_len],
-        );
+        unpack_unit_16_into(chunk, &h, pack_mod, &mut out[dst..dst + write_len]);
         dst += write_len;
     }
 

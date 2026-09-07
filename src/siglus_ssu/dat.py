@@ -623,7 +623,7 @@ def _scn_payload_bounds(blob):
         ss = h.get("scn_size", 0)
     except Exception:
         return None
-    if so < 0 or ss <= 0 or (so + ss) > len(blob):
+    if so < 0 or ss < 0 or (so + ss) > len(blob):
         return None
     return so, ss
 

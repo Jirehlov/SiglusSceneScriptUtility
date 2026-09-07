@@ -360,6 +360,7 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
             return
         if nt == C.NT_S_COMMAND:
             statements["command_call"] += 1
+            expressions["max_depth"] = max(expressions["max_depth"], 1)
             return
         if nt == C.NT_S_TEXT:
             statements["text"] += 1

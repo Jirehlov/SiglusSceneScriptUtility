@@ -1532,9 +1532,8 @@ def disassemble_scn_bytes(
         if argc is None:
             return (None, None)
         p += 4
-        try:
-            argc_i = max(0, int(argc))
-        except Exception:
+        argc_i = max(0, argc)
+        if argc_i > (scn_len - p) // 4:
             return (None, None)
         args = [None] * argc_i
         for idx in range(argc_i - 1, -1, -1):
@@ -1542,12 +1541,8 @@ def disassemble_scn_bytes(
             if form is None:
                 return (None, None)
             p += 4
-            try:
-                form_i = int(form)
-            except Exception:
-                return (None, None)
-            info = {"form": form_i}
-            if form_i == fm_list:
+            info = {"form": form}
+            if form == fm_list:
                 p, sub = _read_arg_layout(p)
                 if p is None:
                     return (None, None)

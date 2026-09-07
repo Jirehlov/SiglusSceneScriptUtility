@@ -116,7 +116,7 @@ pub struct PayloadConfig {
 #[derive(Clone)]
 struct ArgInfo {
     form: i32,
-    sub: Vec<ArgInfo>,
+    sub: Option<Vec<ArgInfo>>,
 }
 
 #[derive(Clone)]
@@ -935,10 +935,7 @@ impl<'a> Scanner<'a> {
                 });
                 let slot = self.call_slot_next;
                 self.call_slots.insert(slot, CallSlotInfo { ret: form });
-                self.call_decl_forms.push(ArgInfo {
-                    form,
-                    sub: Vec::new(),
-                });
+                self.call_decl_forms.push(ArgInfo { form, sub: None });
                 self.call_slot_next += 1;
                 continue;
             }
@@ -1543,8 +1540,8 @@ impl<'a> Scanner<'a> {
 
     fn consume_arg_value(&mut self, arg: &ArgInfo) {
         if arg.form == self.cfg.codes.fm_list {
-            for sub in arg.sub.iter().rev() {
-                self.consume_arg_value(sub);
+            for value in arg.sub.iter().flatten().rev() {
+                self.consume_arg_value(value);
             }
         } else if self.is_scalar_form(arg.form) {
             self.pop_stack();
@@ -1775,24 +1772,18 @@ impl<'a> Scanner<'a> {
     fn read_arg_layout(&self, mut p: usize) -> Option<(usize, Vec<ArgInfo>)> {
         let argc = self.read_i32(p)?.max(0) as usize;
         p += 4;
-        let mut args = vec![
-            ArgInfo {
-                form: 0,
-                sub: Vec::new()
-            };
-            argc
-        ];
+        if argc > (self.dat.scn.len() - p) / 4 {
+            return None;
+        }
+        let mut args = vec![ArgInfo { form: 0, sub: None }; argc];
         for idx in (0..argc).rev() {
             let form = self.read_i32(p)?;
             p += 4;
-            let mut info = ArgInfo {
-                form,
-                sub: Vec::new(),
-            };
+            let mut info = ArgInfo { form, sub: None };
             if form == self.cfg.codes.fm_list {
                 let (next, sub) = self.read_arg_layout(p)?;
                 p = next;
-                info.sub = sub;
+                info.sub = Some(sub);
             }
             args[idx] = info;
         }
@@ -2013,13 +2004,15 @@ fn decode_plain_strings(
         if b > blob_end {
             continue;
         }
-        let mut s = Vec::with_capacity(len_u16 as usize);
-        for p in (a..b).step_by(2) {
-            let w = u16::from_le_bytes([data[p], data[p + 1]]);
-            if w != 0 {
-                s.push(w);
-            }
-        }
+        let units = (a..b)
+            .step_by(2)
+            .map(|p| u16::from_le_bytes([data[p], data[p + 1]]));
+        let s = char::decode_utf16(units)
+            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .filter(|&ch| ch != '\0')
+            .collect::<String>()
+            .encode_utf16()
+            .collect();
         out.push(s);
     }
     out
@@ -2114,9 +2107,9 @@ fn write_arg_layout(out: &mut Vec<u8>, args: &[ArgInfo]) {
         out.push(b'{');
         out.extend_from_slice(b"\"form\": ");
         out.extend_from_slice(arg.form.to_string().as_bytes());
-        if !arg.sub.is_empty() {
+        if let Some(sub) = &arg.sub {
             out.extend_from_slice(b", \"sub\": ");
-            write_arg_layout(out, &arg.sub);
+            write_arg_layout(out, sub);
         }
         out.push(b'}');
     }

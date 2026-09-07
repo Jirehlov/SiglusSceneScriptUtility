@@ -459,6 +459,16 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
             raise EOFError("NWA raw PCM truncated")
         return pcm, h
     _nwa_pack_mod(h.pack_mod)
+    unit_cnt = h.unit_cnt
+    total_samples = (
+        0 if unit_cnt == 0 else (unit_cnt - 1) * h.unit_sample_cnt + h.last_sample_cnt
+    )
+    if total_samples * 2 != h.original_size:
+        raise ValueError("NWA sample size mismatch")
+    table_off = NWA_HEADER_STRUCT.size
+    table_size = unit_cnt * 4
+    if len(data) < table_off + table_size:
+        raise EOFError("NWA table truncated")
     if native_accel is not None and not _runtime._LEGACY_FULL:
         pcm = native_accel.nwa_decode_pcm(data)
         if not isinstance(pcm, (bytes, bytearray, memoryview)):
@@ -469,10 +479,6 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
                 f"native_accel.nwa_decode_pcm size mismatch: got={len(pcm_b)} expected={h.original_size}"
             )
         return pcm_b, h
-    table_off = NWA_HEADER_STRUCT.size
-    table_size = h.unit_cnt * 4
-    if len(data) < table_off + table_size:
-        raise EOFError("NWA table truncated")
     offsets = struct.unpack_from(f"<{h.unit_cnt}I", data, table_off)
     mv = memoryview(data)
     out = bytearray(h.original_size)
@@ -488,10 +494,8 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
         if end < start or end > len(mv):
             raise ValueError("Invalid NWA unit offsets")
         chunk = _nwa_unpack_unit_16(mv[start:end], unit_smp_cnt, h)
-        if dst >= len(out):
-            break
-        n = min(len(chunk), len(out) - dst)
-        out[dst : dst + n] = chunk[:n]
+        n = len(chunk)
+        out[dst : dst + n] = chunk
         dst += n
     return bytes(out), h
 

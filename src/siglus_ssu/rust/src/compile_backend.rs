@@ -157,20 +157,20 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
     }
     out.set_item("handled", true)?;
     let sys = py.import("sys")?;
-    let stdout = sys.getattr("stdout")?;
-    let mut stream_stdout = |line: &str| -> Result<(), String> {
-        stdout
+    let mut stream_output = |channel: &str, line: &str| -> Result<(), String> {
+        let stream = sys.getattr(channel).map_err(|error| error.to_string())?;
+        stream
             .call_method1("write", (line,))
             .map_err(|error| error.to_string())?;
-        stdout
+        stream
             .call_method1("write", ("\n",))
             .map_err(|error| error.to_string())?;
-        stdout
+        stream
             .call_method0("flush")
             .map_err(|error| error.to_string())?;
         Ok(())
     };
-    match project::compile_project_streaming(&parsed, &mut stream_stdout) {
+    match project::compile_project_streaming(&parsed, &mut stream_output) {
         Ok(result) => {
             out.set_item("ok", true)?;
             let stats = PyDict::new(py);

@@ -1827,9 +1827,13 @@ pub fn lsp_scan_document(
             )
             .is_err()
         {
-            return Ok(
-                diagnostic_result(py, "BS", bytecode.last_error.line, "UNK_ERROR")?.unbind(),
-            );
+            return Ok(diagnostic_result(
+                py,
+                "BS",
+                bytecode.last_error.line,
+                bytecode.last_error.code(),
+            )?
+            .unbind());
         }
     }
     let mut local_defs = HashMap::new();

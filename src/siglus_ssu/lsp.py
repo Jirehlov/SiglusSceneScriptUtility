@@ -1536,7 +1536,7 @@ def _native_link_scan_result(
     text: str,
 ) -> tuple[bool, list[DefinitionRecord], list[SymbolOccurrence]] | None:
     result = _native_scan_document_result(native_project, path, text, False)
-    if result is None:
+    if result is None or result.get("has_diagnostics"):
         return None
     commands_raw = result.get("commands")
     occurrences_raw = result.get("occurrences")
@@ -1544,7 +1544,7 @@ def _native_link_scan_result(
         return None
     try:
         return (
-            bool(result.get("has_diagnostics", False)),
+            False,
             [
                 _native_definition_record(item, path)
                 for item in commands_raw
@@ -3183,7 +3183,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 12
+LSP_INDEX_CACHE_VERSION = 13
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 

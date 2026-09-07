@@ -590,16 +590,15 @@ impl CharacterAnalyzer {
     ) -> Result<String, ()> {
         let mut arg_replacements = Vec::with_capacity(macro_def.args.len());
         for (index, arg) in macro_def.args.iter().enumerate() {
-            let source = actual
+            let Some(source) = actual
                 .get(index)
                 .cloned()
                 .or_else(|| arg.default_value.clone())
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    self.error_str = "Not enough macro arguments.".to_string();
-                })
-                .map_err(|_| ())?;
-            let expanded = self.expand_all(&source, default_tree, added_tree)?;
+            else {
+                return self.error(self.current_line, "Not enough macro arguments.");
+            };
+            let expanded = self.expand_all(&source, default_tree, added_tree, false)?;
             arg_replacements.push(Replacement {
                 kind: ReplaceKind::Replace,
                 name: arg.name.clone(),
@@ -614,7 +613,7 @@ impl CharacterAnalyzer {
         for replacement in arg_replacements {
             arg_tree.add(&replacement.name.clone(), replacement);
         }
-        self.expand_all(&macro_def.after, default_tree, &arg_tree)
+        self.expand_all(&macro_def.after, default_tree, &arg_tree, false)
     }
 
     fn replace_one_detail(
@@ -700,6 +699,7 @@ impl CharacterAnalyzer {
         input: &str,
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
+        count_lines: bool,
     ) -> Result<String, ()> {
         let mut text: Vec<char> = input.chars().chain(std::iter::once('\0')).collect();
         let mut pos = 0usize;
@@ -707,7 +707,9 @@ impl CharacterAnalyzer {
         let mut rest_min = text.len();
         while text.get(pos) != Some(&'\0') {
             if text[pos] == '\n' {
-                self.current_line += 1;
+                if count_lines {
+                    self.current_line += 1;
+                }
                 pos += 1;
             } else {
                 (text, pos) = self.replace_one(text, pos, default_tree, added_tree)?;
@@ -733,7 +735,7 @@ impl CharacterAnalyzer {
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {
         self.current_line = 1;
         let empty_tree = ReplaceTree::new();
-        self.expand_all(input, replace_tree, &empty_tree)
+        self.expand_all(input, replace_tree, &empty_tree, true)
     }
 
     pub fn analyze_scene_line_with_map(

@@ -49,6 +49,19 @@ pub struct BsError {
     pub line: usize,
 }
 
+impl BsError {
+    pub fn code(&self) -> &'static str {
+        match self.kind {
+            TNMSERR_BS_ILLEGAL_DEFAULT_ARG => "TNMSERR_BS_ILLEGAL_DEFAULT_ARG",
+            TNMSERR_BS_CONTINUE_NO_LOOP => "TNMSERR_BS_CONTINUE_NO_LOOP",
+            TNMSERR_BS_BREAK_NO_LOOP => "TNMSERR_BS_BREAK_NO_LOOP",
+            TNMSERR_BS_NEED_REFERENCE => "TNMSERR_BS_NEED_REFERENCE",
+            TNMSERR_BS_NEED_VALUE => "TNMSERR_BS_NEED_VALUE",
+            _ => "UNK_ERROR",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BsOutput {
     pub scene: SceneDatInput,
