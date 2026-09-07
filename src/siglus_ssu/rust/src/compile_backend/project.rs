@@ -2394,8 +2394,6 @@ fn compile_project_inner(
     });
     read_flag_stats.top_scenes.truncate(5);
 
-    write_digest_cache(config)?;
-
     for (scene_number, record) in scene_records.iter().enumerate() {
         for (command_id, offset) in &record.command_labels {
             let command_id = *command_id;
@@ -2601,6 +2599,7 @@ fn compile_project_inner(
         fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;
     }
     fs::write(&output_path, &pack).map_err(|error| format_path_error(&output_path, error))?;
+    write_digest_cache(config)?;
     let (macro_counts, source_stats, read_flag_stats, binary_size_stats) =
         if config.cache.full_compile_stats {
             finalize_source_stats(&mut aggregate_source_stats, &base_ia);

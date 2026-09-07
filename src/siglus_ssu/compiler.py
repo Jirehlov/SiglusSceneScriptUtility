@@ -346,6 +346,8 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
                 if need:
                     comp.add(p)
             compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
+        if existing_digest_path:
+            os.remove(existing_digest_path)
     pending_digests = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
     return compile_list, digest_path, pending_digests, full_compile
 
@@ -1654,8 +1656,6 @@ def main(argv=None):
                         max_workers=a.max_workers,
                         parallel=(not force_serial_compile),
                     )
-            if pending_digests is not None:
-                _write_digest_cache(digest_path, pending_digests)
             if full_compile_stats:
                 stats["macro_counts"] = _collect_macro_stats(ctx, compile_stats)
                 stats["source_stats"] = _finalize_source_stats(ctx, compile_stats)
@@ -1672,6 +1672,8 @@ def main(argv=None):
                 stats["read_flags_scenes"] = None
                 stats["top5_read_flags_scenes"] = None
             link_pack(ctx)
+            if pending_digests is not None:
+                _write_digest_cache(digest_path, pending_digests)
         ok = not test_shuffle_failed
     except Exception as e:
         msg = str(e)
