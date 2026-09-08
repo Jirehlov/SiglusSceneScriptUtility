@@ -164,7 +164,7 @@ def _payload_native_config_cached(
     return native_accel.scn_payload_config(config)
 
 
-def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
+def scn_payload_hash_bundles_native(blob: bytes, pack_context=None, *, hashes=True):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
     try:
@@ -172,6 +172,7 @@ def scn_payload_hash_bundles_native(blob: bytes, pack_context=None):
             bytes(blob),
             _payload_native_config(),
             pack_context,
+            hashes=hashes,
         )
     except Exception:
         return None
@@ -591,19 +592,21 @@ def _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         return
     x0 = ((-repx) % tx) if repx <= 0 else ((tx - (repx % tx)) % tx)
     y0 = ((-repy) % ty) if repy <= 0 else ((ty - (repy % ty)) % ty)
+    pixels = min(len(d), len(s)) // 4
+    mask_size = len(t)
     for y in range(by):
-        tyi = (y0 + y) % ty
-        for x in range(bx):
-            mask_idx = tyi * tx + ((x0 + x) % tx)
-            if mask_idx >= len(t):
+        row = y * bx
+        width = min(bx, pixels - row)
+        if width <= 0:
+            break
+        mask_row = ((y0 + y) % ty) * tx
+        for x in range(width):
+            mask_idx = mask_row + ((x0 + x) % tx)
+            if mask_idx >= mask_size:
                 continue
             v = t[mask_idx]
-            i = (y * bx + x) * 4
-            if (
-                i + 4 <= len(d)
-                and i + 4 <= len(s)
-                and ((v >= lim) if not rev else (v < lim))
-            ):
+            i = (row + x) * 4
+            if (v >= lim) if not rev else (v < lim):
                 d[i : i + 4] = s[i : i + 4]
 
 

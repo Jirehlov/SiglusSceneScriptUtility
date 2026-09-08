@@ -531,13 +531,15 @@ fn lsp_scan_document(
 }
 
 #[pyfunction]
+#[pyo3(signature = (blob, config, pack_context, *, hashes=true))]
 fn scn_payload_hash_bundles(
     py: Python<'_>,
     blob: &[u8],
     config: Bound<'_, PyAny>,
     pack_context: Option<Bound<'_, PyAny>>,
+    hashes: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
-    catch_native_panic(|| payload::scn_payload_hash_bundles(py, blob, config, pack_context))
+    catch_native_panic(|| payload::scn_payload_hash_bundles(py, blob, config, pack_context, hashes))
 }
 
 #[pyfunction]

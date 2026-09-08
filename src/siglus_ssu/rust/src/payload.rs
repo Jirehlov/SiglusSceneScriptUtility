@@ -137,6 +137,7 @@ struct CallSlotInfo {
 }
 
 struct PayloadHasher {
+    hashes: bool,
     full: Sha256,
     no_text: Sha256,
     full_size: usize,
@@ -309,8 +310,9 @@ impl Config {
 }
 
 impl PayloadHasher {
-    fn new() -> Self {
+    fn new(hashes: bool) -> Self {
         Self {
+            hashes,
             full: Sha256::new(),
             no_text: Sha256::new(),
             full_size: 0,
@@ -321,6 +323,9 @@ impl PayloadHasher {
     }
 
     fn event(&mut self, event: Event<'_>) {
+        if !self.hashes {
+            return;
+        }
         let full = encode_event(&event, false);
         let no_text = encode_event(&event, true);
         self.update_full(&full);
@@ -355,6 +360,10 @@ impl PayloadHasher {
 
     fn finish(self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let out = PyDict::new(py);
+        if !self.hashes {
+            out.set_item("status", "COMPLETE")?;
+            return Ok(out.into());
+        }
         let full = PyDict::new(py);
         full.set_item("size", self.full_size)?;
         full.set_item("sha256", hex_lower(&self.full.finalize()))?;
@@ -378,13 +387,20 @@ pub fn scn_payload_hash_bundles(
     blob: &[u8],
     config: Bound<'_, PyAny>,
     pack_context: Option<Bound<'_, PyAny>>,
+    hashes: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
     if let Ok(config_obj) = config.cast::<PayloadConfig>() {
         let config_ref = config_obj.borrow();
-        return scn_payload_hash_bundles_with_config(py, blob, &config_ref.inner, pack_context);
+        return scn_payload_hash_bundles_with_config(
+            py,
+            blob,
+            &config_ref.inner,
+            pack_context,
+            hashes,
+        );
     }
     let cfg = Config::from_py(config.cast::<PyDict>()?.clone())?;
-    scn_payload_hash_bundles_with_config(py, blob, &cfg, pack_context)
+    scn_payload_hash_bundles_with_config(py, blob, &cfg, pack_context, hashes)
 }
 
 fn scn_payload_hash_bundles_with_config(
@@ -392,12 +408,13 @@ fn scn_payload_hash_bundles_with_config(
     blob: &[u8],
     cfg: &Config,
     pack_context: Option<Bound<'_, PyAny>>,
+    hashes: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
     let pack = PackContext::from_py(pack_context)?;
     let Some(parsed) = ParsedDat::parse(blob, cfg, &pack) else {
         return Ok(None);
     };
-    let mut scanner = Scanner::new(cfg, &pack, parsed);
+    let mut scanner = Scanner::new(cfg, &pack, parsed, hashes);
     if !scanner.scan() {
         let out = PyDict::new(py);
         out.set_item("status", "INCOMPLETE")?;
@@ -778,12 +795,12 @@ struct Scanner<'a> {
 }
 
 impl<'a> Scanner<'a> {
-    fn new(cfg: &'a Config, pack: &'a PackContext, dat: ParsedDat) -> Self {
+    fn new(cfg: &'a Config, pack: &'a PackContext, dat: ParsedDat, hashes: bool) -> Self {
         Self {
             cfg,
             pack,
             dat,
-            hasher: PayloadHasher::new(),
+            hasher: PayloadHasher::new(hashes),
             stack: Vec::new(),
             elm_points: Vec::new(),
             call_slots: HashMap::new(),
@@ -795,7 +812,9 @@ impl<'a> Scanner<'a> {
     }
 
     fn scan(&mut self) -> bool {
-        self.emit_metadata();
+        if self.hasher.hashes {
+            self.emit_metadata();
+        }
         let mut i = 0usize;
         while i < self.dat.scn.len() {
             let ofs = i;
@@ -1179,7 +1198,9 @@ impl<'a> Scanner<'a> {
                 line: self.cur_line,
                 fields: vec![],
             });
-            self.emit_namae_metadata();
+            if self.hasher.hashes {
+                self.emit_namae_metadata();
+            }
             return true;
         }
         false

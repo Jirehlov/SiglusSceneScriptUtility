@@ -296,6 +296,7 @@ def dat_disassembly_bundle(
     scene_name=None,
     emit_text=True,
     trace_profile=None,
+    with_trace=True,
 ):
     try:
         payload_trace = trace_profile == "payload"
@@ -334,7 +335,7 @@ def dat_disassembly_bundle(
             [] if payload_trace else _build_read_flag_defs(meta.get("read_flag_list"))
         )
         parse_status = {}
-        dis, trace = disam.disassemble_scn_bytes(
+        result = disam.disassemble_scn_bytes(
             scn,
             str_list,
             label_list,
@@ -348,12 +349,13 @@ def dat_disassembly_bundle(
             scene_name=scene_name,
             namae_defs=namae_defs,
             read_flag_defs=read_flag_defs,
-            with_trace=True,
+            with_trace=with_trace,
             emit_text=emit_text,
             trace_profile=trace_profile,
             parse_status=parse_status,
         )
-        if payload_trace:
+        dis, trace = result if with_trace else (result, None)
+        if payload_trace and with_trace:
             runtime_trace = list(trace or [])
             trace = (
                 _payload_metadata_trace(meta, pack_context)
@@ -730,7 +732,13 @@ def _payload_trace_hash_bundles(trace):
 
 
 def scn_payload_hash_bundles(
-    blob, dat_path=None, *, pack_context=None, scene_no=None, scene_name=None
+    blob,
+    dat_path=None,
+    *,
+    pack_context=None,
+    scene_no=None,
+    scene_name=None,
+    hashes=True,
 ):
     from .native_ops import scn_payload_hash_bundles_native
 
@@ -739,7 +747,9 @@ def scn_payload_hash_bundles(
         payload_context["payload_scene_name"] = str(scene_name)
     if not _scn_string_indices_valid(blob):
         return {"status": "INCOMPLETE"}
-    native = scn_payload_hash_bundles_native(blob, pack_context=payload_context)
+    native = scn_payload_hash_bundles_native(
+        blob, pack_context=payload_context, hashes=hashes
+    )
     if native is not None:
         return native
     bundle = dat_disassembly_bundle(
@@ -750,11 +760,14 @@ def scn_payload_hash_bundles(
         scene_name=scene_name,
         emit_text=False,
         trace_profile="payload",
+        with_trace=hashes,
     )
     if not isinstance(bundle, dict):
         return None
     if not bundle.get("complete"):
         return {"status": "INCOMPLETE"}
+    if not hashes:
+        return {"status": "COMPLETE"}
     return _payload_trace_hash_bundles(bundle.get("trace") or [])
 
 

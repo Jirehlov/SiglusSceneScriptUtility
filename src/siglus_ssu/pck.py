@@ -1170,17 +1170,26 @@ def _payload_compare_scene_task(args):
         from . import dat as DAT
 
         blob1 = _decode_scene_blob(raw1, h1, exe_el1, require_exe=True)
-        blob2 = _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
+        same_encoding = (h1 or {}).get("scn_data_exe_angou_mod", 0) == (h2 or {}).get(
+            "scn_data_exe_angou_mod", 0
+        ) and exe_el1 == exe_el2
+        blob2 = (
+            blob1
+            if raw1 == raw2 and same_encoding
+            else _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
+        )
+        same_payload = blob1 == blob2 and pack_ctx1 == pack_ctx2
         c1 = (
             DAT.scn_payload_hash_bundles(
                 blob1,
                 pack_context=pack_ctx1,
                 scene_name=scene_name,
+                hashes=not same_payload,
             )
             if blob1
             else None
         )
-        if blob1 == blob2 and pack_ctx1 == pack_ctx2:
+        if same_payload:
             c2 = c1
         elif blob2:
             c2 = DAT.scn_payload_hash_bundles(
@@ -1194,6 +1203,8 @@ def _payload_compare_scene_task(args):
             return int(row_index), "INCOMPLETE"
         if not c1 or not c2:
             return int(row_index), "-"
+        if same_payload:
+            return int(row_index), "same"
         full1 = c1.get("full") or {}
         full2 = c2.get("full") or {}
         if full1.get("size") == full2.get("size") and full1.get("sha256") == full2.get(
