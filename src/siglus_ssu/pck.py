@@ -1171,18 +1171,25 @@ def _payload_compare_scene_task(args):
 
         blob1 = _decode_scene_blob(raw1, h1, exe_el1, require_exe=True)
         blob2 = _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
-        if not blob1 or not blob2:
-            return int(row_index), "-"
-        c1 = DAT.scn_payload_hash_bundles(
-            blob1,
-            pack_context=pack_ctx1,
-            scene_name=scene_name,
+        c1 = (
+            DAT.scn_payload_hash_bundles(
+                blob1,
+                pack_context=pack_ctx1,
+                scene_name=scene_name,
+            )
+            if blob1
+            else None
         )
-        c2 = DAT.scn_payload_hash_bundles(
-            blob2,
-            pack_context=pack_ctx2,
-            scene_name=scene_name,
-        )
+        if blob1 == blob2 and pack_ctx1 == pack_ctx2:
+            c2 = c1
+        elif blob2:
+            c2 = DAT.scn_payload_hash_bundles(
+                blob2,
+                pack_context=pack_ctx2,
+                scene_name=scene_name,
+            )
+        else:
+            c2 = None
         if any(c and c.get("status") == "INCOMPLETE" for c in (c1, c2)):
             return int(row_index), "INCOMPLETE"
         if not c1 or not c2:
@@ -1331,6 +1338,7 @@ def compare_pck(
         "INCOMPLETE": 0,
     }
     payload_jobs = []
+    identical_rows = set()
     for k in keys:
         l1 = sm1.get(k, [])
         l2 = sm2.get(k, [])
@@ -1346,11 +1354,8 @@ def compare_pck(
                 and (r1[1] - r1[0]) == (r2[1] - r2[0])
                 and b1[r1[0] : r1[1]] == b2[r2[0] : r2[1]]
             )
-            if (
-                same_data
-                and row_sid1 == row_sid2
-                and (not compare_payload or same_pack_context)
-            ):
+            identical = same_data and row_sid1 == row_sid2 and same_pack_context
+            if identical and not compare_payload:
                 continue
             s1z = (r1[1] - r1[0]) if r1 else 0
             s2z = (r2[1] - r2[0]) if r2 else 0
@@ -1361,32 +1366,23 @@ def compare_pck(
             nm = k if i == 0 else f"{k}#{i:d}"
             sid_text = _scene_script_id_pair(row_sid1, row_sid2)
             if compare_payload:
-                payload_cmp = "-"
-                if same_data and r1 and r2 and same_pack_context:
-                    payload_cmp = "same"
-                    payload_cmp_counts[payload_cmp] = (
-                        int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
+                if identical:
+                    identical_rows.add(len(rows))
+                payload_jobs.append(
+                    (
+                        len(rows),
+                        b1[int(r1[0]) : int(r1[1])] if r1 else None,
+                        b2[int(r2[0]) : int(r2[1])] if r2 else None,
+                        h1,
+                        h2,
+                        exe_el1,
+                        exe_el2,
+                        pack_ctx1,
+                        pack_ctx2,
+                        k,
                     )
-                elif r1 and r2:
-                    payload_jobs.append(
-                        (
-                            len(rows),
-                            b1[int(r1[0]) : int(r1[1])],
-                            b2[int(r2[0]) : int(r2[1])],
-                            h1,
-                            h2,
-                            exe_el1,
-                            exe_el2,
-                            pack_ctx1,
-                            pack_ctx2,
-                            k,
-                        )
-                    )
-                else:
-                    payload_cmp_counts[payload_cmp] = (
-                        int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
-                    )
-                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text, payload_cmp))
+                )
+                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text, "-"))
             else:
                 rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text))
     if compare_payload and payload_jobs:
@@ -1399,12 +1395,14 @@ def compare_pck(
             fallback_to_serial=True,
         ):
             payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
+            if payload_cmp == "same" and row_index in identical_rows:
+                rows[int(row_index)] = None
+                continue
             row = list(rows[int(row_index)])
             row[-1] = payload_cmp
             rows[int(row_index)] = tuple(row)
-            payload_cmp_counts[payload_cmp] = (
-                int(payload_cmp_counts.get(payload_cmp, 0) or 0) + 1
-            )
+            payload_cmp_counts[payload_cmp] += 1
+        rows = [row for row in rows if row is not None]
     os1 = _pck_original_source_rows(source_entries1)
     os2 = _pck_original_source_rows(source_entries2)
 
@@ -1604,7 +1602,7 @@ def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
         try:
             return lzss_unpack(lz)
         except Exception:
-            return None
+            return b if looks_like_siglus_dat(b) else None
     return b
 
 

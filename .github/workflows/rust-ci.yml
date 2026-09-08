@@ -19,7 +19,7 @@ jobs:
         run: |
           git config --global core.autocrlf true
           git config --global core.eol crlf
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -54,7 +54,7 @@ jobs:
       - name: Create Pull Request for Fixes
         id: cpr
         if: github.event_name == 'push' && steps.apply_fixes.outputs.changes == 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "style: fix lint and formatting (rust)"

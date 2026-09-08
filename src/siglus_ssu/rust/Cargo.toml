@@ -1,6 +1,6 @@
 [package]
 name = "siglus_ssu_native"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.88"
 license = "Unlicense OR 0BSD"
@@ -10,9 +10,9 @@ name = "siglus_ssu_native"
 crate-type = ["cdylib"]
 
 [dependencies]
-encoding_rs = "0.8"
-pyo3 = { version = "0.29", features = ["extension-module"] }
-sha2 = "0.10"
+encoding_rs = "0.8.40"
+pyo3 = { version = "0.29.2", features = ["extension-module"] }
+sha2 = "0.11.0"
 
 [profile.release]
 lto = true

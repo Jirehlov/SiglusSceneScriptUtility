@@ -36,7 +36,7 @@ pyproject = (
     textwrap.dedent(
         """
     [build-system]
-    requires = ["setuptools>=69", "wheel"]
+    requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
     build-backend = "setuptools.build_meta"
     [project]
     name = "siglus-ssu"

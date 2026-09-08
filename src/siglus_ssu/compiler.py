@@ -33,7 +33,8 @@ from .common import (
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
-    content_digest_file,
+    content_digest,
+    decode_text_auto,
     read_bytes,
     read_text_auto,
     first_line_text,
@@ -271,14 +272,14 @@ def _write_digest_cache(path, payload):
         raise
 
 
-def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, incremental):
+def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, incremental):
     compile_list = list(ss or [])
     digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
-    cur_inc = {}
-    cur_ss = {}
+    cur_inc = source_digests["inc"]
+    cur_ss = source_digests["ss"]
     full_compile = True
     cache_meta = {
-        "schema": 4,
+        "schema": 5,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
@@ -286,19 +287,6 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
         "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
-    for f in inc or []:
-        p = os.path.join(input_dir, f)
-        try:
-            p = resolve_read_path(p, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-        cur_inc[ascii_lower(os.path.basename(p))] = content_digest_file(p)
-    for p in ss or []:
-        try:
-            p = resolve_read_path(p, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-        cur_ss[ascii_lower(os.path.basename(p))] = content_digest_file(p)
     if incremental:
         old = None
         try:
@@ -348,6 +336,16 @@ def _compile_cache_state(*, input_dir, tmp_dir, enc, charset, ss, inc, increment
             compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
         if existing_digest_path:
             os.remove(existing_digest_path)
+        for p in compile_list:
+            name = os.path.splitext(os.path.basename(p))[0] + ".dat"
+            try:
+                existing_dat_path = resolve_read_path(
+                    os.path.join(bs_dir, name), kind="file"
+                )
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            if os.path.basename(existing_dat_path) != name:
+                os.remove(existing_dat_path)
     pending_digests = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
     return compile_list, digest_path, pending_digests, full_compile
 
@@ -379,15 +377,14 @@ def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
 
 
 def _native_compile_cache_config(
-    *, args, input_dir, tmp_dir, enc, charset, ss, inc, test_shuffle
+    *, args, tmp_dir, enc, charset, ss, source_digests, test_shuffle
 ):
     compile_list, digest_path, pending_digests, full_compile = _compile_cache_state(
-        input_dir=input_dir,
         tmp_dir=tmp_dir,
         enc=enc,
         charset=charset,
         ss=ss,
-        inc=inc,
+        source_digests=source_digests,
         incremental=bool(args.tmp_dir),
     )
     dat_paths, lzss_paths = _native_cache_read_paths(
@@ -611,19 +608,22 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
 def _load_project_source_texts(base_dir, gameexe_ini, inc, ss, charset):
     paths = []
     if gameexe_ini:
-        paths.append(os.path.join(base_dir, gameexe_ini))
-    paths.extend(os.path.join(base_dir, name) for name in inc or [])
-    paths.extend(ss or [])
+        paths.append((os.path.join(base_dir, gameexe_ini), None))
+    paths.extend((os.path.join(base_dir, name), "inc") for name in inc or [])
+    paths.extend((path, "ss") for path in ss or [])
     texts = {}
-    for path in paths:
+    digests = {"inc": {}, "ss": {}}
+    for path, kind in paths:
         try:
             resolved = resolve_read_path(path, kind="file")
-            texts[os.path.basename(resolved)] = read_text_auto(
-                resolved, force_charset=charset
-            )
+            data = read_bytes(resolved)
+            name = os.path.basename(resolved)
+            texts[name] = decode_text_auto(data, force_charset=charset)[0]
+            if kind is not None:
+                digests[kind][ascii_lower(name)] = content_digest(data)
         except Exception as exc:
             raise ValueError(f"{path}: {exc}") from exc
-    return texts
+    return texts, digests
 
 
 def _collect_macro_stats(ctx, compile_stats):
@@ -982,7 +982,6 @@ def _native_compile_config(
     scene_pck,
     tmp_dir,
     ss,
-    inc,
     enc,
     charset_force,
     test_shuffle,
@@ -1002,12 +1001,11 @@ def _native_compile_config(
         "constants": _native_compile_constants_config(),
         "cache": _native_compile_cache_config(
             args=args,
-            input_dir=input_dir,
             tmp_dir=tmp_dir,
             enc=enc,
             charset=charset_force,
             ss=ss,
-            inc=inc,
+            source_digests=ctx["source_digests"],
             test_shuffle=test_shuffle,
         ),
         "options": {
@@ -1326,7 +1324,7 @@ def main(argv=None):
             )
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     try:
-        source_texts = _load_project_source_texts(
+        source_texts, source_digests = _load_project_source_texts(
             inp,
             gei_ini,
             [] if a.dat_repack or a.gei else inc,
@@ -1378,6 +1376,7 @@ def main(argv=None):
         "inc_list": inc,
         "ini_list": ini,
         "source_texts": source_texts,
+        "source_digests": source_digests,
         "utf8": bool(use_utf8),
         "charset": enc,
         "charset_force": charset,
@@ -1428,7 +1427,6 @@ def main(argv=None):
                     scene_pck=scene_pck,
                     tmp_dir=tmp,
                     ss=ss,
-                    inc=inc,
                     enc=enc,
                     charset_force=charset,
                     test_shuffle=test_shuffle,
@@ -1467,31 +1465,35 @@ def main(argv=None):
         if not a.gei:
             compile_list, digest_path, pending_digests, full_compile = (
                 _compile_cache_state(
-                    input_dir=inp,
                     tmp_dir=tmp,
                     enc=enc,
                     charset=charset,
                     ss=ss,
-                    inc=inc,
+                    source_digests=source_digests,
                     incremental=bool(a.tmp_dir),
                 )
             )
             if a.tmp_dir and not a.no_angou:
-                bs_dir = os.path.join(tmp, "bs")
-                if full_compile and os.path.isdir(bs_dir):
+                try:
+                    bs_dir = resolve_read_path(os.path.join(tmp, "bs"), kind="dir")
+                except (FileNotFoundError, NotADirectoryError):
+                    bs_dir = ""
+                if full_compile and bs_dir:
                     _, entries = read_directory(bs_dir)
                     for entry in entries:
                         fn = entry.name
                         if str(fn).lower().endswith(".lzss"):
-                            with suppress(OSError):
-                                os.remove(os.path.join(bs_dir, fn))
-                elif os.path.isdir(bs_dir):
+                            os.remove(os.path.join(bs_dir, fn))
+                elif bs_dir:
                     for p in compile_list:
                         nm = os.path.splitext(os.path.basename(p))[0]
-                        lp = os.path.join(bs_dir, nm + ".lzss")
-                        if os.path.isfile(lp):
-                            with suppress(OSError):
-                                os.remove(lp)
+                        try:
+                            lp = resolve_read_path(
+                                os.path.join(bs_dir, nm + ".lzss"), kind="file"
+                            )
+                        except (FileNotFoundError, NotADirectoryError):
+                            continue
+                        os.remove(lp)
             if a.dat_repack:
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)

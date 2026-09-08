@@ -3,6 +3,17 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.4.1] - 2026-09-08
+- Added global `--string-xor-multiplier` for engine variants with different scene-string XOR keys, including plain UTF-16LE strings, with matching Python/Rust behavior and compile-cache invalidation.
+- Fixed incremental compilation so both backends hash the exact source snapshots they compile, invalidate caches after failed or interrupted builds, and handle case-only source renames without linking stale data. Failure to remove stale cached scenes now stops the build.
+- Changed `-a --payload` to report `INCOMPLETE` and fail for truncated scene bytecode, missing `CD_EOF`, or invalid string-table indices, including identical and one-sided PCK scenes, rather than treating partial parses as complete payloads.
+- Stopped generating an empty `Gameexe.dat` when `Gameexe.ini` is missing; normal and `--gei` compilation now warn and skip that output.
+- Added overwrite confirmation to video extraction and creation, protected same-file video conversion from premature truncation, and rejected colliding output paths before batch DBS compilation.
+- Fixed DBS comparisons to detect changed string contents even when their offsets are unchanged; preserved isolated UTF-16 surrogates in scene text maps and fixed CSV handling on Windows Python 3.12.
+- Tightened CLI option validation and numeric bounds, rejected abbreviated long options, and added consistent `--` handling for positional paths beginning with `-`.
+- Updated Python and Rust dependencies, refreshed both lockfiles, and upgraded CI and wheel-building actions to current stable releases.
+
+
 ## [v0.4.0] - 2026-07-14
 - Reviewed by Fable 5 and GPT-5.6 Terra and GPT-5.6 Sol.
 - Added reversible language patching with six-field JSON configurations, atomic full-patch application, byte-identical `--revert`, and explicit `--allow-partial` recovery.

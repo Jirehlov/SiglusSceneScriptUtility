@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** See `siglus-ssu --version`
+**Version:** 0.4.1 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -18,6 +18,7 @@
    - [Global Options](#global-options)
    - [Scene String XOR Multiplier](#scene-string-xor-multiplier)
    - [Command Aliases](#command-aliases)
+   - [Python Module API](#python-module-api)
    - [Getting Help](#getting-help)
 4. [Modes Reference](#modes-reference)
    - [init — Install / Refresh Required Constants](#init--install--refresh-required-constants)
@@ -50,7 +51,7 @@
 - Exporting and applying text maps for translation work
 - Collecting and organizing character voice audio from `.ovk` files
 - Extracting and recompiling `.g00` image files
-- Decoding and re-encoding `.nwa` / `.owp` / `.ovk` audio files
+- Decoding `.nwa` audio and extracting/rebuilding `.owp` / `.ovk` audio files
 - Extracting and recompiling `.omv` video files
 - Patching `SiglusEngine.exe` for alternative key or language settings
 - Providing an LSP for the SiglusSS language
@@ -161,7 +162,7 @@ The CLI also accepts a few convenience aliases:
 - `siglus-ssu version` behaves the same as `siglus-ssu --version`
 - `siglus-ssu --init ...` behaves the same as `siglus-ssu init ...`
 
-After selecting a mode, `--` ends option parsing so that a positional path beginning with `-` can be passed unchanged, for example `siglus-ssu test -- --sample.pck`.
+After selecting a mode and any required sub-operation, `--` ends option parsing so that a positional path beginning with `-` can be passed unchanged, for example `siglus-ssu test -- --sample.pck`. All options, including global options, must precede `--`. For an option value whose path begins with `-`, use an absolute path or prefix the relative path with `./`.
 
 Long options must be written in full. Only explicitly documented aliases are accepted; arbitrary unique prefixes are rejected.
 
@@ -209,7 +210,7 @@ siglus-ssu init [--force | -f] [--ref <git-ref>]
 
 `init` only needs GitHub API access when it actually has to fetch `const.py`. If `--force` is not specified and the user-data target already exists, the command reuses that file instead of downloading it again, then verifies it while loading.
 
-Any downloaded `const.py` is verified against a built-in SHA-512 allowlist. The built-in default ref mapping tracks the current supported package version; explicit `--ref` values still work as long as they resolve to an allowlisted `const.py` content.
+Any downloaded `const.py` is verified against a built-in SHA-512 allowlist. The default download refs are derived from the current package version; explicit `--ref` values still work as long as they resolve to an allowlisted `const.py` content.
 
 #### Examples
 
@@ -221,7 +222,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.4.0
+siglus-ssu init --force --ref v0.4.1
 ```
 
 ---
@@ -283,16 +284,16 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | Parameter | Description |
 |---|---|
 | `<input_dir>` | Directory containing at least one `.ss` source file, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. The `.ss` requirement does not apply to `--dat-repack` or `--gei`. |
-| `<output_pck \| output_dir>` | Output path. If the argument names an existing directory, `Scene.pck` is created inside it. Otherwise the argument is treated as the output file path; a non-existent path that does not end in `.pck` is still written as that exact file name. |
+| `<output_pck \| output_dir>` | Output path. If the argument names an existing directory or ends with `/` or `\`, the directory is created if needed and `Scene.pck` is written inside it. Otherwise the argument is treated as the output file path; a non-existent path without a trailing separator is written as that exact file name even if it does not end in `.pck`. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
 | `--charset ENC` | Force one source encoding using any codec available to Python. CP932/Shift-JIS aliases (`jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`) intentionally select Windows CP932. UTF-8 aliases are also accepted. If omitted, each file is auto-detected as UTF-8 or CP932. |
 | `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan the immediate files in `input_dir` for existing Siglus scene `.dat` files, copy them, and pack them directly into a `.pck` file. Same-directory `.inc` files are used to rebuild package-level include command metadata. If no `.inc` files are present, packaging continues with a warning and omits that metadata. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--tmp` or `--test-shuffle`. |
-| `--no-angou` | Disable LZSS compression and XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. Cannot be combined with `--tmp`. |
+| `--no-angou` | Disable LZSS compression and outer XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. The scene-string XOR transform is still controlled by `--string-xor-multiplier`. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
-| `--serial` | Disable multi-process parallel compilation and force the compile stage to run serially. Parallel compilation is enabled by default. |
-| `--max-workers N` | Positive maximum number of parallel worker processes. Only effective while parallel compilation is enabled; defaults to auto. |
-| `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
+| `--serial` | Force the compile stage to run serially. Parallel compilation is enabled by default, using threads in the Rust backend and processes in the Python backend. |
+| `--max-workers N` | Positive maximum number of parallel workers. Only effective while parallel compilation is enabled; defaults to auto. |
+| `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex from `0` through `0xFFFFFFFF`. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. Cannot be combined with `--tmp` or `--gei`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
@@ -360,7 +361,8 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 - **Source decoding:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. Any other Python codec must be selected explicitly and is decoded strictly; invalid byte sequences fail the compile. Decoding removes one leading Unicode BOM and normalizes CRLF or lone CR to LF, but performs no Unicode normalization. Both compiler backends receive the same decoded text snapshot.
 - **Encoding-independent compilation:** Source encoding does not select a different lexer. After decoding, CP932, UTF-8, and other encodings use the fixed CP932 double-byte character classification of the official Japanese compiler. Therefore equivalent CP932 and UTF-8 sources compile identically. Characters outside that fixed set are valid inside quoted strings but are not treated as unquoted full-width text.
-- **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Cache compatibility includes the `siglus-ssu` version, source charset, active `const.py` content/profile, and scene string XOR multiplier. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. If any `.inc` file changes, a full recompile is triggered.
+- **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Each hash is calculated from the same raw bytes used to decode that file for compilation; a file saved after its snapshot was read is detected as changed on the next run. Cache compatibility includes the `siglus-ssu` version, source charset, active `const.py` content/profile, and scene string XOR multiplier. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. Case-only source renames also remove conflicting old `.dat` files when recompilation is needed and invalidate the matching `.lzss` regardless of its filename case. If any `.inc` file is added, changed, or removed, or cache metadata is incompatible, a full recompile is triggered.
+- **Cache failure recovery:** Before updating an incremental cache, the previous `_source_hashes.json` validity marker is removed. A new marker is written only after linking and writing the final `.pck` succeeds. If compilation, linking, or cache-marker writing fails, or the process is interrupted during cache updates, the next run rebuilds all scenes rather than trusting partial output. Failure to delete stale `.lzss` files stops the build; release the file lock or correct the permissions before retrying. This protects cache reuse, not atomic replacement of all output files.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene and rebuilds every scene serially. A later mismatch still generates the requested output but returns a failure status; use `--set-shuffle` to rebuild with a known seed.
 
 ---
@@ -475,9 +477,11 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--readall` | Only valid for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
 | `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. Can be combined with `--angou`. Encrypted scene data without a valid key source fails before writing CSV. |
-| `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized scene runtime semantics, including decoded/decompressed `scn_bytes`, active control-flow targets, scene property layouts, name/read-flag tables, and pack-level property/command routing metadata. All effects of string-pool shuffle are normalized, including `str_id` changes and the shuffle-dependent `namae_list` deduplication result; inactive zero-filled z-label capacity is also ignored. Speaker text remains covered by normalized `CD_NAME` events and the logical name table. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text runtime differences, and `-` when payload parsing is unavailable for another reason; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. Payload comparison fails when encrypted scene data cannot be decoded with an available key source. When the Rust native payload scanner is available, it is used automatically and falls back to Python otherwise. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
+| `--payload` | **(Compare mode only)** For `.pck` and `.dat` comparisons, additionally compare normalized scene runtime semantics, including decoded/decompressed `scn_bytes`, active control-flow targets, scene property layouts, name/read-flag tables, and pack-level property/command routing metadata. All effects of string-pool shuffle are normalized, including `str_id` changes and the shuffle-dependent `namae_list` deduplication result; inactive zero-filled z-label capacity is also ignored. Speaker text remains covered by normalized `CD_NAME` events and the logical name table. `.pck` results distinguish `same`, `text_only` for resolved text changes only, `real_diff` for non-text runtime differences, and `-` when payload parsing is unavailable for another reason; `.dat` results use `identical`, `text_only`, `real_diff`, or `unavailable`. Both formats additionally report `INCOMPLETE` and return failure when scene bytecode is truncated, lacks `CD_EOF`, or has invalid string-table indices. Payload comparison fails when encrypted scene data cannot be decoded with an available key source. When the Rust native payload scanner is available, it is used automatically and falls back to Python otherwise. It is more expensive than a plain structural comparison, but helps distinguish text-only translation changes from real scene-behavior changes. |
 | `--angou <path\|angou=text\|key=bytes>` | Explicit key source for `.pck`/`.dat` analysis, `.pck` word count, `Gameexe.dat` analysis, or standalone key derivation. `--angou` must be the final option in the command, must use the separated form `--angou VALUE`, and its value cannot be empty. A bare value is always treated as a path to a file or directory. Use `angou=text` for a literal `暗号.dat` first line, and `key=bytes` for a literal 16-byte `exe_el` key such as `key=0xA9,0x86,...`. During decryption, candidates are tried in order: explicit `--angou`; embedded `暗号.dat` inside the input `.pck`; current directory; parent directory. Lower-priority candidates are used only after a higher-priority source produced a key and that key failed validation; a missing, malformed, or keyless explicit source is reported as an input error. If `--angou` is a bare path, parent-directory probing is disabled for that request, so fallback stops after the current directory. Directory probing is not recursive. Inside each probed directory, the order is `Scene.pck`, then `Scene*.pck`, then `暗号.dat`, then `key.txt`, then `SiglusEngine*.exe`. |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode can use `--angou`, but rejects other analyze modifiers such as `--disam`, `--readall`, `--apply`, `--payload`, and `--word`. |
+
+For `.pck` and `.dat` comparisons, differences such as `text_only` and `real_diff` are reported results, not command errors; exit status `0` alone does not mean the inputs are equal. `INCOMPLETE` returns `1` even if both inputs contain the same incomplete data, and is never treated as payload equality. The `.pck` check also covers byte-identical scenes and scenes present on only one side.
 
 Key-source diagnostics are printed to stderr whenever a decryption candidate is tried: each line includes the source, kind, path or inner file when applicable, the concrete `exe_el` value, and whether that candidate was accepted or rejected before falling back.
 
@@ -641,7 +645,9 @@ siglus-ssu -d --c --type 2 --set-shuffle 12345 /path/to/gamedb.dbs.csv /path/to/
 siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/to/output.dbs
 ```
 
-With directory input, both `-d --x` and `-d --c` **recursively** scan subdirectories and preserve the relative directory structure in the output.
+With directory input, both `-d --x` and `-d --c` **recursively** scan subdirectories and preserve the relative directory structure in the output. Before batch compilation writes any `.dbs`, output paths are checked for collisions using Windows filename case rules; conflicting inputs such as `name.csv` and `name.dbs.csv` cause failure rather than overwriting one another.
+
+When row and column layouts match, `-d --a` compares string cells by their decoded text, not by their offsets in the string pool. It scans at most 2,000,000 cells and prints at most 20 cell differences; the output states when either limit is reached.
 
 When compiling `m_type=0`, every string must encode strictly as Shift-JIS; other types use strict UTF-16LE encoding. An unencodable cell reports its CSV path, record start line, column, and call number, and no invalid `.dbs` is written.
 
@@ -745,36 +751,47 @@ siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 
 #### Summary Output
 
-After completion, a summary is printed to stderr:
+After completion, a summary is printed to stderr. Example with `--stats-only` and without `--single`:
 
 ```
 === koe_collector summary ===
 Stats only       : yes
-Single KOE       : 123456789
 OVK entries      : 45,678
 OVK files        : 56
 OVK z-files      : 56
 OVK table errors : 0
 Scene files      : 128
-Scene callsites  : 44,210
+Scene callsites  : 44,213
 Scene missing    : 124
 KOE total        : 45,678
 KOE referenced   : 44,086
 KOE unreferenced : 1,592
 KOE multi-text   : 3
 KOE multi-text no: 200259, 2300267, 30100310
-Audio extracted  : 43,900
-Audio skipped    : 186
+Audio extracted  : 0
+Audio skipped    : 0
 Audio failed     : 0
 Voice duration   : 123,456.789 sec (34:17:36.789) [referenced only]
 Duration counted : 44,086
 Duration failed  : 0
 CSV path         : /path/to/voice_out/koe_master.csv
-CSV rows         : 45,724
+CSV rows         : 45,805
 Out dir          : /path/to/voice_out/
 ```
 
-The example above shows normal-mode output. `Stats only` and `Single KOE` are only shown when the corresponding option is used. `KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, and missing OVK call-sites keep their known `koe_no` in the CSV. With `--single`, scene-scanning and CSV-related lines are omitted.
+`Stats only` appears only with `--stats-only`. In this mode, all three `Audio` counters are `0` because no audio files are extracted; duration-reading failures are counted under `Duration failed`. Without `--stats-only`, the `Stats only` line is omitted and the `Audio` counters report extraction results.
+
+`Single KOE` appears only with `--single`. The two options can be combined; for example, `--stats-only --single 123456789` starts the summary with:
+
+```
+=== koe_collector summary ===
+Stats only       : yes
+Single KOE       : 123456789
+```
+
+With `--single`, the `Scene`, aggregate `KOE`, and CSV-related lines are omitted, and `Voice duration` reports the selected entry without the `[referenced only]` suffix. If the entry is not found, `Single found     : no` is also shown and the command exits with code `1`.
+
+`KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, and missing OVK call-sites keep their known `koe_no` in the CSV.
 
 ---
 
@@ -975,6 +992,7 @@ With `--trim`, type2 `.type2.json` sidecars are not written because the cropped 
 - `--c` directory input currently scans only the **immediate level** of files, not recursively.
 - `.type2.json` can only be used for creating/rebuilding type2; it cannot be used with `--refer` for update mode.
 - In update mode, if the output path is omitted: single-file input defaults to writing back to the reference `.g00`; directory input defaults to writing back to the reference directory. Back up original assets before operating on them.
+- An unchanged update targeting the same physical file as the reference skips the write and preserves that file. If the output is a different file, it is still written even when its bytes match the reference.
 - `type1` create is still not implemented.
 
 #### Type2 JSON Layout
@@ -1155,7 +1173,7 @@ When the input is a directory, the player recursively scans `.nwa`/`.owp`/`.ogg`
 
 The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.ovk`.
 
-Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output.
+Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output. Existing output files are overwritten without confirmation. If multiple inputs or OVK entries in one extraction map to the same output path, the tool prints a warning and continues; the later write wins. A collision warning alone does not make the command fail.
 
 ---
 
@@ -1190,6 +1208,8 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | `--flags 0xXXXXXX` | Override the TableB `flags` high 24 bits. Accepts a single value or a comma-separated range spec like `0-9:0x1A2B3C00,10-:0x00000000`. |
 
 Directory input for `-v --x` recursively scans for `.omv` files and preserves the relative directory structure in the output. For `-v --c`, the second argument is interpreted as a directory if it already exists as a directory, ends with a path separator, or has no extension; to write to a specific file, give an explicit path ending in `.omv`.
+
+Both `-v --x` and `-v --c` ask `Overwrite? [y/N]` before replacing an existing output. Only `y` or `yes` confirms the write, case-insensitively; an empty answer, unavailable standard input, or a cancelled prompt declines it. Creation then exits with failure. Batch extraction leaves that target unchanged, continues with the remaining files, and returns failure if any target was declined. If input and output refer to the same physical file, conversion is buffered until reading and conversion finish, so opening the output cannot prematurely truncate the input.
 
 #### Preparing `.ogv` Inputs
 
@@ -1240,12 +1260,12 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 |---|---|
 | `<input_exe>` | Path to `SiglusEngine.exe` to patch. Symbolic links are rejected; pass the real executable path. |
 | `<input_key>` | **(`--altkey` only)** Source for the new 16-byte key. Accepts a file path to `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck`; a `key=bytes` literal; or an `angou=text` literal. Directories are not accepted. This positional form is only valid with `--altkey`. |
-| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. An existing symbolic-link output is rejected. |
+| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. A JSON file uses `<stem>_<CONFIG>.exe`, where `<CONFIG>` is the JSON filename stem with characters outside ASCII letters, digits, `_`, and `-` removed, then uppercased; an empty stem or an inline JSON object uses `JSON`. `--revert` defaults to `<stem>_ORIGINAL.exe`. An existing symbolic-link output is rejected. |
 | `--inplace` | Overwrite the input executable directly. Cannot be combined with `-o` / `--output`. |
 | `--allow-partial` | Only for `--lang`. Write the available changes even when the current engine build lacks part of the selected preset. By default every preset component is required. |
 | `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
 | `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
-| `--lang config.json` | Apply a complete six-field language configuration from JSON. |
+| `--lang config.json` | Apply a complete six-field language configuration from a JSON file, or pass the JSON object directly as one quoted argument. |
 | `--revert` | Restore the byte-identical original executable using the configuration and undo data embedded by a language patch. |
 | `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
 | `--loc 0` | Disable region detection by replacing the matched top-level check routine with an always-pass stub. |
@@ -1289,7 +1309,7 @@ siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/Si
 siglus-ssu -p --lang cjk /path/to/SiglusEngine.exe
 siglus-ssu -p --lang cjk-path /path/to/SiglusEngine.exe --inplace
 siglus-ssu -p --lang config.json /path/to/SiglusEngine.exe
-siglus-ssu -p --lang config.json --revert /path/to/SiglusEngine_JSON.exe
+siglus-ssu -p --lang config.json --revert /path/to/SiglusEngine_CONFIG.exe
 siglus-ssu -p --info /path/to/SiglusEngine.exe
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
 siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
@@ -1317,7 +1337,7 @@ SHA256: abc123...
 ALTKEY: 0xAA, 0xBB, ...
 LANG charset1: 0x201BC8=0x00 (eng/ansi)
 LANG charset2: 0x2BE1D3=0x80 (jp/shift-jis)
-LANG presets: cjk, cjk-path
+LANG presets: cjk, cjk-path, JSON
 LANG Locale : japanese @ 0x677C94 refs=1
 LANG Code   : ja @ 0x64FC6C refs=3
 LANG Scene  : Scene.pck @ 0x66D208 refs=2
@@ -1394,7 +1414,7 @@ siglus-ssu -t /path/to/Scene.pck /path/to/out/tutorial.json
 
 ### `test` — Round-Trip Compile Test
 
-Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
+Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical `.pck` rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
 
 This mode is intended for `.pck` archives that contain embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
 
@@ -1413,7 +1433,7 @@ For each `.pck`, the command:
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
 3. recompiles the extracted source in place, trying `const-profile` 0, then 1, then 2 until one profile produces `EXACT` or `PAYLOAD_SAME`;
-4. checks whether the rebuilt `.pck` is byte-identical to the original, and otherwise compares them with normalized `-a --payload` semantics;
+4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 
 #### Output
@@ -1466,7 +1486,7 @@ A single `.ss` file is not compiled in isolation. Its compilation environment co
 - all `.inc` files in the same directory;
 - the form and built-in element tables supplied by the active `const.py` / `--const-profile`.
 
-Same-directory `.inc` files are processed in **lower-cased filename sort order**.
+Same-directory `.inc` files are processed in **ASCII-lowercased filename sort order**.
 
 #### Decoding and line endings
 
@@ -1671,7 +1691,7 @@ Expression precedence, from lowest to highest, is:
 
 | Level | Operators | Associativity |
 |---|---|---|
-| 1 | `||` | left |
+| 1 | `\|\|` | left |
 | 2 | `&&` | left |
 | 3 | `\|` | left |
 | 4 | `^` | left |
@@ -2036,10 +2056,10 @@ If text intended as one argument contains argument delimiters such as commas or 
 
 ```
 # The comma splits this into additional arguments
-mes(【Hero】, Wait, I need to think about this.)
+set_namae(Hello, world)
 
 # Quoted form
-mes(【Hero】, "Wait, I need to think about this.")
+set_namae("Hello, world")
 ```
 
 ### Mixed-Form String Multiplication

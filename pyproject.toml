@@ -1,10 +1,10 @@
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.15.0,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "siglus-ssu"
-version = "0.4.0"
+version = "0.4.1"
 description = "SiglusEngine SceneScript Utility for compiling, extracting and analyzing scripts and other resource files."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,10 +24,10 @@ Issues = "https://github.com/Jirehlov/SiglusSceneScriptUtility/issues"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.12.4",
-    "ruff>=0.15.2",
-    "pillow>=12.1.1",
-    "psutil>=5.9",
+    "maturin>=1.15.0",
+    "ruff>=0.16.6",
+    "pillow>=12.3.0",
+    "psutil>=7.2.2",
 ]
 
 [tool.ruff.lint]
