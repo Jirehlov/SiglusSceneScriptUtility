@@ -12,6 +12,7 @@ from .common import (
     write_bytes,
     consume_angou_option,
     iter_exe_el_sources,
+    looks_like_siglus_dat,
     split_end_of_options,
     is_option_token,
 )
@@ -220,6 +221,7 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
                 bundle["koe_source"] = display
                 yield bundle
         return
+    candidates_by_dir = {}
     for dat_path in _iter_scene_dat_paths(scene_root):
         try:
             blob = read_bytes(dat_path)
@@ -227,14 +229,19 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
             raise
         except Exception:
             continue
-        cands = list(
-            pck.iter_exe_el_candidates(
-                os.path.dirname(os.path.abspath(dat_path)) or ".",
-                explicit_angou=explicit_angou,
-                with_sources=True,
+        if not looks_like_siglus_dat(blob):
+            directory = os.path.dirname(os.path.abspath(dat_path))
+            if directory not in candidates_by_dir:
+                candidates_by_dir[directory] = list(
+                    pck.iter_exe_el_candidates(
+                        directory,
+                        explicit_angou=explicit_angou,
+                        with_sources=True,
+                    )
+                )
+            blob, _used = dat.decode_scn_dat_with_candidates(
+                blob, candidates_by_dir[directory], trace=True
             )
-        )
-        blob, _used = dat.decode_scn_dat_with_candidates(blob, cands, trace=True)
         try:
             bundle = dat.dat_disassembly_bundle(
                 blob, dat_path, emit_text=False, trace_profile="koe"

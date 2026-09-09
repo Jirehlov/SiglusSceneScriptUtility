@@ -164,54 +164,6 @@ def _type2_unp_and_cuts(d: bytes, off: int):
     return w, h, cut_cnt, comp_off, unp, cuts
 
 
-def blit(
-    dst: bytearray, dw: int, dh: int, src: bytes, sw: int, sh: int, dx: int, dy: int
-):
-    if dx >= dw or dy >= dh or dx + sw <= 0 or dy + sh <= 0:
-        return
-    x0 = 0
-    y0 = 0
-    if dx < 0:
-        x0 = -dx
-        dx = 0
-    if dy < 0:
-        y0 = -dy
-        dy = 0
-    w = min(sw - x0, dw - dx)
-    h = min(sh - y0, dh - dy)
-    if w <= 0 or h <= 0:
-        return
-    dv = memoryview(dst)
-    sv = memoryview(src)
-    dr = dw * 4
-    sr = sw * 4
-    for y in range(h):
-        di = (dy + y) * dr + dx * 4
-        si = (y0 + y) * sr + x0 * 4
-        for _ in range(w):
-            a = sv[si + 3]
-            if a == 255:
-                dv[di] = sv[si]
-                dv[di + 1] = sv[si + 1]
-                dv[di + 2] = sv[si + 2]
-                dv[di + 3] = 255
-            elif a:
-                ia = 255 - a
-                db = dv[di]
-                dg = dv[di + 1]
-                drc = dv[di + 2]
-                da = dv[di + 3]
-                b = sv[si]
-                g = sv[si + 1]
-                r = sv[si + 2]
-                dv[di] = (b * a + db * ia) // 255
-                dv[di + 1] = (g * a + dg * ia) // 255
-                dv[di + 2] = (r * a + drc * ia) // 255
-                dv[di + 3] = a + (da * ia) // 255
-            di += 4
-            si += 4
-
-
 _G00_SPEC_RE = re.compile(r"^(?P<path>.+?\.g00)(?::cut(?P<cut>\d+))?$", re.IGNORECASE)
 
 
@@ -265,7 +217,7 @@ def _decode_g00_main_layer(p: Path, cut_index=None):
         raise ValueError("type2 no cuts")
     _ci, o, s = _select_type2_cut(cuts, cut_index)
     block = unp[o : o + s]
-    canvas, cw, ch = _render_cut_canvas(block, keep_hidden_rgb=True)
+    canvas, cw, ch = _render_cut_canvas(block)
     return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA"), _type2_cut_header(
         block
     )["center"]
@@ -299,13 +251,11 @@ def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
     return out_path
 
 
-def cut_to_png(
-    blk: bytes, p: Path, preserve_hidden_rgb: bool = True, trim: bool = False
-) -> bool:
+def cut_to_png(blk: bytes, p: Path, trim: bool = False) -> bool:
     if p.exists():
         return False
     need_pil()
-    canvas, cw, ch = _render_cut_canvas(blk, keep_hidden_rgb=preserve_hidden_rgb)
+    canvas, cw, ch = _render_cut_canvas(blk)
     img = Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA")
     if trim:
         img, _cropped = _trim_image_edges(img)
@@ -382,7 +332,7 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
         dst = out / (f"{pre}.png" if single else f"{pre}_cut{ci:03d}.png")
         if dst.exists():
             sk += 1
-        elif cut_to_png(unp[o : o + s], dst, preserve_hidden_rgb=True, trim=trim):
+        elif cut_to_png(unp[o : o + s], dst, trim=trim):
             wrote += 1
         if cuts_meta is not None:
             if ci >= len(cuts_meta):
@@ -500,13 +450,13 @@ def _load_image_bgra(p: Path):
 def _force_bgra_opaque(bgra: bytes):
     if not bgra:
         return bgra, False
+    bgra = bytes(bgra)
+    pixels = len(bgra) // 4
+    if bgra[3::4].count(255) == pixels:
+        return bgra, False
     buf = bytearray(bgra)
-    changed = False
-    for i in range(3, len(buf), 4):
-        if buf[i] != 255:
-            buf[i] = 255
-            changed = True
-    return bytes(buf), changed
+    buf[3::4] = b"\xff" * pixels
+    return bytes(buf), True
 
 
 def _load_type0_image_bgra(p: Path):
@@ -542,21 +492,17 @@ def _parse_cut_block(blk: bytes, strict: bool = False):
     return blk[: C.G00_CUT_SZ], cw, ch, chips
 
 
-def _render_cut_canvas(blk: bytes, keep_hidden_rgb: bool):
+def _render_cut_canvas(blk: bytes):
     _, cw, ch, chips = _parse_cut_block(blk)
     canvas = bytearray(cw * ch * 4)
-    if keep_hidden_rgb:
-        for _hdr, px, py, xl, yl, chip in chips:
-            if px < 0 or py < 0 or px + xl > cw or py + yl > ch:
-                raise ValueError("chip out of bounds")
-            row_bytes = xl * 4
-            for ry in range(yl):
-                so = ry * row_bytes
-                do = ((py + ry) * cw + px) * 4
-                canvas[do : do + row_bytes] = chip[so : so + row_bytes]
-    else:
-        for _hdr, px, py, xl, yl, chip in chips:
-            blit(canvas, cw, ch, chip, xl, yl, px, py)
+    for _hdr, px, py, xl, yl, chip in chips:
+        if px < 0 or py < 0 or px + xl > cw or py + yl > ch:
+            raise ValueError("chip out of bounds")
+        row_bytes = xl * 4
+        for ry in range(yl):
+            so = ry * row_bytes
+            do = ((py + ry) * cw + px) * 4
+            canvas[do : do + row_bytes] = chip[so : so + row_bytes]
     return bytes(canvas), cw, ch
 
 
@@ -1215,7 +1161,7 @@ def _plan_type2_updates(unp: bytes, cuts: list, updates: list):
             raise ValueError(f"type2 cut not found: {ci}")
         o, s = cut_map[ci]
         blk = unp[o : o + s]
-        canvas, cw, ch = _render_cut_canvas(blk, keep_hidden_rgb=True)
+        canvas, cw, ch = _render_cut_canvas(blk)
         bgra, w, h = _load_image_bgra(img_p)
         if (w, h) != (cw, ch):
             raise ValueError(

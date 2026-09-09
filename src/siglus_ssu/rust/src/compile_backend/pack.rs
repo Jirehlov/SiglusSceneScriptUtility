@@ -53,16 +53,14 @@ fn build_index_list_for_strings(values: &[String]) -> (Vec<(i32, i32)>, Vec<u8>)
     (index, blob)
 }
 
-fn build_index_list_for_blobs(values: &[Vec<u8>]) -> (Vec<(i32, i32)>, Vec<u8>) {
+fn build_index_list_for_blobs(values: &[Vec<u8>]) -> Vec<(i32, i32)> {
     let mut index = Vec::with_capacity(values.len());
-    let mut blob = Vec::new();
     let mut ofs = 0i32;
     for value in values {
         index.push((ofs, value.len() as i32));
-        blob.extend_from_slice(value);
         ofs = ofs.wrapping_add(value.len() as i32);
     }
-    (index, blob)
+    index
 }
 
 fn pack_inc_props(values: &[IncPropertyPack]) -> Vec<u8> {
@@ -82,7 +80,7 @@ pub fn build_pack_bytes(layout: &PackHeaderLayout, input: &PackInput) -> Vec<u8>
     push_i32_pairs(&mut inc_cmd_blob, &input.inc_cmd_list);
     let (inc_cmd_idx, inc_cmd_name_blob) = build_index_list_for_strings(&input.inc_cmd_name_list);
     let (scn_name_idx, scn_name_blob) = build_index_list_for_strings(&input.scn_name_list);
-    let (scn_data_idx, scn_data_blob) = build_index_list_for_blobs(&input.scn_data_list);
+    let scn_data_idx = build_index_list_for_blobs(&input.scn_data_list);
     let mut header = std::collections::HashMap::<&str, i32>::new();
     header.insert("header_size", layout.header_size as i32);
     header.insert("scn_data_exe_angou_mod", input.scn_data_exe_angou_mod);
@@ -140,7 +138,18 @@ pub fn build_pack_bytes(layout: &PackHeaderLayout, input: &PackInput) -> Vec<u8>
     push_i32_pairs(&mut tmp, &scn_data_idx);
     push_section(&mut out, &mut header, "scn_data_index_list_ofs", &tmp);
     header.insert("scn_data_index_cnt", scn_data_idx.len() as i32);
-    push_section(&mut out, &mut header, "scn_data_list_ofs", &scn_data_blob);
+    out.reserve_exact(
+        input.scn_data_list.iter().map(Vec::len).sum::<usize>()
+            + input
+                .original_source_chunks
+                .iter()
+                .map(Vec::len)
+                .sum::<usize>(),
+    );
+    header.insert("scn_data_list_ofs", out.len() as i32);
+    for blob in &input.scn_data_list {
+        out.extend_from_slice(blob);
+    }
     header.insert("scn_data_cnt", input.scn_data_list.len() as i32);
 
     for chunk in &input.original_source_chunks {

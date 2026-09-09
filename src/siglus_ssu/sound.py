@@ -24,7 +24,7 @@ def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
             and (data[2] ^ key) == ord("g")
             and (data[3] ^ key) == ord("S")
         ):
-            return bytes((b ^ key) for b in data)
+            return bytes(data).translate(bytes(x ^ key for x in range(256)))
     return data
 
 
@@ -33,7 +33,7 @@ def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
         b = f.read()
     if len(b) >= 4 and b[:4] == b"OggS":
         return b
-    out = bytes((x ^ key) for x in b)
+    out = bytes(b).translate(bytes(x ^ key for x in range(256))) if b else b
     if len(out) < 4 or out[:4] != b"OggS":
         out2 = _xor_decrypt_ogg_auto(b)
         if len(out2) >= 4 and out2[:4] == b"OggS":
@@ -140,7 +140,7 @@ def read_ogg_duration_seconds(path: str) -> float | None:
 def encode_ogg_to_owp_bytes(ogg_bytes: bytes, key: int = 0x39) -> bytes:
     if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
         raise ValueError("OWP encode failed: input is not OggS")
-    return bytes((x ^ key) for x in ogg_bytes)
+    return bytes(ogg_bytes).translate(bytes(x ^ key for x in range(256)))
 
 
 def ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
@@ -159,9 +159,7 @@ def ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
         if hdr_end > n:
             break
         seg_table = ogg_bytes[i + 27 : hdr_end]
-        payload_len = 0
-        for b in seg_table:
-            payload_len += b
+        payload_len = sum(seg_table)
         page_end = hdr_end + payload_len
         if page_end > n:
             break
@@ -189,15 +187,15 @@ def encode_oggs_to_ovk_bytes(entries: List[Tuple[int, bytes]]) -> bytes:
     cnt = len(ordered)
     header_size = 4 + _OVK_ENTRY_STRUCT.size * cnt
     table = bytearray()
-    payload = bytearray()
+    parts = [struct.pack("<I", cnt), table]
     off = header_size
     for no, ogg in ordered:
         size = len(ogg)
         smp = ogg_calc_smp_cnt(ogg)
         table += _OVK_ENTRY_STRUCT.pack(size, off, no, smp)
-        payload += ogg
+        parts.append(ogg)
         off += size
-    return struct.pack("<I", cnt) + bytes(table) + bytes(payload)
+    return b"".join(parts)
 
 
 @dataclass(frozen=True)
@@ -500,7 +498,9 @@ def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
     return bytes(out), h
 
 
-def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
+def _build_wav(
+    pcm: bytes | bytearray | memoryview, channels: int, bits: int, rate: int
+) -> bytes:
     bytes_per_sample = bits // 8
     block_align = channels * bytes_per_sample
     byte_rate = rate * block_align
@@ -520,8 +520,7 @@ def _build_wav(pcm: bytes, channels: int, bits: int, rate: int) -> bytes:
     out += struct.pack("<H", bits)
     out += b"data"
     out += struct.pack("<I", data_size)
-    out += pcm
-    return bytes(out)
+    return b"".join((out, pcm))
 
 
 def decode_nwa_to_wav_bytes(path: str) -> bytes:

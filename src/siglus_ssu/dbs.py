@@ -1,9 +1,16 @@
 import struct
 import os
+import sys
 import csv
 import re
 from ._const_manager import get_const_module
-from .native_ops import lzss_pack, lzss_unpack, msvcrt_rand_byte, tile_copy
+from .native_ops import (
+    is_native_available,
+    lzss_pack,
+    lzss_unpack,
+    msvcrt_rand_byte,
+    xor_cycle_inplace,
+)
 from .common import content_digest, read_bytes, write_bytes
 from .path_policy import open_read
 
@@ -15,9 +22,15 @@ def _xor32_inplace(barr, code):
         return
     n = (len(barr) // 4) * 4
     code = int(code) & 0xFFFFFFFF
-    for i in range(0, n, 4):
-        v = struct.unpack_from("<I", barr, i)[0] ^ code
-        struct.pack_into("<I", barr, i, v)
+    if is_native_available() and isinstance(barr, bytearray):
+        tail = barr[n:]
+        xor_cycle_inplace(barr, struct.pack("<I", code), 0)
+        barr[n:] = tail
+        return
+    words = memoryview(barr).cast("B")[:n].cast("I")
+    code = int.from_bytes(struct.pack("<I", code), sys.byteorder)
+    for i in range(len(words)):
+        words[i] ^= code
 
 
 def _dbs_plane_xor_merge(data: bytes) -> bytes | None:
@@ -25,40 +38,20 @@ def _dbs_plane_xor_merge(data: bytes) -> bytes | None:
     yl = size // (C.DBS_MAP_WIDTH * 4)
     if yl <= 0:
         return None
-    src = bytes(data)
-    planes = []
-    for plane, code in ((0, C.DBS_XOR32_CODE_A), (1, C.DBS_XOR32_CODE_B)):
-        buf = bytearray(size)
-        tile_copy(
-            buf,
-            src,
-            C.DBS_MAP_WIDTH,
-            yl,
-            C.DBS_TILE,
-            C.DBS_TILE_WIDTH,
-            C.DBS_TILE_HEIGHT,
-            0,
-            0,
-            plane,
-            128,
+    codes = b"".join(
+        struct.pack(
+            "<I",
+            C.DBS_XOR32_CODE_A
+            if C.DBS_TILE[y * C.DBS_TILE_WIDTH + x % C.DBS_TILE_WIDTH] >= 128
+            else C.DBS_XOR32_CODE_B,
         )
-        _xor32_inplace(buf, code)
-        planes.append((plane, bytes(buf)))
-    dst = bytearray(size)
-    for plane, plane_data in planes:
-        tile_copy(
-            dst,
-            plane_data,
-            C.DBS_MAP_WIDTH,
-            yl,
-            C.DBS_TILE,
-            C.DBS_TILE_WIDTH,
-            C.DBS_TILE_HEIGHT,
-            0,
-            0,
-            plane,
-            128,
-        )
+        for y in range(C.DBS_TILE_HEIGHT)
+        for x in range(C.DBS_MAP_WIDTH)
+    )
+    dst = bytearray(data)
+    xor_cycle_inplace(dst, codes, 0)
+    end = yl * C.DBS_MAP_WIDTH * 4
+    dst[end:] = b"\0" * (size - end)
     return bytes(dst)
 
 

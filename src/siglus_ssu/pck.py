@@ -337,7 +337,7 @@ def _flix_pck_sections(blob, preview=False):
     return secs, meta
 
 
-def _pck_original_source_entries(blob, h, scn_data_end):
+def _pck_original_source_entries(blob, h, scn_data_end, only_name=""):
     out = []
     try:
         os_hsz = int(h.get("original_source_header_size", 0) or 0)
@@ -368,13 +368,16 @@ def _pck_original_source_entries(blob, h, scn_data_end):
         if sz <= 0 or pos + sz > len(blob):
             break
         try:
-            raw, nm = source_angou_decrypt(blob[pos : pos + sz], ctx)
+            raw, nm = source_angou_decrypt(
+                blob[pos : pos + sz], ctx, only_name=only_name
+            )
         except Exception:
             raw = b""
             nm = ""
         if not nm:
             nm = "unknown.bin"
-        out.append((str(nm), pos, pos + sz, bytes(raw or b"")))
+        if not only_name or is_named_filename(os.path.basename(nm), only_name):
+            out.append((str(nm), pos, pos + sz, bytes(raw or b"")))
         pos += sz
     return out
 
@@ -445,7 +448,7 @@ def _scene_script_id_pair(left, right):
     return _scene_script_id_text(left) + "/" + _scene_script_id_text(right)
 
 
-def _iter_pck_original_source_items(blob: bytes, hdr=None):
+def _iter_pck_original_source_items(blob: bytes, hdr=None, only_name=""):
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         return
     if not looks_like_siglus_pck(blob):
@@ -463,7 +466,9 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None):
     blob_end = hdr.get("scn_data_list_ofs", 0) + max(
         [a + b for a, b in scn_data_idx], default=0
     )
-    for name, _a, _b, raw in _pck_original_source_entries(blob, hdr, blob_end):
+    for name, _a, _b, raw in _pck_original_source_entries(
+        blob, hdr, blob_end, only_name=only_name
+    ):
         if name == "unknown.bin" and not raw:
             continue
         yield {"name": str(name or ""), "raw": bytes(raw or b"")}
@@ -471,11 +476,10 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None):
 
 def iter_pck_angou_dat_items(blob: bytes, hdr=None):
     cands = []
-    for item in _iter_pck_original_source_items(blob, hdr=hdr):
-        nm = os.path.basename(str(item.get("name") or ""))
-        if not is_named_filename(nm, ANGOU_DAT_NAME):
-            continue
-        cands.append((str(item.get("name") or nm), bytes(item.get("raw") or b"")))
+    for item in _iter_pck_original_source_items(
+        blob, hdr=hdr, only_name=ANGOU_DAT_NAME
+    ):
+        cands.append((item["name"], item["raw"]))
     cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
     for name, raw in cands:
         yield {"name": name, "raw": raw}
@@ -1676,7 +1680,7 @@ def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
     return out
 
 
-def source_angou_decrypt(enc: bytes, ctx: dict):
+def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
     sa = ctx.get("source_angou")
     if not sa:
         raise RuntimeError("source_angou: missing ctx.source_angou")
@@ -1690,28 +1694,39 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
         raise RuntimeError("source_angou: missing codes/params")
     if not enc or len(enc) < hs + 4:
         return (b"", "")
-    _b = bytearray(enc)
-    xor_cycle_inplace(_b, lg, int(sa.get("last_index", 0)))
-    dec = bytes(_b)
+    last_index = int(sa.get("last_index", 0))
+    dec = bytearray(enc[: hs + 4] if only_name else enc)
+    xor_cycle_inplace(dec, lg, last_index)
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
         raise RuntimeError("source_angou: bad version")
     smd5_code = dec[4:hs]
     name_len = struct.unpack_from("<I", dec, hs)[0]
     p = hs + 4
-    nameb = bytearray(dec[p : p + name_len])
+    if only_name:
+        nameb = bytearray(enc[p : p + name_len])
+        xor_cycle_inplace(nameb, lg, last_index + p)
+    else:
+        nameb = dec[p : p + name_len]
     xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
     try:
         name = nameb.decode("utf-16le", "surrogatepass")
     except Exception:
         name = ""
+    if only_name and not is_named_filename(os.path.basename(name), only_name):
+        return (b"", name)
     p += name_len
     lzsz = read_u32_le(smd5_code, 64, default=0)
     mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
         smd5_code, sa, mg, lzsz
     )
-    dp1 = dec[p : p + mapt]
-    dp2 = dec[p + mapt : p + mapt * 2]
+    if only_name:
+        dec = bytearray(enc[p : p + mapt * 2])
+        xor_cycle_inplace(dec, lg, last_index + p)
+        p = 0
+    dec_mv = memoryview(dec)
+    dp1 = bytes(dec_mv[p : p + mapt])
+    dp2 = bytes(dec_mv[p + mapt : p + mapt * 2])
     if len(dp1) < mapt or len(dp2) < mapt:
         raise RuntimeError("source_angou: truncated payload")
     lzb = bytearray(mapt * 2)
@@ -1719,19 +1734,15 @@ def source_angou_decrypt(enc: bytes, ctx: dict):
     repy = int(sa.get("tile_repy", 0))
     lim = int(sa.get("tile_limit", 0))
     lzb_mv = memoryview(lzb)
-    dp1_mv = memoryview(dp1)
-    dp2_mv = memoryview(dp2)
     sp1 = lzb_mv[0:mapt]
     sp2 = lzb_mv[bh : bh + mapt]
-    compiler.tile_copy(sp1, dp1_mv, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
-    compiler.tile_copy(sp1, dp2_mv, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
-    compiler.tile_copy(sp2, dp2_mv, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
-    compiler.tile_copy(sp2, dp1_mv, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
-    lz = bytes(lzb[:lzsz])
-    _b = bytearray(lz)
-    xor_cycle_inplace(_b, eg, int(sa.get("easy_index", 0)))
-    lz = bytes(_b)
-    raw = lzss_unpack(lz)
+    compiler.tile_copy(sp1, dp1, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
+    compiler.tile_copy(sp1, dp2, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
+    compiler.tile_copy(sp2, dp2, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
+    compiler.tile_copy(sp2, dp1, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
+    lz = lzb[:lzsz]
+    xor_cycle_inplace(lz, eg, int(sa.get("easy_index", 0)))
+    raw = lzss_unpack(bytes(lz))
     return (raw, name)
 
 

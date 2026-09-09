@@ -218,10 +218,10 @@ def _build_pack_bytes(
     inc_cmd_idx, inc_cmd_name_blob = _build_index_list_for_strings(inc_cmd_name_list)
     scn_name_idx, scn_name_blob = _build_index_list_for_strings(scn_name_list)
     scn_data_idx = []
-    scn_data_blob = bytearray()
+    scn_data_size = 0
     for blob in scn_data_list:
-        scn_data_idx.append((len(scn_data_blob), len(blob)))
-        scn_data_blob.extend(blob)
+        scn_data_idx.append((scn_data_size, len(blob)))
+        scn_data_size += len(blob)
     b = bytearray(b"\0" * C.PACK_HDR_SIZE)
 
     def _push(sec):
@@ -247,7 +247,9 @@ def _build_pack_bytes(
     hdr["scn_name_cnt"] = len(scn_name_list)
     hdr["scn_data_index_list_ofs"] = _push(pack_i32_pairs(scn_data_idx))
     hdr["scn_data_index_cnt"] = len(scn_data_idx)
-    hdr["scn_data_list_ofs"] = _push(scn_data_blob)
+    hdr["scn_data_list_ofs"] = len(b)
+    for blob in scn_data_list:
+        _push(blob)
     hdr["scn_data_cnt"] = len(scn_data_list)
     for ch in original_source_chunks:
         _push(ch)
@@ -368,24 +370,24 @@ def link_pack(ctx):
     noangou_scene_data = lzss_list if lzss_mode else dat_list
     exe_on, exe_el = _resolve_exe_angou(ctx)
     original_hsz, original_chunks = _build_original_source_chunks(ctx, lzss_mode)
-    pack_no = _build_pack_bytes(
-        inc_props,
-        inc_cmd_name_list,
-        inc_prop_name_list,
-        inc_cmd_list,
-        scn_name_list,
-        noangou_scene_data,
-        0,
-        original_hsz,
-        original_chunks,
-    )
-    if exe_on and out_path_noangou:
-        p = os.path.join(out_path_noangou, scene_pck)
-        write_bytes(p, pack_no)
-    if not exe_on:
-        p = os.path.join(out_path, scene_pck)
-        write_bytes(p, pack_no)
-        return p
+    if not exe_on or out_path_noangou:
+        p = os.path.join(out_path_noangou if exe_on else out_path, scene_pck)
+        write_bytes(
+            p,
+            _build_pack_bytes(
+                inc_props,
+                inc_cmd_name_list,
+                inc_prop_name_list,
+                inc_cmd_list,
+                scn_name_list,
+                noangou_scene_data,
+                0,
+                original_hsz,
+                original_chunks,
+            ),
+        )
+        if not exe_on:
+            return p
     ang = []
     for blob in noangou_scene_data:
         b = bytearray(blob)

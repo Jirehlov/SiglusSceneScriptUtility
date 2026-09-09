@@ -548,7 +548,7 @@ def _trim_nwa_to_wav_bytes(
     start_byte = start_sample * bytes_per_frame
     end_byte = end_sample * bytes_per_frame
     return sound._build_wav(
-        pcm[start_byte:end_byte],
+        memoryview(pcm)[start_byte:end_byte],
         header.channels,
         header.bits_per_sample,
         header.samples_per_sec,

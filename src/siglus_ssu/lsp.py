@@ -729,7 +729,7 @@ def _source_token_from_replace_use(item: dict[str, Any]) -> SourceToken | None:
 def _line_range(
     text: str, line_no: int, position_encoding: str = POSITION_ENCODING_UTF16
 ) -> dict[str, Any]:
-    lines = text.split("\n")
+    lines = _split_lines_cached(text)
     idx = max(0, min(len(lines) - 1, line_no - 1 if lines else 0))
     width = _char_to_lsp_character(lines[idx], len(lines[idx]), position_encoding)
     return {
@@ -1703,7 +1703,7 @@ def _definition_range(
         return _line_range(text, record.line, position_encoding)
     if (
         line >= 0
-        and line < len(text.split("\n"))
+        and line < len(_split_lines_cached(text))
         and start_char >= 0
         and end_char > start_char
     ):
@@ -4097,19 +4097,27 @@ class SSLanguageServer:
         return True
 
     def persistent_index_inputs(
-        self, directory: str
+        self, directory: str, *, scene_paths: list[str] | None = None
     ) -> dict[str, dict[str, str]] | None:
         directory = os.path.abspath(directory or ".")
         directory_key = _path_identity(directory)
+        scene_overlays = set()
         for doc in self.documents.values():
             path = os.path.abspath(doc.path)
             lower = path.lower()
             if _path_identity(os.path.dirname(path)) != directory_key:
                 continue
-            if not lower.endswith(".inc"):
-                continue
-            if not self.persistent_cache_file_usable(path):
-                return None
+            if lower.endswith(".inc"):
+                if not self.persistent_cache_file_usable(path):
+                    return None
+            elif (
+                scene_paths is not None and lower.endswith(".ss") and doc.overlay_active
+            ):
+                scene_overlays.add(document_key_for_path(path))
+        if scene_overlays and any(
+            document_key_for_path(path) in scene_overlays for path in scene_paths
+        ):
+            return None
         return _lsp_index_cache_inputs(directory)
 
     def load_persistent_link_diagnostics(
@@ -4260,7 +4268,7 @@ class SSLanguageServer:
         paths: list[str],
         entry: DirectoryLinkDiagnosticsEntry,
     ) -> None:
-        inputs = self.persistent_index_inputs(directory)
+        inputs = self.persistent_index_inputs(directory, scene_paths=paths)
         if inputs is None:
             return
         paths = [os.path.abspath(path) for path in paths]
