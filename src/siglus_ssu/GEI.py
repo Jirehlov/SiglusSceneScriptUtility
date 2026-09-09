@@ -51,7 +51,6 @@ class IniFileAnalizer:
             double_escape_chars='\\"',
             block_comment_enter_advance=2,
             newline_double_message="Newline is not allowed inside double quotes.",
-            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
             unclosed_double_message="Unclosed double quote.",
             unclosed_block_message="Unclosed /* comment.",
         )
@@ -61,28 +60,26 @@ class IniFileAnalizer:
         return True
 
 
-def xor_cycle_inplace(b, code, st=0):
+def xor_cycle_inplace(b, code):
     if not code:
         raise ValueError("xor_cycle_inplace: missing code")
-    _xor_cycle_inplace(b, code, st)
+    _xor_cycle_inplace(b, code, 0)
 
 
-def read_gameexe_dat(
-    gameexe_dat_path: str, exe_el: bytes = b"", base: bytes | None = None
-):
+def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
     dat = read_bytes(gameexe_dat_path)
     if not dat or len(dat) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
     hdr0, mode = struct.unpack_from("<ii", dat, 0)
     payload_enc = dat[8:]
-    base = C.GAMEEXE_DAT_ANGOU_CODE if base is None else base
+    base = C.GAMEEXE_DAT_ANGOU_CODE
     payload = bytearray(payload_enc)
     if payload and base:
-        xor_cycle_inplace(payload, base, 0)
+        xor_cycle_inplace(payload, base)
     used_exe_el = False
     if int(mode) != 0:
         if exe_el:
-            xor_cycle_inplace(payload, exe_el, 0)
+            xor_cycle_inplace(payload, exe_el)
             used_exe_el = True
     lz = bytes(payload)
     lz_hdr = (0, 0)
@@ -124,13 +121,9 @@ def read_gameexe_dat(
 
 
 def restore_gameexe_ini(
-    gameexe_dat_path: str,
-    output_dir: str,
-    exe_el: bytes = b"",
-    base: bytes | None = None,
-    output_name: str = "Gameexe.ini",
+    gameexe_dat_path: str, output_dir: str, exe_el: bytes = b""
 ) -> str:
-    info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el, base=base)
+    info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el)
     if info.get("mode") and not info.get("used_exe_el"):
         raise RuntimeError(
             "Gameexe.dat is encrypted with exe angou; missing \u6697\u53f7.dat/key.txt to derive key"
@@ -138,14 +131,14 @@ def restore_gameexe_ini(
     if (not txt) or (not info.get("ini_ok")):
         raise RuntimeError("Failed to decode Gameexe.dat payload")
     out_dir = os.path.abspath(output_dir or ".")
-    out_path = os.path.join(out_dir, output_name)
+    out_path = os.path.join(out_dir, "Gameexe.ini")
     write_text(out_path, txt, enc="utf-8")
     return out_path
 
 
 def _load_angou_first_line(ctx):
     scn = ctx.get("scn_path") or ""
-    p = find_named_path(scn, ANGOU_DAT_NAME, recursive=False)
+    p = find_named_path(scn, ANGOU_DAT_NAME)
     if not p:
         return ""
     return read_angou_first_line(p, force_charset=(ctx.get("charset_force") or ""))
@@ -190,7 +183,7 @@ def write_gameexe_dat(ctx):
                 if el and len(el) == 16:
                     mode = 1
     if ctx.get("exe_angou_mode") and (not mode) and scn:
-        kp = find_named_path(scn, KEY_TXT_NAME, recursive=False)
+        kp = find_named_path(scn, KEY_TXT_NAME)
         if kp:
             k = read_exe_el_key(kp)
             if k and len(k) == 16:
@@ -199,7 +192,7 @@ def write_gameexe_dat(ctx):
     lz = None
     if ged:
         lz = bytearray(lzss_pack(ged.encode("utf-16le")))
-        xor_cycle_inplace(lz, base, 0)
+        xor_cycle_inplace(lz, base)
     dat_noangou = bytearray(struct.pack("<ii", 0, 0))
     if lz:
         dat_noangou.extend(lz)
@@ -208,7 +201,7 @@ def write_gameexe_dat(ctx):
         dat_angou = bytearray(struct.pack("<ii", 0, 1))
         if lz:
             lz2 = bytearray(lz)
-            xor_cycle_inplace(lz2, el, 0)
+            xor_cycle_inplace(lz2, el)
             dat_angou.extend(lz2)
         dat_out = dat_angou
     p = os.path.join(out, gameexe_dat)

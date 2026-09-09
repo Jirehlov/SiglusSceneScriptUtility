@@ -706,21 +706,16 @@ fn collect_macro_stats(
     base_ia: &IaData,
     scene_counts: &MacroStats,
     global_usage_delta: &BTreeMap<(String, String), usize>,
-    include_global_delta: bool,
 ) -> MacroStats {
     let mut counts = empty_macro_stats();
     for replacement in &base_ia.macro_defs {
         let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
         let bucket = counts.buckets.entry(kind.to_string()).or_default();
         bucket.total += 1;
-        let extra = if include_global_delta {
-            global_usage_delta
-                .get(&(kind.to_string(), replacement.name.clone()))
-                .copied()
-                .unwrap_or_default()
-        } else {
-            0
-        };
+        let extra = global_usage_delta
+            .get(&(kind.to_string(), replacement.name.clone()))
+            .copied()
+            .unwrap_or_default();
         if replacement.used_count + extra == 0 {
             bucket.unused += 1;
         }
@@ -1557,7 +1552,6 @@ fn write_gameexe_dat(
         double_escape_chars: "\\\"".to_string(),
         block_comment_enter_advance: 2,
         newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
-        invalid_escape_message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
         unclosed_double_message: "Unclosed double quote.".to_string(),
         unclosed_block_message: "Unclosed /* comment.".to_string(),
         ..TextCommentOptions::default()
@@ -1668,7 +1662,6 @@ fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
 fn build_original_source_chunks(
     config: &CompileConfig,
     use_lzss: bool,
-    _workers: usize,
     log: &mut OutputLog<'_>,
     stage_times: &mut Vec<(String, f64)>,
 ) -> Result<(i32, Vec<Vec<u8>>), String> {
@@ -2562,7 +2555,7 @@ fn compile_project_inner(
     });
     let (scene_names, scene_data): (Vec<_>, Vec<_>) = encoded_scenes.into_iter().unzip();
     let (original_source_header_size, original_source_chunks) =
-        build_original_source_chunks(config, use_lzss, link_workers, stdout, stage_times)?;
+        build_original_source_chunks(config, use_lzss, stdout, stage_times)?;
     let pack_input = PackInput {
         inc_prop_list: base_ia
             .property_list
@@ -2608,7 +2601,6 @@ fn compile_project_inner(
                     &base_ia,
                     &aggregate_scene_macro_counts,
                     &aggregate_global_usage_delta,
-                    true,
                 )),
                 Some(aggregate_source_stats),
                 Some(read_flag_stats),

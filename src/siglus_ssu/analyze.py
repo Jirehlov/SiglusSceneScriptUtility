@@ -150,9 +150,7 @@ def analyze_file(
             except ValueError as e:
                 sys.stderr.write(str(e) + "\n")
                 return 2
-            decoded_blob, _used = dat.decode_scn_dat_with_candidates(
-                blob, cands, trace=True
-            )
+            decoded_blob, _used = dat.decode_scn_dat_with_candidates(blob, cands)
             if looks_like_siglus_dat(decoded_blob):
                 blob = decoded_blob
         if not looks_like_siglus_dat(blob):
@@ -311,15 +309,11 @@ def compare_files(
                 sys.stderr.write(str(e) + "\n")
                 return 2
             if need_decode1:
-                decoded_b1, _used1 = dat.decode_scn_dat_with_candidates(
-                    b1, cands1, trace=True
-                )
+                decoded_b1, _used1 = dat.decode_scn_dat_with_candidates(b1, cands1)
                 if looks_like_siglus_dat(decoded_b1):
                     b1 = decoded_b1
             if need_decode2:
-                decoded_b2, _used2 = dat.decode_scn_dat_with_candidates(
-                    b2, cands2, trace=True
-                )
+                decoded_b2, _used2 = dat.decode_scn_dat_with_candidates(b2, cands2)
                 if looks_like_siglus_dat(decoded_b2):
                     b2 = decoded_b2
             failed_paths = []
@@ -370,11 +364,7 @@ def main(argv=None):
     if word and ("--disam" in args or "--decompile" in args):
         return 2
     try:
-        args, gei, _disam, _decompile = parse_gei_disam_args(
-            args,
-            allow_gei_disam=True,
-            return_decompile=True,
-        )
+        args, gei, _disam, _decompile = parse_gei_disam_args(args)
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")
         return 2

@@ -716,7 +716,6 @@ class TutorialBuilder:
             blob,
             input_pck=self.input_pck,
             hdr=hdr,
-            trace_key=True,
         )
         for index, item in enumerate(
             pck.iter_pck_scene_dat_items(
@@ -2416,7 +2415,6 @@ def _try_open_generated_viewer(viewer_path: str | None, output_json: str) -> boo
             return bool(webbrowser.open(viewer.as_uri(), new=2))
         except Exception:
             return False
-    server.daemon_threads = True
     thread = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": VIEWER_SERVER_POLL_SECONDS},

@@ -431,7 +431,6 @@ def _native_compile_cache_config(
         "lzss_paths": lzss_paths,
         "lzss_remove_paths": lzss_remove_paths,
         "compiled_scene_files": len(compile_list or []),
-        "full_compile": bool(full_compile),
         "full_compile_stats": bool(full_compile_stats),
     }
 
@@ -861,10 +860,10 @@ def _print_summary(ctx, ok=False):
 def _native_compile_constants_config():
     from .MA import FormTable
 
-    def _const_int(name, default=0):
+    def _const_int(name):
         value = getattr(C, name, None)
         if value is None:
-            return int(default)
+            return 0
         return int(value)
 
     form_table = FormTable()
@@ -1010,11 +1009,9 @@ def _native_compile_config(
         ),
         "options": {
             "dat_repack": bool(args.dat_repack),
-            "no_angou": bool(args.no_angou),
             "serial": bool(args.serial),
             "max_workers": args.max_workers,
             "set_shuffle": args.set_shuffle,
-            "tmp_dir": args.tmp_dir,
             "gei": bool(args.gei),
             "test_shuffle": bool(test_shuffle),
             "force_serial_compile": bool(force_serial_compile),

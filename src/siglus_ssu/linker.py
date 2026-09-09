@@ -49,11 +49,11 @@ def _glob_sorted_rel(base, pattern):
 def _make_original_source_rel_list(scn_path):
     out = []
     out += _glob_sorted_rel(scn_path, "Gameexe*.ini")
-    p = find_named_path(scn_path, ANGOU_DAT_NAME, recursive=False)
+    p = find_named_path(scn_path, ANGOU_DAT_NAME)
     if p:
         out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
     else:
-        kp = find_named_path(scn_path, KEY_TXT_NAME, recursive=False)
+        kp = find_named_path(scn_path, KEY_TXT_NAME)
         if kp:
             out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
     out += _glob_sorted_rel(scn_path, "*.inc")
@@ -82,11 +82,11 @@ def _resolve_exe_angou(ctx):
     scn_path = ctx.get("scn_path") or ""
     angou_str = ctx.get("exe_angou_str")
     if angou_str is None and scn_path:
-        p = find_named_path(scn_path, ANGOU_DAT_NAME, recursive=False)
+        p = find_named_path(scn_path, ANGOU_DAT_NAME)
         if p:
             angou_str = read_angou_first_line(p, ctx.get("charset_force") or "")
     if (not angou_str) and scn_path:
-        kp = find_named_path(scn_path, KEY_TXT_NAME, recursive=False)
+        kp = find_named_path(scn_path, KEY_TXT_NAME)
         if kp:
             el = read_exe_el_key(kp)
             if el and len(el) == 16:
@@ -103,16 +103,14 @@ def _resolve_exe_angou(ctx):
     return (True, el)
 
 
-def _load_scene_data(ctx, scn_names, lzss_mode, max_workers=None, parallel=True):
+def _load_scene_data(ctx, scn_names, lzss_mode):
     tmp = ctx.get("tmp_path") or ""
     bs_dir = os.path.join(tmp, "bs")
-    if parallel and lzss_mode and len(scn_names) > 1:
+    if lzss_mode and len(scn_names) > 1:
         from .parallel import parallel_lzss_compress
 
         start = time.time()
-        _, dat_list, lzss_list = parallel_lzss_compress(
-            ctx, scn_names, bs_dir, lzss_mode, max_workers
-        )
+        _, dat_list, lzss_list = parallel_lzss_compress(ctx, scn_names, bs_dir)
         set_stage_time(ctx, "LZSS", time.time() - start)
         return dat_list, lzss_list
     from . import compiler as _m
@@ -262,7 +260,7 @@ def _build_pack_bytes(
     return bytes(b)
 
 
-def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=True):
+def _build_original_source_chunks(ctx, lzss_mode):
     if not lzss_mode:
         return (0, [])
     if not ctx.get("source_angou"):
@@ -279,13 +277,11 @@ def _build_original_source_chunks(ctx, lzss_mode, max_workers=None, parallel=Tru
     rel_list = _make_original_source_rel_list(scn_path)
     if not rel_list:
         return (0, [])
-    if parallel and len(rel_list) > 1:
+    if len(rel_list) > 1:
         from .parallel import parallel_source_encrypt
 
         start = time.time()
-        sizes, chunks = parallel_source_encrypt(
-            ctx, rel_list, scn_path, tmp_path, skip, max_workers
-        )
+        sizes, chunks = parallel_source_encrypt(ctx, rel_list, scn_path, tmp_path, skip)
         set_stage_time(ctx, "OS", time.time() - start)
         if not sizes:
             return (0, [])
@@ -387,7 +383,7 @@ def link_pack(ctx):
             ),
         )
         if not exe_on:
-            return p
+            return
     ang = []
     for blob in noangou_scene_data:
         b = bytearray(blob)
@@ -406,4 +402,3 @@ def link_pack(ctx):
     )
     p = os.path.join(out_path, scene_pck)
     write_bytes(p, pack_a)
-    return p

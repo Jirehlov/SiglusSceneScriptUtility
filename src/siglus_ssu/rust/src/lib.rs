@@ -88,7 +88,7 @@ fn tile_copy(
 }
 
 #[pyfunction]
-fn msvcrand_shuffle_inplace(_py: Python<'_>, state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
+fn msvcrand_shuffle_inplace(state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
     let mut x = state;
     let n = a.len();
     if n < 2 {
@@ -154,14 +154,11 @@ fn find_rand_skip(
     seed: u32,
     pattern: &[u8],
     start_skip: usize,
-    max_scan: usize,
 ) -> PyResult<Option<usize>> {
     if pattern.is_empty() {
         return Ok(Some(start_skip));
     }
-    if max_scan == 0 {
-        return Ok(None);
-    }
+    let max_scan: usize = 16777216;
     let scan_len = max_scan
         .checked_add(pattern.len() - 1)
         .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
@@ -251,10 +248,10 @@ fn precompute_params(n: usize) -> Vec<ShuffleParam> {
     out
 }
 
-fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
+fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) {
     let mut x = x0;
     if a.len() < 2 {
-        return x;
+        return;
     }
     for (i_idx, p) in params.iter().enumerate() {
         let i = (i_idx + 2) as u32;
@@ -278,7 +275,6 @@ fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) -> u32 {
             a.swap(ii, j);
         }
     }
-    x
 }
 
 fn fmt_hms(secs: f64) -> String {
@@ -323,9 +319,7 @@ fn find_shuffle_seed_first(
     py: Python<'_>,
     target_idx: Vec<(i32, i32)>,
     seed0: u32,
-    workers: Option<usize>,
-    chunk: Option<u32>,
-    progress_iv: Option<f64>,
+    workers: usize,
 ) -> PyResult<Option<u32>> {
     let n = target_idx.len();
     if n < 2 {
@@ -340,12 +334,9 @@ fn find_shuffle_seed_first(
     let target_ofs = Arc::new(target_ofs);
     let lens = Arc::new(lens);
 
-    let cpu = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let w = workers.unwrap_or(cpu).clamp(1, 64);
-    let chunk = chunk.unwrap_or(8192).max(1);
-    let progress_iv = progress_iv.unwrap_or(1.0);
+    let w = workers.clamp(1, 64);
+    let chunk: u32 = 200;
+    let progress_iv = 1.0;
 
     let prefix: &'static str = "[test-shuffle]";
 
@@ -393,7 +384,7 @@ fn find_shuffle_seed_first(
                         }
                         buf.copy_from_slice(&base);
                         let seed = seed0.saturating_add(a as u32);
-                        let _ = shuffle_inplace_vec(seed, &mut buf, &params);
+                        shuffle_inplace_vec(seed, &mut buf, &params);
 
                         let mut ofs: i32 = 0;
                         for &orig_u32 in buf.iter() {

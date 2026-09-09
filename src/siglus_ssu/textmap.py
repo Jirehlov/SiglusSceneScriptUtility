@@ -145,13 +145,13 @@ def _merge_textmap_kind(cur_kind, new_kind):
     return new_kind
 
 
-def _int_value(value, default=-1):
+def _int_value(value):
     try:
         if value is None:
-            return default
+            return -1
         return int(value)
     except Exception:
-        return default
+        return -1
 
 
 def _collect_compiled_string_kinds(root, atom_type_map):
@@ -164,12 +164,12 @@ def _collect_compiled_string_kinds(root, atom_type_map):
     def _add(atom, kind):
         if not isinstance(atom, dict):
             return
-        if _int_value(atom.get("type"), -1) != int(C.LA_T["VAL_STR"]):
+        if _int_value(atom.get("type")) != int(C.LA_T["VAL_STR"]):
             return
-        aid = _int_value(atom.get("id"), -1)
+        aid = _int_value(atom.get("id"))
         if aid < 0:
             return
-        if _int_value(atom_type_map.get(aid), -1) != int(C.LA_T["VAL_STR"]):
+        if _int_value(atom_type_map.get(aid)) != int(C.LA_T["VAL_STR"]):
             return
         out[aid] = _merge_textmap_kind(out.get(aid), kind)
 
@@ -180,7 +180,7 @@ def _collect_compiled_string_kinds(root, atom_type_map):
             return
         if not isinstance(node, dict):
             return
-        if _int_value(node.get("type"), -1) == int(C.LA_T["VAL_STR"]):
+        if _int_value(node.get("type")) == int(C.LA_T["VAL_STR"]):
             _add(node, kind)
         for value in node.values():
             _mark_string_atoms(value, kind)
@@ -188,7 +188,7 @@ def _collect_compiled_string_kinds(root, atom_type_map):
     def _command_name(node):
         name_node = node.get("name")
         atom = name_node.get("atom") if isinstance(name_node, dict) else {}
-        opt = _int_value(atom.get("opt"), -1)
+        opt = _int_value(atom.get("opt"))
         if 0 <= opt < len(unknown_list):
             return str(unknown_list[opt] or "")
         return ""
@@ -217,7 +217,7 @@ def _collect_compiled_string_kinds(root, atom_type_map):
                 TEXTMAP_KIND_OTHER,
             )
         elif nt == C.NT_ELM_ELEMENT:
-            if _int_value(node.get("element_type"), -1) == int(C.ET_COMMAND):
+            if _int_value(node.get("element_type")) == int(C.ET_COMMAND):
                 parent = node.get("element_parent_form")
                 name = _command_name(node)
                 if parent in (C.FM_GLOBAL, C.FM_MWND) and name in (
@@ -290,7 +290,7 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
     atom_list = list(lad.get("atom_list") or [])
     atom_type_map = {}
     for atom in atom_list:
-        atom_type_map[_int_value(atom.get("id"), -1)] = _int_value(atom.get("type"), -1)
+        atom_type_map[_int_value(atom.get("id"))] = _int_value(atom.get("type"))
     sa = SA.SA(iad, lad)
     ok, sad = sa.analize()
     if not ok:
@@ -316,7 +316,7 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
     for atom in atom_list:
         if atom.get("type") != C.LA_T["VAL_STR"]:
             continue
-        aid = _int_value(atom.get("id"), -1)
+        aid = _int_value(atom.get("id"))
         opt = int(atom.get("opt", -1))
         if opt < 0 or opt >= len(str_list):
             continue
@@ -353,20 +353,20 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
             continue
         op = str(ev.get("op") or "")
         if op == "CD_TEXT":
-            sid = _int_value(ev.get("str_id"), -1)
+            sid = _int_value(ev.get("str_id"))
             if sid >= 0:
                 out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_DIALOGUE)
             continue
         if op == "CD_NAME":
-            sid = _int_value(ev.get("str_id"), -1)
+            sid = _int_value(ev.get("str_id"))
             if sid >= 0:
                 out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_NAME)
             continue
         if op != "CD_PUSH":
             continue
-        if _int_value(ev.get("form"), -1) != fm_str:
+        if _int_value(ev.get("form")) != fm_str:
             continue
-        sid = _int_value(ev.get("value"), -1)
+        sid = _int_value(ev.get("value"))
         if sid < 0:
             continue
         out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_OTHER)

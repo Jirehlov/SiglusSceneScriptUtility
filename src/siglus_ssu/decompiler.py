@@ -316,11 +316,10 @@ def _write_support_inc_lines(root, lines):
 
         merged = sorted(merged, key=_sort_key)
         write_text(out_path, "\n".join(merged).rstrip() + "\n", enc="utf-8")
-        return out_path
+        return
     if os.path.isfile(out_path):
         with suppress(OSError):
             os.remove(out_path)
-    return None
 
 
 def _copy_arg_layout(layout):
@@ -4377,8 +4376,16 @@ class _Decompiler:
             idx = idx2
         return prefix_lines, inline_lines, inline_start_idx
 
-    def _range_contains_any_op(self, start_idx, end_ofs, opnames):
-        want = tuple(str(x or "") for x in tuple(opnames or ()))
+    def _range_contains_any_op(self, start_idx, end_ofs):
+        want = (
+            "CD_DEC_PROP",
+            "CD_GOTO",
+            "CD_GOTO_FALSE",
+            "CD_GOTO_TRUE",
+            "CD_RETURN",
+            "CD_TEXT",
+            "CD_NAME",
+        )
         try:
             end_ofs_i = int(end_ofs)
         except Exception:
@@ -4472,14 +4479,9 @@ class _Decompiler:
                 return None
         return tail
 
-    def _wrap_block(self, head, body_lines, inline_body=None, target_line=None):
+    def _wrap_block(self, head, body_lines, inline_body=None):
         if inline_body is not None:
-            return [
-                _line_item(
-                    head + "{" + _join_inline_sentences(inline_body) + "}",
-                    target_line,
-                )
-            ]
+            return [_line_item(head + "{" + _join_inline_sentences(inline_body) + "}")]
         return [head + "{", *_indent_lines(body_lines), "}"]
 
     def _append_trampolines(self, out, idx, end_ofs, ctx):
@@ -4837,19 +4839,7 @@ class _Decompiler:
         if j == g_idx:
             init_lines = []
         else:
-            if self._range_contains_any_op(
-                j,
-                ofs,
-                (
-                    "CD_DEC_PROP",
-                    "CD_GOTO",
-                    "CD_GOTO_FALSE",
-                    "CD_GOTO_TRUE",
-                    "CD_RETURN",
-                    "CD_TEXT",
-                    "CD_NAME",
-                ),
-            ):
+            if self._range_contains_any_op(j, ofs):
                 return None
             init_split = self._split_inline_region_by_line(
                 j,

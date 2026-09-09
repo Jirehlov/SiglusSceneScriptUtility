@@ -99,11 +99,7 @@ impl<'a> SemanticAnalyzer<'a> {
         self.codes.element_type.command
     }
 
-    fn analyze_statements(
-        &mut self,
-        statements: &mut [AstNode],
-        _selection: &mut bool,
-    ) -> Result<(), ()> {
+    fn analyze_statements(&mut self, statements: &mut [AstNode]) -> Result<(), ()> {
         for statement in statements {
             let mut statement_selection = false;
             self.analyze_node(statement, &mut statement_selection)?;
@@ -172,7 +168,7 @@ impl<'a> SemanticAnalyzer<'a> {
     fn analyze_node(&mut self, node: &mut AstNode, selection: &mut bool) -> Result<i32, ()> {
         let form = match &mut node.payload {
             AstPayload::Root(statements) => {
-                self.analyze_statements(statements, selection)?;
+                self.analyze_statements(statements)?;
                 self.codes.forms.void.code
             }
             AstPayload::Label { .. }
@@ -202,7 +198,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 for parameter in parameters {
                     self.analyze_parameter(parameter)?;
                 }
-                self.analyze_statements(body, selection)?;
+                self.analyze_statements(body)?;
                 self.command_depth -= 1;
                 self.ia_data.form_table.reset_call();
                 self.current_call_property_count = 0;
@@ -244,7 +240,7 @@ impl<'a> SemanticAnalyzer<'a> {
                             return self.fail("TNMSERR_MA_IF_COND_IS_NOT_INT", branch.line, None);
                         }
                     }
-                    self.analyze_statements(&mut branch.body, selection)?;
+                    self.analyze_statements(&mut branch.body)?;
                 }
                 self.codes.forms.void.code
             }
@@ -254,7 +250,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 update,
                 body,
             } => {
-                self.analyze_statements(init, selection)?;
+                self.analyze_statements(init)?;
                 let mut condition_selection = false;
                 let condition_form =
                     self.analyze_expression(condition, &mut condition_selection)?;
@@ -264,8 +260,8 @@ impl<'a> SemanticAnalyzer<'a> {
                 if !self.is_int(condition_form) {
                     return self.fail("TNMSERR_MA_FOR_COND_IS_NOT_INT", node.line, None);
                 }
-                self.analyze_statements(update, selection)?;
-                self.analyze_statements(body, selection)?;
+                self.analyze_statements(update)?;
+                self.analyze_statements(body)?;
                 self.codes.forms.void.code
             }
             AstPayload::While { condition, body } => {
@@ -278,7 +274,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 if !self.is_int(condition_form) {
                     return self.fail("TNMSERR_MA_WHILE_COND_IS_NOT_INT", node.line, None);
                 }
-                self.analyze_statements(body, selection)?;
+                self.analyze_statements(body)?;
                 self.codes.forms.void.code
             }
             AstPayload::Switch {
@@ -304,10 +300,10 @@ impl<'a> SemanticAnalyzer<'a> {
                     if !compatible {
                         return self.fail("TNMSERR_MA_CASE_TYPE_MISMATCH", case.line, None);
                     }
-                    self.analyze_statements(&mut case.body, selection)?;
+                    self.analyze_statements(&mut case.body)?;
                 }
                 if let Some(default_body) = default_body {
-                    self.analyze_statements(default_body, selection)?;
+                    self.analyze_statements(default_body)?;
                 }
                 self.codes.forms.void.code
             }

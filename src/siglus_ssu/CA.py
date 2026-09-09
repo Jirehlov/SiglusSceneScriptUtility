@@ -143,7 +143,6 @@ class CharacterAnalizer:
             block_comment_enter_advance=1,
             newline_single_message="Newline is not allowed inside single quotes.",
             newline_double_message="Newline is not allowed inside double quotes.",
-            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
             single_empty_message="Single quotes must enclose exactly one character.",
             single_invalid_message="Single quotes are not closed or contain more than one character.",
             unclosed_single_message="Unclosed single quote.",

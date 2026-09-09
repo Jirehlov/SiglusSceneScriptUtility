@@ -847,15 +847,14 @@ def looks_like_sav(blob):
     return _detect_kind(blob) is not None
 
 
-def _set_fixed_int_list_all(buf, meta, value):
+def _set_fixed_int_list_all(buf, meta):
     if not meta:
-        return 0
+        return
     cnt = int(meta.get("count") or 0)
     if cnt <= 0:
-        return 0
+        return
     data_offset = int(meta["data_offset"])
-    struct.pack_into(f"<{cnt:d}i", buf, data_offset, *([int(value)] * cnt))
-    return cnt
+    struct.pack_into(f"<{cnt:d}i", buf, data_offset, *([1] * cnt))
 
 
 def _set_fixed_int_list_items(buf, meta, values, name):
@@ -965,8 +964,8 @@ def _readall_global(blob):
     info = _parse_global_for_patch(blob)
     raw = bytearray(info["raw"])
     layout = info["payload_layout"]
-    _set_fixed_int_list_all(raw, layout.get("cg_table"), 1)
-    _set_fixed_int_list_all(raw, layout.get("bgm_table"), 1)
+    _set_fixed_int_list_all(raw, layout.get("cg_table"))
+    _set_fixed_int_list_all(raw, layout.get("bgm_table"))
     for off in layout.get("chrkoe_look_flag_offsets") or []:
         raw[int(off)] = 1
     enc = _pack_tnm_data(bytes(raw))

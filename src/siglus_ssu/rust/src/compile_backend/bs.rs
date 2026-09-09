@@ -212,7 +212,7 @@ impl<'a> BytecodeBuilder<'a> {
             }
             AstPayload::DefProperty {
                 form, property_id, ..
-            } => self.compile_def_property(node, form, *property_id),
+            } => self.compile_def_property(form, *property_id),
             AstPayload::DefCommand {
                 command_id,
                 parameters,
@@ -225,7 +225,7 @@ impl<'a> BytecodeBuilder<'a> {
                 let offset = self.stream.len() as i32;
                 self.cmd_label_list.push((*command_id, offset));
                 for parameter in parameters {
-                    self.compile_def_property(node, &parameter.form, parameter.property_id)?;
+                    self.compile_def_property(&parameter.form, parameter.property_id)?;
                 }
                 self.push_u8(self.codes.cd.arg);
                 self.compile_statements(body)?;
@@ -246,7 +246,7 @@ impl<'a> BytecodeBuilder<'a> {
                 Ok(())
             }
             AstPayload::Goto { kind, target, args } => {
-                self.compile_goto(node, *kind, target, args, false)
+                self.compile_goto(*kind, target, args, false)
             }
             AstPayload::Return { value } => {
                 if let Some(value) = value {
@@ -408,12 +408,7 @@ impl<'a> BytecodeBuilder<'a> {
         }
     }
 
-    fn compile_def_property(
-        &mut self,
-        node: &AstNode,
-        form: &FormSpec,
-        property_id: i32,
-    ) -> Result<(), ()> {
+    fn compile_def_property(&mut self, form: &FormSpec, property_id: i32) -> Result<(), ()> {
         let form_code = self
             .ia_data
             .as_ref()
@@ -431,13 +426,11 @@ impl<'a> BytecodeBuilder<'a> {
         self.push_u8(self.codes.cd.dec_prop);
         self.push_i32(form_code);
         self.push_i32(property_id);
-        let _ = node;
         Ok(())
     }
 
     fn compile_goto(
         &mut self,
-        node: &AstNode,
         kind: GotoKind,
         target: &Atom,
         args: &ArgumentList,
@@ -472,7 +465,6 @@ impl<'a> BytecodeBuilder<'a> {
                 self.codes.forms.str_.code
             });
         }
-        let _ = node;
         Ok(())
     }
 
@@ -536,7 +528,7 @@ impl<'a> BytecodeBuilder<'a> {
                 if !need_value {
                     return self.error(TNMSERR_BS_NEED_REFERENCE, node);
                 }
-                self.compile_goto(node, *kind, target, args, true)
+                self.compile_goto(*kind, target, args, true)
             }
             AstPayload::Literal { atom } => {
                 if !need_value {
@@ -669,7 +661,6 @@ impl<'a> BytecodeBuilder<'a> {
                 return self.error(TNMSERR_BS_NEED_VALUE, node);
             }
         }
-        let _ = element_type;
         Ok(())
     }
 

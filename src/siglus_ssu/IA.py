@@ -57,7 +57,6 @@ class IncAnalyzer:
             block_comment_enter_advance=2,
             newline_single_message="Found newline inside single quotes.",
             newline_double_message="Found newline inside double quotes.",
-            invalid_escape_message="Invalid escape (\\). Use '\\\\' to write a backslash.",
             unclosed_single_message="Single quote is not closed.",
             unclosed_double_message="Double quote is not closed.",
             unclosed_block_message=" Comment (/*) is not closed.",

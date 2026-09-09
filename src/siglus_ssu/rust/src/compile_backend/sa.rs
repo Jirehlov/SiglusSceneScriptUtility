@@ -106,10 +106,9 @@ impl SyntaxAnalyzer {
         (atom.atom_type == atom_type).then_some((index + 1, atom))
     }
 
-    fn node(&self, start: usize, end: usize, payload: AstPayload) -> AstNode {
+    fn node(&self, start: usize, payload: AstPayload) -> AstNode {
         let first = self.atom(start);
-        let last = self.atom(end.saturating_sub(1).max(start));
-        AstNode::spanned(first, last, payload)
+        AstNode::from_atom(first, payload)
     }
 
     fn unknown_name(&self, atom: &Atom) -> String {
@@ -140,7 +139,7 @@ impl SyntaxAnalyzer {
         }
         let (_, eof) = self.accept(index, self.codes.la.eof).expect("EOF atom");
         statements.push(AstNode::from_atom(eof, AstPayload::Eof));
-        Ok(self.node(0, index + 1, AstPayload::Root(statements)))
+        Ok(self.node(0, AstPayload::Root(statements)))
     }
 
     fn parse_block(&mut self, index: usize, iad: &mut IaData) -> ParseResult<Vec<AstNode>> {
@@ -356,7 +355,6 @@ impl SyntaxAnalyzer {
             pos,
             self.node(
                 index,
-                pos,
                 AstPayload::DefProperty {
                     name,
                     name_atom,
@@ -511,7 +509,6 @@ impl SyntaxAnalyzer {
             pos,
             self.node(
                 index,
-                pos,
                 AstPayload::DefCommand {
                     name,
                     name_atom,
@@ -552,11 +549,7 @@ impl SyntaxAnalyzer {
         };
         Ok(Some((
             pos,
-            AstNode::spanned(
-                keyword,
-                target.clone(),
-                AstPayload::Goto { kind, target, args },
-            ),
+            AstNode::from_atom(keyword, AstPayload::Goto { kind, target, args }),
         )))
     }
 
@@ -569,15 +562,14 @@ impl SyntaxAnalyzer {
             let Some((after_value, expression)) = self.parse_expression(next, 0, iad)? else {
                 return self.fail("TNMSERR_SA_RETURN_ILLEGAL_EXP", next);
             };
-            let Some((after_close, close)) = self.accept(after_value, self.codes.la.close_paren)
-            else {
+            let Some((after_close, _)) = self.accept(after_value, self.codes.la.close_paren) else {
                 return self.fail("TNMSERR_SA_RETURN_NO_CLOSE_PAREN", after_value);
             };
             pos = after_close;
             value = Some(Box::new(expression));
             return Ok(Some((
                 pos,
-                AstNode::spanned(keyword, close, AstPayload::Return { value }),
+                AstNode::from_atom(keyword, AstPayload::Return { value }),
             )));
         }
         Ok(Some((
@@ -651,7 +643,7 @@ impl SyntaxAnalyzer {
         };
         Ok(Some((
             pos,
-            AstNode::spanned(first, self.atom(pos - 1), AstPayload::If { branches }),
+            AstNode::from_atom(first, AstPayload::If { branches }),
         )))
     }
 
@@ -718,9 +710,8 @@ impl SyntaxAnalyzer {
         pos = after_body;
         Ok(Some((
             pos,
-            AstNode::spanned(
+            AstNode::from_atom(
                 keyword,
-                self.atom(pos - 1),
                 AstPayload::For {
                     init,
                     condition: Box::new(condition),
@@ -759,9 +750,8 @@ impl SyntaxAnalyzer {
         pos = after_body;
         Ok(Some((
             pos,
-            AstNode::spanned(
+            AstNode::from_atom(
                 keyword,
-                self.atom(pos - 1),
                 AstPayload::While {
                     condition: Box::new(condition),
                     body,
@@ -813,15 +803,14 @@ impl SyntaxAnalyzer {
             }
             return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_CASE", pos);
         }
-        let Some((next, close)) = self.accept(pos, self.codes.la.close_brace) else {
+        let Some((next, _)) = self.accept(pos, self.codes.la.close_brace) else {
             return self.fail("TNMSERR_SA_SWITCH_NO_CLOSE_BRACE", pos);
         };
         pos = next;
         Ok(Some((
             pos,
-            AstNode::spanned(
+            AstNode::from_atom(
                 keyword,
-                close,
                 AstPayload::Switch {
                     condition: Box::new(condition),
                     cases,
@@ -909,7 +898,6 @@ impl SyntaxAnalyzer {
                 pos,
                 self.node(
                     index,
-                    pos,
                     AstPayload::Assign {
                         left: Box::new(expression),
                         operator,
@@ -925,7 +913,6 @@ impl SyntaxAnalyzer {
             pos,
             self.node(
                 index,
-                pos,
                 AstPayload::Command {
                     expression: Box::new(expression),
                 },
@@ -947,7 +934,6 @@ impl SyntaxAnalyzer {
                 after_value,
                 self.node(
                     index,
-                    after_value,
                     AstPayload::Unary {
                         operator,
                         value: Box::new(value),
@@ -969,7 +955,6 @@ impl SyntaxAnalyzer {
             };
             expression = self.node(
                 index,
-                after_right,
                 AstPayload::Binary {
                     operator,
                     left: Box::new(expression),
@@ -986,16 +971,14 @@ impl SyntaxAnalyzer {
             let Some((after_expression, expression)) = self.parse_expression(next, 0, iad)? else {
                 return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
             };
-            let Some((after_close, close)) =
-                self.accept(after_expression, self.codes.la.close_paren)
+            let Some((after_close, _)) = self.accept(after_expression, self.codes.la.close_paren)
             else {
                 return self.fail("TNMSERR_SA_SMP_EXP_NO_CLOSE_PAREN", after_expression);
             };
             return Ok(Some((
                 after_close,
-                AstNode::spanned(
+                AstNode::from_atom(
                     open,
-                    close,
                     AstPayload::Paren {
                         expression: Box::new(expression),
                     },
@@ -1027,12 +1010,11 @@ impl SyntaxAnalyzer {
         let mut values = vec![first];
         pos = next;
         loop {
-            if let Some((next, close)) = self.accept(pos, self.codes.la.close_bracket) {
+            if let Some((next, _)) = self.accept(pos, self.codes.la.close_bracket) {
                 return Ok(Some((
                     next,
-                    AstNode::spanned(
+                    AstNode::from_atom(
                         open,
-                        close,
                         AstPayload::ExpressionList {
                             values,
                             forms: Vec::new(),
@@ -1067,7 +1049,6 @@ impl SyntaxAnalyzer {
             pos,
             self.node(
                 index,
-                pos,
                 AstPayload::ElementExpression {
                     elements,
                     element_type: 0,
@@ -1208,13 +1189,13 @@ impl SyntaxAnalyzer {
         let Some((after_name, name)) = self.accept(next, self.codes.la.val_str) else {
             return self.fail("TNMSERR_SA_NAME_ILLEGAL_NAME", next);
         };
-        let Some((after_close, close)) = self.accept(after_name, self.codes.la.close_sumi) else {
+        let Some((after_close, _)) = self.accept(after_name, self.codes.la.close_sumi) else {
             return self.fail("TNMSERR_SA_NAME_NO_CLOSE_SUMI", after_name);
         };
         let string_index = self.string_index(&name);
         Ok(Some((
             after_close,
-            AstNode::spanned(open, close, AstPayload::Name { string_index }),
+            AstNode::from_atom(open, AstPayload::Name { string_index }),
         )))
     }
 

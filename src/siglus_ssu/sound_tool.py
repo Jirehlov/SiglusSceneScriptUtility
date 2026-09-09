@@ -775,24 +775,17 @@ def _format_player_time(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def _get_playback_elapsed_seconds(
-    current: _RunningPlayback,
-    now: float | None = None,
-) -> float:
-    current_time = time.monotonic() if now is None else now
-    end_time = current_time
+def _get_playback_elapsed_seconds(current: _RunningPlayback) -> float:
+    end_time = time.monotonic()
     if current.paused and current.paused_at is not None:
         end_time = current.paused_at
     return max(end_time - current.started_at - current.paused_total, 0.0)
 
 
-def _get_playback_position_sample(
-    current: _RunningPlayback,
-    now: float | None = None,
-) -> tuple[int, str]:
+def _get_playback_position_sample(current: _RunningPlayback) -> tuple[int, str]:
     plan = current.plan
     sample_rate = max(int(plan.sample_rate), 1)
-    elapsed_samples = int(_get_playback_elapsed_seconds(current, now) * sample_rate)
+    elapsed_samples = int(_get_playback_elapsed_seconds(current) * sample_rate)
     first_pass_len = max(plan.end_sample - plan.start_sample, 1)
     loop_len = max(plan.end_sample - plan.repeat_sample, 1)
     if elapsed_samples < first_pass_len:
@@ -1258,10 +1251,10 @@ class _PlayerScreen:
     def _prompt_cursor(self, row: int, col: int) -> str:
         return f"\x1b[{max(row, 1)};{max(col, 1)}H"
 
-    def _read_windows_char(self, timeout: float):
+    def _read_windows_char(self):
         import msvcrt
 
-        deadline = time.monotonic() + max(timeout, 0.0)
+        deadline = time.monotonic() + 0.1
         while True:
             if msvcrt.kbhit():
                 ch = msvcrt.getwch()
@@ -1274,12 +1267,12 @@ class _PlayerScreen:
                 return None
             time.sleep(0.01)
 
-    def _read_posix_char(self, timeout: float):
+    def _read_posix_char(self):
         import select
 
         if self._stdin_fd is None:
             return None
-        ready, _, _ = select.select([self._stdin_fd], [], [], max(timeout, 0.0))
+        ready, _, _ = select.select([self._stdin_fd], [], [], 0.1)
         if not ready:
             return None
         data = os.read(self._stdin_fd, 1)
@@ -1298,15 +1291,15 @@ class _PlayerScreen:
                 break
         return None
 
-    def _read_char(self, timeout: float):
+    def _read_char(self):
         if not self.enabled:
             return None
         if os.name == "nt":
-            return self._read_windows_char(timeout)
-        return self._read_posix_char(timeout)
+            return self._read_windows_char()
+        return self._read_posix_char()
 
-    def read_event(self, timeout: float):
-        ch = self._read_char(timeout)
+    def read_event(self):
+        ch = self._read_char()
         if ch is None:
             return None
         if ch in ("\r", "\n"):
@@ -1543,7 +1536,7 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
                         f"ffplay exited unexpectedly with code {current.process.returncode}"
                     )
                 screen.render(entries, current_index, current)
-                event = screen.read_event(0.1)
+                event = screen.read_event()
                 if event is None:
                     continue
                 kind, payload = event

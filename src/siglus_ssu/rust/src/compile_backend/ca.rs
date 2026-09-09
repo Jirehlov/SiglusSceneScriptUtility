@@ -198,8 +198,6 @@ impl CharacterAnalyzer {
             block_comment_enter_advance: 1,
             newline_single_message: "Newline is not allowed inside single quotes.".to_string(),
             newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
-            invalid_escape_message: "Invalid escape (\\). Use '\\\\' to write a backslash."
-                .to_string(),
             single_empty_message: "Single quotes must enclose exactly one character.".to_string(),
             single_invalid_message:
                 "Single quotes are not closed or contain more than one character.".to_string(),

@@ -98,9 +98,9 @@ def _try_int(value):
         return None
 
 
-def _int_or(value, default):
+def _int_or(value):
     parsed = _try_int(value)
-    return default if parsed is None else parsed
+    return -1 if parsed is None else parsed
 
 
 def _duration_from_path(path: str):
@@ -240,7 +240,7 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
                     )
                 )
             blob, _used = dat.decode_scn_dat_with_candidates(
-                blob, candidates_by_dir[directory], trace=True
+                blob, candidates_by_dir[directory]
             )
         try:
             bundle = dat.dat_disassembly_bundle(
@@ -424,7 +424,7 @@ def _voice_ref_from_event(ev, scene_no=None):
     chara_no = named.get("chara_no")
     if chara_no is None and len(args) >= 2:
         chara_no = args[1]
-    chara_no = _int_or(chara_no, -1)
+    chara_no = _int_or(chara_no)
     return koe_no, chara_no
 
 
@@ -448,7 +448,7 @@ def _line_inline_voice_meta(events, scene_no=None):
         koe_no = _normalize_koe_no(args[0], scene_no=scene_no)
         if koe_no is None:
             continue
-        chara_no = _int_or(args[1], -1)
+        chara_no = _int_or(args[1])
         name = str(args[2] or "")
         text = _normalize_voice_text(args[3])
         if not name and not text:

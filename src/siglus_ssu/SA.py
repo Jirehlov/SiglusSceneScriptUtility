@@ -59,14 +59,14 @@ class SA:
             return 0, i, None
         return 1, i + 1, N(a.get("line", 0), atom=normalize_atom(a))
 
-    def sa_ss(s, i):
-        p = i
+    def sa_ss(s):
+        p = 0
         err = s.last
         ss = N(s._a(p).get("line", 0), sentense_list=[])
         while s._a(p).get("type") != C.LA_T["NONE"]:
             ok, p2, sen = s.sa_sentence(p)
             if not ok:
-                return 0, i, None
+                return 0, 0, None
             ss["sentense_list"].append(sen)
             p = p2
         s.last = err
@@ -1285,7 +1285,7 @@ class SA:
             )
         s.plad["atom_list"] = s.atom_list
         s.clear()
-        ok, root = s.sa_ss(0)[::2]
+        ok, root = s.sa_ss()[::2]
         if not ok:
             return 0, None
         s.clear()

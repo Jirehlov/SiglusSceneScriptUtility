@@ -291,19 +291,15 @@ def new_expression_state(
     element_info,
     receiver_value_form,
     item_expr,
-    info_variants=None,
     append_member_expr=None,
 ):
-    def _default_info_variants(info):
+    def _info_variants(info):
         if not isinstance(info, dict):
             return []
         alts = info.get("alts")
         if isinstance(alts, list) and alts:
             return [x for x in alts if isinstance(x, dict)]
         return [info]
-
-    if info_variants is None:
-        info_variants = _default_info_variants
 
     def _member_name(info):
         try:
@@ -421,13 +417,7 @@ def new_expression_state(
             )
             state.elm_point_pending_idx = None
 
-    def _collapse_value_expr(
-        stack_start,
-        out_form=None,
-        expr=None,
-        origin="property",
-        **extra,
-    ):
+    def _collapse_value_expr(stack_start, out_form=None, expr=None, **extra):
         _drop_stack_tail(stack_start)
         if out_form is None:
             one = {
@@ -435,7 +425,7 @@ def new_expression_state(
                 "val": None,
                 "receiver": False,
                 "expr": expr,
-                "origin": origin,
+                "origin": "property",
             }
             one.update(extra)
             state.stack.append(one)
@@ -445,19 +435,13 @@ def new_expression_state(
                 return
         except Exception:
             return
-        _push_stack_value(out_form, expr=expr, origin=origin, **extra)
+        _push_stack_value(out_form, expr=expr, origin="property", **extra)
 
-    def _collapse_command_expr(
-        stack_start,
-        ret_form,
-        expr=None,
-        origin="command",
-        **extra,
-    ):
+    def _collapse_command_expr(stack_start, ret_form, expr=None, **extra):
         _drop_stack_tail(stack_start)
         ret_form_i = _int_or_none(ret_form)
         if ret_form_i is not None and ret_form_i != int(fm_void):
-            _push_stack_value(ret_form_i, expr=expr, origin=origin, **extra)
+            _push_stack_value(ret_form_i, expr=expr, origin="command", **extra)
 
     def _copy_scalar(form):
         if not state.stack:
@@ -629,7 +613,7 @@ def new_expression_state(
             )
             if not isinstance(info, dict):
                 return None
-            variants = info_variants(info)
+            variants = _info_variants(info)
             if len(variants) > 1:
                 chosen = None
                 next_code = (
@@ -653,7 +637,7 @@ def new_expression_state(
                         if idx + 1 == len(items) - 1 and isinstance(info_hint, dict)
                         else _element_info(ret_form, next_code)
                     )
-                    for nxt in info_variants(next_info):
+                    for nxt in _info_variants(next_info):
                         if not isinstance(nxt, dict):
                             continue
                         if idx + 1 == len(items) - 1 and isinstance(info_hint, dict):
@@ -864,7 +848,7 @@ def new_expression_state(
             info = _element_info(parent_form, code)
             if not isinstance(info, dict):
                 return None
-            variants = info_variants(info)
+            variants = _info_variants(info)
             if len(variants) > 1:
                 for cand in variants:
                     try:
@@ -1004,10 +988,6 @@ def disassemble_scn_bytes(
     scn_prop_defs=None,
     scn_cmd_names=None,
     call_prop_names=None,
-    inc_property_defs=None,
-    inc_property_cnt=0,
-    inc_command_defs=None,
-    inc_command_cnt=0,
     pack_context=None,
     scene_no=None,
     scene_name=None,
@@ -1020,20 +1000,16 @@ def disassemble_scn_bytes(
 ):
     z_label_list = z_label_list or []
     pack_context = dict(pack_context or {})
-    if inc_property_defs is None:
-        inc_property_defs = pack_context.get("inc_property_defs")
-    if inc_command_defs is None:
-        inc_command_defs = pack_context.get("inc_command_defs")
-    if not inc_property_cnt:
-        try:
-            inc_property_cnt = int(pack_context.get("inc_property_cnt", 0) or 0)
-        except Exception:
-            inc_property_cnt = 0
-    if not inc_command_cnt:
-        try:
-            inc_command_cnt = int(pack_context.get("inc_command_cnt", 0) or 0)
-        except Exception:
-            inc_command_cnt = 0
+    inc_property_defs = pack_context.get("inc_property_defs")
+    inc_command_defs = pack_context.get("inc_command_defs")
+    try:
+        inc_property_cnt = int(pack_context.get("inc_property_cnt", 0) or 0)
+    except Exception:
+        inc_property_cnt = 0
+    try:
+        inc_command_cnt = int(pack_context.get("inc_command_cnt", 0) or 0)
+    except Exception:
+        inc_command_cnt = 0
     if scene_name in (None, ""):
         try:
             if scene_no is not None:

@@ -522,7 +522,7 @@ def _extract_iad2_definition_records(
 def _enrich_project_definitions(
     defs: dict[str, list[DefinitionRecord]],
     iad: dict[str, Any],
-) -> dict[str, list[DefinitionRecord]]:
+) -> None:
     prop_map = {str(x.get("name", "") or ""): x for x in iad.get("property_list", [])}
     cmd_map = {str(x.get("name", "") or ""): x for x in iad.get("command_list", [])}
     for records in defs.values():
@@ -550,7 +550,6 @@ def _enrich_project_definitions(
                     )
                     record.detail = f"#command {record.signature}"
                     record.scope = C.FM_GLOBAL
-    return defs
 
 
 def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectContext:
@@ -778,10 +777,7 @@ def _unknown_name(lad: dict[str, Any], atom: dict[str, Any]) -> str:
 
 
 def _source_token_from_atom(
-    lad: dict[str, Any] | None,
-    atom: dict[str, Any],
-    name: str,
-    kind: str,
+    lad: dict[str, Any] | None, atom: dict[str, Any], name: str
 ) -> SourceToken | None:
     if not isinstance(lad, dict) or not isinstance(atom, dict):
         return None
@@ -810,17 +806,12 @@ def _source_token_from_atom(
         line=line,
         start_char=start_char,
         end_char=end_char,
-        kind=kind,
+        kind="ident",
     )
 
 
 def _source_token_from_source_map(
-    text: str,
-    source_map: list[Any],
-    name: str,
-    start: int,
-    end: int,
-    kind: str,
+    text: str, source_map: list[Any], name: str, start: int, end: int
 ) -> SourceToken | None:
     if end <= start:
         return None
@@ -841,7 +832,7 @@ def _source_token_from_source_map(
                     line=next(iter(lines)) - 1,
                     start_char=min(chars),
                     end_char=max(chars) + 1,
-                    kind=kind,
+                    kind="ident",
                 )
         except (TypeError, ValueError, IndexError):
             pass
@@ -852,7 +843,7 @@ def _source_token_from_source_map(
         line=line,
         start_char=max(0, start - line_start),
         end_char=max(0, end - line_start),
-        kind=kind,
+        kind="ident",
     )
 
 
@@ -869,13 +860,11 @@ def _range_overlaps(
 
 
 def _definition_from_maps(
-    maps: Iterable[dict[str, list[DefinitionRecord]]],
-    key: str,
-    kinds: tuple[str, ...],
+    maps: Iterable[dict[str, list[DefinitionRecord]]], key: str
 ) -> DefinitionRecord | None:
     for mapping in maps:
         for record in mapping.get(key, []):
-            if record.kind in kinds:
+            if record.kind == "command":
                 return record
     return None
 
@@ -900,17 +889,17 @@ def _append_occurrence_from_definition(
     token: SourceToken | None,
     record: DefinitionRecord | None,
     used_ranges: set[tuple[int, int, int]],
-) -> bool:
+) -> None:
     if token is None or record is None:
-        return False
+        return
     if not _source_token_matches_text(result.text, token):
-        return False
+        return
     symbol_id = _definition_symbol_id_for_result(result, record)
     if not symbol_id:
-        return False
+        return
     rng = (token.line, token.start_char, token.end_char)
     if _range_overlaps(used_ranges, rng):
-        return False
+        return
     if record.kind == "command":
         kind = "command"
         semantic_type = "function"
@@ -921,7 +910,7 @@ def _append_occurrence_from_definition(
         kind = "macro"
         semantic_type = "macro"
     else:
-        return False
+        return
     used_ranges.add(rng)
     out.append(
         SymbolOccurrence(
@@ -937,7 +926,6 @@ def _append_occurrence_from_definition(
             renamable=_definition_renamable(record),
         )
     )
-    return True
 
 
 def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
@@ -1063,7 +1051,7 @@ def _collect_scene_symbols(
     def span_record(
         record: DefinitionRecord, atom: dict[str, Any], name: str
     ) -> DefinitionRecord:
-        token = _source_token_from_atom(lad, atom, name, "ident")
+        token = _source_token_from_atom(lad, atom, name)
         if token is not None:
             record.line = token.line + 1
             record.start_char = token.start_char
@@ -1934,12 +1922,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             continue
         replace_tokens.append(token)
     _append_macro_use_occurrences(
-        out,
-        result,
-        replace_tokens,
-        seen_ranges,
-        (local_macro_defs, macro_defs),
-        mark_used_ranges=True,
+        out, result, replace_tokens, seen_ranges, (local_macro_defs, macro_defs)
     )
     used_ranges_by_line: dict[int, list[tuple[int, int]]] = {}
     for line, start_char, end_char in seen_ranges:
@@ -1965,17 +1948,17 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
         semantic_type: str,
         definition: bool,
         renamable: bool,
-    ) -> bool:
+    ) -> None:
         if not isinstance(atom, dict) or not name or not symbol_id:
-            return False
-        token = _source_token_from_atom(result.lad, atom, name, "ident")
+            return
+        token = _source_token_from_atom(result.lad, atom, name)
         if token is None:
-            return False
+            return
         if not _source_token_matches_text(result.text, token):
-            return False
+            return
         rng = (token.line, token.start_char, token.end_char)
         if range_used(rng):
-            return False
+            return
         mark_range(rng)
         out.append(
             SymbolOccurrence(
@@ -1991,7 +1974,6 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 renamable=renamable,
             )
         )
-        return True
 
     def walk(node: Any, current_command: str = "") -> None:
         if isinstance(node, list):
@@ -2297,8 +2279,6 @@ def _append_macro_use_occurrences(
     tokens,
     used_ranges: set[tuple[int, int, int]],
     macro_maps,
-    *,
-    mark_used_ranges: bool,
 ) -> None:
     for token in tokens:
         if token.kind != "ident":
@@ -2315,8 +2295,7 @@ def _append_macro_use_occurrences(
                 break
         if record is None and not token.text.startswith("@"):
             continue
-        if mark_used_ranges:
-            used_ranges.add(rng)
+        used_ranges.add(rng)
         symbol_id = (
             _definition_symbol_id(record)
             if record is not None
@@ -2393,12 +2372,7 @@ def _append_iad2_body_occurrences(
                     if record is not None:
                         break
                 token = _source_token_from_source_map(
-                    text,
-                    source_map,
-                    name,
-                    i,
-                    i + len(name),
-                    "ident",
+                    text, source_map, name, i, i + len(name)
                 )
                 _append_occurrence_from_definition(
                     out, result, token, record, used_ranges
@@ -2425,8 +2399,8 @@ def _append_iad2_body_occurrences(
             key = name.casefold()
             if not name or key in arg_names:
                 continue
-            token = _source_token_from_atom(lad, atom, name, "ident")
-            record = _definition_from_maps(definition_maps, key, ("command",))
+            token = _source_token_from_atom(lad, atom, name)
+            record = _definition_from_maps(definition_maps, key)
             if record is None:
                 record = _global_property_definition_from_maps(definition_maps, key)
             if record is None:
@@ -2523,7 +2497,7 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
     if not isinstance(spans, list):
         return []
     atom_type_map = {
-        tm._int_value(atom.get("id"), -1): tm._int_value(atom.get("type"), -1)
+        tm._int_value(atom.get("id")): tm._int_value(atom.get("type"))
         for atom in atom_list
         if isinstance(atom, dict)
     }
@@ -2573,8 +2547,8 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
             continue
         if atom.get("type") != C.LA_T["VAL_STR"]:
             continue
-        aid = tm._int_value(atom.get("id"), -1)
-        opt = tm._int_value(atom.get("opt"), -1)
+        aid = tm._int_value(atom.get("id"))
+        opt = tm._int_value(atom.get("opt"))
         if aid < 0 or aid >= len(spans) or opt < 0 or opt >= len(str_list):
             continue
         span = spans[aid]
@@ -2964,9 +2938,7 @@ def completion_items(
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(
-        label: str, kind: int, detail: str = "", insert_text: str | None = None
-    ) -> None:
+    def add(label: str, kind: int, detail: str = "") -> None:
         key = (label, detail)
         if key in seen:
             return
@@ -2974,11 +2946,8 @@ def completion_items(
         item = {"label": label, "kind": kind}
         if detail:
             item["detail"] = detail
-        new_text = insert_text if insert_text is not None else label
         if rng is not None:
-            item["textEdit"] = {"range": rng, "newText": new_text}
-        elif insert_text is not None:
-            item["insertText"] = insert_text
+            item["textEdit"] = {"range": rng, "newText": label}
         items.append(item)
 
     want_labels = token_kind == "label"
@@ -3235,12 +3204,12 @@ def _cache_str(item: dict[str, Any], key: str) -> str:
     return value
 
 
-def _cache_optional_str(item: dict[str, Any], key: str) -> str | None:
-    value = item.get(key)
+def _cache_optional_str(item: dict[str, Any]) -> str | None:
+    value = item.get("code")
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ValueError(key)
+        raise ValueError("code")
     return value
 
 
@@ -3303,7 +3272,7 @@ def _source_diagnostic_to_cache(diagnostic: SourceDiagnostic) -> dict[str, Any]:
 
 
 def _source_diagnostic_from_cache(item: dict[str, Any], path: str) -> SourceDiagnostic:
-    code = _cache_optional_str(item, "code")
+    code = _cache_optional_str(item)
     return SourceDiagnostic(
         path=path,
         line=_cache_int(item, "line"),
@@ -3501,10 +3470,7 @@ def _write_lsp_index_cache(
 
 
 def _update_lsp_index_cache(
-    directory: str,
-    inputs: dict[str, dict[str, str]],
-    section: str,
-    payload: dict[str, Any],
+    directory: str, inputs: dict[str, dict[str, str]], payload: dict[str, Any]
 ) -> None:
     data = _read_lsp_index_cache_header(directory, inputs)
     if data is None:
@@ -3514,7 +3480,7 @@ def _update_lsp_index_cache(
             "const": _lsp_index_const_signature(),
             "cache": _lsp_index_cache_key(directory, inputs),
         }
-    data[section] = payload
+    data["link"] = payload
     _write_lsp_index_cache(directory, inputs, data)
 
 
@@ -3857,8 +3823,6 @@ class SSLanguageServer:
         title: str,
         message: str = "",
         percentage: int = 0,
-        *,
-        cancellable: bool = True,
     ) -> bool:
         self.raise_if_request_cancelled()
         token = self.current_work_done_token
@@ -3871,7 +3835,7 @@ class SSLanguageServer:
         value: dict[str, Any] = {
             "kind": "begin",
             "title": title,
-            "cancellable": cancellable,
+            "cancellable": True,
             "percentage": percentage,
         }
         if message:
@@ -3901,16 +3865,12 @@ class SSLanguageServer:
             value["percentage"] = percentage
         self.send_progress(token, value)
 
-    def begin_scan_progress(
-        self,
-        title: str,
-        total: int,
-    ) -> ScanProgressState | None:
+    def begin_scan_progress(self, total: int) -> ScanProgressState | None:
         token = self.current_work_done_token
         if token is None or total <= 0:
             return None
         state = ScanProgressState(
-            title=title,
+            title="SiglusSS: Scanning project symbols",
             total=total,
             token=token,
         )
@@ -3931,13 +3891,11 @@ class SSLanguageServer:
         if not self.current_work_done_finished:
             self.send_progress(token, {"kind": "end"})
 
-    def report_scan_progress(
-        self, state: ScanProgressState | None, step: int = 1
-    ) -> None:
+    def report_scan_progress(self, state: ScanProgressState | None) -> None:
         self.raise_if_request_cancelled()
         if state is None:
             return
-        state.current = min(state.total, state.current + step)
+        state.current = min(state.total, state.current + 1)
         percentage = 100 if state.total <= 0 else int(state.current * 100 / state.total)
         self.send_progress(
             state.token,
@@ -4310,7 +4268,7 @@ class SSLanguageServer:
                 for path, diagnostics in entry.diagnostics.items()
             },
         }
-        _update_lsp_index_cache(directory, inputs, "link", payload)
+        _update_lsp_index_cache(directory, inputs, payload)
 
     def project_for_directory(self, directory: str) -> ProjectCacheEntry:
         directory = os.path.abspath(directory or ".")
@@ -4361,15 +4319,11 @@ class SSLanguageServer:
         directory = os.path.abspath(directory or ".")
         return _sorted_dir_paths(directory, self.overlays_for_dir(directory), ".ss")
 
-    def analyze_base(self, doc: DocumentState, force: bool = False) -> AnalysisResult:
+    def analyze_base(self, doc: DocumentState) -> AnalysisResult:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
         project_entry = self.project_for_directory(directory)
         signature = (project_entry.signature, self.document_source_signature(doc))
-        if (
-            doc.base_analysis is not None
-            and not force
-            and doc.base_analysis_signature == signature
-        ):
+        if doc.base_analysis is not None and doc.base_analysis_signature == signature:
             self.report_work_done_progress("Using cached current-file analysis.", 55)
             return doc.base_analysis
         self.report_work_done_progress("Analyzing current file...", 50)
@@ -4503,10 +4457,7 @@ class SSLanguageServer:
         native_project, native_config = self.native_lsp_project_for_directory(
             directory, project_entry
         )
-        progress = self.begin_scan_progress(
-            "SiglusSS: Scanning project symbols",
-            len(dirty_paths),
-        )
+        progress = self.begin_scan_progress(len(dirty_paths))
         try:
             scan_docs: list[tuple[str, DocumentState]] = []
             for path in dirty_paths:
@@ -4613,9 +4564,9 @@ class SSLanguageServer:
         self.save_persistent_link_diagnostics(directory, paths, entry)
         return entry
 
-    def analyze(self, doc: DocumentState, force: bool = False) -> AnalysisResult:
+    def analyze(self, doc: DocumentState) -> AnalysisResult:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
-        base = self.analyze_base(doc, force=force)
+        base = self.analyze_base(doc)
         if not doc.path.lower().endswith(".ss") or base.diagnostics:
             doc.analysis = base
             doc.analysis_signature = doc.base_analysis_signature
@@ -4626,11 +4577,7 @@ class SSLanguageServer:
             return doc.analysis
         link_entry = self.link_diagnostics_for_directory(directory)
         signature = (link_entry.project_signature, link_entry.revision)
-        if (
-            doc.analysis is not None
-            and not force
-            and doc.analysis_signature == signature
-        ):
+        if doc.analysis is not None and doc.analysis_signature == signature:
             return doc.analysis
         extras = list(_diagnostics_for_path(link_entry.diagnostics, doc.path))
         if not extras:

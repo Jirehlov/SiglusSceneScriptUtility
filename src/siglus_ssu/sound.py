@@ -28,12 +28,12 @@ def _xor_decrypt_ogg_auto(data: bytes) -> bytes:
     return data
 
 
-def decode_owp_to_ogg_bytes(path: str, key: int = 0x39) -> bytes:
+def decode_owp_to_ogg_bytes(path: str) -> bytes:
     with open_read(path) as f:
         b = f.read()
     if len(b) >= 4 and b[:4] == b"OggS":
         return b
-    out = bytes(b).translate(bytes(x ^ key for x in range(256))) if b else b
+    out = bytes(b).translate(bytes(x ^ 0x39 for x in range(256))) if b else b
     if len(out) < 4 or out[:4] != b"OggS":
         out2 = _xor_decrypt_ogg_auto(b)
         if len(out2) >= 4 and out2[:4] == b"OggS":
@@ -137,10 +137,10 @@ def read_ogg_duration_seconds(path: str) -> float | None:
         return estimate_ogg_duration_seconds(f.read())
 
 
-def encode_ogg_to_owp_bytes(ogg_bytes: bytes, key: int = 0x39) -> bytes:
+def encode_ogg_to_owp_bytes(ogg_bytes: bytes) -> bytes:
     if len(ogg_bytes) < 4 or ogg_bytes[:4] != b"OggS":
         raise ValueError("OWP encode failed: input is not OggS")
-    return bytes(ogg_bytes).translate(bytes(x ^ key for x in range(256)))
+    return bytes(ogg_bytes).translate(bytes(x ^ 0x39 for x in range(256)))
 
 
 def ogg_calc_smp_cnt(ogg_bytes: bytes) -> int:
@@ -211,7 +211,7 @@ _OVK_ENTRY_STRUCT = struct.Struct("<IIii")
 
 def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
     with open_read(ovk_path) as f:
-        cnt = read_u32_le_from_file(f, strict=True)
+        cnt = read_u32_le_from_file(f)
         if cnt == 0:
             return []
         table = f.read(_OVK_ENTRY_STRUCT.size * cnt)
@@ -278,11 +278,11 @@ class NWAHeader:
 class _BitReader:
     __slots__ = ("_data", "_len", "byte_pos", "bit_pos")
 
-    def __init__(self, data: bytes, byte_pos: int = 0, bit_pos: int = 0):
+    def __init__(self, data: bytes, byte_pos: int = 0):
         self._data = data
         self._len = len(data)
         self.byte_pos = byte_pos
-        self.bit_pos = bit_pos
+        self.bit_pos = 0
 
     def get(self, nbits: int) -> int:
         data = self._data
@@ -375,7 +375,7 @@ def _nwa_decode_sample(br, header: NWAHeader, mod: int, zero_cnt: int, nowsmp: i
 def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> bytes:
     if header.channels == 1:
         nowsmp = _int16_le(data, 0)
-        br = _BitReader(data, byte_pos=2, bit_pos=0)
+        br = _BitReader(data, byte_pos=2)
         out = array("h", [0]) * src_smp_cnt
         mod = _nwa_pack_mod(header.pack_mod)
         zero_cnt = 0
@@ -387,7 +387,7 @@ def _nwa_unpack_unit_16(data: bytes, src_smp_cnt: int, header: NWAHeader) -> byt
         return out.tobytes()
     nowsmp_l = _int16_le(data, 0)
     nowsmp_r = _int16_le(data, 2)
-    br = _BitReader(data, byte_pos=4, bit_pos=0)
+    br = _BitReader(data, byte_pos=4)
     out = array("h", [0]) * src_smp_cnt
     mod = _nwa_pack_mod(header.pack_mod)
     zero_cnt = 0

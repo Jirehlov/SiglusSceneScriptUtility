@@ -128,12 +128,12 @@ def load_const_module(path: Path | None = None, profile: int | None = None) -> N
     _bind_const_module(m)
 
 
-def get_const_module(path: Path | None = None, profile: int | None = None):
+def get_const_module(profile: int | None = None):
     cached = sys.modules.get(_CONST_MODULE_NAME)
-    if cached is not None and path is None and profile is None:
+    if cached is not None and profile is None:
         _bind_const_module(cached)
         return cached
-    load_const_module(path=path, profile=profile)
+    load_const_module(profile=profile)
     module = sys.modules.get(_CONST_MODULE_NAME)
     if module is None:
         raise RuntimeError("const.py loaded but module cache entry is missing.")
@@ -267,24 +267,15 @@ def _github_api_json(url: str):
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
-def _remote_version_refs(
-    version: str, *, per_page: int = 100, max_pages: int = 10
-) -> tuple[str, ...]:
+def _remote_version_refs(version: str) -> tuple[str, ...]:
     pattern = _version_subject_pattern(version)
     if pattern is None:
         return ()
     refs = []
     seen = set()
-    try:
-        per_page = max(1, min(int(per_page), 100))
-        max_pages = max(1, int(max_pages))
-    except (TypeError, ValueError):
-        return ()
-    for page in range(1, max_pages + 1):
+    for page in range(1, 11):
         try:
-            payload = _github_api_json(
-                _COMMITS_API.format(per_page=per_page, page=page)
-            )
+            payload = _github_api_json(_COMMITS_API.format(per_page=100, page=page))
         except (urlerror.URLError, ValueError, RuntimeError):
             return tuple(refs)
         if not isinstance(payload, list) or not payload:
@@ -298,7 +289,7 @@ def _remote_version_refs(
             except AttributeError:
                 continue
             _append_version_ref(refs, seen, pattern, sha, subject)
-        if refs or len(payload) < per_page:
+        if refs or len(payload) < 100:
             break
     return tuple(refs)
 

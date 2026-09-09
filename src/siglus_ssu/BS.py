@@ -569,7 +569,6 @@ def set_shuffle_seed(seed=1):
     except (TypeError, ValueError):
         seed_i = 1
     _MSR = MSVCRand(seed_i)
-    return seed_i
 
 
 def get_shuffle_seed():

@@ -220,25 +220,23 @@ def extract_ogv_from_omv(omv_path, out_ogv_path):
         shutil.copyfileobj(fin, fout, length=1024 * 1024)
 
 
-def read_omv_info(path, *, parse_streams=True):
+def read_omv_info(path):
     size = int(read_file_stat(path).st_size)
     oggs_off = find_oggs_offset(path, 0)
     header_size = int(oggs_off)
     ogv_size = int(size - oggs_off)
-    stream_kinds = ()
-    if parse_streams:
-        try:
-            kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, oggs_off)
-            stream_kinds = tuple(
-                kinds_by_serial[serial] for serial in sorted(kinds_by_serial)
-            )
-        except _OMV_PARSE_ERRORS:
-            stream_kinds = ()
+    try:
+        kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, oggs_off)
+        stream_kinds = tuple(
+            kinds_by_serial[serial] for serial in sorted(kinds_by_serial)
+        )
+    except _OMV_PARSE_ERRORS:
+        stream_kinds = ()
     return OMVInfo(str(path), size, oggs_off, header_size, ogv_size, stream_kinds)
 
 
 def read_omv_full_info(path):
-    basic = read_omv_info(path, parse_streams=True)
+    basic = read_omv_info(path)
     outer = _parse_outer_header(path)
     table_a = ()
     table_b = ()
@@ -286,10 +284,10 @@ def read_omv_full_info(path):
     )
 
 
-def read_ogv_stream_kinds(path, *, max_pages=256):
+def read_ogv_stream_kinds(path):
     path = resolve_read_path(path, kind="file")
     kinds_by_serial = {}
-    for serial, packet in _iter_ogg_packets(path, 0, max_pages=max_pages):
+    for serial, packet in _iter_ogg_packets(path, 0, max_pages=256):
         if serial in kinds_by_serial:
             continue
         kind = _detect_packet_kind(packet)
@@ -523,9 +521,9 @@ def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
                 yield serial, packet
 
 
-def _parse_ogg_stream_kinds_by_serial(path, oggs_off, *, max_pages=256):
+def _parse_ogg_stream_kinds_by_serial(path, oggs_off):
     kinds_by_serial = {}
-    for serial, packet in _iter_ogg_packets(path, oggs_off, max_pages=max_pages):
+    for serial, packet in _iter_ogg_packets(path, oggs_off, max_pages=256):
         if serial in kinds_by_serial:
             continue
         kind = _detect_packet_kind(packet)

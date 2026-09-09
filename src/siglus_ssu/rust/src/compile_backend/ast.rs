@@ -183,17 +183,6 @@ impl AstNode {
         }
     }
 
-    pub fn spanned(first: Atom, _last: Atom, payload: AstPayload) -> Self {
-        Self {
-            line: first.line,
-            form: 0,
-            temp_form: 0,
-            include_selection: false,
-            first_atom: Some(first),
-            payload,
-        }
-    }
-
     pub fn first_atom(&self) -> Option<&Atom> {
         self.first_atom.as_ref()
     }

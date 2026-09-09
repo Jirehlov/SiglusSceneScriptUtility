@@ -828,29 +828,29 @@ fn append_occurrence_from_definition(
     token: Option<SourceToken>,
     record: Option<&LspDefinition>,
     used_ranges: &mut UsedRanges,
-) -> bool {
+) {
     let Some(token) = token else {
-        return false;
+        return;
     };
     let Some(record) = record else {
-        return false;
+        return;
     };
     let symbol_id = definition_symbol_id_for_document(record, path_identity, project_defs);
     if symbol_id.is_empty() {
-        return false;
+        return;
     }
     let rng = (token.line, token.start_char, token.end_char);
     if used_ranges.overlaps(rng) {
-        return false;
+        return;
     }
     let (kind, semantic_type) = match record.kind.as_str() {
         "command" => ("command", "function"),
         "property" => ("property", "variable"),
         "macro" | "define" | "replace" => ("macro", "macro"),
-        _ => return false,
+        _ => return,
     };
     if !used_ranges.insert(rng) {
-        return false;
+        return;
     }
     out.push(LspOccurrence {
         symbol_id,
@@ -864,7 +864,6 @@ fn append_occurrence_from_definition(
         definition: false,
         renamable: definition_renamable(record),
     });
-    true
 }
 
 fn append_macro_use_occurrences(
@@ -874,7 +873,6 @@ fn append_macro_use_occurrences(
     tokens: Vec<SourceToken>,
     used_ranges: &mut UsedRanges,
     macro_maps: &[HashMap<String, LspDefinition>],
-    mark_used_ranges: bool,
 ) {
     for token in tokens {
         let rng = (token.line, token.start_char, token.end_char);
@@ -886,7 +884,7 @@ fn append_macro_use_occurrences(
         if record.is_none() && !token.text.starts_with('@') {
             continue;
         }
-        if mark_used_ranges && !used_ranges.insert(rng) {
+        if !used_ranges.insert(rng) {
             continue;
         }
         let symbol_id = record
@@ -1555,7 +1553,6 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> Vec<LspOccurrence>
         replace_tokens(replace_uses),
         &mut used_ranges,
         &[local_macro_defs.clone(), project_macro_defs.clone()],
-        true,
     );
     let ctx = OccurrenceContext {
         project,

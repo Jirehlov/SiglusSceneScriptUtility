@@ -19,10 +19,10 @@ _GAN_OPS = {
 
 
 def _gan_read_i32(blob, ofs):
-    return read_i32_le_advancing(blob, ofs, default=None)
+    return read_i32_le_advancing(blob, ofs)
 
 
-def _gan_parse(blob, want_disasm=True, max_ins=200000):
+def _gan_parse(blob, want_disasm=True):
     out = {
         "ok": True,
         "errors": [],
@@ -68,7 +68,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
             }
         )
 
-    while ofs < len(blob) and ins_cnt < max_ins:
+    while ofs < len(blob) and ins_cnt < 200000:
         ins_cnt += 1
         ofs0 = ofs
         code, ofs = _gan_read_i32(blob, ofs)
@@ -179,7 +179,7 @@ def _gan_parse(blob, want_disasm=True, max_ins=200000):
         _add_ins(ofs0, code)
         out["warnings"].append(f"unknown top-level code {code!r} at {hx(ofs0)}")
         break
-    if ins_cnt >= max_ins:
+    if ins_cnt >= 200000:
         out["warnings"].append("disasm truncated (too many instructions)")
     return out
 

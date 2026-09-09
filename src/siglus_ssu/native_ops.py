@@ -670,12 +670,12 @@ def msvcrt_rand_byte(state: int):
     return s, v & 0xFF
 
 
-def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int, max_scan: int):
+def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int):
     pat_len = len(pattern)
     state = seed
     buf = bytearray()
     pos = -1
-    target_end = start_skip + max_scan + pat_len - 1
+    target_end = start_skip + 16777216 + pat_len - 1
     while pos + 1 < target_end:
         state, value = msvcrt_rand_byte(state)
         pos += 1
@@ -690,20 +690,15 @@ def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int, max_scan: int
     return None
 
 
-def find_rand_skip(
-    seed: int, pattern: bytes, start_skip: int = 0, max_scan: int = 16777216
-):
+def find_rand_skip(seed: int, pattern: bytes, start_skip: int = 0):
     seed = int(seed) & 0xFFFFFFFF
     start_skip = max(0, int(start_skip))
     pattern = bytes(pattern)
-    max_scan = int(max_scan)
     if not pattern:
         return start_skip
-    if max_scan <= 0:
-        return None
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
-        return native_accel.find_rand_skip(seed, pattern, start_skip, max_scan)
-    return _py_find_rand_skip(seed, pattern, start_skip, max_scan)
+        return native_accel.find_rand_skip(seed, pattern, start_skip)
+    return _py_find_rand_skip(seed, pattern, start_skip)
 
 
 def _py_palette_bgra(palette, indices: bytes) -> bytes:
@@ -753,14 +748,7 @@ def msvcrand_shuffle_inplace(state: int, a) -> int:
     return _py_msvcrand_shuffle_inplace(state, a)
 
 
-def find_shuffle_seed_first(
-    target_idx_pairs,
-    seed0: int,
-    *,
-    workers=None,
-    chunk=None,
-    progress_iv=None,
-):
+def find_shuffle_seed_first(target_idx_pairs, seed0: int, *, workers):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
     pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
@@ -768,6 +756,4 @@ def find_shuffle_seed_first(
         pairs,
         int(seed0) & 0xFFFFFFFF,
         workers,
-        chunk,
-        progress_iv,
     )

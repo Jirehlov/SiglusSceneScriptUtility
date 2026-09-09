@@ -586,8 +586,8 @@ def _is_charset_compare_tail(data: bytearray, i: int) -> bool:
     return False
 
 
-def _charset_loop_back_edge(data: bytearray, start: int, limit: int = 192):
-    end = min(len(data), int(start) + int(limit))
+def _charset_loop_back_edge(data: bytearray, start: int):
+    end = min(len(data), int(start) + 192)
     i = int(start) + 4
     while i < end:
         op = data[i]
@@ -620,12 +620,10 @@ def _is_font_charset_loop(data: bytearray, i: int) -> bool:
     return _charset_loop_back_edge(data, i)
 
 
-def _find_charset_candidates(data: bytearray, accept_values=None):
+def _find_charset_candidates(data: bytearray):
     candidates = []
     for i in range(max(0, len(data) - 4)):
-        if (
-            accept_values is None or data[i + 3] in accept_values
-        ) and _is_font_charset_loop(data, i):
+        if _is_font_charset_loop(data, i):
             candidates.append(i)
     return candidates
 
@@ -966,7 +964,7 @@ def _restore_lang_overlay(data: bytes, expected_config=None):
     return restored, manifest
 
 
-def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = True):
+def _active_utf16_refs(data: bytes, layout, texts):
     active = []
     for text in texts:
         for off in _find_bytes_all(data, _utf16z(text)):
@@ -974,17 +972,16 @@ def _active_utf16_refs(data: bytes, layout, texts, *, require_code_ref: bool = T
             if va is None:
                 continue
             refs = _find_va_refs(data, layout, va)
-            if require_code_ref and not any(_is_code_ref(layout, ref) for ref in refs):
+            if not any(_is_code_ref(layout, ref) for ref in refs):
                 continue
-            if refs:
-                active.append(
-                    {
-                        "text": text,
-                        "off": off,
-                        "va": va,
-                        "refs": refs,
-                    }
-                )
+            active.append(
+                {
+                    "text": text,
+                    "off": off,
+                    "va": va,
+                    "refs": refs,
+                }
+            )
     return active
 
 
@@ -1042,11 +1039,8 @@ def _patch_utf16_refs(
     target_va,
     changes,
     warnings,
-    require_code_ref: bool = True,
 ):
-    active = _active_utf16_refs(
-        bytes(data), layout, texts, require_code_ref=require_code_ref
-    )
+    active = _active_utf16_refs(bytes(data), layout, texts)
     target_active = [item for item in active if item["text"] == target]
     source_active = [item for item in active if item["text"] != target]
     if not source_active:
@@ -1076,9 +1070,7 @@ def _patch_utf16_refs(
                 f"LANG {label}: {item['text']} -> {target}",
                 changes,
             )
-    verified = _active_utf16_refs(
-        bytes(data), layout, texts, require_code_ref=require_code_ref
-    )
+    verified = _active_utf16_refs(bytes(data), layout, texts)
     if not any(item["text"] == target for item in verified) or any(
         item["text"] != target for item in verified
     ):
@@ -1241,7 +1233,7 @@ def _lang_needed_strings(data: bytes, layout, specs):
     needed = []
     for _label, texts, target in specs:
         unique = tuple(dict.fromkeys(texts))
-        active = _active_utf16_refs(data, layout, unique, require_code_ref=True)
+        active = _active_utf16_refs(data, layout, unique)
         if any(item["text"] != target for item in active) and not any(
             item["text"] == target for item in active
         ):
@@ -1319,7 +1311,7 @@ def revert_lang(data: bytearray, lang_spec: str):
 
 
 def _format_active_utf16_refs(data: bytes, layout, texts):
-    active = _active_utf16_refs(data, layout, texts, require_code_ref=True)
+    active = _active_utf16_refs(data, layout, texts)
     if not active:
         return "not found"
     parts = []

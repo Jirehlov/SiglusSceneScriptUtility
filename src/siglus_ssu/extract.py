@@ -60,9 +60,7 @@ def _disassemble_dat_dir(
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
-        blob, _used = D.decode_scn_dat_with_candidates(
-            blob, exe_el_candidates, trace=True
-        )
+        blob, _used = D.decode_scn_dat_with_candidates(blob, exe_el_candidates)
         if not looks_like_siglus_dat(blob):
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
@@ -104,11 +102,7 @@ def main(argv=None):
     args, positional_args = split_end_of_options(args)
     try:
         args, gei, dat_txt, decompile = parse_gei_disam_args(
-            args,
-            disam_action=lambda: None,
-            decompile_action=lambda: None,
-            allow_gei_disam=False,
-            return_decompile=True,
+            args, allow_gei_disam=False
         )
     except ValueError as e:
         sys.stderr.write(str(e) + "\n")

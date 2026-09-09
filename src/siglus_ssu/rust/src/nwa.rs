@@ -2,13 +2,10 @@
 pub struct NwaHeader {
     pub channels: u16,
     pub bits_per_sample: u16,
-    pub samples_per_sec: u32,
     pub pack_mod: i32,
     pub zero_mod: i32,
     pub unit_cnt: u32,
     pub original_size: u32,
-    pub pack_size: u32,
-    pub sample_cnt: u32,
     pub unit_sample_cnt: u32,
     pub last_sample_cnt: u32,
     pub last_sample_pack_size: u32,
@@ -57,13 +54,10 @@ pub fn parse_header(b: &[u8]) -> Result<NwaHeader, String> {
     Ok(NwaHeader {
         channels: read_u16_le(b, 0)?,
         bits_per_sample: read_u16_le(b, 2)?,
-        samples_per_sec: read_u32_le(b, 4)?,
         pack_mod: read_i32_le(b, 8)?,
         zero_mod: read_i32_le(b, 12)?,
         unit_cnt: read_u32_le(b, 16)?,
         original_size: read_u32_le(b, 20)?,
-        pack_size: read_u32_le(b, 24)?,
-        sample_cnt: read_u32_le(b, 28)?,
         unit_sample_cnt: read_u32_le(b, 32)?,
         last_sample_cnt: read_u32_le(b, 36)?,
         last_sample_pack_size: read_u32_le(b, 40)?,
@@ -263,8 +257,6 @@ fn unpack_unit_16_into(chunk: &[u8], header: &NwaHeader, pack_mod: u8, dst: &mut
 
 pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
     let h = parse_header(data)?;
-
-    let _ = (h.samples_per_sec, h.pack_size, h.sample_cnt);
 
     if h.bits_per_sample != 16 {
         return Err(format!(

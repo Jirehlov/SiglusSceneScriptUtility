@@ -198,8 +198,6 @@ impl IncAnalyzer {
             block_comment_enter_advance: 2,
             newline_single_message: "Found newline inside single quotes.".to_string(),
             newline_double_message: "Found newline inside double quotes.".to_string(),
-            invalid_escape_message: "Invalid escape (\\). Use '\\\\' to write a backslash."
-                .to_string(),
             unclosed_single_message: "Single quote is not closed.".to_string(),
             unclosed_double_message: "Double quote is not closed.".to_string(),
             unclosed_block_message: " Comment (/*) is not closed.".to_string(),

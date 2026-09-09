@@ -271,17 +271,13 @@ def next_else_ifdef_state(state: int) -> int:
 def scan_text_comments(
     text,
     *,
-    case_mode=None,
+    case_mode,
     single_quote_mode: str = "none",
     single_escape_chars: str = "",
     double_escape_chars: str = "",
-    semicolon_line_comment: bool = True,
-    slash_line_comment: bool = True,
-    block_comment: bool = True,
     block_comment_enter_advance: int = 2,
     newline_single_message: str = "",
     newline_double_message: str = "",
-    invalid_escape_message: str = "",
     single_empty_message: str = "",
     single_invalid_message: str = "",
     unclosed_single_message: str = "",
@@ -346,7 +342,11 @@ def scan_text_comments(
             if ch in single_escape_chars:
                 state = 1 if single_quote_mode == "string" else 3
             else:
-                return {"ok": False, "line": line, "message": invalid_escape_message}
+                return {
+                    "ok": False,
+                    "line": line,
+                    "message": "Invalid escape (\\). Use '\\\\' to write a backslash.",
+                }
         elif state == 3:
             if ch == "'":
                 state = 0
@@ -361,7 +361,11 @@ def scan_text_comments(
             if ch in double_escape_chars:
                 state = 4
             else:
-                return {"ok": False, "line": line, "message": invalid_escape_message}
+                return {
+                    "ok": False,
+                    "line": line,
+                    "message": "Invalid escape (\\). Use '\\\\' to write a backslash.",
+                }
         elif state == 6:
             i += 1
             column += 1
@@ -380,17 +384,17 @@ def scan_text_comments(
                 state = 1
             elif ch == '"':
                 state = 4
-            elif semicolon_line_comment and ch == ";":
+            elif ch == ";":
                 state = 6
                 i += 1
                 column += 1
                 continue
-            elif slash_line_comment and ch == "/" and text[i + 1] == "/":
+            elif ch == "/" and text[i + 1] == "/":
                 state = 6
                 i += 2
                 column += 2
                 continue
-            elif block_comment and ch == "/" and text[i + 1] == "*":
+            elif ch == "/" and text[i + 1] == "*":
                 block_line = line
                 state = 7
                 i += block_comment_enter_advance
@@ -817,7 +821,7 @@ def is_named_filename(name: str, target_name: str) -> bool:
     return windows_filename_key(name) == windows_filename_key(target_name)
 
 
-def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
+def list_named_paths(base_dir: str, target_name: str):
     try:
         base_dir, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
@@ -829,16 +833,6 @@ def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
             continue
         if entry.is_file():
             out.append(entry.path)
-    if recursive:
-        for dirpath, _, filenames in walk_read_directory(base_dir):
-            if dirpath == base_dir:
-                continue
-            for fn in filenames:
-                if not is_named_filename(fn, target_name):
-                    continue
-                p = os.path.join(dirpath, fn)
-                if os.path.isfile(p):
-                    out.append(p)
     seen = set()
     uniq = []
     for p in out:
@@ -859,12 +853,12 @@ def list_named_paths(base_dir: str, target_name: str, recursive: bool = True):
     return uniq
 
 
-def find_named_path(base_dir: str, target_name: str, recursive: bool = True) -> str:
-    hits = list_named_paths(base_dir, target_name, recursive=recursive)
+def find_named_path(base_dir: str, target_name: str) -> str:
+    hits = list_named_paths(base_dir, target_name)
     return hits[0] if hits else ""
 
 
-def norm_charset(cs: str, keep_unknown: bool = False) -> str:
+def norm_charset(cs: str) -> str:
     s = str(cs or "").strip().lower()
     if not s:
         return ""
@@ -884,7 +878,7 @@ def norm_charset(cs: str, keep_unknown: bool = False) -> str:
     try:
         name = codecs.lookup(s).name
     except LookupError:
-        return str(cs or "") if keep_unknown else ""
+        return ""
     if name == "cp932":
         return "cp932"
     if name == "utf-8-sig":
@@ -997,9 +991,9 @@ def read_angou_first_line(path: str, force_charset: str = "") -> str:
         return ""
 
 
-def decode_angou_first_line(data: bytes, force_charset: str = "") -> str:
+def decode_angou_first_line(data: bytes) -> str:
     try:
-        text, _, _ = decode_text_auto(data, force_charset=force_charset)
+        text, _, _ = decode_text_auto(data)
     except Exception:
         return ""
     return angou_first_line(text)
@@ -1076,11 +1070,11 @@ def ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
-def parse_i32_header(dat: bytes, fields, size: int, offset: int = 0) -> dict:
-    if (not dat) or len(dat) < offset + int(size or 0):
+def parse_i32_header(dat: bytes, fields, size: int) -> dict:
+    if (not dat) or len(dat) < int(size or 0):
         return {}
     try:
-        vals = struct.unpack_from("<" + "i" * len(fields), dat, int(offset or 0))
+        vals = struct.unpack_from("<" + "i" * len(fields), dat, 0)
     except Exception:
         return {}
     return {k: int(v) for k, v in zip(fields, vals)}
@@ -1099,18 +1093,12 @@ def read_scn_header(blob):
     return {fields[i]: int(vals[i]) for i in range(len(fields))}
 
 
-def parse_i32_header_checked(
-    dat: bytes,
-    fields,
-    size: int,
-    offset: int = 0,
-    header_size_key: str = "header_size",
-) -> dict:
-    h = parse_i32_header(dat, fields, size, offset=offset)
+def parse_i32_header_checked(dat: bytes, fields, size: int) -> dict:
+    h = parse_i32_header(dat, fields, size)
     if not h:
         return {}
     try:
-        hs = int(h.get(header_size_key, 0) or 0)
+        hs = int(h.get("header_size", 0) or 0)
     except Exception:
         return {}
     if hs < int(size or 0) or hs > len(dat):
@@ -1255,8 +1243,6 @@ def iter_exe_el_sources(
     input_path: str = "",
     base_dir: str = "",
     input_blob: bytes = b"",
-    include_parent: bool = True,
-    force_charset: str = "",
 ):
     seen = set()
 
@@ -1300,7 +1286,7 @@ def iter_exe_el_sources(
         out = []
         for item in items:
             raw = bytes(item.get("raw") or b"")
-            s = decode_angou_first_line(raw, force_charset=force_charset)
+            s = decode_angou_first_line(raw)
             src = add(
                 angou_to_exe_el(s),
                 "pck_angou",
@@ -1314,12 +1300,12 @@ def iter_exe_el_sources(
                 out.append(src)
         return out
 
-    def add_file(path, label):
+    def add_file(path):
         bn = os.path.basename(str(path or ""))
         cf = bn.casefold()
         out = []
         if cf.endswith(".pck"):
-            out.extend(add_pck(path, label))
+            out.extend(add_pck(path, "explicit_file"))
             return out
         try:
             data = read_bytes(path)
@@ -1328,20 +1314,22 @@ def iter_exe_el_sources(
         except Exception:
             data = b""
         if data and looks_like_siglus_pck(data):
-            out.extend(add_pck(path, label, blob=data))
+            out.extend(add_pck(path, "explicit_file", blob=data))
             return out
         if is_named_filename(bn, ANGOU_DAT_NAME):
             src = add_angou_text(
-                read_angou_first_line(path, force_charset=force_charset),
+                read_angou_first_line(path),
                 "angou_dat",
                 path=path,
-                label=label,
+                label="explicit_file",
             )
             if src:
                 out.append(src)
             return out
         if is_named_filename(bn, KEY_TXT_NAME):
-            src = add(read_exe_el_key(path), "key_txt", path=path, label=label)
+            src = add(
+                read_exe_el_key(path), "key_txt", path=path, label="explicit_file"
+            )
             if src:
                 out.append(src)
             return out
@@ -1350,7 +1338,7 @@ def iter_exe_el_sources(
                 read_siglus_engine_exe_el(path),
                 "siglusengine_exe",
                 path=path,
-                label=label,
+                label="explicit_file",
             )
             if src:
                 out.append(src)
@@ -1390,17 +1378,17 @@ def iter_exe_el_sources(
         out = []
         for p in scene_pck_paths(path):
             out.extend(add_pck(p, label))
-        p = find_named_path(path, ANGOU_DAT_NAME, recursive=False)
+        p = find_named_path(path, ANGOU_DAT_NAME)
         if p:
             src = add_angou_text(
-                read_angou_first_line(p, force_charset=force_charset),
+                read_angou_first_line(p),
                 "angou_dat",
                 path=p,
                 label=label,
             )
             if src:
                 out.append(src)
-        kp = find_named_path(path, KEY_TXT_NAME, recursive=False)
+        kp = find_named_path(path, KEY_TXT_NAME)
         if kp:
             src = add(read_exe_el_key(kp), "key_txt", path=kp, label=label)
             if src:
@@ -1417,7 +1405,7 @@ def iter_exe_el_sources(
                 out.append(src)
         return out
 
-    def add_dir_with_parent(path, label):
+    def add_dir_with_parent(path):
         out = []
         if not path:
             return out
@@ -1425,11 +1413,10 @@ def iter_exe_el_sources(
             ap = resolve_read_path(path, kind="dir")
         except (FileNotFoundError, NotADirectoryError):
             return out
-        out.extend(add_dir(ap, label))
-        if include_parent:
-            parent = os.path.dirname(ap)
-            if parent and parent != ap:
-                out.extend(add_dir(parent, "parent_dir"))
+        out.extend(add_dir(ap, "current_dir"))
+        parent = os.path.dirname(ap)
+        if parent and parent != ap:
+            out.extend(add_dir(parent, "parent_dir"))
         return out
 
     explicit = str(explicit_angou or "").strip()
@@ -1465,7 +1452,7 @@ def iter_exe_el_sources(
             if os.path.isdir(p):
                 found = add_dir(p, "explicit_dir")
             else:
-                found = add_file(p, "explicit_file")
+                found = add_file(p)
             if not found:
                 raise ValueError(f"could not derive exe_el from --angou: {explicit}")
             for src in found:
@@ -1495,7 +1482,7 @@ def iter_exe_el_sources(
             for src in add_dir(scan_base, "current_dir"):
                 yield src
         else:
-            for src in add_dir_with_parent(scan_base, "current_dir"):
+            for src in add_dir_with_parent(scan_base):
                 yield src
 
 
@@ -1633,8 +1620,8 @@ def read_i32_le(buf, off, *, strict: bool = False, default=None):
     return v
 
 
-def read_i32_le_advancing(buf, off, *, strict: bool = False, default=None):
-    ok, v, off_i = _read_struct_le(_I32_LE, buf, off, strict=strict, default=default)
+def read_i32_le_advancing(buf, off):
+    ok, v, off_i = _read_struct_le(_I32_LE, buf, off, strict=False, default=None)
     return v, (off_i + 4 if ok else off_i)
 
 
@@ -1658,12 +1645,10 @@ def pack_i32_pairs(pairs) -> bytes:
     return bytes(out)
 
 
-def read_u32_le_from_file(f, *, strict: bool = True, default=None):
+def read_u32_le_from_file(f):
     b = f.read(4)
     if len(b) != 4:
-        if strict:
-            raise EOFError("Unexpected EOF while reading u32")
-        return default
+        raise EOFError("Unexpected EOF while reading u32")
     return read_u32_le(b, 0, strict=True)
 
 
@@ -1684,26 +1669,19 @@ def append_diff(diffs, k, x, y):
         diffs.append(f"{k}: {x!r} -> {y!r}")
 
 
-def print_limited_diffs(diffs, title: str, identical_message: str, limit: int = 5000):
+def print_limited_diffs(diffs, title: str, identical_message: str):
     if not diffs:
         print(identical_message)
         return 0
     print(title)
-    for d in diffs[:limit]:
+    for d in diffs[:5000]:
         print(d)
-    if len(diffs) > limit:
-        print(f"... ({len(diffs) - limit:d} diffs omitted)")
+    if len(diffs) > 5000:
+        print(f"... ({len(diffs) - 5000:d} diffs omitted)")
     return 0
 
 
-def parse_gei_disam_args(
-    argv,
-    *,
-    disam_action=None,
-    decompile_action=None,
-    allow_gei_disam: bool = True,
-    return_decompile: bool = False,
-):
+def parse_gei_disam_args(argv, *, allow_gei_disam: bool = True):
     args = list(argv or [])
     gei = False
     disam = False
@@ -1714,23 +1692,17 @@ def parse_gei_disam_args(
     if "--disam" in args:
         args = [arg for arg in args if arg != "--disam"]
         disam = True
-        if disam_action is not None:
-            disam_action()
     if "--decompile" in args:
         if disam:
             raise ValueError("--disam and --decompile are mutually exclusive")
         args = [arg for arg in args if arg != "--decompile"]
         disam = True
         decompile = True
-        if decompile_action is not None:
-            decompile_action()
     if gei and disam and (not allow_gei_disam):
         if decompile:
             raise ValueError("--decompile is not supported with --gei")
         raise ValueError("--disam is not supported with --gei")
-    if return_decompile:
-        return args, gei, disam, decompile
-    return args, gei, disam
+    return args, gei, disam, decompile
 
 
 def dn(name, width=None):
@@ -1800,18 +1772,13 @@ def build_sections(blob, header_fields, header_size, header_size_validator=None)
 def iter_files_by_ext(
     root: str,
     extensions,
-    exclude_names=None,
     exclude_pred=None,
     recursive: bool = True,
 ):
     ext_set = {ext.lower() for ext in extensions}
-    exclude_set = {name.lower() for name in (exclude_names or [])}
     out = []
 
     def should_skip(path):
-        name = os.path.basename(path)
-        if name.lower() in exclude_set:
-            return True
         if exclude_pred is not None and exclude_pred(path):
             return True
         return False
@@ -1896,9 +1863,7 @@ def decode_utf16le_strings(
     *,
     errors: str = "replace",
     strip_null: bool = True,
-    default: str = "",
     on_error: str = "skip",
-    on_decode_error: str = "append_default",
     min_blob_ofs: int = 0,
     allow_empty_blob: bool = False,
     strict_blob_end: bool = False,
@@ -1922,32 +1887,29 @@ def decode_utf16le_strings(
         return out
     blob_end = max(0, min(blob_end, len(dat)))
 
-    def _handle(kind: str, si: int, exc, mode: str):
-        if mode == "raise":
-            msg = f"utf16le decode failed ({kind}) at index {si}"
-            raise ValueError(msg) from exc
-        if mode == "append_default":
-            out.append(default)
+    def _handle_error():
+        if on_error == "append_default":
+            out.append("")
 
-    for si, (ofs_u16, ln_u16) in enumerate(idx_pairs or []):
+    for ofs_u16, ln_u16 in idx_pairs:
         try:
             o = int(ofs_u16)
             ln = int(ln_u16)
-        except Exception as exc:
-            _handle("bad-pair", si, exc, on_error)
+        except Exception:
+            _handle_error()
             continue
         if o < 0 or ln <= 0:
-            _handle("bad-range", si, None, on_error)
+            _handle_error()
             continue
         a = blob_ofs + o * 2
         b = a + ln * 2
         if b > blob_end:
-            _handle("out-of-range", si, None, on_error)
+            _handle_error()
             continue
         try:
             s = dat[a:b].decode("utf-16le", errors=errors)
-        except Exception as exc:
-            _handle("decode-error", si, exc, on_decode_error)
+        except Exception:
+            out.append("")
             continue
         if strip_null and s:
             s = s.replace("\x00", "")
@@ -2353,12 +2315,9 @@ def collect_batch_files(
     extensions,
     empty_message: str,
     *,
-    recursive: bool = True,
     sort_key=None,
 ):
-    files = (
-        iter_files_by_ext(inp, extensions, recursive=recursive) if src_is_dir else [inp]
-    )
+    files = iter_files_by_ext(inp, extensions) if src_is_dir else [inp]
     if sort_key is not None and src_is_dir:
         files = sorted(files, key=sort_key)
     if not files:

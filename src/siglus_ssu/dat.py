@@ -588,20 +588,12 @@ def process_dat_output_items(items, stats=None, decompile=False):
     return {"written": ready_items, "failed_paths": failed_paths}
 
 
-def _write_dat_disassembly(
-    dat_path,
-    blob,
-    out_dir=None,
-    stats=None,
-    bundle=None,
-):
+def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
     try:
         name = os.path.basename(str(dat_path))
         write_status(f"Disassembling {name} ...")
         started = time.perf_counter()
-        out_dir, bundle = _resolve_dat_output(
-            dat_path, blob=blob, out_dir=out_dir, bundle=bundle
-        )
+        out_dir, bundle = _resolve_dat_output(dat_path, blob=blob, out_dir=out_dir)
         if not out_dir or not isinstance(bundle, dict):
             return None
         if bool(bundle.get("decompiler_excluded")):
@@ -731,15 +723,7 @@ def _payload_trace_hash_bundles(trace):
     }
 
 
-def scn_payload_hash_bundles(
-    blob,
-    dat_path=None,
-    *,
-    pack_context=None,
-    scene_no=None,
-    scene_name=None,
-    hashes=True,
-):
+def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes=True):
     from .native_ops import scn_payload_hash_bundles_native
 
     payload_context = dict(pack_context or {})
@@ -754,9 +738,7 @@ def scn_payload_hash_bundles(
         return native
     bundle = dat_disassembly_bundle(
         blob,
-        dat_path=dat_path,
         pack_context=payload_context,
-        scene_no=scene_no,
         scene_name=scene_name,
         emit_text=False,
         trace_profile="payload",
@@ -984,7 +966,7 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
     return 0
 
 
-def decode_scn_dat_with_candidates(blob: bytes, candidates=None, trace: bool = False):
+def decode_scn_dat_with_candidates(blob: bytes, candidates=None):
     if looks_like_siglus_dat(blob):
         return bytes(blob), b""
     from . import textmap as _textmap
@@ -995,8 +977,7 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None, trace: bool = F
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
         exe_el = src.get("exe_el")
-        if trace:
-            sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
+        sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         try:
             parsed, plain_blob, _enc = _textmap._parse_scn_dat_with_decrypt(
                 blob, exe_el
@@ -1005,13 +986,11 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None, trace: bool = F
             parsed = None
             plain_blob = blob
         if parsed and looks_like_siglus_dat(plain_blob):
-            if trace:
-                sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
+            sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
             return bytes(plain_blob), bytes(exe_el or b"")
-        if trace:
-            sys.stderr.write(
-                f"key source rejected, falling back: {format_exe_el_source(src)}\n"
-            )
+        sys.stderr.write(
+            f"key source rejected, falling back: {format_exe_el_source(src)}\n"
+        )
     return bytes(blob), b""
 
 
@@ -1177,7 +1156,6 @@ def compare_dat(
     b1: bytes,
     b2: bytes,
     compare_payload=False,
-    disam_out_dir=None,
     disam_to_input_dir=False,
 ) -> int:
     m1 = dat_sections(b1)[1]
@@ -1246,14 +1224,10 @@ def compare_dat(
         else:
             payload_status = "unavailable"
         print("payload compare (normalized scene runtime semantics): " + payload_status)
-    if disam_out_dir or disam_to_input_dir:
+    if disam_to_input_dir:
         disam_stats = new_disam_stats()
-        out1_dir = (
-            (os.path.dirname(str(p1)) or ".") if disam_to_input_dir else disam_out_dir
-        )
-        out2_dir = (
-            (os.path.dirname(str(p2)) or ".") if disam_to_input_dir else disam_out_dir
-        )
+        out1_dir = os.path.dirname(str(p1)) or "."
+        out2_dir = os.path.dirname(str(p2)) or "."
         out1 = _write_dat_disassembly(p1, b1, out_dir=out1_dir, stats=disam_stats)
         out2 = _write_dat_disassembly(p2, b2, out_dir=out2_dir, stats=disam_stats)
         if out1 or out2:

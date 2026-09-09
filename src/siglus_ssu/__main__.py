@@ -18,16 +18,12 @@ def _get_version() -> str:
     return package_version() or "unknown"
 
 
-def _print_version(out=None) -> None:
-    if out is None:
-        out = sys.stdout
+def _print_version() -> None:
     p = _prog()
-    out.write(f"{p} {_get_version()}\n")
+    sys.stdout.write(f"{p} {_get_version()}\n")
 
 
-def _usage(out=None):
-    if out is None:
-        out = sys.stdout
+def _usage():
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
@@ -184,19 +180,17 @@ def _usage(out=None):
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
         "    const-profile  Compile tries profiles 0, 1, then 2 before reporting failure\n"
     )
-    out.write(text)
+    sys.stdout.write(text)
 
 
-def _usage_short(out=None):
-    if out is None:
-        out = sys.stderr
+def _usage_short():
     p = _prog()
     text = (
         f"{p} {_get_version()}\n"
         f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
-    out.write(text)
+    sys.stderr.write(text)
 
 
 def _parse_scene_string_xor_multiplier(value):
@@ -360,9 +354,8 @@ def _uses_string_xor_multiplier(mode, args):
             return False
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main():
+    argv = sys.argv[1:]
     _runtime._LEGACY_COMPILE = False
     _runtime._LEGACY_FULL = False
     _runtime._SCENE_STRING_XOR_MULTIPLIER = 0x7087

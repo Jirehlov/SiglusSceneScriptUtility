@@ -66,19 +66,17 @@ def _capture(callable_obj, *args):
     return rc, out.getvalue(), err.getvalue()
 
 
-def _record_timing(timings, stage: str, started: float) -> float:
+def _record_timing(timings, stage: str, started: float) -> None:
     elapsed = max(0.0, time.perf_counter() - started)
     timings.append((stage, elapsed))
-    return elapsed
 
 
-def _append_timing(timings, stage: str, elapsed: float) -> float:
+def _append_timing(timings, stage: str, elapsed: float) -> None:
     try:
         elapsed = max(0.0, float(elapsed))
     except Exception:
         elapsed = 0.0
     timings.append((stage, elapsed))
-    return elapsed
 
 
 def _format_timings(timings) -> str:
@@ -127,16 +125,14 @@ def _const_profiles():
     return _CONST_PROFILES
 
 
-def _print_tail(
-    stage: str, stdout_text: str, stderr_text: str, max_lines: int = 24
-) -> None:
+def _print_tail(stage: str, stdout_text: str, stderr_text: str) -> None:
     lines = []
     if stderr_text.strip():
         lines.append(f"  {stage} stderr:")
-        lines.extend("    " + line for line in stderr_text.splitlines()[-max_lines:])
+        lines.extend("    " + line for line in stderr_text.splitlines()[-24:])
     if stdout_text.strip():
         lines.append(f"  {stage} stdout:")
-        lines.extend("    " + line for line in stdout_text.splitlines()[-max_lines:])
+        lines.extend("    " + line for line in stdout_text.splitlines()[-24:])
     if lines:
         sys.stderr.write("\n".join(lines) + "\n")
 
@@ -236,14 +232,13 @@ def _find_extract_dir(tmp_root: str) -> str:
     return cands[0] if cands else ""
 
 
-def _count_files_with_ext(path: str, ext: str) -> int:
-    ext = ext.lower()
+def _count_files_with_ext(path: str) -> int:
     try:
         _, entries = read_directory(path)
         return sum(
             1
             for entry in entries
-            if entry.is_file() and os.path.splitext(entry.name)[1].lower() == ext
+            if entry.is_file() and os.path.splitext(entry.name)[1].lower() == ".ss"
         )
     except FilenameCaseCollisionError:
         raise
@@ -493,7 +488,7 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                     status = "FAIL"
                     detail = "extract output directory not found"
                 else:
-                    ss_count = _count_files_with_ext(extract_dir, ".ss")
+                    ss_count = _count_files_with_ext(extract_dir)
                     print(f"  extract: ok source_ss={ss_count:d}")
                     if ss_count <= 0:
                         status = "FAIL"

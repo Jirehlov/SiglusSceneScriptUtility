@@ -91,7 +91,6 @@ def parallel_process_completed_map(
     initargs=(),
     on_result=None,
     on_poll=None,
-    poll_interval: float = 0.05,
 ):
     item_list = list(items)
     if not item_list:
@@ -148,7 +147,7 @@ def parallel_process_completed_map(
                 else:
                     done, pending = wait(
                         pending,
-                        timeout=max(0.01, float(poll_interval)),
+                        timeout=0.05,
                         return_when=FIRST_COMPLETED,
                     )
                     if not done:
@@ -172,25 +171,17 @@ def parallel_process_completed_map(
     return results
 
 
-def parallel_process_map(
-    process_fn,
-    items,
-    max_workers: int | None = None,
-    chunksize: int = 1,
-    fallback_to_serial: bool = False,
-):
+def parallel_process_map(process_fn, items):
     item_list = list(items)
     if not item_list:
         return []
-    if max_workers == 1 or len(item_list) <= 1:
+    if len(item_list) <= 1:
         return [process_fn(item) for item in item_list]
     try:
-        workers = min(get_max_workers(max_workers), len(item_list))
+        workers = min(get_max_workers(None), len(item_list))
         with process_pool(workers) as executor:
-            return list(executor.map(process_fn, item_list, chunksize=chunksize))
+            return list(executor.map(process_fn, item_list))
     except Exception:
-        if not fallback_to_serial:
-            raise
         return [process_fn(item) for item in item_list]
 
 
@@ -362,28 +353,11 @@ def _lzss_compress_task(
 
 
 def parallel_lzss_compress(
-    ctx: dict,
-    scn_names: list[str],
-    bs_dir: str,
-    lzss_mode: bool,
-    max_workers: int | None = None,
+    ctx: dict, scn_names: list[str], bs_dir: str
 ) -> tuple[list[str], list[bytes], list[bytes]]:
     from .common import format_scene_name, read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
-    if not lzss_mode:
-        enc_names = []
-        dat_list = []
-        for nm in scn_names:
-            dat_path = os.path.join(bs_dir, nm + ".dat")
-            try:
-                dat_path = resolve_read_path(dat_path, kind="file")
-            except (FileNotFoundError, NotADirectoryError):
-                raise FileNotFoundError(f"scene dat not found: {dat_path}")
-            dat = read_bytes(dat_path)
-            dat_list.append(dat)
-            enc_names.append(nm)
-        return (enc_names, dat_list, [])
     results = {}
     tasks = []
     for nm in scn_names:
@@ -410,7 +384,7 @@ def parallel_lzss_compress(
             dat_list.append(dat)
             lzss_list.append(lz)
         return (enc_names, dat_list, lzss_list)
-    workers = get_max_workers(max_workers)
+    workers = get_max_workers(None)
     errors = []
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -460,16 +434,9 @@ def _source_encrypt_task(
 
 
 def parallel_source_encrypt(
-    ctx: dict,
-    rel_list: list[str],
-    scn_path: str,
-    tmp_path: str,
-    skip: bool,
-    max_workers: int | None = None,
+    ctx: dict, rel_list: list[str], scn_path: str, tmp_path: str, skip: bool
 ) -> tuple[list[int], list[bytes]]:
     source_angou = ctx.get("source_angou")
-    if not source_angou:
-        return ([], [])
     if tmp_path:
         os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
     tasks = []
@@ -479,7 +446,7 @@ def parallel_source_encrypt(
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
         tasks.append((rel, src_path, cache_path, source_angou, skip))
-    workers = get_max_workers(max_workers)
+    workers = get_max_workers(None)
     results = {}
     errors = []
     print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
@@ -513,14 +480,9 @@ def _g00_extract_task(args):
     return extract_one(path_s, out_s, trim=trim)
 
 
-def parallel_g00_extract(
-    g00_files, out_dir, max_workers: int | None = None, trim=False
-):
+def parallel_g00_extract(g00_files, out_dir, trim=False):
     fs = list(g00_files)
-    if max_workers is not None and max_workers > 0:
-        workers = max_workers
-    else:
-        workers = get_max_workers(None)
+    workers = get_max_workers(None)
     ok = sk = bad = 0
     it = iter(fs)
     futures = set()
@@ -589,13 +551,7 @@ def _seed_chunk_worker(args):
     return None
 
 
-def find_shuffle_seed_parallel(
-    target_idx_pairs,
-    seed0=0,
-    workers=None,
-    chunk=None,
-    progress_iv=None,
-):
+def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
     import concurrent.futures
     import sys
     import time
@@ -603,24 +559,13 @@ def find_shuffle_seed_parallel(
 
     target = [(int(o), int(ln)) for o, ln in target_idx_pairs]
     n = len(target)
-    if workers is None:
-        workers = get_max_workers(None)
-    workers = max(1, int(workers))
-    if chunk is None:
-        chunk = 200
-    chunk = max(1, int(chunk))
-    if progress_iv is None:
-        progress_iv = 1.0
+    workers = get_max_workers(None)
+    chunk = 200
+    progress_iv = 1.0
     seed0 = int(seed0) & 0xFFFFFFFF
     prefix = "[test-shuffle]"
     if is_native_available():
-        r = find_shuffle_seed_first(
-            target,
-            seed0,
-            workers=workers,
-            chunk=chunk,
-            progress_iv=progress_iv,
-        )
+        r = find_shuffle_seed_first(target, seed0, workers=workers)
         if r is not None:
             return int(r) & 0xFFFFFFFF
         return None

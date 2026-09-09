@@ -1613,8 +1613,8 @@ html.theme-dark .stage::before {
         return Math.max(width, height) * 0.72;
     }
 
-    function drawRoundedRect(x, y, w, h, r, fill, stroke, lineWidth) {
-        const rr = Math.min(r, h / 2, w / 2);
+    function drawRoundedRect(x, y, w, h, fill, stroke, lineWidth) {
+        const rr = Math.min(11, h / 2, w / 2);
         ctx.beginPath();
         ctx.moveTo(x + rr, y);
         ctx.arcTo(x + w, y, x + w, y + h, rr);
@@ -1811,7 +1811,6 @@ html.theme-dark .stage::before {
                 ly - 11,
                 width,
                 22,
-                11,
                 geometry.selected ? "rgba(255, 255, 255, 0.98)" : "rgba(248, 251, 253, 0.95)",
                 geometry.selected ? "rgba(37, 99, 173, 0.34)" : "rgba(37, 99, 173, 0.16)",
                 1,
@@ -1832,7 +1831,6 @@ html.theme-dark .stage::before {
             p.y - height / 2,
             width,
             height,
-            11,
             node.role === "terminal"
                 ? active ? "#fbefd6" : "#f8f1e3"
                 : node.role === "merge"
@@ -2155,7 +2153,7 @@ html.theme-dark .stage::before {
         }
     }
 
-    function integrateNodes(dt, damping) {
+    function integrateNodes(dt) {
         let maxMotion = 0;
         for (const node of state.visibleNodes) {
             if (state.dragNode && state.dragNode.id === node.id) {
@@ -2163,8 +2161,8 @@ html.theme-dark .stage::before {
                 node.vy = 0;
                 continue;
             }
-            node.vx *= damping;
-            node.vy *= damping;
+            node.vx *= 0.84;
+            node.vy *= 0.84;
             const speed = Math.hypot(node.vx, node.vy);
             const maxSpeed = 10;
             if (speed > maxSpeed) {
@@ -2252,12 +2250,12 @@ html.theme-dark .stage::before {
         }
     }
 
-    function layoutVisible(iterations = 260) {
-        for (let step = 0; step < iterations; step += 1) {
+    function layoutVisible() {
+        for (let step = 0; step < 260; step += 1) {
             applyPairForces(1);
             applyEdgeForces(1);
             applyCentering(0.0011);
-            integrateNodes(1, 0.84);
+            integrateNodes(1);
         }
         draw();
     }
@@ -2273,7 +2271,7 @@ html.theme-dark .stage::before {
             applyEdgeForces(forceScale);
             applyCentering(0.00032 * forceScale);
         }
-        const maxMotion = integrateNodes(dt, 0.84);
+        const maxMotion = integrateNodes(dt);
         state.physicsAlpha = Math.max(0, alpha * 0.94 - 0.008);
         return maxMotion;
     }

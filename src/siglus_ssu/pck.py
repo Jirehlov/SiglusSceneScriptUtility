@@ -290,7 +290,7 @@ def _pck_sections(blob, preview=False):
     return secs, meta
 
 
-def _flix_pck_sections(blob, preview=False):
+def _flix_pck_sections(blob):
     n = len(blob)
     info = _parse_flix_pck(blob)
     if not info:
@@ -327,11 +327,10 @@ def _flix_pck_sections(blob, preview=False):
     sec(base, base + cnt * 4, "L", "name_len_list")
     sec(base + cnt * 4, idx_abs, "S", "name_list")
     sec(idx_abs, data_abs, "I", "index_table")
-    if item_cnt and (preview or item_cnt <= MAX_SCENE_LIST):
-        for i in range(item_cnt):
-            off, sz = entries[i]
-            nm = names[i] if i < len(names) and names[i] else (f"file#{i:d}")
-            sec(off, off + sz, "D", nm)
+    for i in range(item_cnt):
+        off, sz = entries[i]
+        nm = names[i] if i < len(names) and names[i] else (f"file#{i:d}")
+        sec(off, off + sz, "D", nm)
     add_gap_sections(secs, used, n)
     meta = {"header": h, "file_names": names, "entries": entries, "item_cnt": item_cnt}
     return secs, meta
@@ -495,7 +494,6 @@ def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
             path = find_named_path(
                 os.path.dirname(os.path.abspath(input_pck)),
                 ANGOU_DAT_NAME,
-                recursive=False,
             )
         except Exception:
             path = ""
@@ -529,9 +527,7 @@ def _read_pck_scene_lists(blob: bytes, hdr=None):
         hdr.get("scn_name_list_ofs", 0) + scn_name_blob_len,
         errors="surrogatepass",
         strip_null=False,
-        default="",
         on_error="append_default",
-        on_decode_error="append_default",
         min_blob_ofs=1,
         allow_empty_blob=True,
         strict_blob_end=True,
@@ -631,7 +627,6 @@ def require_pck_scene_exe_el(
     hdr=None,
     scn_data=None,
     explicit_angou: str = "",
-    trace_key: bool = False,
 ):
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
@@ -645,7 +640,7 @@ def require_pck_scene_exe_el(
         hdr=hdr,
         scn_data=scn_data,
         explicit_angou=explicit_angou,
-        trace_key=trace_key,
+        trace_key=True,
     )
     if exe_el:
         return exe_el
@@ -714,7 +709,6 @@ def _collect_pck_read_flag_stats(
     input_pck: str = "",
     hdr=None,
     explicit_angou: str = "",
-    trace_key: bool = False,
 ):
     stats = {
         "read_flags": 0,
@@ -731,7 +725,7 @@ def _collect_pck_read_flag_stats(
             hdr=hdr,
             require_exe=True,
             explicit_angou=explicit_angou,
-            trace_key=trace_key,
+            trace_key=True,
         )
         or []
     ):
@@ -802,7 +796,6 @@ def _pck_cd_word_rows(
     input_pck: str = "",
     hdr=None,
     explicit_angou: str = "",
-    trace_key: bool = False,
     scene_exe_el=None,
 ) -> dict:
     from . import dat as _dat
@@ -820,7 +813,6 @@ def _pck_cd_word_rows(
             input_pck=input_pck,
             hdr=hdr,
             explicit_angou=explicit_angou,
-            trace_key=trace_key,
             require_exe=True,
             scene_exe_el=scene_exe_el,
         )
@@ -992,7 +984,6 @@ def pck_word_count(
             input_pck=input_pck,
             hdr=hdr,
             explicit_angou=explicit_angou,
-            trace_key=True,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")
@@ -1048,7 +1039,7 @@ def pck_word_count(
 
 def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        secs, meta = _flix_pck_sections(blob, preview=True)
+        secs, meta = _flix_pck_sections(blob)
         h = meta.get("header") or {}
         print("header:")
         print(f"  header_size={h.get('header_size', 0):d}")
@@ -1109,7 +1100,6 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
         input_pck=input_pck,
         hdr=h,
         explicit_angou=explicit_angou,
-        trace_key=True,
     )
     read_flags = int((read_flag_stats or {}).get("read_flags", 0) or 0)
     read_flags_scenes = int((read_flag_stats or {}).get("read_flags_scenes", 0) or 0)
@@ -1316,7 +1306,6 @@ def compare_pck(
                 hdr=h1,
                 scn_data=data1,
                 explicit_angou=explicit_angou,
-                trace_key=True,
             )
             exe_el2 = require_pck_scene_exe_el(
                 b2,
@@ -1324,7 +1313,6 @@ def compare_pck(
                 hdr=h2,
                 scn_data=data2,
                 explicit_angou=explicit_angou,
-                trace_key=True,
             )
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
@@ -1404,10 +1392,7 @@ def compare_pck(
         from .parallel import parallel_process_map
 
         for row_index, payload_cmp in parallel_process_map(
-            _payload_compare_scene_task,
-            payload_jobs,
-            chunksize=1,
-            fallback_to_serial=True,
+            _payload_compare_scene_task, payload_jobs
         ):
             payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
             if payload_cmp == "same" and row_index in identical_rows:
@@ -1877,7 +1862,6 @@ def extract_pck(
             input_pck=input_pck,
             hdr=hdr,
             explicit_angou=explicit_angou,
-            trace_key=True,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")

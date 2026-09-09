@@ -114,15 +114,14 @@ def type1_bgra(unp: bytes, w: int, h: int) -> bytes:
     return palette_bgra(pal, idx)
 
 
-def save_png_bgra(bgra: bytes, w: int, h: int, p: Path, trim: bool = False) -> bool:
+def save_png_bgra(bgra: bytes, w: int, h: int, p: Path, trim: bool = False) -> None:
     if p.exists():
-        return False
+        return
     need_pil()
     img = Image.frombytes("RGBA", (w, h), bgra, "raw", "BGRA")
     if trim:
         img, _cropped = _trim_image_edges(img)
     img.save(p, "PNG")
-    return True
 
 
 def cuts_from_unp(unp: bytes):
@@ -141,9 +140,9 @@ def cuts_from_unp(unp: bytes):
     return r
 
 
-def _type2_outer_rects(d: bytes, off: int, cut_cnt: int):
+def _type2_outer_rects(d: bytes, cut_cnt: int):
     rects = []
-    pos = off
+    pos = 9
     for _ in range(max(cut_cnt, 0)):
         if pos + 24 > len(d):
             break
@@ -152,7 +151,8 @@ def _type2_outer_rects(d: bytes, off: int, cut_cnt: int):
     return rects
 
 
-def _type2_unp_and_cuts(d: bytes, off: int):
+def _type2_unp_and_cuts(d: bytes):
+    off = 1
     w, h = struct.unpack_from("<HH", d, off)
     off += 4
     cut_cnt = struct.unpack_from("<i", d, off)[0]
@@ -212,7 +212,7 @@ def _decode_g00_main_layer(p: Path, cut_index=None):
         return _simple_to_pil(t, pay, w, h), (0, 0)
     if t != 2:
         raise ValueError(f"unsupported type for merge: {t}")
-    _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, 1)
+    _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
     if not cuts:
         raise ValueError("type2 no cuts")
     _ci, o, s = _select_type2_cut(cuts, cut_index)
@@ -321,10 +321,10 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
     if t != 2:
         raise ValueError("unknown type")
     need_pil()
-    canvas_w, canvas_h, cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d, 1)
+    canvas_w, canvas_h, cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
     if not cuts:
         raise ValueError("type2 no cuts")
-    outer_rects = _type2_outer_rects(d, 9, cut_cnt)
+    outer_rects = _type2_outer_rects(d, cut_cnt)
     single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
     wrote = sk = 0
     cuts_meta = None if trim else [None] * max(int(cut_cnt), 0)
@@ -374,7 +374,7 @@ def analyze_one(p: str):
         return
     if t != 2:
         raise ValueError("unknown type")
-    w, h, cut_cnt, comp_off, unp, cuts = _type2_unp_and_cuts(d, 1)
+    w, h, cut_cnt, comp_off, unp, cuts = _type2_unp_and_cuts(d)
     print("Canvas:", f"{w}x{h}")
     print("CutCnt:", cut_cnt)
     arc, org = struct.unpack_from("<II", d, comp_off)
@@ -580,18 +580,11 @@ def _resolve_refer_base(refer_arg, base_name: str, dir_input: bool):
         raise ValueError(f"missing refer g00: {candidate}") from None
 
 
-def _resolve_create_out(inp: Path, out_arg, base_name: str, dir_input: bool):
+def _resolve_create_out(inp: Path, out_arg, base_name: str):
     if out_arg is None:
-        out_dir = inp if dir_input else inp.parent
+        out_dir = inp.parent
         return out_dir / f"{base_name}.g00"
     outp = Path(out_arg)
-    if dir_input:
-        if outp.exists() and outp.is_file():
-            raise ValueError("output must be a directory when input is a directory")
-        if outp.suffix.lower() == ".g00":
-            raise ValueError("output must be a directory when input is a directory")
-        outp.mkdir(parents=True, exist_ok=True)
-        return outp / f"{base_name}.g00"
     if outp.exists() and outp.is_dir():
         return outp / f"{base_name}.g00"
     if outp.suffix.lower() == ".g00" or (outp.exists() and outp.is_file()):
@@ -653,19 +646,17 @@ def _official_type2_tile_type_view(
     return 0
 
 
-def _official_type2_tiles(
-    bgra: bytes, w: int, h: int, tile_w: int = 8, tile_h: int = 8
-):
-    nx = (w + tile_w - 1) // tile_w
-    ny = (h + tile_h - 1) // tile_h
+def _official_type2_tiles(bgra: bytes, w: int, h: int):
+    nx = (w + 7) // 8
+    ny = (h + 7) // 8
     tiles = []
     for ty in range(ny):
         row = []
-        py = ty * tile_h
-        th = min(tile_h, h - py)
+        py = ty * 8
+        th = min(8, h - py)
         for tx in range(nx):
-            px = tx * tile_w
-            tw = min(tile_w, w - px)
+            px = tx * 8
+            tw = min(8, w - px)
             t = _official_type2_tile_type_view(bgra, w, px, py, tw, th)
             row.append({"type": t, "x": px, "y": py, "w": tw, "h": th})
         tiles.append(row)
@@ -729,7 +720,7 @@ def _official_type2_group_chips(tiles):
 
 
 def _build_type2_official_cut_block(bgra: bytes, w: int, h: int, cx=0, cy=0) -> bytes:
-    tiles = _official_type2_tiles(bgra, w, h, 8, 8)
+    tiles = _official_type2_tiles(bgra, w, h)
     chips, bbox = _official_type2_group_chips(tiles)
     x, y, x1, y1 = bbox
     dx = x1 - x + 1
@@ -1282,7 +1273,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             + lzss_pack(bytes(new_unp), suppress_empty_tail_group=True)
         )
     if t == 2:
-        bw, bh, _cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes, 1)
+        bw, bh, _cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes)
         if not cuts:
             raise ValueError("type2 no cuts")
         planned = _plan_type2_updates(unp, cuts, updates)
@@ -1429,7 +1420,7 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
     out_path = (
         base_path
         if do_update and out_arg is None
-        else _resolve_create_out(ip, out_arg, base_name, dir_input=False)
+        else _resolve_create_out(ip, out_arg, base_name)
     )
     if do_update:
         base_bytes = read_bytes(base_path)

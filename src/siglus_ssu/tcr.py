@@ -8,7 +8,7 @@ _HDR_SIZE = 8 + _OFFSET_COUNT * 4
 _SUB_HDR_SIZE = 64
 
 
-def _parse(blob, want_payload=True):
+def _parse(blob):
     out = {
         "ok": True,
         "errors": [],
@@ -33,8 +33,6 @@ def _parse(blob, want_payload=True):
     out["offsets"] = tuple(int(x) for x in offs)
     if int(out["cnt"]) > _OFFSET_COUNT:
         out["warnings"].append(f"cnt>{_OFFSET_COUNT:d} ({int(out['cnt']):d})")
-    if not want_payload:
-        return out
     curves = []
     n = len(blob)
     for i, raw_offset in enumerate(out["offsets"]):
@@ -82,7 +80,7 @@ def _parse(blob, want_payload=True):
 
 
 def tcr(blob: bytes) -> int:
-    info = _parse(blob, want_payload=True)
+    info = _parse(blob)
     print("==== TCR Meta ====")
     print(f"max: {int(info.get('max') or 0):d}")
     print(f"cnt: {int(info.get('cnt') or 0):d}")
@@ -126,8 +124,8 @@ def tcr(blob: bytes) -> int:
 
 
 def compare_tcr(b1: bytes, b2: bytes) -> int:
-    a = _parse(b1, want_payload=True)
-    b = _parse(b2, want_payload=True)
+    a = _parse(b1)
+    b = _parse(b2)
     diffs = []
     append_diff(diffs, "max", int(a.get("max") or 0), int(b.get("max") or 0))
     append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))

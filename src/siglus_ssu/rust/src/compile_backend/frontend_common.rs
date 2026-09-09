@@ -1,6 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaseMode {
-    None,
     Lower,
     Upper,
 }
@@ -18,13 +17,9 @@ pub struct TextCommentOptions {
     pub single_quote_mode: SingleQuoteMode,
     pub single_escape_chars: String,
     pub double_escape_chars: String,
-    pub semicolon_line_comment: bool,
-    pub slash_line_comment: bool,
-    pub block_comment: bool,
     pub block_comment_enter_advance: usize,
     pub newline_single_message: String,
     pub newline_double_message: String,
-    pub invalid_escape_message: String,
     pub single_empty_message: String,
     pub single_invalid_message: String,
     pub unclosed_single_message: String,
@@ -37,17 +32,13 @@ pub struct TextCommentOptions {
 impl Default for TextCommentOptions {
     fn default() -> Self {
         Self {
-            case_mode: CaseMode::None,
+            case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::None,
             single_escape_chars: String::new(),
             double_escape_chars: String::new(),
-            semicolon_line_comment: true,
-            slash_line_comment: true,
-            block_comment: true,
             block_comment_enter_advance: 2,
             newline_single_message: String::new(),
             newline_double_message: String::new(),
-            invalid_escape_message: String::new(),
             single_empty_message: String::new(),
             single_invalid_message: String::new(),
             unclosed_single_message: String::new(),
@@ -187,7 +178,7 @@ pub fn scan_text_comments(
             } else {
                 return Err(TextCommentError {
                     line,
-                    message: options.invalid_escape_message.clone(),
+                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
                 });
             }
         } else if state == 3 {
@@ -211,7 +202,7 @@ pub fn scan_text_comments(
             } else {
                 return Err(TextCommentError {
                     line,
-                    message: options.invalid_escape_message.clone(),
+                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
                 });
             }
         } else if state == 6 {
@@ -232,17 +223,17 @@ pub fn scan_text_comments(
             state = 1;
         } else if ch == '"' {
             state = 4;
-        } else if options.semicolon_line_comment && ch == ';' {
+        } else if ch == ';' {
             state = 6;
             i += 1;
             column += 1;
             continue;
-        } else if options.slash_line_comment && ch == '/' && chars.get(i + 1) == Some(&'/') {
+        } else if ch == '/' && chars.get(i + 1) == Some(&'/') {
             state = 6;
             i += 2;
             column += 2;
             continue;
-        } else if options.block_comment && ch == '/' && chars.get(i + 1) == Some(&'*') {
+        } else if ch == '/' && chars.get(i + 1) == Some(&'*') {
             block_line = line;
             state = 7;
             i += options.block_comment_enter_advance;
