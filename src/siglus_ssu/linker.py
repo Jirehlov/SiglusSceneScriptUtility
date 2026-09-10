@@ -110,7 +110,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
         from .parallel import parallel_lzss_compress
 
         start = time.time()
-        _, dat_list, lzss_list = parallel_lzss_compress(ctx, scn_names, bs_dir)
+        dat_list, lzss_list = parallel_lzss_compress(ctx, scn_names, bs_dir)
         set_stage_time(ctx, "LZSS", time.time() - start)
         return dat_list, lzss_list
     from . import compiler as _m

@@ -49,7 +49,6 @@ def need_pil():
 
 def _trim_image_edges(img):
     full = (0, 0, *img.size)
-    bbox = None
     if "A" in img.getbands():
         bbox = img.getchannel("A").getbbox()
         if bbox == full:
@@ -193,11 +192,11 @@ def _simple_to_pil(t: int, pay: bytes, w: int, h: int):
 
 def _select_type2_cut(cuts, cut_index):
     if cut_index is None:
-        return cuts[0]
+        return cuts[0][1:]
     cut_index = int(cut_index)
     for ci, o, s in cuts:
         if ci == cut_index:
-            return ci, o, s
+            return o, s
     raise ValueError(f"type2 cut not found: cut{cut_index:03d}")
 
 
@@ -215,7 +214,7 @@ def _decode_g00_main_layer(p: Path, cut_index=None):
     _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
     if not cuts:
         raise ValueError("type2 no cuts")
-    _ci, o, s = _select_type2_cut(cuts, cut_index)
+    o, s = _select_type2_cut(cuts, cut_index)
     block = unp[o : o + s]
     canvas, cw, ch = _render_cut_canvas(block)
     return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA"), _type2_cut_header(
@@ -509,14 +508,8 @@ def _render_cut_canvas(blk: bytes):
 def _type2_cut_header(blk: bytes):
     if len(blk) < C.G00_CUT_SZ:
         raise ValueError("cut block short")
-    ct, cc, x, y, dx, dy, cx, cy, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
+    cx, cy, cw, ch = struct.unpack_from("<4i", blk, 20)
     return {
-        "type": int(ct),
-        "chip_count": int(cc),
-        "x": int(x),
-        "y": int(y),
-        "w": int(dx),
-        "h": int(dy),
         "center": (int(cx), int(cy)),
         "canvas": (int(cw), int(ch)),
     }
@@ -673,16 +666,13 @@ def _official_type2_group_chips(tiles):
             for tx in range(nx):
                 if tiles[ty][tx]["type"] != want:
                     continue
-                widths = []
                 x = tx
                 row_w = 0
                 while x < nx and tiles[ty][x]["type"] == want:
                     row_w += tiles[ty][x]["w"]
-                    widths.append(tiles[ty][x]["w"])
                     tiles[ty][x]["type"] = 2
                     x += 1
                 height = tiles[ty][tx]["h"]
-                rows = 1
                 y = ty + 1
                 while y < ny:
                     rx = tx
@@ -698,7 +688,6 @@ def _official_type2_group_chips(tiles):
                             tiles[y][tx + back]["type"] = want
                         break
                     height += tiles[y][tx]["h"]
-                    rows += 1
                     y += 1
                 px = tiles[ty][tx]["x"]
                 py = tiles[ty][tx]["y"]

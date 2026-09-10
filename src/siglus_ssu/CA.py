@@ -95,10 +95,7 @@ class CharacterAnalizer:
     def __init__(self, *, sidecar=False):
         self.error_line = 0
         self.error_str = ""
-        self.m_line = 1
-        self.iad = None
         self.sidecar = bool(sidecar)
-        self.source_map_1 = []
 
     def error(self, line, s):
         self.error_line = line
@@ -152,7 +149,6 @@ class CharacterAnalizer:
         )
         if not result.get("ok"):
             return self.error(result.get("line", 0), result.get("message", ""))
-        self.m_line = int(result.get("line", 1) or 1)
         if self.sidecar:
             self.source_map_1 = (
                 list(result.get("source_map") or [])
@@ -557,11 +553,9 @@ class CharacterAnalizer:
             if self.sidecar and len(r) >= 6 and isinstance(r[5], list)
             else []
         )
-        pcad["inc_text"] = inc
         pcad["inc_line_map"] = inc_line_map
         if self.sidecar:
             pcad["sidecar"] = True
-            pcad["inc_source_map"] = inc_source_map
         if inc:
             preprocess_stats["inc_lines"] = inc.count("\n") + (
                 0 if inc.endswith("\n") else 1

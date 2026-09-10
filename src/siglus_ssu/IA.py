@@ -28,16 +28,10 @@ class IncAnalyzer:
         self.el = -1
         self.es = ""
         self.sidecar = bool(sidecar)
-        self._last_name_line = 1
-        self._last_name_start = -1
-        self._last_name_end = -1
-        self._last_after_text = ""
-        self._last_after_source_map = []
         self.input_source_map = (
             source_map if self.sidecar and isinstance(source_map, list) else []
         )
         self.source_map_from_input = bool(self.input_source_map)
-        self.source_map = []
         if self.sidecar and isinstance(self.iad2, dict):
             self.iad2.setdefault("decls", [])
             self.iad2.setdefault("bodies", [])
@@ -647,30 +641,20 @@ class IncAnalyzer:
         i0 = i
         tp, i, line = self._decl_type(i, line)
         if tp is None:
-            return None, i, line, 0
+            return i, line, 0
         if tp in ("replace", "define", "define_s"):
             nm, i, line = self._name_until(
                 i, line, set("\t \n") if tp != "define_s" else set("\t\n")
             )
             if nm is None:
-                return None, i, line, 0
+                return i, line, 0
             name_line = self._last_name_line
             after, i, line, ok = self._after(i, line)
             if not ok:
-                return None, i, line, 0
-            if len(nm) < 1:
-                self.err(
-                    line,
-                    (
-                        "#replace name must contain at least one character."
-                        if tp == "replace"
-                        else "#define name must contain at least one character."
-                    ),
-                )
-                return None, i, line, 0
+                return i, line, 0
             if nm in self.iad["name_set"]:
                 self.err(line, nm + " is declared twice.")
-                return None, i, line, 0
+                return i, line, 0
             self.iad["name_set"].add(nm)
             rep = {
                 "type": ("replace" if tp == "replace" else "define"),
@@ -692,27 +676,24 @@ class IncAnalyzer:
                 self._last_name_end,
             )
             self._record_body("replace" if tp == "replace" else "define", nm)
-            return rep, i, line, 1
+            return i, line, 1
         if tp == "macro":
             nm, i, line = self._name_until(i, line, set(" \t\n("))
             if nm is None:
-                return None, i, line, 0
+                return i, line, 0
             name_line = self._last_name_line
             args, i, line = self._macro_arg_list(i, line)
             if args is None:
-                return None, i, line, 0
+                return i, line, 0
             after, i, line, ok = self._after(i, line)
             if not ok:
-                return None, i, line, 0
-            if len(nm) < 1:
-                self.err(line, "#macro name must contain at least one character.")
-                return None, i, line, 0
+                return i, line, 0
             if not nm.startswith("@"):
                 self.err(line, "#macro name must start with '@'.")
-                return None, i, line, 0
+                return i, line, 0
             if nm in self.iad["name_set"]:
                 self.err(line, nm + " is declared twice.")
-                return None, i, line, 0
+                return i, line, 0
             self.iad["name_set"].add(nm)
             rep = {
                 "type": "macro",
@@ -734,34 +715,31 @@ class IncAnalyzer:
                 self._last_name_end,
             )
             self._record_body("macro", nm, args)
-            return rep, i, line, 1
+            return i, line, 1
         if tp == "property":
             txt, i, line, name_line, span = self._prop_cmd_text(i, line, set(" :\t\n"))
             self.iad2["pt"].append(txt)
             self.iad2["pl"].append(name_line)
             if self.sidecar:
                 self.iad2.setdefault("ps", []).append(span)
-            return None, i, line, 1
+            return i, line, 1
         if tp == "command":
             txt, i, line, name_line, span = self._prop_cmd_text(i, line, set(" (:\t\n"))
             self.iad2["ct"].append(txt)
             self.iad2["cl"].append(name_line)
             if self.sidecar:
                 self.iad2.setdefault("cs", []).append(span)
-            return None, i, line, 1
-        if tp == "expand":
-            after, i2, line2, ok = self._after(i, line)
-            if not ok:
-                return None, i2, line2, 0
-            ca = CharacterAnalizer()
-            t = ca.analize_line(after, self.iad)
-            if t is None:
-                self.err(line2, ca.get_error_str())
-                return None, i2, line2, 0
-            self.t = self.t[:i0] + t + self.t[i2:]
-            return None, i0, line2, 1
-        self.err(line, "unknown declare")
-        return None, i, line, 0
+            return i, line, 1
+        after, i2, line2, ok = self._after(i, line)
+        if not ok:
+            return i2, line2, 0
+        ca = CharacterAnalizer()
+        t = ca.analize_line(after, self.iad)
+        if t is None:
+            self.err(line2, ca.get_error_str())
+            return i2, line2, 0
+        self.t = self.t[:i0] + t + self.t[i2:]
+        return i0, line2, 1
 
     def step1(self):
         if not self.cc():
@@ -772,7 +750,7 @@ class IncAnalyzer:
             i, line, ok = self._skip(i, line)
             if not ok:
                 break
-            _, i, line, ok2 = self._declare(i, line)
+            i, line, ok2 = self._declare(i, line)
             if not ok2:
                 return 0
         return 1
@@ -822,7 +800,6 @@ class IncAnalyzer:
                     "origin": "inc",
                 },
             )
-            self.iad["_ft_user_added"] = 1
             if self.pf == C.FM_GLOBAL:
                 self.iad["inc_property_cnt"] += 1
             if self.sidecar:
@@ -909,7 +886,6 @@ class IncAnalyzer:
                     "origin": "inc",
                 },
             )
-            self.iad["_ft_user_added"] = 1
             if self.pf == C.FM_GLOBAL:
                 self.iad["inc_command_cnt"] += 1
             if self.sidecar:

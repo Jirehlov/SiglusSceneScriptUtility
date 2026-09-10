@@ -116,7 +116,6 @@ def _parse_flix_pck(blob: bytes) -> dict:
         "base": base,
         "idx_abs": idx_abs,
         "data_abs": data_abs,
-        "name_lens": lens,
         "names": names,
         "entries": entries,
     }
@@ -282,8 +281,6 @@ def _pck_sections(blob, preview=False):
             if inc_cmd_name_idx
             else []
         ),
-        "sn_end": sn_end,
-        "scn_data_end": scn_data_end,
         "item_cnt": item_cnt,
         "scene_script_ids": _scene_script_id_map(source_entries) if preview else {},
     }
@@ -930,7 +927,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 "count": 0,
             }
             try:
-                text, encoding, _newline = _textmap.read_text(ss_path)
+                text, encoding = _textmap.read_text(ss_path)
                 ctx = {
                     "scn_path": os.path.dirname(os.path.abspath(ss_path)),
                     "utf8": bool(str(encoding or "").startswith("utf-8")),

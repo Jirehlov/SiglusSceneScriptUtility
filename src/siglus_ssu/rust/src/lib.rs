@@ -281,10 +281,7 @@ fn fmt_hms(secs: f64) -> String {
     if !(secs.is_finite()) || secs <= 0.0 {
         return "00:00:00".to_string();
     }
-    let mut s = secs.round() as i64;
-    if s < 0 {
-        s = 0;
-    }
+    let s = secs.round() as i64;
     let h = s / 3600;
     let m = (s % 3600) / 60;
     let ss = s % 60;
@@ -328,9 +325,8 @@ fn find_shuffle_seed_first(
     let params = Arc::new(precompute_params(n));
     let base: Vec<u32> = (0..(n as u32)).collect();
     let base = Arc::new(base);
-    let target = Arc::new(target_idx);
-    let target_ofs: Vec<i32> = target.iter().map(|p| p.0).collect();
-    let lens: Vec<i32> = target.iter().map(|p| p.1).collect();
+    let target_ofs: Vec<i32> = target_idx.iter().map(|p| p.0).collect();
+    let lens: Vec<i32> = target_idx.iter().map(|p| p.1).collect();
     let target_ofs = Arc::new(target_ofs);
     let lens = Arc::new(lens);
 
@@ -436,7 +432,7 @@ fn find_shuffle_seed_first(
             break;
         }
 
-        if progress_iv > 0.0 && last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
+        if last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
             let done = done_attempts.load(Ordering::Relaxed);
             let elapsed = t0.elapsed().as_secs_f64();
             let rate = if elapsed > 0.0 {

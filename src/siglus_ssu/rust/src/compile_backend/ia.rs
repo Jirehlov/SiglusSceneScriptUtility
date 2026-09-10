@@ -895,16 +895,6 @@ impl IncAnalyzer {
             i = next;
             line = line2;
             let (after, next, line2) = self.after(i, line, iad)?;
-            if name.is_empty() {
-                return self.err(
-                    line2,
-                    if kind == "replace" {
-                        "#replace name must contain at least one character."
-                    } else {
-                        "#define name must contain at least one character."
-                    },
-                );
-            }
             if iad.name_set.contains(&name) {
                 return self.err(line2, format!("{name} is declared twice."));
             }
@@ -946,9 +936,6 @@ impl IncAnalyzer {
             i = next;
             line = line2;
             let (after, next, line2) = self.after(i, line, iad)?;
-            if name.is_empty() {
-                return self.err(line2, "#macro name must contain at least one character.");
-            }
             if !name.starts_with('@') {
                 return self.err(line2, "#macro name must start with '@'.");
             }
@@ -984,18 +971,15 @@ impl IncAnalyzer {
             scratch.command_spans.push(span);
             return Ok((next, line2));
         }
-        if kind == "expand" {
-            let (after, next, line2) = self.after(i, line, iad)?;
-            let mut ca = super::ca::CharacterAnalyzer::new();
-            let expanded = ca.analyze_line(&after, &iad.replace_tree).map_err(|_| {
-                self.error_line = line2;
-                self.error_str = ca.error_str;
-            })?;
-            iad.record_replacement_usage(&ca.used_replacements);
-            self.text.splice(declaration_start..next, expanded.chars());
-            return Ok((declaration_start, line2));
-        }
-        self.err(line, "unknown declare")
+        let (after, next, line2) = self.after(i, line, iad)?;
+        let mut ca = super::ca::CharacterAnalyzer::new();
+        let expanded = ca.analyze_line(&after, &iad.replace_tree).map_err(|_| {
+            self.error_line = line2;
+            self.error_str = ca.error_str;
+        })?;
+        iad.record_replacement_usage(&ca.used_replacements);
+        self.text.splice(declaration_start..next, expanded.chars());
+        Ok((declaration_start, line2))
     }
 
     pub fn step1(&mut self, iad: &mut IaData, scratch: &mut IaScratch) -> Result<(), ()> {

@@ -620,9 +620,8 @@ def parse_pe32_layout(b: bytes):
         image_base = struct.unpack_from("<I", b, opt_off + 28)[0]
         data_dir_off = opt_off + 96
         import_rva = 0
-        import_size = 0
         if opt_sz >= 104 and data_dir_off + 16 <= len(b):
-            import_rva, import_size = struct.unpack_from("<II", b, data_dir_off + 8)
+            import_rva = struct.unpack_from("<I", b, data_dir_off + 8)[0]
         sec_off = opt_off + opt_sz
         sections = []
         for i in range(int(sec_cnt) & 0xFFFF):
@@ -657,7 +656,6 @@ def parse_pe32_layout(b: bytes):
         "image_base": int(image_base),
         "sections": sections,
         "import_rva": int(import_rva),
-        "import_size": int(import_size),
     }
 
 

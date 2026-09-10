@@ -472,7 +472,7 @@ def _read_scn_dat(path):
     return b, h, idx
 
 
-def _read_scn_dat_header_bytes(path):
+def _read_scn_dat_header(path):
     b = read_bytes(path)
     if len(b) < C.SCN_HDR_SIZE:
         raise ValueError("bad dat header")
@@ -481,7 +481,7 @@ def _read_scn_dat_header_bytes(path):
         raise ValueError("bad const.SCN_HDR_FIELDS")
     vals = struct.unpack_from("<" + "i" * len(fields), b, 0)
     h = {fields[i]: int(vals[i]) for i in range(len(fields))}
-    return b, h
+    return h
 
 
 def _read_scn_dat_str_pool(path):
@@ -651,7 +651,7 @@ def _collect_read_flag_stats(bs_dir, scene_paths):
     for scene_path in scene_paths:
         nm = os.path.splitext(os.path.basename(scene_path))[0]
         dat_path = os.path.join(bs_dir, nm + ".dat")
-        _blob, header = _read_scn_dat_header_bytes(dat_path)
+        header = _read_scn_dat_header(dat_path)
         cnt = header["read_flag_cnt"]
         total += cnt
         if cnt > 0:
@@ -1055,18 +1055,7 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
     if isinstance(stats, dict):
         ctx.setdefault("stats", {}).update(stats)
     ok = bool(result.get("ok"))
-    message = str(result.get("message") or "")
-    stdout = result.get("stdout")
-    stderr = result.get("stderr")
-    if stdout is None and stderr is None:
-        stdout = message if ok else ""
-        stderr = "" if ok else message
-    stdout = str(stdout or "")
-    stderr = str(stderr or "")
-    if stdout:
-        sys.stdout.write(stdout)
-        if not stdout.endswith(("\n", "\r")):
-            sys.stdout.write("\n")
+    stderr = str(result.get("stderr") or "")
     if stderr:
         sys.stderr.write(stderr)
         if not stderr.endswith(("\n", "\r")):
@@ -1367,7 +1356,6 @@ def main(argv=None):
         "gameexe_ini": gei_ini,
         "angou_path": os.path.join(inp, angou_name) if angou_name else "",
         "key_path": os.path.join(inp, key_txt_name) if key_txt_name else "",
-        "exe_path": None,
         "scn_list": [os.path.basename(x) for x in ss],
         "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,

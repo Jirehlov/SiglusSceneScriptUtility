@@ -345,10 +345,6 @@ def dat_disassembly_bundle(
             scn_cmd_names=meta.get("scn_cmd_names"),
             call_prop_names=meta.get("call_prop_names"),
             pack_context=pack_context,
-            scene_no=scene_no,
-            scene_name=scene_name,
-            namae_defs=namae_defs,
-            read_flag_defs=read_flag_defs,
             with_trace=with_trace,
             emit_text=emit_text,
             trace_profile=trace_profile,
@@ -968,7 +964,7 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
 
 def decode_scn_dat_with_candidates(blob: bytes, candidates=None):
     if looks_like_siglus_dat(blob):
-        return bytes(blob), b""
+        return bytes(blob)
     from . import textmap as _textmap
 
     cands = list(candidates or [])
@@ -987,11 +983,11 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None):
             plain_blob = blob
         if parsed and looks_like_siglus_dat(plain_blob):
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-            return bytes(plain_blob), bytes(exe_el or b"")
+            return bytes(plain_blob)
         sys.stderr.write(
             f"key source rejected, falling back: {format_exe_el_source(src)}\n"
         )
-    return bytes(blob), b""
+    return bytes(blob)
 
 
 def _gei_decode_txt(path, explicit_angou: str = ""):
@@ -1012,22 +1008,18 @@ def _gei_decode_txt(path, explicit_angou: str = ""):
             cands = [b""]
     from . import GEI
 
-    last = None
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
         exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
-        last = (info, txt)
         if int(mode) == 0 or (info.get("used_exe_el") and txt and info.get("ini_ok")):
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
             return info, txt
         sys.stderr.write(
             f"key source rejected, falling back: {format_exe_el_source(src)}\n"
         )
-    if last is not None:
-        return last
-    return {}, ""
+    return info, txt
 
 
 def _parse_gameexe_ini_configs(txt):
@@ -1072,7 +1064,6 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
         return 1
     hdr0, mode = struct.unpack_from("<ii", blob, 0)
     payload_size = max(0, len(blob) - 8)
-    info = None
     try:
         info, _ = _gei_decode_txt(path, explicit_angou=explicit_angou)
     except Exception as e:

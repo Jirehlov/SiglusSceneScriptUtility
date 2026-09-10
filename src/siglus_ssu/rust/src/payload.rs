@@ -866,7 +866,7 @@ impl<'a> Scanner<'a> {
                     line: self.cur_line,
                     fields: vec![Field::Form(form), Field::Value(value), Field::Text(text)],
                 });
-                self.push_stack(form, Some(value), false);
+                self.push_stack(form, Some(value));
                 continue;
             }
             if op == c.cd_pop {
@@ -989,11 +989,7 @@ impl<'a> Scanner<'a> {
                 for arg in args.iter().rev() {
                     self.consume_arg_value(arg);
                 }
-                self.push_stack(
-                    if op == c.cd_gosub { c.fm_int } else { c.fm_str },
-                    None,
-                    false,
-                );
+                self.push_stack(if op == c.cd_gosub { c.fm_int } else { c.fm_str }, None);
                 continue;
             }
             if op == c.cd_return {
@@ -1052,7 +1048,7 @@ impl<'a> Scanner<'a> {
                 self.pop_stack();
                 if form == c.fm_int && (opr == c.op_plus || opr == c.op_minus || opr == c.op_tilde)
                 {
-                    self.push_stack(c.fm_int, None, false);
+                    self.push_stack(c.fm_int, None);
                 }
                 continue;
             }
@@ -1079,7 +1075,7 @@ impl<'a> Scanner<'a> {
                 self.pop_stack();
                 self.pop_stack();
                 if let Some(form) = self.binary_result_form(left, right, opr) {
-                    self.push_stack(form, None, false);
+                    self.push_stack(form, None);
                 }
                 continue;
             }
@@ -1181,11 +1177,7 @@ impl<'a> Scanner<'a> {
                     }
                     self.consume_element();
                     if ret_form != c.fm_void {
-                        self.push_stack(
-                            ret_form,
-                            None,
-                            self.cfg.receiver_forms.contains(&ret_form),
-                        );
+                        self.push_stack(ret_form, None);
                     }
                 }
                 continue;
@@ -1474,8 +1466,8 @@ impl<'a> Scanner<'a> {
         form == c.fm_int || form == c.fm_str || form == c.fm_label
     }
 
-    fn push_stack(&mut self, form: i32, val: Option<i32>, receiver: bool) {
-        let receiver = receiver || self.cfg.receiver_forms.contains(&form);
+    fn push_stack(&mut self, form: i32, val: Option<i32>) {
+        let receiver = self.cfg.receiver_forms.contains(&form);
         self.stack.push(StackItem {
             form: Some(form),
             val,
@@ -1488,10 +1480,9 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    fn pop_stack(&mut self) -> Option<StackItem> {
-        let out = self.stack.pop();
+    fn pop_stack(&mut self) {
+        self.stack.pop();
         self.trim_stack_points(self.stack.len());
-        out
     }
 
     fn trim_stack_points(&mut self, stack_start: usize) {
@@ -1580,7 +1571,7 @@ impl<'a> Scanner<'a> {
             if let Some(ret) = self.scan_property(&self.stack[start..]) {
                 self.drop_stack_tail(start);
                 if ret != self.cfg.codes.fm_void {
-                    self.push_stack(ret, None, self.cfg.receiver_forms.contains(&ret));
+                    self.push_stack(ret, None);
                 }
                 return;
             }
@@ -1593,7 +1584,7 @@ impl<'a> Scanner<'a> {
                 .and_then(|f| self.receiver_value_form(f));
             self.drop_stack_tail(start);
             if let Some(ret) = out_form {
-                self.push_stack(ret, None, self.cfg.receiver_forms.contains(&ret));
+                self.push_stack(ret, None);
             } else {
                 self.stack.push(StackItem {
                     form: None,
@@ -1786,7 +1777,7 @@ impl<'a> Scanner<'a> {
     fn collapse_command(&mut self, start: usize, ret_form: i32) {
         self.drop_stack_tail(start);
         if ret_form != self.cfg.codes.fm_void {
-            self.push_stack(ret_form, None, self.cfg.receiver_forms.contains(&ret_form));
+            self.push_stack(ret_form, None);
         }
     }
 

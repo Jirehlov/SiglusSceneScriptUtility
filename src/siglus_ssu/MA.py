@@ -90,7 +90,6 @@ class FormTable:
     def __init__(s):
         s.form_map_by_name = {}
         s.form_map_by_code = {}
-        s.call_base = None
 
     @staticmethod
     def _new_form(fc):
@@ -190,9 +189,7 @@ class FormTable:
         s.call_base = copy.deepcopy(s.get_form_by_name(C.FM_CALL))
 
     def reset_call(s):
-        base = copy.deepcopy(
-            s.call_base if isinstance(s.call_base, dict) else s._new_form(C.FM_CALL)
-        )
+        base = copy.deepcopy(s.call_base)
         s.form_map_by_name[C.FM_CALL] = base
         if isinstance(base.get("code"), int):
             s.form_map_by_code[int(base.get("code"))] = base

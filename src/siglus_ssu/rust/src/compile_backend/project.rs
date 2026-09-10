@@ -24,8 +24,6 @@ use std::time::Instant;
 pub struct ProjectOutput {
     pub scene_count: usize,
     pub compiled_scene_count: usize,
-    pub workers: usize,
-    pub stdout: String,
     pub full_compile_stats: bool,
     pub stage_times: Vec<(String, f64)>,
     pub macro_counts: Option<MacroStats>,
@@ -36,7 +34,6 @@ pub struct ProjectOutput {
 
 #[derive(Debug, Clone)]
 pub struct CompileFailure {
-    pub stdout: String,
     pub stderr: String,
     pub stage_times: Vec<(String, f64)>,
 }
@@ -2119,8 +2116,6 @@ fn compile_project_inner(
         return Ok(ProjectOutput {
             scene_count: 0,
             compiled_scene_count: 0,
-            workers: 1,
-            stdout: String::new(),
             full_compile_stats: false,
             stage_times: stage_times.clone(),
             macro_counts: None,
@@ -2612,8 +2607,6 @@ fn compile_project_inner(
     Ok(ProjectOutput {
         scene_count: pack_input.scn_name_list.len(),
         compiled_scene_count: config.cache.compiled_scene_files,
-        workers: compile_workers,
-        stdout: String::new(),
         full_compile_stats: config.cache.full_compile_stats,
         stage_times: stage_times.clone(),
         macro_counts,
@@ -2631,7 +2624,6 @@ fn compile_project_with_log(
     match compile_project_inner(config, &mut stdout, &mut stage_times) {
         Ok(output) => Ok(output),
         Err(stderr) => Err(CompileFailure {
-            stdout: String::new(),
             stderr,
             stage_times,
         }),

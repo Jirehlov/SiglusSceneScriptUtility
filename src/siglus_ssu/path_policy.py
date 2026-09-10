@@ -96,9 +96,9 @@ def resolve_read_path(path, kind=None):
     return absolute
 
 
-def read_path_exists(path, kind=None):
+def read_file_exists(path):
     try:
-        resolve_read_path(path, kind=kind)
+        resolve_read_path(path, kind="file")
     except (FileNotFoundError, NotADirectoryError):
         return False
     return True

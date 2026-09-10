@@ -239,7 +239,7 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
                         with_sources=True,
                     )
                 )
-            blob, _used = dat.decode_scn_dat_with_candidates(
+            blob = dat.decode_scn_dat_with_candidates(
                 blob, candidates_by_dir[directory]
             )
         try:

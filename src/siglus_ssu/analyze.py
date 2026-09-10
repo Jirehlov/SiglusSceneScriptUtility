@@ -150,7 +150,7 @@ def analyze_file(
             except ValueError as e:
                 sys.stderr.write(str(e) + "\n")
                 return 2
-            decoded_blob, _used = dat.decode_scn_dat_with_candidates(blob, cands)
+            decoded_blob = dat.decode_scn_dat_with_candidates(blob, cands)
             if looks_like_siglus_dat(decoded_blob):
                 blob = decoded_blob
         if not looks_like_siglus_dat(blob):
@@ -309,11 +309,11 @@ def compare_files(
                 sys.stderr.write(str(e) + "\n")
                 return 2
             if need_decode1:
-                decoded_b1, _used1 = dat.decode_scn_dat_with_candidates(b1, cands1)
+                decoded_b1 = dat.decode_scn_dat_with_candidates(b1, cands1)
                 if looks_like_siglus_dat(decoded_b1):
                     b1 = decoded_b1
             if need_decode2:
-                decoded_b2, _used2 = dat.decode_scn_dat_with_candidates(b2, cands2)
+                decoded_b2 = dat.decode_scn_dat_with_candidates(b2, cands2)
                 if looks_like_siglus_dat(decoded_b2):
                     b2 = decoded_b2
             failed_paths = []

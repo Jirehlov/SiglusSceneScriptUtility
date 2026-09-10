@@ -16,7 +16,7 @@ from .common import (
     scan_text_comments,
 )
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
-from .path_policy import read_path_exists
+from .path_policy import read_file_exists
 
 C = get_const_module()
 
@@ -70,7 +70,7 @@ def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
     dat = read_bytes(gameexe_dat_path)
     if not dat or len(dat) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
-    hdr0, mode = struct.unpack_from("<ii", dat, 0)
+    _, mode = struct.unpack_from("<ii", dat, 0)
     payload_enc = dat[8:]
     base = C.GAMEEXE_DAT_ANGOU_CODE
     payload = bytearray(payload_enc)
@@ -106,10 +106,8 @@ def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
         except Exception:
             ini_ok = False
     info = {
-        "header0": int(hdr0),
         "mode": int(mode),
         "used_exe_el": bool(used_exe_el),
-        "payload_size": int(len(payload_enc)),
         "lzss_header": (int(lz_hdr[0]), int(lz_hdr[1])),
         "lzss_size": int(len(lz)),
         "raw_size": int(len(raw)),
@@ -154,7 +152,7 @@ def write_gameexe_dat(ctx):
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
     gei_path = os.path.join(scn, gameexe_ini)
     source_texts = ctx.get("source_texts") or {}
-    if gameexe_ini not in source_texts and not read_path_exists(gei_path, kind="file"):
+    if gameexe_ini not in source_texts and not read_file_exists(gei_path):
         return None
     gei = read_compile_source(ctx, gei_path)
     ged = ""

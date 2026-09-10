@@ -405,26 +405,15 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
         if ok:
             return txt
     os_dir = os.path.dirname(os.path.abspath(gameexe_path))
-    cands = None
-    if explicit_angou:
-        cands = list(
-            pck.iter_exe_el_candidates(
-                os_dir,
-                explicit_angou=explicit_angou,
-                with_sources=True,
-            )
+    cands = list(
+        pck.iter_exe_el_candidates(
+            os_dir,
+            explicit_angou=explicit_angou,
+            with_sources=True,
         )
-    if cands is None:
-        cands = list(
-            pck.iter_exe_el_candidates(
-                os_dir,
-                explicit_angou=explicit_angou,
-                with_sources=True,
-            )
-        )
+    )
     if not cands:
         cands = [b""]
-    last_err = None
     for cand in cands:
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
         exe_el = src.get("exe_el")
@@ -444,9 +433,7 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
             sys.stderr.write(
                 f"key source rejected, falling back: {format_exe_el_source(src)}\n"
             )
-    if last_err is not None:
-        raise last_err
-    raise RuntimeError("Failed to decode Gameexe.dat payload")
+    raise last_err
 
 
 def _load_bgm_table(gameexe_path: str, explicit_angou: str = ""):
@@ -1749,7 +1736,7 @@ def main(argv=None) -> int:
                 base, _ = os.path.splitext(os.path.basename(src_path))
                 m = suffix_re.match(base)
                 if not m:
-                    tasks.append(("owp", src_path, rel_dir, base))
+                    tasks.append(("owp", src_path, rel_dir))
                     continue
                 base2 = m.group("base")
                 no = int(m.group("no"))
@@ -1762,18 +1749,16 @@ def main(argv=None) -> int:
                     tasks.append(("ovk", items, rel_dir, base2))
                     continue
                 for _no, src_path in items:
-                    base = os.path.splitext(os.path.basename(src_path))[0]
-                    tasks.append(("owp", src_path, rel_dir, base))
+                    tasks.append(("owp", src_path, rel_dir))
         else:
             src_path = files[0]
             rel_dir = ""
-            base = os.path.splitext(os.path.basename(src_path))[0]
-            tasks.append(("owp", src_path, rel_dir, base))
+            tasks.append(("owp", src_path, rel_dir))
 
         def _proc(task):
             kind = task[0]
             if kind == "owp":
-                _, src_path, rel_dir, _base = task
+                _, src_path, rel_dir = task
                 n = _pack_one(src_path, out_root, rel_dir)
                 return n, n
             _, items, rel_dir, base2 = task

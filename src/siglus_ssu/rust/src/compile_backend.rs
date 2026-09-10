@@ -177,8 +177,6 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
             stats.set_item("inc_files", parsed.context.inc_list.len())?;
             stats.set_item("scene_files", result.scene_count)?;
             stats.set_item("compiled_scene_files", result.compiled_scene_count)?;
-            stats.set_item("parallel", result.workers > 1)?;
-            stats.set_item("workers", result.workers)?;
             stats.set_item("full_compile_stats", result.full_compile_stats)?;
             let mut timings = HashMap::<String, f64>::new();
             for (stage, elapsed) in &result.stage_times {
@@ -191,9 +189,7 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
             stats.set_item("stage_time", stage_time)?;
             set_extra_stats(py, &stats, &result)?;
             out.set_item("stats", stats)?;
-            out.set_item("stdout", result.stdout)?;
             out.set_item("stderr", "")?;
-            out.set_item("message", "")?;
         }
         Err(failure) => {
             out.set_item("ok", false)?;
@@ -202,7 +198,6 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
                 stats.set_item("inc_files", parsed.context.inc_list.len())?;
                 stats.set_item("scene_files", parsed.context.scn_list.len())?;
                 stats.set_item("compiled_scene_files", parsed.cache.compiled_scene_files)?;
-                stats.set_item("parallel", false)?;
                 stats.set_item("full_compile_stats", false)?;
             }
             let mut timings = HashMap::<String, f64>::new();
@@ -215,9 +210,7 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
             }
             stats.set_item("stage_time", stage_time)?;
             out.set_item("stats", stats)?;
-            out.set_item("stdout", failure.stdout)?;
             out.set_item("stderr", failure.stderr)?;
-            out.set_item("message", "")?;
         }
     }
     Ok(out.unbind())

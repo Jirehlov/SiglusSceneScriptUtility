@@ -1278,7 +1278,6 @@ def _analyze_ss_document(
             )
         )
         return result
-    result.sad = sad
     result.mad = mad
     if run_bs:
         bs = BS()

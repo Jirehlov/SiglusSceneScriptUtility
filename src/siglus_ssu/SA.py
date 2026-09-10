@@ -830,7 +830,6 @@ class SA:
     def sa_exp(s, i, pri):
         p = i
         err = s.last
-        exp = None
         ok, p, op = s.sa_operator_1(p)
         if ok:
             ok, p, x = s.sa_exp(p, C.SA_PRI_MAX)

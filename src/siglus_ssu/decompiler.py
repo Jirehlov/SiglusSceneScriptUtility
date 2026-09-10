@@ -583,11 +583,6 @@ def _merge_same_target_lines(lines):
             prev_text = _line_text(out[-1])
             prev_target = _line_target(out[-1])
             prev_label = _LINE_LABEL_RE.match(prev_text)
-            prev_has_open = False
-            if prev_label:
-                prev_has_open = "{" in str(prev_label.group(3) or "")
-            else:
-                prev_has_open = "{" in prev_text
             next_target = next_targets[idx]
             if (
                 prev_text
@@ -597,13 +592,13 @@ def _merge_same_target_lines(lines):
             ):
                 if prev_label:
                     indent, label, tail = prev_label.groups()
-                    if tail and prev_has_open:
+                    if tail and "{" in tail:
                         out[-1] = _line_item(
                             indent + label + "\t" + str(tail).rstrip() + "}",
                             prev_target,
                         )
                         continue
-                elif prev_has_open or (not prev_label):
+                else:
                     out[-1] = _line_item(prev_text.rstrip() + "}", prev_target)
                     continue
         if out and text and target is not None and target == _line_target(out[-1]):
@@ -1453,7 +1448,6 @@ class _Decompiler:
             "scene_prop_lines",
             self._build_scene_prop_lines,
         )
-        self.external_inc_lines = []
         self.suppressed_label_offsets = set()
 
     def _build_trace(self):
@@ -1475,10 +1469,6 @@ class _Decompiler:
             scn_cmd_names=self.meta.get("scn_cmd_names"),
             call_prop_names=self.meta.get("call_prop_names"),
             pack_context=self.pack_context,
-            scene_no=self.bundle.get("scene_no"),
-            scene_name=self.bundle.get("scene_name"),
-            namae_defs=self.bundle.get("namae_defs"),
-            read_flag_defs=self.bundle.get("read_flag_defs"),
             with_trace=True,
         )
         trace = trace or []
@@ -2167,8 +2157,6 @@ class _Decompiler:
                                 call_name = local_name
                             else:
                                 call_name = f"__cmd_{code_idx:d}"
-                if isinstance(info, dict):
-                    ev["_call_parent_form"] = info.get("parent_code")
                 if call_name:
                     ev["_call_name"] = call_name
                     ev["_expr"] = (
@@ -4282,11 +4270,11 @@ class _Decompiler:
                 break
             line, idx2 = self._parse_statement_inline(idx, end_ofs, ctx)
             if line is None or idx2 <= idx:
-                return None, idx
+                return None
             if line:
                 out.append(line)
             idx = idx2
-        return out, idx
+        return out
 
     def _parse_statement_inline(self, start_idx, end_ofs, ctx=None):
         if start_idx >= len(self.events):
@@ -4433,11 +4421,11 @@ class _Decompiler:
         return hit
 
     def _parse_body_with_inline(self, start_idx, end_ofs, ctx, source_line):
-        body_lines, _ = self._parse_block(start_idx, end_ofs, ctx)
+        body_lines = self._parse_block(start_idx, end_ofs, ctx)
         inline_same_line = self._range_is_inline(start_idx, end_ofs, source_line)
         inline_body = None
         if inline_same_line:
-            inline_body, _ = self._parse_inline_block(start_idx, end_ofs, ctx)
+            inline_body = self._parse_inline_block(start_idx, end_ofs, ctx)
         return body_lines, inline_body, inline_same_line
 
     def _first_target_line(self, lines, fallback=None):
@@ -4527,7 +4515,7 @@ class _Decompiler:
                 break
             lines.extend(stmt_lines)
             idx = idx2
-        return lines, idx
+        return lines
 
     def _parse_raw(self, idx, ctx):
         ev = self.events[idx]
@@ -4588,7 +4576,7 @@ class _Decompiler:
         params = list(parsed.get("params") or [])
         info = parsed.get("info") or {}
         body_ctx = self._merge_ctx(ctx, in_command=True)
-        body_lines, _ = self._parse_block(body_start_idx, trim_end_ofs, body_ctx)
+        body_lines = self._parse_block(body_start_idx, trim_end_ofs, body_ctx)
         call_forms = self.command_call_forms.get(int(info.get("cmd_id", 0) or 0), set())
         ret_form = self._pick_return_form(
             int(info.get("cmd_id", 0) or 0),
@@ -4676,7 +4664,6 @@ class _Decompiler:
                     "body": body_lines,
                     "inline": inline_body,
                     "source_line": self.event_lines[cur_idx],
-                    "close_line": self.event_lines[false_idx],
                     "inline_same_line": inline_same_line,
                 }
             )
@@ -4695,16 +4682,12 @@ class _Decompiler:
                         self.event_lines[cur_idx],
                     )
                 )
-                end_idx = self._idx_for_ofs(end_target)
                 clauses.append(
                     {
                         "cond": None,
                         "body": else_lines,
                         "inline": inline_else,
                         "source_line": self.event_lines[cur_idx],
-                        "close_line": self.event_lines[end_idx]
-                        if end_idx is not None
-                        else None,
                         "inline_same_line": inline_else_same_line,
                     }
                 )
@@ -4865,7 +4848,7 @@ class _Decompiler:
             if int(loop_ofs) not in self.suppressed_label_offsets:
                 self.suppressed_label_offsets.add(int(loop_ofs))
                 added_loop_label = True
-            loop_lines, _ = self._parse_inline_block(
+            loop_lines = self._parse_inline_block(
                 loop_idx,
                 cond_ofs,
                 ctx,
@@ -4978,7 +4961,7 @@ class _Decompiler:
                 out_ofs = tgt
             elif out_ofs != tgt:
                 return None
-            body_lines, _ = self._parse_block(
+            body_lines = self._parse_block(
                 start_idx2 + 1,
                 int(tail.get("ofs", 0) or 0),
                 ctx,
@@ -5040,7 +5023,7 @@ class _Decompiler:
             tail = self._tail_goto(out_idx, out_ofs)
             if tail is None:
                 return None
-            default_lines, _ = self._parse_block(
+            default_lines = self._parse_block(
                 default_idx,
                 int(tail.get("ofs", 0) or 0),
                 ctx,
@@ -5099,7 +5082,7 @@ class _Decompiler:
         return self._with_event(start_idx, out), tramp_idx
 
     def decompile(self):
-        body_lines, _ = self._parse_block(0, 1 << 30, None)
+        body_lines = self._parse_block(0, 1 << 30, None)
         body_lines = self._restore_missing_l_labels(body_lines)
         body_lines = self._dedupe_l_label_defs(body_lines)
         body_lines, keep_labels = self._restore_standalone_l_labels(body_lines)
@@ -5165,8 +5148,7 @@ def write_decompiled_ss(dat_path, bundle, out_dir=None, hints=None):
         out_path = unique_out_path(os.path.join(out_root, stem + ".ss"))
         dec = _Decompiler(bundle, hints=hints)
         write_text(out_path, dec.decompile(), enc="utf-8")
-        inc_lines = dec.external_inc_lines or _support_inc_lines_from_hints(hints)
-        _write_support_inc_lines(out_root, inc_lines)
+        _write_support_inc_lines(out_root, dec.external_inc_lines)
         return out_path
     except Exception:
         return None

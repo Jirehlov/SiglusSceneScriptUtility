@@ -59,10 +59,8 @@ def _gan_parse(blob, want_disasm=True):
         out["disasm"].append(
             {
                 "ofs": int(ofs0),
-                "code": int(code) if code is not None else None,
-                "name": _GAN_OPS.get(int(code), "UNKNOWN")
-                if code is not None
-                else "HDR",
+                "code": code,
+                "name": _GAN_OPS.get(code, "UNKNOWN"),
                 "arg": arg,
                 "extra": extra,
             }
@@ -122,7 +120,7 @@ def _gan_parse(blob, want_disasm=True):
                     return out
                 pat_cnt = int(pat_cnt)
                 _add_ins(ofs1, c2, pat_cnt)
-                s = {"pat_cnt": pat_cnt, "total_time": 0, "pats": []}
+                s = {"total_time": 0, "pats": []}
                 keika = 0
                 for _pi in range(max(0, pat_cnt)):
                     pat = {
@@ -168,7 +166,6 @@ def _gan_parse(blob, want_disasm=True):
                         elif c3 == 30105:
                             pat["z"] = val
                         else:
-                            pat.setdefault("_unknown", []).append((c3, val))
                             out["warnings"].append(
                                 f"unknown pat code {c3!r} at {hx(ofs2)}"
                             )

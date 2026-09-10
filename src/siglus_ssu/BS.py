@@ -758,16 +758,6 @@ def build_scn_dat(plad, out_scn):
 
 
 class BS:
-    def __init__(s):
-        s.last_error = {
-            "type": TNMSERR_BS_NONE,
-            "atom": {"id": 0, "line": 0, "type": 0, "opt": 0, "subopt": 0},
-        }
-        s.m_piad = None
-        s.out_scn = None
-        s.loop_label = []
-        s.cur_read_flag_no = 0
-
     def clear_error(s):
         s.last_error = {
             "type": TNMSERR_BS_NONE,
@@ -1667,21 +1657,7 @@ class BS:
             s.cur_read_flag_no = 0
             out_scn = {
                 "scn": BinaryStream(),
-                "scn_bytes": b"",
-                "str_list": [],
-                "str_index_list": [],
-                "str_sort_index": [],
-                "label_list": [],
-                "z_label_list": [],
                 "cmd_label_list": [],
-                "scn_prop_list": [],
-                "scn_prop_name_list": [],
-                "scn_prop_name_index_list": [],
-                "call_prop_name_list": [],
-                "call_prop_name_index_list": [],
-                "scn_cmd_list": [],
-                "scn_cmd_name_list": [],
-                "scn_cmd_name_index_list": [],
                 "namae_list": [],
                 "read_flag_list": [],
                 "default_arg_fills": 0,
@@ -1780,7 +1756,6 @@ def compile_one_pipeline(
     record_time=False,
 ):
     nm = os.path.splitext(os.path.basename(ss_path))[0]
-    fname = os.path.basename(ss_path)
     display_name = format_scene_name(ss_path, ctx)
 
     def fmt_err(code, line):
@@ -1885,7 +1860,6 @@ def compile_one_pipeline(
     )
     return {
         "nm": nm,
-        "fname": fname,
         "out_scn": bsd["out_scn"],
         "scene_macro_counts": scene_macro_counts,
         "global_macro_usage_delta": global_macro_usage_delta,

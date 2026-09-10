@@ -324,11 +324,11 @@ def _fetch_const_payload(ref: str) -> bytes:
     return base64.b64decode(payload["content"].replace("\n", ""))
 
 
-def _resolve_const_ref(ref: str | None) -> tuple[str, bytes]:
+def _resolve_const_ref(ref: str | None) -> bytes:
     if ref is not None and str(ref).strip():
         chosen = str(ref).strip()
         try:
-            return chosen, _fetch_const_payload(chosen)
+            return _fetch_const_payload(chosen)
         except urlerror.HTTPError as exc:
             if exc.code == 404:
                 raise RuntimeError(f"const.py ref not found: {chosen}") from exc
@@ -340,7 +340,7 @@ def _resolve_const_ref(ref: str | None) -> tuple[str, bytes]:
         )
     for chosen in refs:
         try:
-            return chosen, _fetch_const_payload(chosen)
+            return _fetch_const_payload(chosen)
         except urlerror.HTTPError as exc:
             if exc.code == 404:
                 continue
@@ -357,7 +357,7 @@ def download_const(ref: str | None = None, force: bool = False) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists() and not force:
         return dst
-    _, data = _resolve_const_ref(ref)
+    data = _resolve_const_ref(ref)
     _validate_const_bytes(data)
     tmp = dst.with_suffix(".py.tmp")
     tmp.write_bytes(data)

@@ -101,15 +101,9 @@ def _csv_unescape_text(s: str | None) -> str:
 def read_text(path: str):
     with open_read(path) as f:
         data = f.read()
-    if b"\r\n" in data:
-        newline = "\r\n"
-    elif b"\r" in data:
-        newline = "\r"
-    else:
-        newline = "\n"
     text, chosen, had_bom = decode_text_auto(data)
     encoding = "utf-8-sig" if had_bom else chosen
-    return text, encoding, newline
+    return text, encoding
 
 
 def _encode_quoted(value: str) -> str:
@@ -323,7 +317,6 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
         kind = int(kind_map.get(aid, TEXTMAP_KIND_OTHER) or TEXTMAP_KIND_OTHER)
         tokens.append(
             {
-                "index": len(tokens) + 1,
                 "line": int(atom.get("line", 0) or 0),
                 "text": str_list[opt],
                 "kind": kind or TEXTMAP_KIND_OTHER,
@@ -390,22 +383,16 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
 
 
 def locate_tokens(source_text: str, tokens, iad):
-    line_spans = []
-    pos = 0
-    for line in source_text.splitlines(keepends=True):
-        line_len = len(line)
-        line_spans.append((pos, pos + line_len, line))
-        pos += line_len
+    source_lines = source_text.splitlines(keepends=True)
     cursors = {}
-    line_orders = {}
     out = []
     replace_tree = iad.get("replace_tree") if isinstance(iad, dict) else None
     replace_span_cache = {}
     for token in tokens:
         line_no = int(token["line"] or 0)
-        if line_no <= 0 or line_no > len(line_spans):
+        if line_no <= 0 or line_no > len(source_lines):
             continue
-        line_start, _line_end, line_text = line_spans[line_no - 1]
+        line_text = source_lines[line_no - 1]
         cursor = cursors.get(line_no, 0)
         text = token["text"]
         replace_spans = replace_span_cache.get(line_no)
@@ -416,47 +403,24 @@ def locate_tokens(source_text: str, tokens, iad):
         pos_quoted = line_text.find(quoted_lit, cursor)
         pos_raw = -1 if text == "" else line_text.find(text, cursor)
         if pos_quoted >= 0 and (pos_raw < 0 or pos_quoted <= pos_raw):
-            abs_start = line_start + pos_quoted
-            abs_end = abs_start + len(quoted_lit)
-            start = abs_start + 1
             cursor = pos_quoted + len(quoted_lit)
-            quoted_flag = 1
         elif pos_raw >= 0:
             rel_left = pos_raw
             rel_right = pos_raw + len(text)
-            quoted_flag = 0
-            if (
+            if not (
                 rel_left > 0
                 and rel_right < len(line_text)
                 and line_text[rel_left - 1] == '"'
                 and line_text[rel_right] == '"'
-            ):
-                while rel_left > 0 and line_text[rel_left - 1] == '"':
-                    rel_left -= 1
-                while rel_right < len(line_text) and line_text[rel_right] == '"':
-                    rel_right += 1
-                quoted_flag = 1
-            elif _is_within_replace_symbol(rel_left, rel_right, replace_spans):
+            ) and _is_within_replace_symbol(rel_left, rel_right, replace_spans):
                 cursors[line_no] = pos_raw + len(text)
                 continue
-            abs_start = line_start + rel_left
-            abs_end = line_start + rel_right
-            start = line_start + pos_raw
             cursor = pos_raw + len(text)
         else:
             continue
         cursors[line_no] = cursor
-        line_orders[line_no] = line_orders.get(line_no, 0) + 1
-        order = line_orders[line_no]
         out.append(
             {
-                "index": token["index"],
-                "line": token["line"],
-                "order": order,
-                "start": start,
-                "span_start": abs_start,
-                "span_end": abs_end,
-                "quoted": quoted_flag,
                 "text": text,
                 "kind": int(token.get("kind", TEXTMAP_KIND_OTHER) or 0)
                 or TEXTMAP_KIND_OTHER,

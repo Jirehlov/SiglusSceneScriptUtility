@@ -303,16 +303,8 @@ class TutorialBuilder:
         self.scene_by_name = {}
         self.scene_by_name_folded = {}
         self.block_index = {}
-        self.segment_index = {}
         self.inc_cmd_by_name = {}
         self.inc_cmd_by_name_folded = {}
-        self.call_records = []
-        self.exit_cache = {}
-        self.silent_resolutions = {}
-        self.return_frontiers = {}
-        self.same_scene_return_frontiers = {}
-        self.same_scene_silent_frontiers = {}
-        self.same_scene_near_return_frontiers = {}
         self.stats = defaultdict(int)
 
     def build(self) -> dict:
@@ -578,7 +570,6 @@ class TutorialBuilder:
             block["choice_option"] = ""
             block["choice_next_option"] = ""
             block["choice_index"] = None
-            block["choice_count"] = 0
             block["choice_last"] = False
         for block in blocks:
             options = tuple(block.get("selbtn_options") or ())
@@ -605,7 +596,6 @@ class TutorialBuilder:
                     options[index + 1] if index + 1 < len(options) else ""
                 )
                 cursor["choice_index"] = index
-                cursor["choice_count"] = len(options)
                 cursor["choice_last"] = index + 1 >= len(options)
                 if index + 1 >= len(options):
                     break
@@ -682,7 +672,6 @@ class TutorialBuilder:
         if not events:
             self.stats["skipped_scenes"] += 1
             return None
-        label_list = list(bundle.get("label_list") or [])
         z_label_list = list(bundle.get("z_label_list") or [])
         kind_map = textmap._collect_dat_string_kinds(bundle, scene_name)
         dialogue_by_ofs = self._collect_dialogues(events, kind_map)
@@ -691,7 +680,6 @@ class TutorialBuilder:
             "scene_id": _scene_key(scene_no),
             "scene_no": int(scene_no),
             "scene_name": scene_name,
-            "label_list": label_list,
             "z_label_list": z_label_list,
             "cmd_name_to_ofs": {
                 _safe_text(name): int(ofs)
@@ -1090,7 +1078,6 @@ class TutorialBuilder:
         for scene in self.scenes:
             scene["block_starts"] = []
             scene["block_by_start"] = {}
-            scene["label_list"] = []
             scene["z_label_list"] = []
             scene["cmd_name_to_ofs"] = {}
 
@@ -1235,7 +1222,6 @@ class TutorialBuilder:
                     "dialogue_count": sum(
                         int(member.get("dialogue_count", 0) or 0) for member in members
                     ),
-                    "first_block_id": members[0]["id"],
                     "last_block_id": members[-1]["id"],
                     "out_edges": [],
                     "incoming_count": 0,
@@ -1248,7 +1234,6 @@ class TutorialBuilder:
                     scene_block_to_segment[member["id"]] = segment_id
                     block_to_segment[member["id"]] = segment_id
             scene["segments"] = segments
-            scene["segment_by_block"] = scene_block_to_segment
             self.stats["segment_count"] += len(segments)
         for scene in self.scenes:
             for segment in scene.get("segments") or ():
@@ -1268,11 +1253,6 @@ class TutorialBuilder:
                     self._add_segment_edge(segment, target_segment, kind, label)
         for scene in self.scenes:
             scene["blocks"] = []
-            scene["block_starts"] = []
-            scene["block_by_start"] = {}
-            scene["label_list"] = []
-            scene["z_label_list"] = []
-            scene["segment_by_block"] = {}
         self.block_index = {}
         self.call_records = []
         self.exit_cache = {}

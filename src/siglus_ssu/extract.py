@@ -60,7 +60,7 @@ def _disassemble_dat_dir(
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1
             continue
-        blob, _used = D.decode_scn_dat_with_candidates(blob, exe_el_candidates)
+        blob = D.decode_scn_dat_with_candidates(blob, exe_el_candidates)
         if not looks_like_siglus_dat(blob):
             sys.stdout.write(f"Skipped: {name}\n")
             skip_cnt += 1

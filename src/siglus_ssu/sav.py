@@ -436,9 +436,7 @@ def _read_fixed_array_header(r, item_size=None, meta=None):
         if need > jump:
             raise ValueError("bad fixed array")
     if meta is not None:
-        meta["header_offset"] = int(start)
         meta["data_offset"] = int(start + 8)
-        meta["jump_offset"] = int(jump)
         meta["count"] = int(cnt)
     r.seek(start + 8)
     return jump, cnt
@@ -447,20 +445,16 @@ def _read_fixed_array_header(r, item_size=None, meta=None):
 def _read_fixed_int_list(r, meta=None):
     jump, cnt = _read_fixed_array_header(r, item_size=4, meta=meta)
     data = r._read(cnt * 4)
-    if meta is not None:
-        meta["data_end"] = int(r.tell())
     out = list(struct.unpack_from(f"<{cnt:d}i", data, 0)) if cnt else []
     r.seek(jump)
     return out
 
 
-def _read_fixed_str_list(r, meta=None):
-    jump, cnt = _read_fixed_array_header(r, meta=meta)
+def _read_fixed_str_list(r):
+    jump, cnt = _read_fixed_array_header(r)
     out = []
     for _ in range(cnt):
         out.append(r.str_u16())
-    if meta is not None:
-        meta["data_end"] = int(r.tell())
     r.seek(jump)
     return out
 
@@ -468,9 +462,7 @@ def _read_fixed_str_list(r, meta=None):
 def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False):
     r = _SaveStreamReader(raw, size_t_size=size_t_size)
     out = {}
-    layout = {"size_t_size": int(size_t_size)} if with_layout else None
-    if layout is not None:
-        layout["global_real_time_offset"] = int(r.tell())
+    layout = {} if with_layout else None
     out["global_real_time"] = (
         int(r.i64()) if (major > 1 or (major == 1 and minor >= 2)) else 0
     )
@@ -482,16 +474,8 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
     out["Z"] = _read_fixed_int_list(r, meta=meta)
     if layout is not None:
         layout["Z"] = meta
-    meta = {} if with_layout else None
-    out["M"] = _read_fixed_str_list(r, meta=meta)
-    if layout is not None:
-        layout["M"] = meta
-    meta = {} if with_layout else None
-    out["global_namae"] = _read_fixed_str_list(r, meta=meta)
-    if layout is not None:
-        layout["global_namae"] = meta
-    if layout is not None:
-        layout["dummy_check_id_offset"] = int(r.tell())
+    out["M"] = _read_fixed_str_list(r)
+    out["global_namae"] = _read_fixed_str_list(r)
     out["dummy_check_id"] = int(r.u32())
     p = r.tell()
     if p + 12 <= len(raw):
@@ -520,11 +504,8 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
         out["bgm_table"] = []
         if layout is not None:
             layout["bgm_table"] = None
-    if layout is not None:
-        layout["chrkoe_count_offset"] = int(r.tell())
     cnt = int(r.sizet())
     if layout is not None:
-        layout["chrkoe_count"] = int(cnt)
         layout["chrkoe_look_flag_offsets"] = []
     chrkoe = []
     for _ in range(cnt):
@@ -536,14 +517,9 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
             layout["chrkoe_look_flag_offsets"].append(int(look_pos))
     out["chrkoe"] = chrkoe
     tail = raw[r.tell() :]
-    if layout is not None:
-        layout["tail_offset"] = int(r.tell())
-        layout["tail_size"] = int(len(tail))
     if tail and any(x != 0 for x in tail):
         out["_tail_hex"] = tail.hex()
-    if with_layout:
-        return out, layout
-    return out
+    return layout if with_layout else out
 
 
 def _parse_config_payload(raw, major, minor, *, size_t_size=4):
@@ -640,13 +616,13 @@ def _try_parse_global_payload_with_layout(raw, major, minor):
     last_err = None
     for sz in (4, 8):
         try:
-            d, layout = _parse_global_payload(
+            layout = _parse_global_payload(
                 raw, major, minor, size_t_size=sz, with_layout=True
             )
-            return d, {"size_t_size": sz}, layout, None
+            return layout, None
         except Exception as e:
             last_err = str(e)
-    return None, None, None, last_err or "eof"
+    return None, last_err or "eof"
 
 
 def _parse_global_or_config(blob):
@@ -877,16 +853,12 @@ def _parse_global_for_patch(blob):
         raise ValueError("not global.sav")
     enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
     raw = _unpack_tnm_data(enc)
-    payload, variant, layout, err = _try_parse_global_payload_with_layout(
-        raw, k["major"], k["minor"]
-    )
-    if payload is None or layout is None:
+    layout, err = _try_parse_global_payload_with_layout(raw, k["major"], k["minor"])
+    if layout is None:
         raise ValueError(f"global.sav: {err or 'parse failed'}")
     return {
         **k,
         "raw": raw,
-        "payload": payload,
-        "payload_variant": variant,
         "payload_layout": layout,
     }
 

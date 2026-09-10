@@ -240,29 +240,11 @@ def _read_loc_bool_branch(text_data: bytes, rel_off: int):
         return None
     branch = tail[2:]
     if len(branch) >= 2 and branch[0] in (0x74, 0x75):
-        return {
-            "test_bytes": bytes(tail[:2]),
-            "branch_size": 2,
-            "branch_bytes": bytes(branch[:2]),
-        }
+        return bytes(branch[:2])
     if len(branch) >= 6 and branch[:2] in (b"\x0f\x84", b"\x0f\x85"):
-        return {
-            "test_bytes": bytes(tail[:2]),
-            "branch_size": 6,
-            "branch_bytes": bytes(branch[:6]),
-        }
+        return bytes(branch[:6])
     if len(branch) >= 2 and branch[:2] == b"\x90\x90":
-        return {
-            "test_bytes": bytes(tail[:2]),
-            "branch_size": 2,
-            "branch_bytes": bytes(branch[:2]),
-        }
-    if len(branch) >= 6 and branch[:6] == b"\x90" * 6:
-        return {
-            "test_bytes": bytes(tail[:2]),
-            "branch_size": 6,
-            "branch_bytes": bytes(branch[:6]),
-        }
+        return bytes(branch[:2])
     return None
 
 
@@ -399,14 +381,14 @@ def _find_loc_guard_function(data: bytearray):
             "Multiple plausible region-detection routines were found; refusing to patch this SiglusEngine.exe build."
         )
     func_off = ranked[0][1]
-    if _find_loc_guard_call_site(data, func_off) is None:
+    if _find_loc_guard_branch(data, func_off) is None:
         raise RuntimeError(
             "Could not locate a guarded caller for the region-detection routine in this SiglusEngine.exe build."
         )
     return func_off
 
 
-def _find_loc_guard_call_site(data: bytearray, func_off: int):
+def _find_loc_guard_branch(data: bytearray, func_off: int):
     exe_bytes = bytes(data)
     layout = parse_pe32_layout(exe_bytes)
     text_sec = _find_text_section(layout)
@@ -425,25 +407,17 @@ def _find_loc_guard_call_site(data: bytearray, func_off: int):
         dest_va = text_va + rel_off + 5 + disp
         if dest_va != func_va:
             continue
-        branch_info = _read_loc_bool_branch(text_data, rel_off)
-        if branch_info is None:
-            continue
-        branch_rel = rel_off + 5 + len(branch_info["test_bytes"])
-        return {
-            "call_off": text_sec["raw_offset"] + rel_off,
-            "branch_off": text_sec["raw_offset"] + branch_rel,
-            "branch_size": branch_info["branch_size"],
-            "branch_bytes": branch_info["branch_bytes"],
-        }
+        branch = _read_loc_bool_branch(text_data, rel_off)
+        if branch is not None:
+            return branch
     return None
 
 
-def _loc_state(data: bytearray, func_off: int, call_info):
+def _loc_state(data: bytearray, func_off: int, branch):
     head = bytes(data[func_off : func_off + 3])
     if head == _LOC_BYPASS_STUB:
         return "disabled", "function stub"
-    if call_info:
-        branch = call_info["branch_bytes"]
+    if branch:
         if branch == b"\x90" * len(branch):
             return "disabled", "caller branch patched"
         if branch[:1] == b"\x75" or branch[:2] == b"\x0f\x85":
@@ -465,8 +439,8 @@ def _parse_loc_mode(v: str) -> bool:
 def patch_loc(data: bytearray, loc_spec: str):
     want_enabled = _parse_loc_mode(loc_spec)
     func_off = _find_loc_guard_function(data)
-    call_info = _find_loc_guard_call_site(data, func_off)
-    before_state, before_detail = _loc_state(data, func_off, call_info)
+    branch = _find_loc_guard_branch(data, func_off)
+    before_state, before_detail = _loc_state(data, func_off, branch)
     target_state = "enabled" if want_enabled else "disabled"
     if before_state == "unknown":
         raise RuntimeError(
@@ -480,7 +454,6 @@ def patch_loc(data: bytearray, loc_spec: str):
     if not want_enabled and before_detail == "caller branch patched":
         return (
             f"loc:{int(want_enabled)}",
-            f"LOC{int(want_enabled)}",
             [],
             before_state,
             before_state,
@@ -528,7 +501,7 @@ def patch_loc(data: bytearray, loc_spec: str):
                         )
                     )
     after_state, after_detail = _loc_state(
-        data, func_off, _find_loc_guard_call_site(data, func_off)
+        data, func_off, _find_loc_guard_branch(data, func_off)
     )
     if after_state == "unknown":
         raise RuntimeError(
@@ -540,7 +513,6 @@ def patch_loc(data: bytearray, loc_spec: str):
         )
     return (
         f"loc:{int(want_enabled)}",
-        f"LOC{int(want_enabled)}",
         changes,
         before_state,
         after_state,
@@ -750,7 +722,6 @@ def _pe32_patch_header(data: bytes):
         "coff_off": coff_off,
         "optional_off": optional_off,
         "section_count": section_count,
-        "section_table_off": section_table_off,
         "section_table_end": section_table_end,
         "file_alignment": file_alignment,
         "section_alignment": section_alignment,
@@ -1398,8 +1369,8 @@ def print_patch_info(in_path: str, raw: bytes):
     )
     try:
         func_off = _find_loc_guard_function(data)
-        call_info = _find_loc_guard_call_site(data, func_off)
-        state, detail = _loc_state(data, func_off, call_info)
+        branch = _find_loc_guard_branch(data, func_off)
+        state, detail = _loc_state(data, func_off, branch)
         print(f"LOC   : {state} ({detail}, func=0x{func_off:X})")
     except Exception as e:
         print(f"LOC   : unavailable ({e})")
@@ -1498,13 +1469,10 @@ def main(argv=None):
         return 0
     before_hash = hashlib.sha256(raw).hexdigest()
     data = bytearray(raw)
-    mode_name = ""
-    suffix = ""
     loc_before = None
     loc_after = None
     warnings = []
     if args.altkey:
-        key_source = {}
         if args.key:
             key_bytes = parse_input_key(args.key)
             key_source = {
@@ -1539,12 +1507,11 @@ def main(argv=None):
         suffix = "alt"
     elif args.loc is not None:
         try:
-            mode_name, suffix, changes, loc_before, loc_after = patch_loc(
-                data, args.loc
-            )
+            mode_name, changes, loc_before, loc_after = patch_loc(data, args.loc)
         except Exception as e:
             sys.stderr.write(str(e) + "\n")
             return 1
+        suffix = "LOC1" if args.loc == "1" else "LOC0"
     else:
         try:
             if args.revert:
@@ -1562,15 +1529,7 @@ def main(argv=None):
     elif explicit_out_path:
         out_path = explicit_out_path
     else:
-        out_path = (
-            _default_out_path(in_path, "alt", upper=False)
-            if args.altkey
-            else (
-                _default_out_path(in_path, "LOC1" if args.loc == "1" else "LOC0")
-                if args.loc is not None
-                else _default_out_path(in_path, suffix)
-            )
-        )
+        out_path = _default_out_path(in_path, suffix, upper=not args.altkey)
     if not args.inplace and _same_file_path(in_path, out_path):
         sys.stderr.write("output refers to input; use --inplace to overwrite it\n")
         return 2

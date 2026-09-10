@@ -354,7 +354,7 @@ def _lzss_compress_task(
 
 def parallel_lzss_compress(
     ctx: dict, scn_names: list[str], bs_dir: str
-) -> tuple[list[str], list[bytes], list[bytes]]:
+) -> tuple[list[bytes], list[bytes]]:
     from .common import format_scene_name, read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
@@ -375,15 +375,13 @@ def parallel_lzss_compress(
         else:
             results[nm] = (dat, read_bytes(lz_path))
     if not tasks:
-        enc_names = []
         dat_list = []
         lzss_list = []
         for nm in scn_names:
             dat, lz = results[nm]
-            enc_names.append(nm)
             dat_list.append(dat)
             lzss_list.append(lz)
-        return (enc_names, dat_list, lzss_list)
+        return (dat_list, lzss_list)
     workers = get_max_workers(None)
     errors = []
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
@@ -398,16 +396,14 @@ def parallel_lzss_compress(
                 print(f"  LZSS: {format_scene_name(nm + '.ss', ctx)}")
     if errors:
         raise RuntimeError(str(errors[0][1]))
-    enc_names = []
     dat_list = []
     lzss_list = []
     for nm in scn_names:
         dat, lz = results[nm]
-        enc_names.append(nm)
         dat_list.append(dat)
         lzss_list.append(lz)
     print("[PARALLEL] LZSS compression complete")
-    return (enc_names, dat_list, lzss_list)
+    return (dat_list, lzss_list)
 
 
 def _source_encrypt_task(

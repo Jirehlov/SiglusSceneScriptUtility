@@ -101,8 +101,6 @@ def _build_system_element_index(const_module):
                 if one.get("parent")
                 else one.get("name", "")
             )
-            one["aliases"] = [one.get("name", "")]
-            one["is_alias"] = False
             return one
 
         from collections import defaultdict
@@ -163,8 +161,6 @@ def _build_system_element_index(const_module):
                     if one.get("parent")
                     else picked
                 )
-                one["aliases"] = names
-                one["is_alias"] = len(names) > 1
                 out[key] = one
                 continue
             if len(types) == 1 and len(specs) == 1:
@@ -206,8 +202,6 @@ def _build_array_element_index(const_module):
                     "name": name,
                     "ret": int(fm[ret]),
                     "q": f"{parent}.{name}",
-                    "aliases": [name],
-                    "is_alias": False,
                 }
             except Exception:
                 continue
@@ -269,10 +263,6 @@ def _shared_disassembly_tables(const_module=None):
     return _cached_disassembly_tables(
         _ConstCacheKey(C if const_module is None else const_module)
     )
-
-
-_shared_disassembly_tables.cache_clear = _cached_disassembly_tables.cache_clear
-_shared_disassembly_tables.cache_info = _cached_disassembly_tables.cache_info
 
 
 def new_expression_state(
@@ -989,10 +979,6 @@ def disassemble_scn_bytes(
     scn_cmd_names=None,
     call_prop_names=None,
     pack_context=None,
-    scene_no=None,
-    scene_name=None,
-    namae_defs=None,
-    read_flag_defs=None,
     with_trace=False,
     emit_text=True,
     trace_profile=None,
@@ -1010,15 +996,6 @@ def disassemble_scn_bytes(
         inc_command_cnt = int(pack_context.get("inc_command_cnt", 0) or 0)
     except Exception:
         inc_command_cnt = 0
-    if scene_name in (None, ""):
-        try:
-            if scene_no is not None:
-                sn_i = int(scene_no)
-                scene_names = list(pack_context.get("scene_names") or [])
-                if 0 <= sn_i < len(scene_names):
-                    scene_name = str(scene_names[sn_i] or "")
-        except Exception:
-            scene_name = ""
     (
         form_rev,
         op_names,
@@ -1110,8 +1087,6 @@ def disassemble_scn_bytes(
     cmd_label_list = list(cmd_label_list or [])
     inc_property_defs = list(inc_property_defs or [])
     inc_command_defs = list(inc_command_defs or [])
-    namae_defs = list(namae_defs or [])
-    read_flag_defs = list(read_flag_defs or [])
     fm_void = _form_code(C.FM_VOID)
     fm_int = _form_code(C.FM_INT)
     fm_str = _form_code(C.FM_STR)
@@ -1147,8 +1122,6 @@ def disassemble_scn_bytes(
                 "ret": form,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code),
                 "q": q,
-                "aliases": [q],
-                "is_alias": False,
             }
         except Exception:
             continue
@@ -1171,8 +1144,6 @@ def disassemble_scn_bytes(
                 "ret": form,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_PROP, 0, code),
                 "q": q,
-                "aliases": [q],
-                "is_alias": False,
             }
         except Exception:
             continue
@@ -1193,31 +1164,7 @@ def disassemble_scn_bytes(
                 "ret": None,
                 "ec": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, code),
                 "q": name,
-                "aliases": [name],
-                "is_alias": False,
             }
-        except Exception:
-            continue
-    namae_ids_by_str = {}
-    for idx, it in enumerate(namae_defs):
-        try:
-            if not isinstance(it, dict):
-                continue
-            nid = int(it.get("id", idx))
-            sid = int(it.get("str_id"))
-            namae_ids_by_str.setdefault(sid, []).append(nid)
-        except Exception:
-            continue
-    read_flag_line_by_id = {}
-    read_flag_ids_by_line = {}
-    for idx, it in enumerate(read_flag_defs):
-        try:
-            if not isinstance(it, dict):
-                continue
-            rid = int(it.get("id", idx))
-            line = int(it.get("line"))
-            read_flag_line_by_id[rid] = line
-            read_flag_ids_by_line.setdefault(line, []).append(rid)
         except Exception:
             continue
     cmd_label_offsets = set()
@@ -1242,45 +1189,6 @@ def disassemble_scn_bytes(
             return (int(parent_form), int(element_code)) in read_flag_command_codes
         except Exception:
             return False
-
-    def _clone_side_defs(defs):
-        out_defs = []
-        for idx, it in enumerate(defs or []):
-            if not isinstance(it, dict):
-                continue
-            one = {}
-            for key in sorted(it):
-                val = it.get(key)
-                if isinstance(val, bool):
-                    one[str(key)] = bool(val)
-                elif isinstance(val, int):
-                    one[str(key)] = int(val)
-                elif val is None:
-                    one[str(key)] = None
-                else:
-                    one[str(key)] = str(val)
-            if "id" not in one:
-                one["id"] = int(idx)
-            out_defs.append(one)
-        return out_defs
-
-    def _namae_ids_for_str(str_id):
-        try:
-            return list(namae_ids_by_str.get(int(str_id), []) or [])
-        except Exception:
-            return []
-
-    def _read_flag_line(flag_id):
-        try:
-            return read_flag_line_by_id.get(int(flag_id))
-        except Exception:
-            return None
-
-    def _read_flag_ids_for_line(line_no):
-        try:
-            return list(read_flag_ids_by_line.get(int(line_no), []) or [])
-        except Exception:
-            return []
 
     def _element_info_cb(parent_form, code):
         try:
@@ -1614,10 +1522,6 @@ def disassemble_scn_bytes(
             nl_fields = {}
             if not koe_trace:
                 nl_fields["value"] = int(cur_line)
-                if not payload_trace:
-                    rf_ids = _read_flag_ids_for_line(cur_line)
-                    if rf_ids:
-                        nl_fields["read_flag_ids"] = rf_ids
             _trace(opname, ofs, **nl_fields)
             continue
         if op == cd_push:
@@ -2062,10 +1966,6 @@ def disassemble_scn_bytes(
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     text_fields["str_id"] = sid_i
-            if not (koe_trace or payload_trace):
-                rf_line = _read_flag_line(rf)
-                if rf_line is not None:
-                    text_fields["read_flag_line"] = int(rf_line)
             _trace(
                 opname,
                 ofs,
@@ -2097,11 +1997,6 @@ def disassemble_scn_bytes(
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     name_fields["str_id"] = sid_i
-                    name_ids = _namae_ids_for_str(sid_i)
-                    if name_ids:
-                        name_fields["namae_ids"] = list(name_ids)
-                        if len(name_ids) == 1:
-                            name_fields["namae_id"] = int(name_ids[0])
             _trace(
                 opname,
                 ofs,
@@ -2223,15 +2118,7 @@ def disassemble_scn_bytes(
                     }
                 )
                 if not payload_trace:
-                    rf_line = _read_flag_line(read_flag)
-                    cmd_fields.update(
-                        {
-                            "arg_list_id": int(arg_list_id),
-                            "read_flag_line": (
-                                int(rf_line) if rf_line is not None else None
-                            ),
-                        }
-                    )
+                    cmd_fields["arg_list_id"] = int(arg_list_id)
             _trace(opname, ofs, **cmd_fields)
             if cmd_stack_start is not None:
                 _collapse_command_expr(
@@ -2258,19 +2145,6 @@ def disassemble_scn_bytes(
         break
     if parse_status is not None:
         parse_status["complete"] = complete
-    if trace is not None and trace and not payload_trace:
-        tail = trace[-1]
-        if scene_no is not None:
-            try:
-                tail["scene_no"] = int(scene_no)
-            except Exception:
-                tail["scene_no"] = scene_no
-        if scene_name not in (None, ""):
-            tail["scene_name"] = str(scene_name)
-        if namae_defs:
-            tail["namae_defs"] = _clone_side_defs(namae_defs)
-        if read_flag_defs:
-            tail["read_flag_defs"] = _clone_side_defs(read_flag_defs)
     if trace is not None:
         return out, trace
     return out
