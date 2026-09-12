@@ -171,15 +171,13 @@ def _parse_outer_header(path):
         return None
 
 
-def find_oggs_offset(path, start_off=0, *, chunk_size=1024 * 1024):
-    start_off = 0 if start_off < 0 else int(start_off)
-    chunk_size = 64 if chunk_size < 64 else int(chunk_size)
+def find_oggs_offset(path, start_off=0):
     with open_read(path) as file_obj:
         file_obj.seek(start_off)
         offset = start_off
         tail = b""
         while True:
-            block = file_obj.read(chunk_size)
+            block = file_obj.read(1024 * 1024)
             if not block:
                 break
             buf = tail + block

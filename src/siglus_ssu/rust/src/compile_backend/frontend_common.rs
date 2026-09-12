@@ -60,7 +60,6 @@ pub struct SourcePoint {
 #[derive(Debug, Clone)]
 pub struct TextCommentResult {
     pub text: String,
-    pub line: usize,
     pub source_map: Option<Vec<Option<SourcePoint>>>,
 }
 
@@ -287,7 +286,6 @@ pub fn scan_text_comments(
     }
     Ok(TextCommentResult {
         text: out,
-        line,
         source_map,
     })
 }

@@ -150,11 +150,7 @@ class CharacterAnalizer:
         if not result.get("ok"):
             return self.error(result.get("line", 0), result.get("message", ""))
         if self.sidecar:
-            self.source_map_1 = (
-                list(result.get("source_map") or [])
-                if isinstance(result.get("source_map"), list)
-                else []
-            )
+            self.source_map_1 = result["source_map"]
         else:
             self.source_map_1 = []
         return result.get("text", "")
@@ -165,7 +161,7 @@ class CharacterAnalizer:
         inc = []
         out_source_map = []
         inc_source_map = []
-        source_map = self.source_map_1 if isinstance(self.source_map_1, list) else []
+        source_map = self.source_map_1
         inc_line_map = []
         stats = {
             "ifdef": 0,
@@ -372,7 +368,7 @@ class CharacterAnalizer:
         if not r1 and not r2:
             return text, pos + 1, 1
         rep = (r1 if r1["name"] > r2["name"] else r2) if (r1 and r2) else (r1 or r2)
-        if isinstance(rep, dict) and "used_count" in rep:
+        if "used_count" in rep:
             rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
         tp, nm, after = rep["type"], rep["name"], rep.get("after", "")
         nl = len(nm)
@@ -380,14 +376,12 @@ class CharacterAnalizer:
             return text[:pos] + after + text[pos + nl :], pos + len(after), 1
         if tp == "define":
             return text[:pos] + after + text[pos + nl :], pos, 1
-        if tp == "macro":
-            st = pos
-            p = pos + nl
-            ok, p2, res = self._analize_macro(text, p, rep, default_rt, added_rt)
-            if not ok:
-                return text, pos, 0
-            return text[:st] + res + text[p2:], st + len(res), 1
-        return text, pos + 1, 1
+        st = pos
+        p = pos + nl
+        ok, p2, res = self._analize_macro(text, p, rep, default_rt, added_rt)
+        if not ok:
+            return text, pos, 0
+        return text[:st] + res + text[p2:], st + len(res), 1
 
     def _analize_macro(self, text, p, macro, default_rt, added_rt):
         real = []
@@ -541,18 +535,9 @@ class CharacterAnalizer:
         r = self.analize_file_2(t1)
         if not isinstance(r, tuple):
             return 0
-        scn, inc, inc_line_map = r[:3]
-        preprocess_stats = dict(r[3]) if len(r) >= 4 and isinstance(r[3], dict) else {}
-        scn_source_map = (
-            list(r[4])
-            if self.sidecar and len(r) >= 5 and isinstance(r[4], list)
-            else []
-        )
-        inc_source_map = (
-            list(r[5])
-            if self.sidecar and len(r) >= 6 and isinstance(r[5], list)
-            else []
-        )
+        scn, inc, inc_line_map, preprocess_stats = r[:4]
+        scn_source_map = r[4] if self.sidecar else []
+        inc_source_map = r[5] if self.sidecar else []
         pcad["inc_line_map"] = inc_line_map
         if self.sidecar:
             pcad["sidecar"] = True
@@ -623,10 +608,6 @@ class CharacterAnalizer:
                                     replace_uses.append(
                                         {
                                             "name": name,
-                                            "type": str(rep.get("type") or ""),
-                                            "decl_type": str(
-                                                rep.get("decl_type") or ""
-                                            ),
                                             "line": next(iter(lines)),
                                             "start_char": min(chars),
                                             "end_char": max(chars) + 1,

@@ -261,7 +261,6 @@ class _LzssTreeFind:
         self.window_size = window_size
         self.max_match_len = look_ahead_size
         self.src_index = 0
-        self.match_target = 0
         self.match_size = 0
         self.window_top = 0
         self.tree = _LzssTree()
@@ -320,9 +319,7 @@ def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
     mv = memoryview(src)
     tree_find.ready(mv, len(src), WINDOW_SIZE, LOOK_AHEAD)
     pack_buf = bytearray(b"\0" * 8)
-    pack_buf_size = 8
     pack_data = bytearray(1 + (3 * 8))
-    pack_data[0] = 0
     pack_bit_count = 0
     pack_data_count = 1
     replace_cnt = 0
@@ -356,7 +353,6 @@ def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
         if make_pack_data():
             if pack_bit_count == 8:
                 pack_buf.extend(pack_data[:pack_data_count])
-                pack_buf_size += pack_data_count
                 pack_bit_count = 0
                 pack_data_count = 1
                 pack_data[0] = 0
@@ -365,10 +361,9 @@ def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
                 pack_data_count == 1 and not suppress_empty_tail_group
             ):
                 pack_buf.extend(pack_data[:pack_data_count])
-                pack_buf_size += pack_data_count
             break
-    struct.pack_into("<II", pack_buf, 0, pack_buf_size, len(src))
-    return bytes(pack_buf[:pack_buf_size])
+    struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
+    return bytes(pack_buf)
 
 
 def _py_lzss32_pack(src: bytes) -> bytes:
@@ -387,7 +382,6 @@ def _py_lzss32_pack(src: bytes) -> bytes:
     tree_find.ready(dwords, src_cnt, WINDOW_SIZE, LOOK_AHEAD)
     pack_buf = bytearray(b"\0" * 8)
     pack_data = bytearray(1 + (3 * 8))
-    pack_data[0] = 0
     pack_bit_count = 0
     pack_data_count = 1
     replace_cnt = 0
@@ -751,9 +745,4 @@ def msvcrand_shuffle_inplace(state: int, a) -> int:
 def find_shuffle_seed_first(target_idx_pairs, seed0: int, *, workers):
     if not _USE_NATIVE or _runtime._LEGACY_FULL:
         return None
-    pairs = [(int(o), int(ln)) for (o, ln) in list(target_idx_pairs)]
-    return native_accel.find_shuffle_seed_first(
-        pairs,
-        int(seed0) & 0xFFFFFFFF,
-        workers,
-    )
+    return native_accel.find_shuffle_seed_first(target_idx_pairs, seed0, workers)

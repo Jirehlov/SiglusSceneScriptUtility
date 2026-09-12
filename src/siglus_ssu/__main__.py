@@ -430,7 +430,7 @@ def main():
                 if str(ref).startswith("-"):
                     sys.stderr.write(f"{_prog()}: --ref requires a value\n")
                     return 2
-            elif a in ("-h", "--help", "help"):
+            elif a == "help":
                 _usage()
                 return 0
             else:

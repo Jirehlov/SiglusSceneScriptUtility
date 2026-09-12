@@ -155,16 +155,13 @@ class FormTable:
             )
             if not name or et is None:
                 continue
-            am = args if isinstance(args, dict) else {}
-            if am and any(not isinstance(v, dict) for v in am.values()):
-                am = parse_arg_spec(args)
             info = {
                 "type": et,
                 "code": C.create_elm_code(owner, group, int(code)),
                 "name": name,
                 "form": form or C.FM_INT,
                 "size": size,
-                "arg_map": am,
+                "arg_map": args,
                 "origin": "sys",
             }
             s.add(parent or C.FM_SCENE, info)
@@ -256,30 +253,14 @@ class FormTable:
 
 class MA:
     def __init__(s, piad, plad, psad):
-        s.piad = piad or {}
-        s.plad = plad or {}
-        s.psad = psad or {}
+        s.piad = piad
+        s.plad = plad
+        s.psad = psad
         s.last = {
             "type": "TNMSERR_MA_NONE",
             "atom": {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0},
         }
-        ft = s.piad.get("form_table")
-        if not isinstance(ft, FormTable):
-            ft = FormTable()
-            ft.create_system_form_table()
-            s.piad["form_table"] = ft
-        s.ft = ft
-        if "command_cnt" not in s.piad:
-            s.piad["command_cnt"] = len(s.piad.get("command_list", []))
-        if "property_cnt" not in s.piad:
-            s.piad["property_cnt"] = len(s.piad.get("property_list", []))
-        s.psad.setdefault("call_prop_name_list", [])
-        s.psad.setdefault("cur_call_prop_cnt", 0)
-        s.psad.setdefault("total_call_prop_cnt", 0)
-        if "inc_command_cnt" not in s.piad:
-            s.piad["inc_command_cnt"] = 0
-        if "inc_property_cnt" not in s.piad:
-            s.piad["inc_property_cnt"] = 0
+        s.ft = s.piad["form_table"]
 
     def error(s, t, a=None, **kw):
         s.last = {
@@ -823,14 +804,13 @@ class MA:
             return 0
         u = s.plad.get("unknown_list", [])
         els = n.get("element") or [{}]
-        e0 = els[0] if els else {}
+        e0 = els[0]
         elm_chain = []
         for i, el in enumerate(els):
             if not isinstance(el, dict):
                 elm_chain.append("")
                 continue
             el["_elm_pos"] = i
-            el["_elm_chain"] = None
             if el.get("node_type") == C.NT_ELM_ELEMENT:
                 atom = (el.get("name") or {}).get("atom") or {}
                 try:

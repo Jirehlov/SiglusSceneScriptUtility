@@ -1159,10 +1159,9 @@ class TutorialBuilder:
         self.segment_index = {}
         self.stats["segment_count"] = 0
         block_to_segment = {}
-        segment_lookup = {}
         for scene in self.scenes:
             segments = []
-            scene_block_to_segment = {}
+            assigned_blocks = set()
             blocks = list(scene.get("blocks") or ())
             unique_outgoing = {}
             unique_incoming = defaultdict(set)
@@ -1172,7 +1171,7 @@ class TutorialBuilder:
                 for target_id in grouped:
                     unique_incoming[target_id].add(block["id"])
             for block in blocks:
-                if block["id"] in scene_block_to_segment:
+                if block["id"] in assigned_blocks:
                     continue
                 members = [block]
                 member_ids = {block["id"]}
@@ -1194,7 +1193,7 @@ class TutorialBuilder:
                         break
                     if _safe_text(next_block.get("choice_option")):
                         break
-                    if target_id in member_ids or target_id in scene_block_to_segment:
+                    if target_id in member_ids or target_id in assigned_blocks:
                         break
                     if len(unique_incoming.get(target_id, ())) != 1:
                         break
@@ -1229,9 +1228,8 @@ class TutorialBuilder:
                 segments.append(segment)
                 segment_id = _safe_text(segment.get("id"))
                 self.segment_index[segment_id] = segment
-                segment_lookup[segment_id] = segment
                 for member in members:
-                    scene_block_to_segment[member["id"]] = segment_id
+                    assigned_blocks.add(member["id"])
                     block_to_segment[member["id"]] = segment_id
             scene["segments"] = segments
             self.stats["segment_count"] += len(segments)
@@ -1247,7 +1245,7 @@ class TutorialBuilder:
                     target_segment_id = block_to_segment.get(target_id)
                     if not target_segment_id:
                         continue
-                    target_segment = segment_lookup.get(target_segment_id)
+                    target_segment = self.segment_index.get(target_segment_id)
                     if not isinstance(target_segment, dict):
                         continue
                     self._add_segment_edge(segment, target_segment, kind, label)

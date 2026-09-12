@@ -7,7 +7,6 @@ from .CA import (
     is_zen,
     add_replace_tree,
 )
-from .MA import FormTable
 from .common import (
     mark_named_usage,
     next_else_ifdef_state,
@@ -32,7 +31,7 @@ class IncAnalyzer:
             source_map if self.sidecar and isinstance(source_map, list) else []
         )
         self.source_map_from_input = bool(self.input_source_map)
-        if self.sidecar and isinstance(self.iad2, dict):
+        if self.sidecar:
             self.iad2.setdefault("decls", [])
             self.iad2.setdefault("bodies", [])
 
@@ -62,20 +61,11 @@ class IncAnalyzer:
             return 0
         self.t = result.get("text", "")
         if self.sidecar:
-            source_map = (
-                list(result.get("source_map") or [])
-                if isinstance(result.get("source_map"), list)
-                else []
-            )
+            source_map = result["source_map"]
             if self.input_source_map:
                 composed = []
                 for point in source_map:
-                    source_index = -1
-                    if isinstance(point, (list, tuple)) and len(point) >= 3:
-                        try:
-                            source_index = int(point[2])
-                        except (TypeError, ValueError):
-                            source_index = -1
+                    source_index = point[2]
                     if 0 <= source_index < len(self.input_source_map):
                         composed.append(self.input_source_map[source_index])
                     else:
@@ -368,12 +358,12 @@ class IncAnalyzer:
         )
 
     def _record_decl(self, kind, name, line, directive, start=-1, end=-1):
-        if not self.sidecar or not isinstance(self.iad2, dict) or not name:
+        if not self.sidecar:
             return
         line, start_char, end_char, source_mapped = self._span_from_offsets(
             start, end, line
         )
-        self.iad2.setdefault("decls", []).append(
+        self.iad2["decls"].append(
             {
                 "kind": kind,
                 "name": name,
@@ -381,18 +371,12 @@ class IncAnalyzer:
                 "start_char": int(start_char),
                 "end_char": int(end_char),
                 "directive": directive,
-                "parent_form": self.pf,
                 "source_mapped": bool(source_mapped),
             }
         )
 
-    def _record_body(self, kind, name, args=None):
-        if (
-            not self.sidecar
-            or not isinstance(self.iad2, dict)
-            or not name
-            or not self._last_after_text
-        ):
+    def _record_body(self, args=None):
+        if not self.sidecar or not self._last_after_text:
             return
         arg_names = [
             str(item.get("name", "") or "")
@@ -403,14 +387,11 @@ class IncAnalyzer:
             list(item) if isinstance(item, tuple) else item
             for item in self._last_after_source_map
         ]
-        self.iad2.setdefault("bodies", []).append(
+        self.iad2["bodies"].append(
             {
-                "kind": kind,
-                "name": name,
                 "text": self._last_after_text,
                 "source_map": source_map,
                 "args": arg_names,
-                "parent_form": self.pf,
             }
         )
 
@@ -665,8 +646,8 @@ class IncAnalyzer:
                 "used_count": 0,
             }
             add_replace_tree(self.iad["replace_tree"], nm, rep)
-            self.iad.setdefault("macro_defs", []).append(rep)
-            self.iad.setdefault("macro_map", {})[nm] = rep
+            self.iad["macro_defs"].append(rep)
+            self.iad["macro_map"][nm] = rep
             self._record_decl(
                 "replace" if tp == "replace" else "define",
                 nm,
@@ -675,7 +656,7 @@ class IncAnalyzer:
                 self._last_name_start,
                 self._last_name_end,
             )
-            self._record_body("replace" if tp == "replace" else "define", nm)
+            self._record_body()
             return i, line, 1
         if tp == "macro":
             nm, i, line = self._name_until(i, line, set(" \t\n("))
@@ -704,8 +685,8 @@ class IncAnalyzer:
                 "used_count": 0,
             }
             add_replace_tree(self.iad["replace_tree"], nm, rep)
-            self.iad.setdefault("macro_defs", []).append(rep)
-            self.iad.setdefault("macro_map", {})[nm] = rep
+            self.iad["macro_defs"].append(rep)
+            self.iad["macro_map"][nm] = rep
             self._record_decl(
                 "macro",
                 nm,
@@ -714,7 +695,7 @@ class IncAnalyzer:
                 self._last_name_start,
                 self._last_name_end,
             )
-            self._record_body("macro", nm, args)
+            self._record_body(args)
             return i, line, 1
         if tp == "property":
             txt, i, line, name_line, span = self._prop_cmd_text(i, line, set(" :\t\n"))
@@ -783,11 +764,7 @@ class IncAnalyzer:
             self.iad["property_list"].append(
                 {"id": pid, "form": form, "size": size, "name": name}
             )
-            ft = self.iad.get("form_table")
-            if not isinstance(ft, FormTable):
-                ft = FormTable()
-                ft.create_system_form_table()
-                self.iad["form_table"] = ft
+            ft = self.iad["form_table"]
             ft.add(
                 self.pf,
                 {
@@ -808,7 +785,7 @@ class IncAnalyzer:
                     if idx < len(self.iad2.get("ps", []))
                     else {}
                 )
-                self.iad2.setdefault("decls", []).append(
+                self.iad2["decls"].append(
                     {
                         "kind": "property",
                         "name": name,
@@ -816,7 +793,6 @@ class IncAnalyzer:
                         "start_char": int(span.get("start_char", 0) or 0),
                         "end_char": int(span.get("end_char", 0) or 0),
                         "directive": "#property",
-                        "parent_form": self.pf,
                         "source_mapped": bool(span.get("source_mapped")),
                     }
                 )
@@ -854,11 +830,7 @@ class IncAnalyzer:
                     "is_defined": False,
                 }
             )
-            ft = self.iad.get("form_table")
-            if not isinstance(ft, FormTable):
-                ft = FormTable()
-                ft.create_system_form_table()
-                self.iad["form_table"] = ft
+            ft = self.iad["form_table"]
             al0 = []
             for ii, a in enumerate((arg_list or {}).get("arg_list", [])):
                 al0.append(
@@ -894,7 +866,7 @@ class IncAnalyzer:
                     if idx < len(self.iad2.get("cs", []))
                     else {}
                 )
-                self.iad2.setdefault("decls", []).append(
+                self.iad2["decls"].append(
                     {
                         "kind": "command",
                         "name": name,
@@ -902,7 +874,6 @@ class IncAnalyzer:
                         "start_char": int(span.get("start_char", 0) or 0),
                         "end_char": int(span.get("end_char", 0) or 0),
                         "directive": "#command",
-                        "parent_form": self.pf,
                         "source_mapped": bool(span.get("source_mapped")),
                     }
                 )

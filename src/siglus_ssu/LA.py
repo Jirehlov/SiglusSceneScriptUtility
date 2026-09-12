@@ -94,7 +94,7 @@ def la_analize(pcad):
 
     def fallback_span(start, end, line):
         line_index = max(0, min(int(line or 1) - 1, len(line_starts) - 1))
-        line_start = line_starts[line_index] if line_starts else 0
+        line_start = line_starts[line_index]
         return {
             "line": line_index + 1,
             "start_char": max(0, start - line_start),
@@ -274,7 +274,6 @@ def la_analize(pcad):
             len(pcad.get("scn_text", "")), len(pcad.get("scn_text", "")), cur_line
         )
         atom_span_list.append(eof_span)
-    cur_id += 1
     str_list.append("dummy")
     lad = {
         "atom_list": atom_list,

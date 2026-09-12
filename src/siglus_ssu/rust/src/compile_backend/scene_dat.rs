@@ -30,7 +30,7 @@ impl MsvcRand {
             let iu = i as u32;
             let mut mask = 0u32;
             let mut chunks = 0u32;
-            while mask < iu - 1 && mask != u32::MAX {
+            while mask < iu - 1 {
                 mask = (mask << 15) | 0x7fff;
                 chunks += 1;
             }

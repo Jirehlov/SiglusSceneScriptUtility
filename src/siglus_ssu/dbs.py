@@ -73,11 +73,7 @@ def dbs_unpack(blob):
 def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
     if not sblob:
         return ""
-    try:
-        ofs = int(ofs)
-    except Exception:
-        return ""
-    if ofs < 0 or ofs >= len(sblob):
+    if ofs >= len(sblob):
         return ""
     if int(m_type) == 0:
         end = sblob.find(b"\x00", ofs)
@@ -126,7 +122,7 @@ def parse_dbs(m_type: int, data: bytes):
         row_hdr_sz = row_cnt * 4
         col_hdr_sz = col_cnt * 8
         cell_cnt = row_cnt * col_cnt
-        if cell_cnt < 0 or cell_cnt > 1_000_000_000:
+        if cell_cnt > 1_000_000_000:
             return None
         dt_sz = cell_cnt * 4
         if not (
@@ -319,23 +315,14 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
 
 
 def _dbs_cell_to_text(m_type: int, info: dict, col_idx: int, raw_val: int) -> str:
-    try:
-        _, dt = info["col_headers"][col_idx]
-    except Exception:
-        dt = 0
+    _, dt = info["col_headers"][col_idx]
     ch = chr(dt & 0xFF) if 32 <= (dt & 0xFF) <= 126 else ""
     if ch == "S":
-        try:
-            return _dbs_get_str(m_type, info.get("str_blob") or b"", int(raw_val))
-        except Exception:
-            return ""
-    try:
-        v = int(raw_val) & 0xFFFFFFFF
-        if v >= 0x80000000:
-            v -= 0x100000000
-        return str(v)
-    except Exception:
-        return str(raw_val)
+        return _dbs_get_str(m_type, info["str_blob"], raw_val)
+    v = raw_val
+    if v >= 0x80000000:
+        v -= 0x100000000
+    return str(v)
 
 
 _MSVCRT_RAND_STATE = 1
@@ -425,7 +412,7 @@ def _read_official_csv(csv_path: str):
     for i, row in enumerate(rows[datatype_i + 1 :], datatype_i + 1):
         if not row:
             continue
-        row_call = _wtoi_prefix(row[0] if len(row) > 0 else "")
+        row_call = _wtoi_prefix(row[0])
         if row_call is None:
             continue
         row_calls.append(int(row_call))
@@ -438,11 +425,11 @@ def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
     blob = read_bytes(dbs_path)
     m_type, expanded = dbs_unpack(blob)
     info = parse_dbs(m_type, expanded)
-    row_cnt = int(info.get("row_cnt") or 0)
-    col_cnt = int(info.get("col_cnt") or 0)
-    data_ofs = int(info.get("data_offset") or 0)
-    data_blob = info.get("data_blob") or expanded
-    cols = info.get("col_headers") or []
+    row_cnt = info["row_cnt"]
+    col_cnt = info["col_cnt"]
+    data_ofs = info["data_offset"]
+    data_blob = info["data_blob"]
+    cols = info["col_headers"]
     head_datano = ["#DATANO"]
     head_dtype = ["#DATATYPE"]
     for call_no, dt in cols:
@@ -459,15 +446,12 @@ def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
         w = csv.writer(f, lineterminator="\r\n")
         w.writerow(head_datano)
         w.writerow(head_dtype)
-        row_calls = info.get("row_calls") or []
+        row_calls = info["row_calls"]
         for r in range(row_cnt):
-            row = [str(int(row_calls[r]) if r < len(row_calls) else r)]
+            row = [str(row_calls[r])]
             base = data_ofs + (r * col_cnt * 4)
             for c in range(col_cnt):
-                try:
-                    raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[0]
-                except Exception:
-                    raw_val = 0
+                raw_val = struct.unpack_from("<I", data_blob, base + c * 4)[0]
                 row.append(_dbs_cell_to_text(m_type, info, c, raw_val))
             w.writerow(row)
 
@@ -492,7 +476,7 @@ def create_one_dbs_from_csv(
     for i, (_csv_idx, call_no, dt) in enumerate(col_specs):
         struct.pack_into("<2i", prefix, col_ofs + i * 8, int(call_no), int(dt))
     for r in range(row_cnt):
-        row = data_rows[r] if r < len(data_rows) else []
+        row = data_rows[r]
         base = data_ofs + (r * col_cnt * 4)
         for c in range(col_cnt):
             csv_idx, call_no, dt = col_specs[c]
@@ -502,7 +486,7 @@ def create_one_dbs_from_csv(
                 try:
                     encoded = _dbs_encode_text(m_type, cell)
                 except UnicodeEncodeError as exc:
-                    line_no = data_lines[r] if r < len(data_lines) else 0
+                    line_no = data_lines[r]
                     raise ValueError(
                         f"{csv_path}:{line_no}:{csv_idx + 1}: "
                         f"cannot encode value for call {call_no}: "

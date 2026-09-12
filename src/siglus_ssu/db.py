@@ -47,8 +47,7 @@ def _analyze_one(path):
         "data_offset",
         "str_offset",
     ):
-        if k in info:
-            print(fmt_kv(k, info[k]))
+        print(fmt_kv(k, info[k]))
     return 0
 
 
@@ -96,14 +95,7 @@ def _extract_padding_pattern_from_dbs(dbs_path: str):
     blob = read_bytes(dbs_path)
     m_type, expanded = dbs.dbs_unpack(blob)
     info = dbs.parse_dbs(m_type, expanded)
-    data_size = int(info.get("data_size") or 0)
-    raw_size = len(expanded)
-    st = data_size + 1
-    if st < 0:
-        st = 0
-    if st > raw_size:
-        st = raw_size
-    return m_type, bytes(expanded[st:raw_size])
+    return m_type, expanded[info["data_size"] + 1 :]
 
 
 def main(argv=None):
@@ -154,10 +146,7 @@ def main(argv=None):
         test_shuffle = True
         remaining_count = len(argv) - i + len(positional_args or ())
         if i < len(argv) and _is_int_token(argv[i]) and remaining_count >= 4:
-            try:
-                test_skip0 = int(str(argv[i]).strip(), 0)
-            except Exception:
-                test_skip0 = 0
+            test_skip0 = int(str(argv[i]).strip(), 0)
             test_skip0_given = True
             argv.pop(i)
     unknown_option = first_option_token(argv)

@@ -208,13 +208,10 @@ impl CharacterAnalyzer {
             ..TextCommentOptions::default()
         };
         match scan_text_comments(input, &options) {
-            Ok(result) => {
-                self.current_line = result.line;
-                Ok(File1Result {
-                    text: result.text,
-                    source_map: result.source_map.unwrap_or_default(),
-                })
-            }
+            Ok(result) => Ok(File1Result {
+                text: result.text,
+                source_map: result.source_map.unwrap_or_default(),
+            }),
             Err(err) => self.error(err.line, err.message),
         }
     }

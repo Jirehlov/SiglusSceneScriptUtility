@@ -1588,7 +1588,6 @@ def main(argv=None):
                         )
                         sys.stderr.flush()
                         return 1
-                    seed = int(seed) & 0xFFFFFFFF
                     sys.stderr.write(
                         f"{test_shuffle_prefix} using seed={seed} (matched first script)\n"
                     )

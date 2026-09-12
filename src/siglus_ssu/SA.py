@@ -13,9 +13,9 @@ def N(ln, **k):
 
 class SA:
     def __init__(s, piad, plad):
-        s.piad = piad or {}
-        s.plad = plad or {}
-        s.atom_list = s.plad.get("atom_list", [])
+        s.piad = piad
+        s.plad = plad
+        s.atom_list = s.plad["atom_list"]
         s.label_list = [
             {"name": x.get("name", ""), "line": x.get("line", 0), "exist": False}
             for x in s.plad.get("label_list", [])
@@ -25,11 +25,7 @@ class SA:
         ]
         s.last = {
             "type": "TNMSERR_SA_NONE",
-            "atom": normalize_atom(
-                s.atom_list[0]
-                if s.atom_list
-                else {"id": 0, "line": 1, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
-            ),
+            "atom": normalize_atom(s.atom_list[0]),
         }
 
     def _a(s, i):
@@ -306,7 +302,7 @@ class SA:
                     for x in n["prop_list"]
                 ]
             }
-            s.piad.setdefault("command_list", []).append(
+            s.piad["command_list"].append(
                 {
                     "id": cid,
                     "form": n["form_code"],
@@ -315,34 +311,33 @@ class SA:
                     "is_defined": True,
                 }
             )
-            s.piad.setdefault("name_set", set()).add(name)
-            ft = s.piad.get("form_table")
-            if ft and hasattr(ft, "add"):
-                al0 = []
-                for arg_index, a in enumerate(n.get("prop_list", [])):
-                    al0.append(
-                        {
-                            "id": arg_index,
-                            "name": "",
-                            "form": a.get("form_code", C.FM_INT),
-                            "def_int": 0,
-                            "def_str": "",
-                            "def_exist": False,
-                        }
-                    )
-                am = {0: {"arg_list": al0}}
-                ft.add(
-                    C.FM_SCENE,
+            s.piad["name_set"].add(name)
+            ft = s.piad["form_table"]
+            al0 = []
+            for arg_index, a in enumerate(n.get("prop_list", [])):
+                al0.append(
                     {
-                        "type": C.ET_COMMAND,
-                        "code": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
-                        "name": name,
-                        "form": n["form_code"],
-                        "size": 0,
-                        "arg_map": am,
-                        "origin": "user",
-                    },
+                        "id": arg_index,
+                        "name": "",
+                        "form": a.get("form_code", C.FM_INT),
+                        "def_int": 0,
+                        "def_str": "",
+                        "def_exist": False,
+                    }
                 )
+            am = {0: {"arg_list": al0}}
+            ft.add(
+                C.FM_SCENE,
+                {
+                    "type": C.ET_COMMAND,
+                    "code": C.create_elm_code(C.ELM_OWNER_USER_CMD, 0, int(cid)),
+                    "name": name,
+                    "form": n["form_code"],
+                    "size": 0,
+                    "arg_map": am,
+                    "origin": "user",
+                },
+            )
         else:
             n["cmd_id"] = cmd.get("id", 0)
             if cmd.get("is_defined"):
@@ -889,7 +884,6 @@ class SA:
             elm_exp=None,
             exp_list=None,
             Literal=None,
-            node_type=C.NT_EXP_SIMPLE,
         )
         ok, p, op = s.sa_atom(p, C.LA_T["OPEN_PAREN"])
         if ok:
@@ -1271,7 +1265,6 @@ class SA:
         return 0, i, None
 
     def analize(s):
-        s.atom_list = s.plad.get("atom_list", [])
         for _ in range(256):
             s.atom_list.append(
                 {
@@ -1282,7 +1275,6 @@ class SA:
                     "subopt": 0,
                 }
             )
-        s.plad["atom_list"] = s.atom_list
         s.clear()
         ok, root = s.sa_ss()[::2]
         if not ok:

@@ -292,7 +292,6 @@ def scan_text_comments(
     state = 0
     line = 1
     column = 0
-    block_line = 1
     i = 0
     while text[i] != "\0":
         ch = text[i]
@@ -421,7 +420,7 @@ def scan_text_comments(
         return {"ok": False, "line": line, "message": unclosed_double_message}
     if state == 7:
         return {"ok": False, "line": block_line, "message": unclosed_block_message}
-    result = {"ok": True, "text": "".join(out), "line": line}
+    result = {"ok": True, "text": "".join(out)}
     if source_map is not None:
         result["source_map"] = source_map
     return result
@@ -1084,10 +1083,7 @@ def read_scn_header(blob):
     fields = list(C.SCN_HDR_FIELDS or [])
     if len(fields) * 4 != C.SCN_HDR_SIZE:
         return {}
-    try:
-        vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
-    except struct.error:
-        return {}
+    vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
     return {fields[i]: int(vals[i]) for i in range(len(fields))}
 
 
@@ -1095,10 +1091,7 @@ def parse_i32_header_checked(dat: bytes, fields, size: int) -> dict:
     h = parse_i32_header(dat, fields, size)
     if not h:
         return {}
-    try:
-        hs = int(h.get("header_size", 0) or 0)
-    except Exception:
-        return {}
+    hs = h.get("header_size", 0)
     if hs < int(size or 0) or hs > len(dat):
         return {}
     return h
@@ -1110,11 +1103,6 @@ def looks_like_siglus_dat(blob: bytes) -> bool:
         return False
     so = h.get("scn_ofs", 0)
     ss = h.get("scn_size", 0)
-    try:
-        so = int(so)
-        ss = int(ss)
-    except Exception:
-        return False
     if so < 0 or ss < 0 or so > len(blob):
         return False
     if ss and so + ss > len(blob):
@@ -1131,10 +1119,7 @@ def looks_like_siglus_pck(blob: bytes) -> bool:
         "scn_data_index_list_ofs",
         "scn_data_list_ofs",
     ):
-        try:
-            o = int(h.get(k, 0) or 0)
-        except Exception:
-            return False
+        o = h.get(k, 0)
         if o < 0 or o > len(blob):
             return False
     return True
@@ -1212,8 +1197,6 @@ def consume_angou_option(argv):
     while i < len(args):
         a = args[i]
         if a == "--angou":
-            if value:
-                raise ValueError("--angou specified more than once")
             if i + 1 >= len(args):
                 raise ValueError("--angou requires a value")
             if is_option_token(args[i + 1]):
@@ -1820,27 +1803,19 @@ I32_PAIR_STRUCT = struct.Struct("<2i")
 
 
 def read_struct_list(dat, ofs, cnt, st: struct.Struct):
-    out = []
     try:
         ofs = int(ofs)
         cnt = int(cnt)
     except Exception:
-        return out
+        return []
     if ofs < 0 or cnt <= 0:
-        return out
+        return []
     need = cnt * st.size
     if ofs + need > len(dat):
-        return out
+        return []
     if st is I32_STRUCT:
         return [t[0] for t in st.iter_unpack(memoryview(dat)[ofs : ofs + need])]
-    if st is I32_PAIR_STRUCT:
-        return list(st.iter_unpack(memoryview(dat)[ofs : ofs + need]))
-    u = st.unpack_from
-    step = st.size
-    for i in range(cnt):
-        t = u(dat, ofs + i * step)
-        out.append(int(t[0]) if len(t) == 1 else tuple(int(x) for x in t))
-    return out
+    return list(st.iter_unpack(memoryview(dat)[ofs : ofs + need]))
 
 
 def max_pair_end(pairs):
@@ -1883,19 +1858,13 @@ def decode_utf16le_strings(
         return out
     if strict_blob_end and blob_end > len(dat):
         return out
-    blob_end = max(0, min(blob_end, len(dat)))
+    blob_end = min(blob_end, len(dat))
 
     def _handle_error():
         if on_error == "append_default":
             out.append("")
 
-    for ofs_u16, ln_u16 in idx_pairs:
-        try:
-            o = int(ofs_u16)
-            ln = int(ln_u16)
-        except Exception:
-            _handle_error()
-            continue
+    for o, ln in idx_pairs:
         if o < 0 or ln <= 0:
             _handle_error()
             continue

@@ -49,10 +49,7 @@ MAX_SCENE_LIST = 2000
 def _parse_flix_pck(blob: bytes) -> dict:
     if (not blob) or len(blob) < 0x20:
         return {}
-    try:
-        ver, cnt, data_rel, idx_rel = struct.unpack_from("<4I", blob, 0)
-    except Exception:
-        return {}
+    ver, cnt, data_rel, idx_rel = struct.unpack_from("<4I", blob, 0)
     if int(ver) != 1:
         return {}
     cnt = int(cnt)
@@ -61,17 +58,14 @@ def _parse_flix_pck(blob: bytes) -> dict:
     base = 0x20
     idx_abs = base + int(idx_rel)
     data_abs = base + int(data_rel)
-    if idx_abs < base or data_abs < idx_abs or data_abs > len(blob):
+    if data_abs < idx_abs or data_abs > len(blob):
         return {}
     if idx_abs + cnt * 16 != data_abs:
         return {}
     name_tbl_end = base + cnt * 4
     if name_tbl_end > idx_abs:
         return {}
-    try:
-        lens = list(struct.unpack_from("<" + "I" * cnt, blob, base))
-    except Exception:
-        return {}
+    lens = list(struct.unpack_from("<" + "I" * cnt, blob, base))
     for ln in lens:
         ln = int(ln) & 0xFFFFFFFF
         if (ln & 1) != 0 or ln > 0x20000:
@@ -95,16 +89,13 @@ def _parse_flix_pck(blob: bytes) -> dict:
         ):
             return {}
     entries = []
-    try:
-        for i in range(cnt):
-            off, sz = struct.unpack_from("<QQ", blob, idx_abs + i * 16)
-            off = int(off)
-            sz = int(sz)
-            if off < data_abs or off + sz > len(blob):
-                return {}
-            entries.append((off, sz))
-    except Exception:
-        return {}
+    for i in range(cnt):
+        off, sz = struct.unpack_from("<QQ", blob, idx_abs + i * 16)
+        off = int(off)
+        sz = int(sz)
+        if off < data_abs or off + sz > len(blob):
+            return {}
+        entries.append((off, sz))
     for i in range(1, len(entries)):
         if entries[i][0] < entries[i - 1][0]:
             return {}
@@ -287,35 +278,26 @@ def _pck_sections(blob, preview=False):
     return secs, meta
 
 
-def _flix_pck_sections(blob):
+def _flix_pck_sections(blob, info):
     n = len(blob)
-    info = _parse_flix_pck(blob)
-    if not info:
-        return [], {"header": {}, "file_names": [], "entries": [], "item_cnt": 0}
-    cnt = int(info.get("cnt", 0) or 0)
-    base = int(info.get("base", 0) or 0)
-    idx_abs = int(info.get("idx_abs", 0) or 0)
-    data_abs = int(info.get("data_abs", 0) or 0)
-    names = list(info.get("names") or [])
-    entries = list(info.get("entries") or [])
-    item_cnt = min(len(names), len(entries)) if names else len(entries)
+    cnt = info["cnt"]
+    base = info["base"]
+    idx_abs = info["idx_abs"]
+    data_abs = info["data_abs"]
+    names = info["names"]
+    entries = info["entries"]
     h = {
         "header_size": base,
-        "version": int(info.get("version", 0) or 0),
+        "version": info["version"],
         "file_cnt": cnt,
-        "data_start_rel": int(info.get("data_rel", 0) or 0),
-        "index_table_rel": int(info.get("idx_rel", 0) or 0),
+        "data_start_rel": info["data_rel"],
+        "index_table_rel": info["idx_rel"],
     }
     secs = []
     used = []
 
     def sec(a, b, sym, name):
-        try:
-            a = int(a)
-            b = int(b)
-        except Exception:
-            return
-        if a < 0 or b < 0 or b <= a or b > n:
+        if b <= a:
             return
         secs.append((a, b, sym, name))
         used.append((a, b))
@@ -324,12 +306,12 @@ def _flix_pck_sections(blob):
     sec(base, base + cnt * 4, "L", "name_len_list")
     sec(base + cnt * 4, idx_abs, "S", "name_list")
     sec(idx_abs, data_abs, "I", "index_table")
-    for i in range(item_cnt):
+    for i in range(cnt):
         off, sz = entries[i]
-        nm = names[i] if i < len(names) and names[i] else (f"file#{i:d}")
+        nm = names[i] or f"file#{i:d}"
         sec(off, off + sz, "D", nm)
     add_gap_sections(secs, used, n)
-    meta = {"header": h, "file_names": names, "entries": entries, "item_cnt": item_cnt}
+    meta = {"header": h, "file_names": names, "item_cnt": cnt}
     return secs, meta
 
 
@@ -354,10 +336,7 @@ def _pck_original_source_entries(blob, h, scn_data_end, only_name=""):
         return out
     if (not size_bytes) or (len(size_bytes) % 4):
         return out
-    try:
-        sizes = struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes)
-    except Exception:
-        return out
+    sizes = struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes)
     pos += os_hsz
     for sz in sizes:
         sz = int(sz) & 0xFFFFFFFF
@@ -571,10 +550,6 @@ def _resolve_pck_scene_exe_el(
             base_dir=base_dir,
             input_blob=blob,
         )
-    except ValueError:
-        if explicit_angou:
-            raise
-        return b""
     except Exception:
         return b""
     while True:
@@ -588,9 +563,7 @@ def _resolve_pck_scene_exe_el(
             return b""
         except Exception:
             return b""
-        exe_el = src.get("exe_el") if isinstance(src, dict) else b""
-        if not exe_el:
-            continue
+        exe_el = src["exe_el"]
         if trace_key:
             sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         if scn_data:
@@ -606,7 +579,7 @@ def _resolve_pck_scene_exe_el(
                         sys.stderr.write(
                             f"key source accepted: {format_exe_el_source(src)}\n"
                         )
-                    return bytes(exe_el)
+                    return exe_el
             if trace_key:
                 sys.stderr.write(
                     f"key source rejected, falling back: {format_exe_el_source(src)}\n"
@@ -614,7 +587,7 @@ def _resolve_pck_scene_exe_el(
             continue
         if trace_key:
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-        return bytes(exe_el)
+        return exe_el
     return b""
 
 
@@ -1035,25 +1008,25 @@ def pck_word_count(
 
 
 def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
-    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        secs, meta = _flix_pck_sections(blob)
-        h = meta.get("header") or {}
+    flix_info = _parse_flix_pck(blob)
+    if flix_info and (not looks_like_siglus_pck(blob)):
+        secs, meta = _flix_pck_sections(blob, flix_info)
+        h = meta["header"]
         print("header:")
-        print(f"  header_size={h.get('header_size', 0):d}")
-        print(f"  version={h.get('version', 0):d}")
-        print(f"  data_start_rel={h.get('data_start_rel', 0):d}")
-        print(f"  index_table_rel={h.get('index_table_rel', 0):d}")
+        print(f"  header_size={h['header_size']:d}")
+        print(f"  version={h['version']:d}")
+        print(f"  data_start_rel={h['data_start_rel']:d}")
+        print(f"  index_table_rel={h['index_table_rel']:d}")
         print("counts:")
-        print(f"  files={h.get('file_cnt', 0):d}")
-        fn = meta.get("file_names") or []
-        if fn:
-            pv = fn[: C.MAX_LIST_PREVIEW]
+        print(f"  files={h['file_cnt']:d}")
+        fn = meta["file_names"]
+        pv = fn[: C.MAX_LIST_PREVIEW]
+        print(
+            f"file_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(fn) > len(pv) else '')}"
+        )
+        if meta["item_cnt"] > MAX_SCENE_LIST:
             print(
-                f"file_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(fn) > len(pv) else '')}"
-            )
-        if meta.get("item_cnt", 0) > MAX_SCENE_LIST:
-            print(
-                f"note: entries={meta.get('item_cnt', 0):d} (listing omitted; limit={MAX_SCENE_LIST:d})"
+                f"note: entries={meta['item_cnt']:d} (listing omitted; limit={MAX_SCENE_LIST:d})"
             )
         print()
         print_sections(secs, len(blob))
@@ -1439,14 +1412,11 @@ def compare_pck(
 
     def _row_sort_key(row):
         parts = []
-        for part in str(row[7] if len(row) > 7 else "-").split("/"):
+        for part in row[7].split("/"):
             if part == "-":
                 continue
-            try:
-                parts.append(int(part))
-            except Exception:
-                pass
-        name = str(row[0] if row else "")
+            parts.append(int(part))
+        name = row[0]
         if not parts:
             return (0, name.casefold(), name)
         return (1, min(parts), name.casefold(), name)
@@ -1606,10 +1576,7 @@ def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
 def looks_like_lzss(blob: bytes) -> bool:
     if not blob or len(blob) < 8:
         return False
-    try:
-        pack_sz, org_sz = struct.unpack_from("<II", blob, 0)
-    except Exception:
-        return False
+    pack_sz, org_sz = struct.unpack_from("<II", blob, 0)
     if pack_sz != len(blob):
         return False
     if org_sz <= 0:
@@ -1735,12 +1702,7 @@ def iter_exe_el_candidates(
         explicit_angou=explicit_angou,
         base_dir=os_dir,
     ):
-        el = src.get("exe_el") if isinstance(src, dict) else b""
-        if el and len(el) == 16:
-            if with_sources:
-                yield src
-            else:
-                yield bytes(el)
+        yield src if with_sources else src["exe_el"]
 
 
 def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):
@@ -1826,21 +1788,17 @@ def extract_pck(
     ok_cnt = 0
     fail_cnt = 0
     dat = read_bytes(input_pck)
-    if _looks_like_flix_pck(dat) and (not looks_like_siglus_pck(dat)):
-        info = _parse_flix_pck(dat)
-        if not info:
-            sys.stderr.write("Invalid pck\n")
-            return 1
-        names = list(info.get("names") or [])
-        entries = list(info.get("entries") or [])
+    flix_info = _parse_flix_pck(dat)
+    if flix_info and (not looks_like_siglus_pck(dat)):
+        names = flix_info["names"]
+        entries = flix_info["entries"]
         out_dir = os.path.join(
             output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
         )
         os.makedirs(out_dir, exist_ok=True)
         sys.stdout.write(f"Output: {out_dir}\n")
-        item_cnt = min(len(names), len(entries)) if names else len(entries)
-        for i in range(item_cnt):
-            nm = names[i] if i < len(names) and names[i] else (f"file_{i:d}.bin")
+        for i in range(flix_info["cnt"]):
+            nm = names[i] or f"file_{i:d}.bin"
             rel = _safe_relpath(nm) or nm
             out_name = os.path.basename(rel) or rel
             out_path = _unique_outpath(out_dir, out_name)

@@ -102,7 +102,7 @@ fn msvcrand_shuffle_inplace(state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
         let iu = i as u32;
         let mut mask: u32 = 0;
         let mut chunks: u32 = 0;
-        while mask < iu - 1 && mask != u32::MAX {
+        while mask < iu - 1 {
             mask = (mask << n32) | i_1;
             chunks += 1;
         }
@@ -228,16 +228,13 @@ struct ShuffleParam {
 }
 
 fn precompute_params(n: usize) -> Vec<ShuffleParam> {
-    if n < 2 {
-        return Vec::new();
-    }
     let maxv: u32 = 0x7FFF;
-    let mut out = Vec::with_capacity(n.saturating_sub(1));
+    let mut out = Vec::with_capacity(n - 1);
     for i in 2..=n {
         let iu = i as u32;
         let mut mask: u32 = 0;
         let mut chunks: u32 = 0;
-        while mask < iu - 1 && mask != u32::MAX {
+        while mask < iu - 1 {
             mask = (mask << 15) | maxv;
             chunks += 1;
         }
@@ -250,9 +247,6 @@ fn precompute_params(n: usize) -> Vec<ShuffleParam> {
 
 fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) {
     let mut x = x0;
-    if a.len() < 2 {
-        return;
-    }
     for (i_idx, p) in params.iter().enumerate() {
         let i = (i_idx + 2) as u32;
         let iu = p.iu;
@@ -379,7 +373,7 @@ fn find_shuffle_seed_first(
                             break;
                         }
                         buf.copy_from_slice(&base);
-                        let seed = seed0.saturating_add(a as u32);
+                        let seed = seed0 + a as u32;
                         shuffle_inplace_vec(seed, &mut buf, &params);
 
                         let mut ofs: i32 = 0;

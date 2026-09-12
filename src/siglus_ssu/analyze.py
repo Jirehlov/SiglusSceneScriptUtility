@@ -37,10 +37,7 @@ def _backup_file(path):
 
 
 def _fmt_key_txt(el: bytes) -> str:
-    b = bytes(el or b"")
-    if len(b) >= 16:
-        b = b[:16]
-    return ", ".join(f"0x{x:02X}" for x in b)
+    return ", ".join(f"0x{x:02X}" for x in el)
 
 
 def analyze_angou_dat(value: str) -> int:
@@ -56,17 +53,16 @@ def analyze_angou_dat(value: str) -> int:
     if not sources:
         print("key.txt: ")
         return 1
-    for src in sources:
-        print(f"source: {src.get('label')}")
-        print(f"kind: {src.get('kind')}")
-        if src.get("path"):
-            print(f"path: {src.get('path')}")
-        if src.get("inner"):
-            print(f"inner: {src.get('inner')}")
-        if src.get("angou"):
-            print(f"angou: {src.get('angou')}")
-        print(f"key.txt: {_fmt_key_txt(src.get('exe_el') or b'')}")
-        break
+    src = sources[0]
+    print(f"source: {src.get('label')}")
+    print(f"kind: {src.get('kind')}")
+    if src.get("path"):
+        print(f"path: {src.get('path')}")
+    if src.get("inner"):
+        print(f"inner: {src.get('inner')}")
+    if src.get("angou"):
+        print(f"angou: {src.get('angou')}")
+    print(f"key.txt: {_fmt_key_txt(src['exe_el'])}")
     return 0
 
 

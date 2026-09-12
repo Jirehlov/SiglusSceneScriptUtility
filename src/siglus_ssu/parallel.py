@@ -520,14 +520,10 @@ def _seed_chunk_worker(args):
     seed_start, count, n, target_pairs = args
     from .BS import MSVCRand
 
-    n = int(n)
-    ss = int(seed_start)
-    cc = int(count)
-    target_pairs = [(int(o), int(ln)) for o, ln in target_pairs]
     target_ofs = [p[0] for p in target_pairs]
     lens = [p[1] for p in target_pairs]
-    for s in range(ss, ss + cc):
-        rng = MSVCRand(int(s) & 0xFFFFFFFF)
+    for s in range(seed_start, seed_start + count):
+        rng = MSVCRand(s)
         a = list(range(n))
         rng.shuffle(a)
         ofs = 0
@@ -543,7 +539,7 @@ def _seed_chunk_worker(args):
                 ok = False
                 break
         if ok:
-            return int(s) & 0xFFFFFFFF
+            return s
     return None
 
 
@@ -561,10 +557,7 @@ def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
     seed0 = int(seed0) & 0xFFFFFFFF
     prefix = "[test-shuffle]"
     if is_native_available():
-        r = find_shuffle_seed_first(target, seed0, workers=workers)
-        if r is not None:
-            return int(r) & 0xFFFFFFFF
-        return None
+        return find_shuffle_seed_first(target, seed0, workers=workers)
     t0 = time.time()
     last = t0
     limit = 2**32
@@ -591,8 +584,6 @@ def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
             while done < total:
                 futs = []
                 base = seed0 + done
-                if base >= limit:
-                    break
                 scheduled = 0
                 for w in range(workers):
                     st = base + w * chunk
@@ -606,13 +597,11 @@ def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
                         )
                     )
                     scheduled += count
-                if not futs:
-                    break
                 found = None
                 for fut in concurrent.futures.as_completed(futs):
                     r = fut.result()
                     if r is not None:
-                        found = int(r) & 0xFFFFFFFF
+                        found = r
                         break
                 if found is not None:
                     for fut in futs:
@@ -635,7 +624,4 @@ def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
                     last = now
         return None
 
-    r = _scan_bits()
-    if r is not None:
-        return int(r) & 0xFFFFFFFF
-    return None
+    return _scan_bits()

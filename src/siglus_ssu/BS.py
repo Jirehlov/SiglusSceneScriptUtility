@@ -564,15 +564,11 @@ _MSR = MSVCRand()
 
 def set_shuffle_seed(seed=1):
     global _MSR
-    try:
-        seed_i = int(seed) & 0xFFFFFFFF
-    except (TypeError, ValueError):
-        seed_i = 1
-    _MSR = MSVCRand(seed_i)
+    _MSR = MSVCRand(seed)
 
 
 def get_shuffle_seed():
-    return int(getattr(_MSR, "x", 0) or 0) & 0xFFFFFFFF
+    return _MSR.x
 
 
 def _u16(t):
@@ -605,9 +601,6 @@ class BinaryStream:
 
     def __init__(s):
         s.buf = bytearray()
-
-    def clear(s):
-        s.buf.clear()
 
     def size(s):
         return len(s.buf)
@@ -837,13 +830,6 @@ class BS:
             return True
         if isinstance(block, dict) and "sentense_list" in block:
             return s.bs_ss(block)
-        if isinstance(block, dict) and "sentense" in block:
-            for sn in block.get("sentense") or []:
-                if not s.bs_sentence(sn):
-                    return False
-            return True
-        if isinstance(block, dict) and "node_type" in block:
-            return s.bs_sentence(block)
         if isinstance(block, list):
             for sn in block:
                 if not s.bs_sentence(sn):
@@ -861,8 +847,7 @@ class BS:
         s._bs_write_cd_nl(node_line)
         if is_inc:
             s.scn_push_u8(C.CD_SEL_BLOCK_START)
-        node = sentense.get("sentense") if isinstance(sentense, dict) else None
-        if not s.bs_sentence_sub(node if node is not None else sentense):
+        if not s.bs_sentence_sub(sentense):
             return False
         if is_inc:
             s.scn_push_u8(C.CD_SEL_BLOCK_END)
@@ -887,17 +872,17 @@ class BS:
         if nt == C.NT_S_RETURN:
             return s.bs_return({"Return": node.get("Return")})
         if nt == C.NT_S_IF:
-            return s.bs_if(node.get("if") or node.get("If"))
+            return s.bs_if(node.get("If"))
         if nt == C.NT_S_FOR:
-            return s.bs_for(node.get("for") or node.get("For"))
+            return s.bs_for(node.get("For"))
         if nt == C.NT_S_WHILE:
-            return s.bs_while(node.get("while") or node.get("While"))
+            return s.bs_while(node.get("While"))
         if nt == C.NT_S_CONTINUE:
-            return s.bs_continue(node.get("continue") or node.get("Continue"))
+            return s.bs_continue(node.get("Continue"))
         if nt == C.NT_S_BREAK:
-            return s.bs_break(node.get("break") or node.get("Break"))
+            return s.bs_break(node.get("Break"))
         if nt == C.NT_S_SWITCH:
-            return s.bs_switch(node.get("switch") or node.get("Switch"))
+            return s.bs_switch(node.get("Switch"))
         if nt == C.NT_S_ASSIGN:
             return s.bs_assign(node.get("assign"))
         if nt == C.NT_S_COMMAND:
@@ -916,16 +901,10 @@ class BS:
         if not isinstance(ss, dict):
             return False
         sl = ss.get("sentense_list")
-        if isinstance(sl, dict):
-            for sn in sl.get("sentense") or []:
-                if not s.bs_sentence(sn):
-                    return False
-            return True
         if isinstance(sl, list):
             for sn in sl:
                 if not s.bs_sentence(sn):
                     return False
-            return True
         return True
 
     def bs_label(s, label):
@@ -1107,7 +1086,7 @@ class BS:
             return True
         if not isinstance(if_, dict):
             return False
-        sub = list(if_.get("if_list") or if_.get("sub") or [])
+        sub = list(if_.get("sub") or [])
         label_no_end = len(s.out_scn["label_list"])
         s.out_scn["label_list"].append(0)
         for sb in sub:
@@ -1217,7 +1196,7 @@ class BS:
         if not isinstance(switch, dict):
             return False
         form_l = _fc(dereference((switch.get("cond") or {}).get("node_form")))
-        cases = list(switch.get("case") or switch.get("Case") or [])
+        cases = list(switch.get("case") or [])
         label_size = len(s.out_scn["label_list"])
         label_no_out = label_size
         label_no_case = label_size + 1
@@ -1380,8 +1359,6 @@ class BS:
         if not isinstance(smp_exp, dict):
             return False
         nt = int(smp_exp.get("node_type", 0) or 0)
-        if nt in (C.NT_EXP_SIMPLE, C.NT_EXP_OPR1, C.NT_EXP_OPR2):
-            return s.bs_exp(smp_exp, bool(need_value))
         if nt == C.NT_SMP_KAKKO:
             return s.bs_exp(smp_exp.get("exp"), bool(need_value))
         if nt == C.NT_SMP_GOTO:
@@ -1444,13 +1421,9 @@ class BS:
                 )
                 if not s.bs_arg_list(arg_list, False):
                     return False
-                ft = (s.m_piad or {}).get("form_table")
-                info = (
-                    ft.get_element_by_code(
-                        element.get("element_parent_form"), element.get("element_code")
-                    )
-                    if ft is not None
-                    else None
+                ft = s.m_piad["form_table"]
+                info = ft.get_element_by_code(
+                    element.get("element_parent_form"), element.get("element_code")
                 )
                 aid = int(element.get("arg_list_id", 0) or 0)
                 temp_args = None
@@ -1522,8 +1495,6 @@ class BS:
             return True
         if not isinstance(elm_list, dict):
             return False
-        if "element" not in elm_list and "value" in elm_list:
-            return s.bs_exp(elm_list.get("value"), True)
         s.scn_push_u8(C.CD_ELM_POINT)
         if elm_list.get("parent_form_code") == C.FM_CALL:
             cur = C.ELM_GLOBAL_CUR_CALL
@@ -1550,12 +1521,6 @@ class BS:
         if not isinstance(elm_exp, dict):
             return False
         elm_list = elm_exp.get("elm_list")
-        if (
-            isinstance(elm_list, dict)
-            and "element" not in elm_list
-            and "value" in elm_list
-        ):
-            return s.bs_exp(elm_list.get("value"), bool(need_value))
         et = int(elm_exp.get("element_type", 0) or 0)
         if et == C.ET_COMMAND:
             el = elm_list.get("element") or []
@@ -1602,28 +1567,10 @@ class BS:
             return True
         if not isinstance(Literal, dict):
             return False
-        form = Literal.get("node_form", Literal.get("form"))
-        opt = (
-            (Literal.get("atom") or {}).get("opt")
-            if isinstance(Literal.get("atom"), dict)
-            else None
-        )
-        if form == C.FM_LABEL:
-            s.scn_push_u8(C.CD_PUSH)
-            s.scn_push_i32(_fc(C.FM_INT))
-            s.scn_push_i32(
-                int(opt if opt is not None else Literal.get("label_id", 0) or 0)
-            )
-        else:
-            s.scn_push_u8(C.CD_PUSH)
-            s.scn_push_i32(_fc(form))
-            s.scn_push_i32(
-                int(
-                    opt
-                    if opt is not None
-                    else Literal.get("int", Literal.get("str_id", 0)) or 0
-                )
-            )
+        form = Literal["node_form"]
+        s.scn_push_u8(C.CD_PUSH)
+        s.scn_push_i32(_fc(C.FM_INT if form == C.FM_LABEL else form))
+        s.scn_push_i32(int(Literal["atom"]["opt"]))
         return True
 
     def bs_operator_1(s, opr):
@@ -1647,12 +1594,7 @@ class BS:
     def compile(s, piad, plad, psad, pbsd):
         s.clear_error()
         try:
-            piad = piad or {}
-            plad = plad or {}
-            psad = psad or {}
             s.m_piad = piad
-            if isinstance(pbsd, dict):
-                pbsd["out_scn"] = b""
             s.loop_label = []
             s.cur_read_flag_no = 0
             out_scn = {
@@ -1713,17 +1655,14 @@ class BS:
                 ofs += ln
             out_scn["call_prop_name_index_list"] = idx
             s.out_scn = out_scn
-            root = psad.get("root") if isinstance(psad, dict) else None
-            if root is not None:
-                if not s.bs_ss(root):
-                    return 0
+            if not s.bs_ss(psad["root"]):
+                return 0
             out_scn["scn_bytes"] = out_scn["scn"].to_bytes()
             out = build_scn_dat(plad, out_scn)
         except Exception:
             return 0
-        if isinstance(pbsd, dict):
-            pbsd["out_scn"] = out
-            pbsd["default_arg_fills"] = int(out_scn.get("default_arg_fills", 0) or 0)
+        pbsd["out_scn"] = out
+        pbsd["default_arg_fills"] = int(out_scn.get("default_arg_fills", 0) or 0)
         return 1
 
 
@@ -1809,14 +1748,12 @@ def compile_one_pipeline(
         )
     if log:
         log_stage("MA", ss_path, ctx)
-    while True:
-        t = time.time()
-        ma = MA(iad, lad, sad)
-        ok, mad = ma.analize()
-        if record_time:
-            record_stage_time(ctx, "MA", time.time() - t)
-        if ok:
-            break
+    t = time.time()
+    ma = MA(iad, lad, sad)
+    ok, mad = ma.analize()
+    if record_time:
+        record_stage_time(ctx, "MA", time.time() - t)
+    if not ok:
         code = ma.last.get("type") or "UNK_ERROR"
         atom = ma.last.get("atom") or {}
         line = int(atom.get("line", 0) or 0)

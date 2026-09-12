@@ -495,7 +495,7 @@ def _render_cut_canvas(blk: bytes):
     _, cw, ch, chips = _parse_cut_block(blk)
     canvas = bytearray(cw * ch * 4)
     for _hdr, px, py, xl, yl, chip in chips:
-        if px < 0 or py < 0 or px + xl > cw or py + yl > ch:
+        if px + xl > cw or py + yl > ch:
             raise ValueError("chip out of bounds")
         row_bytes = xl * 4
         for ry in range(yl):
@@ -521,7 +521,7 @@ def _dump_type2_layout_json(out_path: Path, canvas_w: int, canvas_h: int, cuts_m
         "canvas": {"width": int(canvas_w), "height": int(canvas_h)},
         "cuts": [],
     }
-    centers = [tuple(c.get("center", (0, 0))) for c in cuts_meta if isinstance(c, dict)]
+    centers = [c["center"] for c in cuts_meta if c is not None]
     if centers:
         first_center = centers[0]
         if all(c == first_center for c in centers):
@@ -535,14 +535,11 @@ def _dump_type2_layout_json(out_path: Path, canvas_w: int, canvas_h: int, cuts_m
             continue
         cx, cy = meta["center"]
         cw, ch = meta["canvas"]
-        canvas_rect = meta.get("canvas_rect")
-        if not isinstance(canvas_rect, dict):
-            canvas_rect = {"x0": 0, "y0": 0, "x1": int(cw) - 1, "y1": int(ch) - 1}
         entry = {
             "index": int(meta["index"]),
             "source": meta["source"],
             "source_rect": {"x": 0, "y": 0, "w": int(cw), "h": int(ch)},
-            "canvas_rect": canvas_rect,
+            "canvas_rect": meta["canvas_rect"],
         }
         if payload.get("default_center") != {"x": int(cx), "y": int(cy)}:
             entry["center"] = {"x": int(cx), "y": int(cy)}
@@ -1007,7 +1004,7 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
         rp = _resolve_source_path(sp, base_dir)
         if rp not in cache:
             cache[rp] = _load_image_bgra(rp)
-        return rp, cache[rp]
+        return cache[rp]
 
     if layout_path is not None:
         layout_path = Path(layout_path)
@@ -1023,7 +1020,7 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
     else:
         if img_p is None or not img_p.is_file():
             raise ValueError("type2 create requires an input image or a layout json")
-        _, (_, default_w, default_h) = _load_source(img_p, img_p.parent)
+        _, default_w, default_h = _load_source(img_p, img_p.parent)
         canvas_w, canvas_h = default_w, default_h
         base_dir = img_p.parent
         cuts = [
@@ -1045,7 +1042,7 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
             outer += struct.pack("<6i", 0, 0, 0, 0, 0, 0)
             entries.append((len(unp), 0))
             continue
-        _, (src_bgra, src_w, src_h) = _load_source(c["source"], base_dir)
+        src_bgra, src_w, src_h = _load_source(c["source"], base_dir)
         source_rect = c.get("source_rect")
         canvas_rect = c.get("canvas_rect")
         if source_rect is None and canvas_rect is None:
@@ -1235,13 +1232,9 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         _report_single_update(report, img_p, (bw, bh), is_changed)
         if not is_changed:
             return base_bytes
-        if len(unp) < 2:
-            raise ValueError("type1 short")
         pc = struct.unpack_from("<H", unp, 0)[0]
         po = 2 + pc * 4
         n = w * h
-        if len(unp) < po + n:
-            raise ValueError("type1 short")
         pal = list(struct.unpack_from(f"<{pc}I", unp, 2))
         idx = bytearray(n)
         pal_map = {v: i for i, v in enumerate(pal)}

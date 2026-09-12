@@ -2478,8 +2478,6 @@ def _line_start_offsets(text: str) -> list[int]:
     for line in text.split("\n"):
         out.append(offset)
         offset += len(line) + 1
-    if not out:
-        out.append(0)
     return out
 
 

@@ -90,21 +90,19 @@ def _peek_tid_ok(buf, pos):
 def _parse_save_stream_head(b):
     if not b:
         return None
-    for sz in (4, 8):
-        try:
-            r = _SaveStreamReader(b, size_t_size=sz)
-            scn = r.str_u16()
-            line_no = int(r.i32())
-            prg_cntr = int(r.i32())
-            return {
-                "size_t_size": int(sz),
-                "scn_name": scn,
-                "line_no": line_no,
-                "prg_cntr": prg_cntr,
-            }
-        except Exception:
-            continue
-    return None
+    try:
+        r = _SaveStreamReader(b, size_t_size=4)
+        scn = r.str_u16()
+        line_no = int(r.i32())
+        prg_cntr = int(r.i32())
+        return {
+            "size_t_size": 4,
+            "scn_name": scn,
+            "line_no": line_no,
+            "prg_cntr": prg_cntr,
+        }
+    except Exception:
+        return None
 
 
 def _stream_info(b):
@@ -239,10 +237,7 @@ def _peek_lzss_header(enc):
         return None
     h = bytearray(enc[:8])
     xor_cycle_inplace(h, C.TPC, 0)
-    try:
-        pack_sz, org_sz = struct.unpack_from("<II", h, 0)
-    except Exception:
-        return None
+    pack_sz, org_sz = struct.unpack_from("<II", h, 0)
     if org_sz == 0 or org_sz > 512 * 1024 * 1024:
         return None
     if pack_sz == 0:
@@ -325,10 +320,7 @@ def _parse_read_sav(blob):
 def _try_parse_read_meta(blob):
     if (not blob) or len(blob) < 24:
         return None
-    try:
-        major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
-    except Exception:
-        return None
+    major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
     if major != 1:
         return None
     if minor < 0 or minor > 32:
@@ -378,8 +370,6 @@ class _SaveStreamReader:
         return self.pos
 
     def seek(self, p):
-        if p < 0 or p > len(self.buf):
-            raise ValueError("seek out of range")
         self.pos = int(p)
 
     def _read(self, n):
@@ -406,12 +396,9 @@ class _SaveStreamReader:
         return bool(self.u8())
 
     def sizet(self):
-        n = self.size_t_size
-        if n == 4:
+        if self.size_t_size == 4:
             return int(self.u32())
-        if n == 8:
-            return int(struct.unpack_from("<Q", self._read(8), 0)[0])
-        raise ValueError("bad size_t_size")
+        return int(struct.unpack_from("<Q", self._read(8), 0)[0])
 
     def str_u16(self):
         ln = self.i32()
@@ -694,10 +681,7 @@ def _print_chrkoe_diff(ca, cb, fields, first_formatter=None):
 def _try_parse_global_or_config(blob):
     if (not blob) or len(blob) < 12:
         return None
-    try:
-        major, minor, data_size = struct.unpack_from("<3i", blob, 0)
-    except Exception:
-        return None
+    major, minor, data_size = struct.unpack_from("<3i", blob, 0)
     if major < 0 or major > 32:
         return None
     if minor < 0 or minor > 32:
@@ -725,21 +709,18 @@ def _try_parse_local(blob):
         header_size = 40 + (7 * 256 * ssz) + (256 * 4) + 4
         if len(blob) < header_size:
             continue
-        try:
-            (
-                major,
-                minor,
-                year,
-                month,
-                day,
-                weekday,
-                hour,
-                minute,
-                second,
-                millisecond,
-            ) = struct.unpack_from("<10i", blob, 0)
-        except Exception:
-            continue
+        (
+            major,
+            minor,
+            year,
+            month,
+            day,
+            weekday,
+            hour,
+            minute,
+            second,
+            millisecond,
+        ) = struct.unpack_from("<10i", blob, 0)
         if major != 1:
             continue
         if minor < 0 or minor > 32:

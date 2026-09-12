@@ -48,9 +48,9 @@ def decode_cgm(blob):
     if cnt is None or af is None or r0 is None or r1 is None:
         r["errors"].append("bad header")
         return r
-    r["cnt"] = int(cnt)
-    r["auto_flag"] = int(af)
-    r["rev"] = (int(r0), int(r1))
+    r["cnt"] = cnt
+    r["auto_flag"] = af
+    r["rev"] = (r0, r1)
     rec = 36 if hb == b"CGTABLE" else 60
     r["record_size"] = rec
     body = bytearray(b[32:])
@@ -83,8 +83,8 @@ def decode_cgm(blob):
                 .split(b"\x00", 1)[0]
                 .decode("cp932", errors="replace")
             )
-            flag = read_i32_le(mv, o + 32, default=0) or 0
-            es.append((name, int(flag), 0, zc))
+            flag = read_i32_le(mv, o + 32, default=0)
+            es.append((name, flag, 0, zc))
     else:
         for i in range(r["cnt"]):
             o = i * rec
@@ -93,20 +93,20 @@ def decode_cgm(blob):
                 .split(b"\x00", 1)[0]
                 .decode("cp932", errors="replace")
             )
-            flag = read_i32_le(mv, o + 32, default=0) or 0
+            flag = read_i32_le(mv, o + 32, default=0)
             codes = (
-                int(read_i32_le(mv, o + 36, default=0) or 0),
-                int(read_i32_le(mv, o + 40, default=0) or 0),
-                int(read_i32_le(mv, o + 44, default=0) or 0),
-                int(read_i32_le(mv, o + 48, default=0) or 0),
-                int(read_i32_le(mv, o + 52, default=0) or 0),
+                read_i32_le(mv, o + 36, default=0),
+                read_i32_le(mv, o + 40, default=0),
+                read_i32_le(mv, o + 44, default=0),
+                read_i32_le(mv, o + 48, default=0),
+                read_i32_le(mv, o + 52, default=0),
             )
-            cec = read_i32_le(mv, o + 56, default=0) or 0
-            es.append((name, int(flag), int(cec), codes))
+            cec = read_i32_le(mv, o + 56, default=0)
+            es.append((name, flag, cec, codes))
     r["entries"] = es
     if need != len(payload):
         tail = payload[need:]
-        if tail and any(x != 0 for x in tail):
+        if any(x != 0 for x in tail):
             r["warnings"].append(f"nonzero tail: {len(tail):d}")
     r["ok"] = True
     return r
@@ -115,28 +115,28 @@ def decode_cgm(blob):
 def cgm(blob):
     info = decode_cgm(blob)
     print("==== CGM Meta ====")
-    print(f"head: {info.get('head') or ''}")
-    print(f"cnt: {int(info.get('cnt') or 0):d}")
-    print(f"auto_flag: {int(info.get('auto_flag') or 0):d}")
-    r0, r1 = info.get("rev") or (0, 0)
-    print(f"rev: {int(r0):d}, {int(r1):d}")
-    print(f"packed_size: {int(info.get('packed_size') or 0):d}")
-    print(f"unpacked_size: {int(info.get('unpacked_size') or 0):d}")
-    print(f"record_size: {int(info.get('record_size') or 0):d}")
-    for w in info.get("warnings") or []:
+    print(f"head: {info['head']}")
+    print(f"cnt: {info['cnt']:d}")
+    print(f"auto_flag: {info['auto_flag']:d}")
+    r0, r1 = info["rev"]
+    print(f"rev: {r0:d}, {r1:d}")
+    print(f"packed_size: {info['packed_size']:d}")
+    print(f"unpacked_size: {info['unpacked_size']:d}")
+    print(f"record_size: {info['record_size']:d}")
+    for w in info["warnings"]:
         print(f"warning: {w}")
-    if not info.get("ok"):
-        for e in info.get("errors") or []:
+    if not info["ok"]:
+        for e in info["errors"]:
             print(f"error: {e}")
         return 1
-    es = info.get("entries") or []
+    es = info["entries"]
     print()
     print("==== CGM Payload ====")
     print(f"entry_count: {len(es):d}")
     n = C.MAX_LIST_PREVIEW
     for i, (name, flag, cec, codes) in enumerate(es[:n]):
         print(
-            f"[{i:d}] flag_no={int(flag):d} code_exist_cnt={int(cec):d} code={int(codes[0]):d},{int(codes[1]):d},{int(codes[2]):d},{int(codes[3]):d},{int(codes[4]):d} name={name!r}"
+            f"[{i:d}] flag_no={flag:d} code_exist_cnt={cec:d} code={codes[0]:d},{codes[1]:d},{codes[2]:d},{codes[3]:d},{codes[4]:d} name={name!r}"
         )
     if len(es) > n:
         print(f"... ({len(es) - n:d} entries omitted)")
@@ -147,14 +147,12 @@ def compare_cgm(b1, b2):
     a = decode_cgm(b1)
     b = decode_cgm(b2)
     diffs = []
-    append_diff(diffs, "head", a.get("head"), b.get("head"))
-    append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))
-    append_diff(
-        diffs, "auto_flag", int(a.get("auto_flag") or 0), int(b.get("auto_flag") or 0)
-    )
-    append_diff(diffs, "rev", a.get("rev"), b.get("rev"))
-    ea = a.get("entries") or []
-    eb = b.get("entries") or []
+    append_diff(diffs, "head", a["head"], b["head"])
+    append_diff(diffs, "cnt", a["cnt"], b["cnt"])
+    append_diff(diffs, "auto_flag", a["auto_flag"], b["auto_flag"])
+    append_diff(diffs, "rev", a["rev"], b["rev"])
+    ea = a["entries"]
+    eb = b["entries"]
     if len(ea) != len(eb):
         diffs.append(f"entry_count: {len(ea):d} -> {len(eb):d}")
     for i in range(max(len(ea), len(eb))):

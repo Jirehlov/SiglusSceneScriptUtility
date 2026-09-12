@@ -17,8 +17,6 @@ from .path_policy import resolve_read_path
 
 
 def _build_hi24_ranges(hi24):
-    if not hi24:
-        return []
     ranges = []
     s = 0
     cur = hi24[0]
@@ -39,7 +37,7 @@ def _warn_lossy_ogv_streams(path):
         return
     if len(stream_kinds) <= 1 or "theora" not in stream_kinds:
         return
-    all_streams = ",".join(stream_kinds) if stream_kinds else "unknown"
+    all_streams = ",".join(stream_kinds)
     eprint(
         "warning: lossy conversion: "
         f"input .ogv streams={all_streams}; "
@@ -116,15 +114,14 @@ def _analyze_one(path):
                 f"seq={first.seq},page_no={first.page_no},flags_lo8={first.flags & 255},time_ms={first.time_ms}",
             )
         )
-        hi24 = [int(e.flags) & 0xFFFFFF00 for e in info.table_b]
+        hi24 = [e.flags & 0xFFFFFF00 for e in info.table_b]
         uniq = sorted(set(hi24))
         ranges = _build_hi24_ranges(hi24)
         rs = [
             f"{a}:0x{v:06X}" if a == b else f"{a}-{b}:0x{v:06X}" for a, b, v in ranges
         ]
-        if rs:
-            print(fmt_kv("flags_hi24_variants", ",".join(rs)))
-            print(fmt_kv("flags_hi24_variant_count", len(uniq)))
+        print(fmt_kv("flags_hi24_variants", ",".join(rs)))
+        print(fmt_kv("flags_hi24_variant_count", len(uniq)))
     if info.table_b and info.outer:
         expected = info.outer.dword_50
         got = len(info.table_b)
@@ -278,12 +275,12 @@ def main(argv=None):
                 eprint("error: refer .omv missing outer header or tableB")
                 return 1
             if not mode_specified:
-                mode_override = int(ref_info.outer.dword_28)
+                mode_override = ref_info.outer.dword_28
             if not flags_specified:
-                hi24 = [int(e.flags) & 0xFFFFFF00 for e in ref_info.table_b]
+                hi24 = [e.flags & 0xFFFFFF00 for e in ref_info.table_b]
                 uniq = sorted(set(hi24))
-                if len(uniq) <= 1:
-                    flags_hi24 = int(uniq[0]) if uniq else 0
+                if len(uniq) == 1:
+                    flags_hi24 = uniq[0]
                 else:
                     flags_hi24 = _build_hi24_ranges(hi24)
         if not _confirm_overwrite(outp2):

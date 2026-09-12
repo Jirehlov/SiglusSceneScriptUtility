@@ -601,7 +601,7 @@ impl IncAnalyzer {
         start: usize,
         end: usize,
     ) {
-        if !self.sidecar || name.is_empty() {
+        if !self.sidecar {
             return;
         }
         let span = self.span_from_offsets(start, end, line);
@@ -615,8 +615,8 @@ impl IncAnalyzer {
         });
     }
 
-    fn record_body(&mut self, name: &str, args: &[MacroArg]) {
-        if !self.sidecar || name.is_empty() || self.last_after_text.is_empty() {
+    fn record_body(&mut self, args: &[MacroArg]) {
+        if !self.sidecar || self.last_after_text.is_empty() {
             return;
         }
         self.sidecar_data.bodies.push(IncBody {
@@ -924,7 +924,7 @@ impl IncAnalyzer {
                 name_start,
                 name_end,
             );
-            self.record_body(&name, &[]);
+            self.record_body(&[]);
             return Ok((next, line2));
         }
         if kind == "macro" {
@@ -952,7 +952,7 @@ impl IncAnalyzer {
                 decl_type: "macro".to_string(),
             });
             self.record_decl("macro", &name, line, "#macro", name_start, name_end);
-            self.record_body(&name, &args);
+            self.record_body(&args);
             return Ok((next, line2));
         }
         if kind == "property" {

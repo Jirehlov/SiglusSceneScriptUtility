@@ -521,8 +521,6 @@ def _trim_nwa_to_wav_bytes(
         raise RuntimeError("invalid repeat position (start_sample < 0)")
     pcm, header = sound.decode_nwa_to_pcm_bytes(nwa_bytes)
     bytes_per_frame = header.channels * (header.bits_per_sample // 8)
-    if bytes_per_frame <= 0:
-        raise RuntimeError("invalid NWA frame size")
     if header.samples_per_sec <= 0:
         raise RuntimeError("invalid NWA sample rate")
     total_sample_cnt = len(pcm) // bytes_per_frame
@@ -546,9 +544,7 @@ def _resolve_bgm_entry(trim_table, base_name: str):
     key = base_name.lower()
     if key not in trim_table:
         raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
-    candidates = list(trim_table[key] or [])
-    if not candidates:
-        raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
+    candidates = trim_table[key]
     for candidate in candidates:
         if candidate.name.lower() == key:
             return candidate
@@ -588,8 +584,6 @@ def _build_ffplay_audio_filter(
         f",aformat=channel_layouts={channel_layout}" if channel_layout else ""
     )
     loop_size = end_sample - repeat_sample
-    if loop_size <= 0:
-        raise RuntimeError("invalid loop size")
     loop_filter = (
         f"atrim=start_sample={repeat_sample}:end_sample={end_sample},"
         f"asetpts=PTS-STARTPTS,aloop=loop=-1:size={loop_size}{layout_filter}"
@@ -604,14 +598,6 @@ def _build_ffplay_audio_filter(
         f"[loop_src]{loop_filter}[loop];"
         "[intro][loop]concat=n=2:v=0:a=1"
     )
-
-
-def _channel_layout_for_channels(channels: int) -> str:
-    if channels == 1:
-        return "mono"
-    if channels == 2:
-        return "stereo"
-    return ""
 
 
 @dataclass(frozen=True)
@@ -644,7 +630,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
                     play_path=play_path,
                     tmp_dir=tmp_dir,
                     total_sample_cnt=total_sample_cnt,
-                    sample_rate=_get_ogg_sample_rate(ogg, total_sample_cnt),
+                    sample_rate=_get_ogg_sample_rate(ogg),
                     channel_layout="",
                 )
             except Exception:
@@ -655,7 +641,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
             play_path=play_path,
             tmp_dir=tmp_dir,
             total_sample_cnt=total_sample_cnt,
-            sample_rate=_get_ogg_sample_rate(ogg, total_sample_cnt),
+            sample_rate=_get_ogg_sample_rate(ogg),
             channel_layout="",
         )
     if ext == ".nwa":
@@ -664,7 +650,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
         pcm, header = sound.decode_nwa_to_pcm_bytes(data)
         bytes_per_sample = header.bits_per_sample // 8
         bytes_per_frame = header.channels * bytes_per_sample
-        total_sample_cnt = len(pcm) // bytes_per_frame if bytes_per_frame > 0 else 0
+        total_sample_cnt = len(pcm) // bytes_per_frame
         if total_sample_cnt <= 0:
             raise RuntimeError("failed to determine audio sample count")
         if header.samples_per_sec <= 0:
@@ -687,7 +673,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
                 tmp_dir=tmp_dir,
                 total_sample_cnt=total_sample_cnt,
                 sample_rate=int(header.samples_per_sec),
-                channel_layout=_channel_layout_for_channels(int(header.channels)),
+                channel_layout="mono" if header.channels == 1 else "stereo",
             )
         except Exception:
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -735,26 +721,13 @@ def _make_playback_entry(path: str, root: str = "") -> _PlaybackEntry:
     return _PlaybackEntry(path=path, display_name=display_name, base_name=base_name)
 
 
-def _get_ogg_sample_rate(ogg_bytes: bytes, total_sample_cnt: int = 0) -> int:
-    ident_info = getattr(sound, "_ogg_ident_info", None)
-    if callable(ident_info):
-        info = ident_info(ogg_bytes)
-        if info is not None:
-            _codec, sample_rate, _pre_skip = info
-            if sample_rate > 0:
-                return int(sample_rate)
-    if total_sample_cnt <= 0:
-        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg_bytes)
-    duration = sound.estimate_ogg_duration_seconds(ogg_bytes)
-    if duration and duration > 0 and total_sample_cnt > 0:
-        sample_rate = int(round(total_sample_cnt / duration))
-        if sample_rate > 0:
-            return sample_rate
-    return 44100
+def _get_ogg_sample_rate(ogg_bytes: bytes) -> int:
+    info = sound._ogg_ident_info(ogg_bytes)
+    return info[0] if info is not None else 44100
 
 
 def _format_player_time(seconds: float) -> str:
-    total_seconds = max(int(seconds), 0)
+    total_seconds = int(seconds)
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     if hours:
@@ -771,18 +744,16 @@ def _get_playback_elapsed_seconds(current: _RunningPlayback) -> float:
 
 def _get_playback_position_sample(current: _RunningPlayback) -> tuple[int, str]:
     plan = current.plan
-    sample_rate = max(int(plan.sample_rate), 1)
-    elapsed_samples = int(_get_playback_elapsed_seconds(current) * sample_rate)
-    first_pass_len = max(plan.end_sample - plan.start_sample, 1)
-    loop_len = max(plan.end_sample - plan.repeat_sample, 1)
+    elapsed_samples = int(_get_playback_elapsed_seconds(current) * plan.sample_rate)
+    first_pass_len = plan.end_sample - plan.start_sample
+    loop_len = plan.end_sample - plan.repeat_sample
     if elapsed_samples < first_pass_len:
-        return min(plan.start_sample + elapsed_samples, plan.end_sample), "first"
-    loop_elapsed = max(elapsed_samples - first_pass_len, 0)
+        return plan.start_sample + elapsed_samples, "first"
+    loop_elapsed = elapsed_samples - first_pass_len
     return plan.repeat_sample + (loop_elapsed % loop_len), "loop"
 
 
 def _build_progress_bar(progress: float, width: int) -> str:
-    width = max(int(width), 8)
     progress = min(max(float(progress), 0.0), 1.0)
     filled = int(progress * width)
     if filled >= width:
@@ -874,12 +845,9 @@ def _terminal_text_cells(text: str) -> list[tuple[str, int]]:
 
 def _fit_terminal_text(text: str, width: int) -> str:
     clean = str(text or "").replace("\r", " ").replace("\n", " ")
-    width = max(int(width), 1)
     cells = _terminal_text_cells(clean)
     if sum(cell_width for _, cell_width in cells) <= width:
         return clean
-    if width <= 1:
-        return ">"
     limit = width - 1
     parts = []
     used = 0
@@ -893,12 +861,7 @@ def _fit_terminal_text(text: str, width: int) -> str:
 
 def _tail_terminal_text(text: str, width: int) -> str:
     clean = str(text or "").replace("\r", " ").replace("\n", " ")
-    width = max(int(width), 0)
-    if width <= 0:
-        return ""
     cells = _terminal_text_cells(clean)
-    if sum(cell_width for _, cell_width in cells) <= width:
-        return clean
     parts = []
     used = 0
     for part, part_width in reversed(cells):
@@ -952,7 +915,6 @@ def _parse_player_command(command: str, has_playlist: bool):
 
 
 def _clamp_playlist_offset(total: int, offset: int, rows: int) -> int:
-    rows = max(int(rows), 1)
     max_offset = max(int(total) - rows, 0)
     return min(max(int(offset), 0), max_offset)
 
@@ -1093,14 +1055,11 @@ def _switch_playback(
         raise RuntimeError("ffplay not found in PATH")
     plan = _build_playback_plan(entries[current_index], trim_table)
     running = _start_playback_process(plan, ffplay_path)
-    old = current
-    current = running
-    _stop_running_playback(old)
-    plan = current.plan
+    _stop_running_playback(current)
     reporter(
         f"play [{current_index + 1}/{len(entries)}] {plan.entry.display_name} #{plan.bgm_name}: start {plan.start_sample}, loop {plan.repeat_sample}..{plan.end_sample}"
     )
-    return current
+    return running
 
 
 class _PlayerScreen:
@@ -1145,8 +1104,6 @@ class _PlayerScreen:
                 import termios
 
                 termios.tcsetattr(self._stdin_fd, termios.TCSADRAIN, self._term_state)
-        self._last_frame = ""
-        self._last_size = None
         self._stream.write("\x1b[?1049l")
         self._stream.flush()
 
@@ -1164,7 +1121,6 @@ class _PlayerScreen:
         return "\x1b[K\r\n".join(lines) + "\x1b[K"
 
     def _playlist_window(self, total: int, rows: int) -> tuple[int, int]:
-        rows = max(rows, 1)
         start = _clamp_playlist_offset(total, self.list_offset, rows)
         end = min(start + rows, total)
         return start, end
@@ -1208,8 +1164,6 @@ class _PlayerScreen:
         width: int,
     ) -> tuple[str, list[str]]:
         total = len(entries)
-        if total <= 0 or rows <= 0:
-            return "playlist 0/0", []
         start, end = self._playlist_window(total, rows)
         header = f"playlist {start + 1}-{end}/{total}"
         lines = []
@@ -1225,18 +1179,15 @@ class _PlayerScreen:
         prefix = "player> "
         prefix_width = _terminal_text_width(prefix)
         visible = width - prefix_width
-        if visible <= 0:
-            line = _fit_terminal_text(prefix, width)
-            return line, max(min(_terminal_text_width(line), width), 1)
         if _terminal_text_width(self.buffer) <= visible:
             line = prefix + self.buffer
             col = min(prefix_width + _terminal_text_width(self.buffer) + 1, width)
-            return line, max(col, 1)
+            return line, col
         line = prefix + _tail_terminal_text(self.buffer, visible)
         return line, width
 
     def _prompt_cursor(self, row: int, col: int) -> str:
-        return f"\x1b[{max(row, 1)};{max(col, 1)}H"
+        return f"\x1b[{row};{col}H"
 
     def _read_windows_char(self):
         import msvcrt
@@ -1257,8 +1208,6 @@ class _PlayerScreen:
     def _read_posix_char(self):
         import select
 
-        if self._stdin_fd is None:
-            return None
         ready, _, _ = select.select([self._stdin_fd], [], [], 0.1)
         if not ready:
             return None
@@ -1279,8 +1228,6 @@ class _PlayerScreen:
         return None
 
     def _read_char(self):
-        if not self.enabled:
-            return None
         if os.name == "nt":
             return self._read_windows_char()
         return self._read_posix_char()
@@ -1299,7 +1246,7 @@ class _PlayerScreen:
             if not self.buffer:
                 return "stop", None
             return None
-        if ch in ("\b", "\x08", "\x7f"):
+        if ch in ("\b", "\x7f"):
             if self.buffer:
                 self.buffer = self.buffer[:-1]
             return "edit", None
@@ -1317,17 +1264,13 @@ class _PlayerScreen:
         current_index: int,
         current: _RunningPlayback | None,
     ) -> None:
-        if not self.enabled:
-            return
         width, height = self._get_size()
         lines = []
         paused = bool(current and current.paused)
         if current is not None:
             resource_path = os.path.abspath(current.plan.entry.path)
-        elif entries:
-            resource_path = os.path.abspath(entries[current_index].path)
         else:
-            resource_path = ""
+            resource_path = os.path.abspath(entries[current_index].path)
         lines.append(self._fit(resource_path, width))
         if current is None:
             lines.append(self._fit("state stopped", width))
@@ -1335,16 +1278,16 @@ class _PlayerScreen:
         else:
             plan = current.plan
             position_sample, phase = _get_playback_position_sample(current)
-            position_sec = position_sample / float(max(plan.sample_rate, 1))
-            end_sec = plan.end_sample / float(max(plan.sample_rate, 1))
-            progress = position_sample / float(max(plan.end_sample, 1))
+            position_sec = position_sample / float(plan.sample_rate)
+            end_sec = plan.end_sample / float(plan.sample_rate)
+            progress = position_sample / float(plan.end_sample)
             if current.paused:
                 state_text = "paused"
             elif phase == "first":
                 state_text = "first-pass"
             else:
                 state_text = phase
-            bar_width = max(min(width - 24, 60), 8)
+            bar_width = min(width - 24, 60)
             lines.append(
                 self._fit(
                     f"bgm {plan.bgm_name}  state {state_text}  start {_format_player_time(plan.start_sample / plan.sample_rate)}  loop {_format_player_time(plan.repeat_sample / plan.sample_rate)}  end {_format_player_time(end_sec)}",
@@ -1359,7 +1302,7 @@ class _PlayerScreen:
             )
         lines.append(self._fit(_format_playlist_help(len(entries) > 1), width))
         footer_rows = 2
-        playlist_rows = max(height - len(lines) - footer_rows, 1)
+        playlist_rows = height - len(lines) - footer_rows
         playlist_header, playlist_lines = self._build_playlist_lines(
             entries,
             current_index,
@@ -1374,7 +1317,6 @@ class _PlayerScreen:
         lines.append(self._fit(self.message, width))
         prompt_line, prompt_col = self._prompt_line(width)
         lines.append(self._fit(prompt_line, width))
-        lines = lines[:height]
         size = (width, height)
         frame = (
             ("\x1b[2J\x1b[H" if size != self._last_size else "\x1b[H")
@@ -1395,7 +1337,7 @@ def _handle_player_action(
     value,
     entries,
     current_index: int,
-    current: _RunningPlayback | None,
+    current: _RunningPlayback,
     trim_table,
     ffplay_path: str,
     reporter,
@@ -1414,8 +1356,6 @@ def _handle_player_action(
         view_handler(action, entries)
         return current_index, current, None
     if action == "toggle_pause":
-        if current is None:
-            return current_index, current, None
         if current.paused:
             _control_process(current.process, "resume")
             if current.paused_at is not None:
@@ -1464,20 +1404,18 @@ def _handle_player_action(
             reporter=reporter,
         )
         return current_index, current, None
-    if action == "play":
-        if value >= len(entries):
-            reporter(f"playlist index out of range: {value + 1}")
-            return current_index, current, None
-        current_index = value
-        current = _switch_playback(
-            entries,
-            current_index,
-            current,
-            trim_table,
-            ffplay_path,
-            reporter=reporter,
-        )
+    if value >= len(entries):
+        reporter(f"playlist index out of range: {value + 1}")
         return current_index, current, None
+    current_index = value
+    current = _switch_playback(
+        entries,
+        current_index,
+        current,
+        trim_table,
+        ffplay_path,
+        reporter=reporter,
+    )
     return current_index, current, None
 
 
@@ -1505,8 +1443,7 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
             if action_name == "top":
                 screen.scroll_to_top()
                 return
-            if action_name == "bottom":
-                screen.scroll_to_bottom(len(items))
+            screen.scroll_to_bottom(len(items))
 
         try:
             current = _switch_playback(
@@ -1518,7 +1455,7 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
                 reporter=screen.set_message,
             )
             while True:
-                if current is not None and current.process.poll() is not None:
+                if current.process.poll() is not None:
                     raise RuntimeError(
                         f"ffplay exited unexpectedly with code {current.process.returncode}"
                     )
@@ -1587,10 +1524,10 @@ def _extract_one(
     src_path: str,
     out_root: str,
     rel_dir: str,
+    output_claims,
     trim_table=None,
     ffmpeg_path: str = "",
     tmp_dir: str = "",
-    output_claims=None,
 ) -> int:
     bn = os.path.basename(src_path)
     base_name, ext = os.path.splitext(bn)
@@ -1600,15 +1537,14 @@ def _extract_one(
 
     def _write_output(out_name, data):
         out_path = os.path.join(out_dir, out_name)
-        if output_claims is not None:
-            key = os.path.normcase(os.path.abspath(out_path))
-            previous = output_claims.get(key)
-            if previous is not None:
-                eprint(
-                    f"warning: output collision: {out_path} from {src_path} overwrites {previous}"
-                )
-            else:
-                output_claims[key] = src_path
+        key = os.path.normcase(os.path.abspath(out_path))
+        previous = output_claims.get(key)
+        if previous is not None:
+            eprint(
+                f"warning: output collision: {out_path} from {src_path} overwrites {previous}"
+            )
+        else:
+            output_claims[key] = src_path
         write_bytes(out_path, data)
 
     if ext == ".owp":
@@ -1812,11 +1748,10 @@ def main(argv=None) -> int:
         if rc is not None:
             return rc
         entries, skipped = _filter_playback_entries(entries, trim_table)
-        if skipped:
-            for entry in skipped:
-                eprint(
-                    f"skip {entry.display_name}: no #BGM.* entry for file name: {entry.base_name}"
-                )
+        for entry in skipped:
+            eprint(
+                f"skip {entry.display_name}: no #BGM.* entry for file name: {entry.base_name}"
+            )
         if not entries:
             eprint("error: no playable audio files matched #BGM.* entries")
             return 1

@@ -40,8 +40,8 @@ def _gan_parse(blob, want_disasm=True):
     ofs = 0
     cv, ofs = _gan_read_i32(blob, ofs)
     ver, ofs = _gan_read_i32(blob, ofs)
-    out["code_version"] = int(cv) if cv is not None else None
-    out["version"] = int(ver) if ver is not None else None
+    out["code_version"] = cv
+    out["version"] = ver
     if want_disasm:
         out["disasm"].append(
             {"ofs": 0, "code": None, "name": "CODE_VERSION", "arg": cv}
@@ -58,7 +58,7 @@ def _gan_parse(blob, want_disasm=True):
             return
         out["disasm"].append(
             {
-                "ofs": int(ofs0),
+                "ofs": ofs0,
                 "code": code,
                 "name": _GAN_OPS.get(code, "UNKNOWN"),
                 "arg": arg,
@@ -72,14 +72,12 @@ def _gan_parse(blob, want_disasm=True):
         code, ofs = _gan_read_i32(blob, ofs)
         if code is None:
             break
-        code = int(code)
         if code == 10100:
             ln, ofs = _gan_read_i32(blob, ofs)
             if ln is None:
                 out["ok"] = False
                 out["errors"].append(f"truncated at {hx(ofs0)}")
                 break
-            ln = int(ln)
             if ln < 0 or ofs + ln > len(blob):
                 out["ok"] = False
                 out["errors"].append(f"invalid string length {ln!r} at {hx(ofs0)}")
@@ -95,7 +93,6 @@ def _gan_parse(blob, want_disasm=True):
                 out["ok"] = False
                 out["errors"].append(f"truncated at {hx(ofs0)}")
                 break
-            set_cnt = int(set_cnt)
             _add_ins(ofs0, code, set_cnt)
             if set_cnt < 0:
                 out["ok"] = False
@@ -108,7 +105,6 @@ def _gan_parse(blob, want_disasm=True):
                     out["ok"] = False
                     out["errors"].append(f"truncated at {hx(ofs1)}")
                     return out
-                c2 = int(c2)
                 if c2 != 30000:
                     out["warnings"].append(
                         f"expected PAT_COUNT(30000) but got {c2!r} at {hx(ofs1)}"
@@ -118,11 +114,10 @@ def _gan_parse(blob, want_disasm=True):
                     out["ok"] = False
                     out["errors"].append(f"truncated at {hx(ofs1)}")
                     return out
-                pat_cnt = int(pat_cnt)
                 _add_ins(ofs1, c2, pat_cnt)
                 s = {"total_time": 0, "pats": []}
                 keika = 0
-                for _pi in range(max(0, pat_cnt)):
+                for _pi in range(pat_cnt):
                     pat = {
                         "pat_no": 0,
                         "x": 0,
@@ -139,11 +134,9 @@ def _gan_parse(blob, want_disasm=True):
                             out["ok"] = False
                             out["errors"].append(f"truncated at {hx(ofs2)}")
                             return out
-                        c3 = int(c3)
                         if c3 == 999999:
                             _add_ins(ofs2, c3)
-                            w = int(pat.get("wait") or 0)
-                            keika += w
+                            keika += pat["wait"]
                             pat["keika_time"] = keika
                             s["pats"].append(pat)
                             break
@@ -152,7 +145,6 @@ def _gan_parse(blob, want_disasm=True):
                             out["ok"] = False
                             out["errors"].append(f"truncated at {hx(ofs2)}")
                             return out
-                        val = int(val)
                         if c3 == 30100:
                             pat["pat_no"] = val
                         elif c3 == 30101:
@@ -184,20 +176,19 @@ def _gan_parse(blob, want_disasm=True):
 def gan(blob):
     g = _gan_parse(blob, want_disasm=True)
     print("==== GAN Meta ====")
-    print(f"code_version: {g.get('code_version')!r}")
-    print(f"version: {g.get('version')!r}")
-    g00 = g.get("g00_file_name") or ""
+    print(f"code_version: {g['code_version']!r}")
+    print(f"version: {g['version']!r}")
+    g00 = g["g00_file_name"]
     if g00:
         print(f"g00_file_name: {g00}")
     else:
         print("g00_file_name: <missing>")
-    sets = g.get("sets") or []
+    sets = g["sets"]
     print(f"set_count: {len(sets):d}")
-    if g.get("warnings"):
-        for w in g.get("warnings"):
-            print(f"warning: {w}")
-    if not g.get("ok"):
-        for e in g.get("errors"):
+    for w in g["warnings"]:
+        print(f"warning: {w}")
+    if not g["ok"]:
+        for e in g["errors"]:
             print(f"error: {e}")
         print()
         print("(disassembly may be incomplete)")
@@ -206,46 +197,44 @@ def gan(blob):
     if sets:
         print("==== GAN Sets ====")
         for i, s in enumerate(sets):
-            pats = s.get("pats") or []
-            print(
-                f"set[{i:d}]: pat_count={len(pats):d} total_time={int(s.get('total_time') or 0):d}"
-            )
+            pats = s["pats"]
+            print(f"set[{i:d}]: pat_count={len(pats):d} total_time={s['total_time']:d}")
             for j, p in enumerate(pats[: C.MAX_LIST_PREVIEW]):
                 print(
-                    f"  pat[{j:d}]: pat_no={int(p.get('pat_no') or 0):d} x={int(p.get('x') or 0):d} y={int(p.get('y') or 0):d} wait={int(p.get('wait') or 0):d} tr={int(p.get('tr') or 0):d} z={int(p.get('z') or 0):d} keika={int(p.get('keika_time') or 0):d}"
+                    f"  pat[{j:d}]: pat_no={p['pat_no']:d} x={p['x']:d} y={p['y']:d} wait={p['wait']:d} tr={p['tr']:d} z={p['z']:d} keika={p['keika_time']:d}"
                 )
             if len(pats) > C.MAX_LIST_PREVIEW:
                 print(f"  ... ({len(pats) - C.MAX_LIST_PREVIEW:d} patterns omitted)")
         print()
     print("==== GAN Disassembly ====")
-    for ins in g.get("disasm") or []:
-        ofs = ins.get("ofs", 0)
-        code = ins.get("code")
-        name = ins.get("name") or ""
-        arg = ins.get("arg")
+    for ins in g["disasm"]:
+        ofs = ins["ofs"]
+        code = ins["code"]
+        name = ins["name"]
+        arg = ins["arg"]
         extra = ins.get("extra")
         if code is None:
             print(f"{hx(ofs)}: {name} {arg!r}")
             continue
         if extra is not None:
-            print(f"{hx(ofs)}: {int(code):d} ({name}) {arg!r} -> {extra!r}")
+            print(f"{hx(ofs)}: {code:d} ({name}) {arg!r} -> {extra!r}")
         elif arg is not None:
-            print(f"{hx(ofs)}: {int(code):d} ({name}) {arg!r}")
+            print(f"{hx(ofs)}: {code:d} ({name}) {arg!r}")
         else:
-            print(f"{hx(ofs)}: {int(code):d} ({name})")
+            print(f"{hx(ofs)}: {code:d} ({name})")
     return 0
 
 
 def compare_gan(b1, b2):
     g1 = _gan_parse(b1, want_disasm=False)
     g2 = _gan_parse(b2, want_disasm=False)
-    if (not g1.get("ok")) or (not g2.get("ok")):
+    if (not g1["ok"]) or (not g2["ok"]):
         print("GAN parse failed; showing high-level differences only.")
-        if not g1.get("ok"):
-            for e in g1.get("errors"):
+        if not g1["ok"]:
+            for e in g1["errors"]:
                 print(f"file1 error: {e}")
-        if not g2.get("ok"):
-            for e in g2.get("errors"):
+        if not g2["ok"]:
+            for e in g2["errors"]:
                 print(f"file2 error: {e}")
     diffs = []
 
@@ -254,11 +243,11 @@ def compare_gan(b1, b2):
             return
         diffs.append(f"{k}: {v1!r} -> {v2!r}")
 
-    _d("code_version", g1.get("code_version"), g2.get("code_version"))
-    _d("version", g1.get("version"), g2.get("version"))
-    _d("g00_file_name", g1.get("g00_file_name") or "", g2.get("g00_file_name") or "")
-    s1 = g1.get("sets") or []
-    s2 = g2.get("sets") or []
+    _d("code_version", g1["code_version"], g2["code_version"])
+    _d("version", g1["version"], g2["version"])
+    _d("g00_file_name", g1["g00_file_name"], g2["g00_file_name"])
+    s1 = g1["sets"]
+    s2 = g2["sets"]
     if len(s1) != len(s2):
         diffs.append(f"set_count: {len(s1):d} -> {len(s2):d}")
     for si in range(max(len(s1), len(s2))):
@@ -272,11 +261,11 @@ def compare_gan(b1, b2):
         b = s2[si]
         _d(
             f"set[{si:d}].total_time",
-            int(a.get("total_time") or 0),
-            int(b.get("total_time") or 0),
+            a["total_time"],
+            b["total_time"],
         )
-        p1s = a.get("pats") or []
-        p2s = b.get("pats") or []
+        p1s = a["pats"]
+        p2s = b["pats"]
         if len(p1s) != len(p2s):
             diffs.append(f"set[{si:d}].pat_count: {len(p1s):d} -> {len(p2s):d}")
         for pi in range(max(len(p1s), len(p2s))):
@@ -289,8 +278,8 @@ def compare_gan(b1, b2):
             pa = p1s[pi]
             pb = p2s[pi]
             for fk in ("pat_no", "x", "y", "wait", "tr", "z"):
-                va = int(pa.get(fk) or 0)
-                vb = int(pb.get(fk) or 0)
+                va = pa[fk]
+                vb = pb[fk]
                 if va != vb:
                     diffs.append(f"set[{si:d}].pat[{pi:d}].{fk}: {va:d} -> {vb:d}")
     return print_limited_diffs(

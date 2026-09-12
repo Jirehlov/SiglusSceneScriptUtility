@@ -24,12 +24,7 @@ def _parse(blob):
         return out
     out["max"] = int(read_i32_le(blob, 0, default=0) or 0)
     out["cnt"] = int(read_i32_le(blob, 4, default=0) or 0)
-    try:
-        offs = struct.unpack_from(f"<{_OFFSET_COUNT:d}i", blob, 8)
-    except Exception:
-        out["ok"] = False
-        out["errors"].append("bad offset table")
-        return out
+    offs = struct.unpack_from(f"<{_OFFSET_COUNT:d}i", blob, 8)
     out["offsets"] = tuple(int(x) for x in offs)
     if int(out["cnt"]) > _OFFSET_COUNT:
         out["warnings"].append(f"cnt>{_OFFSET_COUNT:d} ({int(out['cnt']):d})")
@@ -44,12 +39,8 @@ def _parse(blob):
             continue
         typ = int(read_i32_le(blob, of + 0, strict=True))
         dsz = int(read_i32_le(blob, of + 4, default=0) or 0)
-        try:
-            keep = struct.unpack_from("<14i", blob, of + 8)
-            keep = tuple(int(x) for x in keep)
-        except Exception:
-            keep = (0,) * 14
-            out["warnings"].append(f"bad keep at {hx(of)}")
+        keep = struct.unpack_from("<14i", blob, of + 8)
+        keep = tuple(int(x) for x in keep)
         p = of + _SUB_HDR_SIZE
         r = bytes(blob[p : p + 256])
         g = bytes(blob[p + 256 : p + 512])
@@ -85,10 +76,7 @@ def tcr(blob: bytes) -> int:
     print(f"max: {int(info.get('max') or 0):d}")
     print(f"cnt: {int(info.get('cnt') or 0):d}")
     print(f"header_size: {_HDR_SIZE:d}")
-    try:
-        nz = sum(1 for x in (info.get("offsets") or ()) if int(x) != 0)
-    except Exception:
-        nz = 0
+    nz = sum(1 for x in (info.get("offsets") or ()) if int(x) != 0)
     print(f"offset_nonzero_0_{_OFFSET_COUNT - 1:d}: {int(nz):d}")
     for w in info.get("warnings") or []:
         print(f"warning: {w}")

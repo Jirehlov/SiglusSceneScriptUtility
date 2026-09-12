@@ -22,11 +22,6 @@ C = get_const_module()
 
 
 class IniFileAnalizer:
-    def __init__(self):
-        self._el = 0
-        self._es = ""
-        self._last = ""
-
     def get_error_line(self):
         return int(self._el)
 

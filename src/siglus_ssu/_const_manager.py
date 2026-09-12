@@ -202,12 +202,7 @@ def _repo_root() -> tuple[Path, Path] | None:
 
 
 def _version_subject_pattern(version: str):
-    if not version:
-        return None
-    try:
-        vv = re.escape(str(version).lstrip("vV"))
-    except (TypeError, ValueError):
-        return None
+    vv = re.escape(version.lstrip("vV"))
     if not vv:
         return None
     return re.compile(rf"^v?{vv}\b")

@@ -41,9 +41,7 @@ def _derive_key_from_file(p: str) -> bytes:
         return b""
     try:
         for src in iter_exe_el_sources(explicit_angou=p):
-            el = src.get("exe_el") if isinstance(src, dict) else b""
-            if el and len(el) == 16:
-                return bytes(el)
+            return src["exe_el"]
     except ValueError:
         return b""
     return b""
@@ -53,15 +51,10 @@ def parse_input_key(arg: str) -> bytes:
     s = str(arg or "").strip()
     low = s.casefold()
     if low.startswith("key="):
-        el = parse_exe_el_key_text(s.split("=", 1)[1])
-        return el if el and len(el) == 16 else b""
+        return parse_exe_el_key_text(s.split("=", 1)[1])
     if low.startswith("angou="):
-        el = angou_to_exe_el(s.split("=", 1)[1])
-        return el if el and len(el) == 16 else b""
-    el = _derive_key_from_file(arg)
-    if el and len(el) == 16:
-        return el
-    return b""
+        return angou_to_exe_el(s.split("=", 1)[1])
+    return _derive_key_from_file(arg)
 
 
 def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
@@ -400,10 +393,7 @@ def _find_loc_guard_branch(data: bytearray, func_off: int):
     for rel_off in range(max(0, len(text_data) - 5)):
         if text_data[rel_off] != 0xE8:
             continue
-        try:
-            disp = struct.unpack_from("<i", text_data, rel_off + 1)[0]
-        except struct.error:
-            continue
+        disp = struct.unpack_from("<i", text_data, rel_off + 1)[0]
         dest_va = text_va + rel_off + 5 + disp
         if dest_va != func_va:
             continue
