@@ -21,6 +21,7 @@ from .common import (
     print_sections,
     diff_kv,
     build_sections,
+    parse_i32_header_checked,
     read_bytes,
     is_named_filename,
     unique_out_path,
@@ -618,38 +619,51 @@ def _scn_payload_bounds(blob):
     return so, ss
 
 
-def _scn_string_indices_valid(blob):
-    try:
-        header = build_sections(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)[0]
-        count = int(header.get("str_index_cnt", 0) or 0)
-        pairs = read_struct_list(
-            blob,
-            header.get("str_index_list_ofs", 0),
-            count,
-            I32_PAIR_STRUCT,
-        )
-        if len(pairs) != count:
+def scn_structure_valid(blob):
+    header = parse_i32_header_checked(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
+    if not header:
+        return False
+    size = len(blob)
+    header_size = header["header_size"]
+    for name, count_key, item_size in (
+        ("scn", "scn_size", 1),
+        ("str_index_list", "str_index_cnt", 8),
+        ("label_list", "label_cnt", 4),
+        ("z_label_list", "z_label_cnt", 4),
+        ("cmd_label_list", "cmd_label_cnt", 8),
+        ("scn_prop_list", "scn_prop_cnt", 8),
+        ("scn_prop_name_index_list", "scn_prop_name_index_cnt", 8),
+        ("scn_cmd_list", "scn_cmd_cnt", 4),
+        ("scn_cmd_name_index_list", "scn_cmd_name_index_cnt", 8),
+        ("call_prop_name_index_list", "call_prop_name_index_cnt", 8),
+        ("namae_list", "namae_cnt", 4),
+        ("read_flag_list", "read_flag_cnt", 4),
+    ):
+        offset = header[f"{name}_ofs"]
+        count = header[count_key]
+        if offset < 0 or count < 0 or offset + count * item_size > size:
             return False
-        if not pairs:
-            return True
-        blob_ofs = int(header.get("str_list_ofs", 0) or 0)
-        if blob_ofs < 0 or blob_ofs > len(blob):
+        if count and offset < header_size:
             return False
-        blob_end = blob_ofs + max_pair_end(pairs) * 2
-        if blob_end > len(blob):
+    for name in ("str", "scn_prop_name", "scn_cmd_name", "call_prop_name"):
+        count = header[f"{name}_index_cnt"]
+        if count != header[f"{name}_cnt"]:
             return False
-        for offset, length in pairs:
-            offset = int(offset)
-            length = int(length)
+        blob_ofs = header[f"{name}_list_ofs"]
+        if blob_ofs < 0 or blob_ofs > size:
+            return False
+        if count and blob_ofs < header_size:
+            return False
+        index_ofs = header[f"{name}_index_list_ofs"]
+        index_end = index_ofs + count * I32_PAIR_STRUCT.size
+        for offset, length in I32_PAIR_STRUCT.iter_unpack(
+            memoryview(blob)[index_ofs:index_end]
+        ):
             if offset < 0 or length < 0:
                 return False
-            start = blob_ofs + offset * 2
-            end = start + length * 2
-            if end > blob_end:
+            if blob_ofs + (offset + length) * 2 > size:
                 return False
-        return True
-    except (TypeError, ValueError, OverflowError, struct.error):
-        return False
+    return True
 
 
 def _payload_trace_normalize_value(ev, key, value):
@@ -725,7 +739,7 @@ def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes
     payload_context = dict(pack_context or {})
     if scene_name is not None:
         payload_context["payload_scene_name"] = str(scene_name)
-    if not _scn_string_indices_valid(blob):
+    if not scn_structure_valid(blob):
         return {"status": "INCOMPLETE"}
     native = scn_payload_hash_bundles_native(
         blob, pack_context=payload_context, hashes=hashes

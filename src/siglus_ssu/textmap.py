@@ -12,7 +12,6 @@ from . import dat as DAT
 from . import pck
 from .native_ops import lzss_pack, xor_cycle_inplace
 from .common import (
-    looks_like_siglus_dat,
     eprint,
     hint_help as _hint_help,
     decode_text_auto,
@@ -439,7 +438,7 @@ def _read_map(csv_path: str):
 
 
 def _parse_scn_dat(blob: bytes):
-    if not looks_like_siglus_dat(blob):
+    if not DAT.scn_structure_valid(blob):
         return None
     try:
         _, meta = DAT.dat_sections(blob)
@@ -452,8 +451,6 @@ def _parse_scn_dat(blob: bytes):
         h.get("str_index_cnt", 0),
         I32_PAIR_STRUCT,
     )
-    if int(h.get("str_index_cnt", 0) or 0) and not idx_pairs:
-        return None
     str_blob_end = int(meta.get("str_blob_end", 0) or 0)
     if str_blob_end <= 0:
         str_blob_end = int(h.get("str_list_ofs", 0) or 0) + max_pair_end(idx_pairs) * 2
