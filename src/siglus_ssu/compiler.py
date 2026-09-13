@@ -1525,9 +1525,6 @@ def main(argv=None):
                     os.makedirs(bs_dir, exist_ok=True)
                     if ctx.get("ia_data") is None:
                         ctx["ia_data"] = build_ia_data(ctx)
-                    compile_list = ss
-                    if not compile_list:
-                        raise RuntimeError("test-shuffle: no .ss files")
                     first_ss = compile_list[0]
                     first_nm = os.path.splitext(os.path.basename(first_ss))[0]
                     exp_first = os.path.join(test_dir, first_nm + ".dat")
