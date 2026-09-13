@@ -50,8 +50,9 @@ def need_pil():
 def _trim_image_edges(img):
     full = (0, 0, *img.size)
     if "A" in img.getbands():
-        bbox = img.getchannel("A").getbbox()
-        if bbox == full:
+        alpha = img.getchannel("A")
+        bbox = alpha.getbbox()
+        if alpha.getextrema()[0] == 255:
             rgb = img.convert("RGB")
             bg = Image.new("RGB", rgb.size, rgb.getpixel((0, 0)))
             bbox = ImageChops.difference(rgb, bg).getbbox()
@@ -1159,22 +1160,13 @@ def _plan_type2_updates(unp: bytes, cuts: list, updates: list):
 
 def _rebuild_type2_cut_block(blk: bytes, bgra_canvas: bytes) -> bytes:
     hdr, cw, ch, chips = _parse_cut_block(blk, strict=True)
-    mv = memoryview(bgra_canvas)
-    parts = [hdr]
-    for chip_hdr, px, py, xl, yl, _chip in chips:
+    for _chip_hdr, px, py, xl, yl, _chip in chips:
         if xl <= 0 or yl <= 0:
             raise ValueError("bad chip size")
         if px + xl > cw or py + yl > ch:
             raise ValueError("chip rect out of bounds")
-        cd = bytearray(xl * yl * 4)
-        row_bytes = xl * 4
-        for ry in range(yl):
-            so = ((py + ry) * cw + px) * 4
-            do = ry * row_bytes
-            cd[do : do + row_bytes] = mv[so : so + row_bytes]
-        parts.append(chip_hdr)
-        parts.append(bytes(cd))
-    return b"".join(parts)
+    rebuilt = _build_type2_official_cut_block(bgra_canvas, cw, ch)
+    return hdr[:2] + rebuilt[2:20] + hdr[20:] + rebuilt[C.G00_CUT_SZ :]
 
 
 def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=None):
