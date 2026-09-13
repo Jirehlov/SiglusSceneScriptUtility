@@ -1,6 +1,7 @@
 from functools import lru_cache
 from ._const_manager import get_const_module
 from .common import (
+    eprint,
     mark_named_usage,
     next_else_ifdef_state,
     next_elseif_ifdef_state,
@@ -477,10 +478,21 @@ class CharacterAnalizer:
             rep = {"type": "replace", "name": a["name"], "after": after, "args": []}
             t = rep["after"] + ("\0" * 256)
             p = 0
+            replacements = 0
             while t[p] != "\0":
+                old_t = t
+                old_p = p
                 t, p, ok = self._std_replace(t, p, default_rt, added_rt)
                 if not ok:
                     return None
+                if replacements < 10000 and (t != old_t or p == old_p):
+                    replacements += 1
+                    if replacements == 10000:
+                        eprint(
+                            "warning: macro argument expansion reached 10000 replacements "
+                            f"at line {self.m_line}; check for cyclic #define references; "
+                            "continuing without truncation."
+                        )
             rep["after"] = t[:-256]
             reps.append(rep)
         reps.sort(key=lambda x: len(x["name"]), reverse=True)
@@ -489,10 +501,21 @@ class CharacterAnalizer:
             add_replace_tree(art, r["name"], r)
         t = src + ("\0" * 256)
         p = 0
+        replacements = 0
         while t[p] != "\0":
+            old_t = t
+            old_p = p
             t, p, ok = self._std_replace(t, p, default_rt, art)
             if not ok:
                 return None
+            if replacements < 10000 and (t != old_t or p == old_p):
+                replacements += 1
+                if replacements == 10000:
+                    eprint(
+                        "warning: macro body expansion reached 10000 replacements "
+                        f"at line {self.m_line}; check for cyclic #define references; "
+                        "continuing without truncation."
+                    )
         return t[:-256]
 
     def analize_line(self, in_text, piad):
