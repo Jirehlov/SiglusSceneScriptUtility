@@ -857,7 +857,10 @@ impl<'a> Scanner<'a> {
                 };
                 i += 8;
                 let text = if form == c.fm_str {
-                    self.string_by_id(value).map(<[u16]>::to_vec)
+                    let Some(text) = self.string_by_id(value) else {
+                        return false;
+                    };
+                    Some(text.to_vec())
                 } else {
                     None
                 };

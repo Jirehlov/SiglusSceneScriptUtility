@@ -1531,9 +1531,16 @@ def disassemble_scn_bytes(
                 _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 8
+            if int(form) == fm_str and not 0 <= int(val) < len(str_list or []):
+                _emit(
+                    lambda: (
+                        f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d} <invalid string index>"
+                    )
+                )
+                break
             if render_text:
                 s = ""
-                if int(form) == fm_str and 0 <= int(val) < len(str_list or []):
+                if int(form) == fm_str:
                     s = f' ; "{_escape_preview(str_list[int(val)])}"'
                 _emit(lambda: f"{ofs:08X}: {opname} {fmt_form(form)}, {int(val):d}{s}")
             push_fields = {}
@@ -1541,11 +1548,7 @@ def disassemble_scn_bytes(
                 push_fields = {
                     "form": int(form),
                     "value": int(val),
-                    "text": (
-                        str(str_list[int(val)])
-                        if int(form) == fm_str and 0 <= int(val) < len(str_list or [])
-                        else None
-                    ),
+                    "text": str(str_list[int(val)]) if int(form) == fm_str else None,
                 }
             _trace(opname, ofs, **push_fields)
             _push_stack_value(form, int(val), receiver=False)

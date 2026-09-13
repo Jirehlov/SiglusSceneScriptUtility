@@ -1226,14 +1226,13 @@ def compare_pck(
 
     def _scene_map(names, idx, base_ofs, blob):
         m = {}
-        for i in range(min(len(idx), len(names) if names else len(idx))):
-            o, s = idx[i]
+        for i, (o, s) in enumerate(idx):
             if o < 0 or s <= 0:
-                continue
+                return None
             a = base_ofs + o
             b = a + s
             if a < 0 or b > len(blob):
-                continue
+                return None
             nm = (names[i] if names and i < len(names) else (f"scene#{i:d}")) or (
                 f"scene#{i:d}"
             )
@@ -1242,6 +1241,13 @@ def compare_pck(
 
     sm1 = _scene_map(names1, idx1, h1.get("scn_data_list_ofs", 0), b1)
     sm2 = _scene_map(names2, idx2, h2.get("scn_data_list_ofs", 0), b2)
+    for path, header, idx, scenes in (
+        (p1, h1, idx1, sm1),
+        (p2, h2, idx2, sm2),
+    ):
+        if scenes is None or len(idx) != header.get("scn_data_index_cnt", 0):
+            sys.stderr.write(f"analyze: INCOMPLETE scene_data directory: {path}\n")
+            return 1
     source_entries1 = list(
         _pck_original_source_entries(
             b1, h1, h1.get("scn_data_list_ofs", 0) + max_pair_end(idx1)
