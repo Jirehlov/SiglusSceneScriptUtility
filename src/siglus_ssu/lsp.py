@@ -26,6 +26,7 @@ from .MA import MA, FormTable
 from .SA import SA
 from ._const_manager import package_version
 from .common import (
+    ascii_lower,
     build_empty_ia_data,
     content_digest,
     content_digest_file,
@@ -413,7 +414,7 @@ def _project_input_signature(
 def _append_definition(
     defs: dict[str, list[DefinitionRecord]], record: DefinitionRecord
 ) -> None:
-    defs.setdefault(record.name.casefold(), []).append(record)
+    defs.setdefault(ascii_lower(record.name), []).append(record)
 
 
 def _project_link_command_names(project: ProjectContext) -> dict[str, str]:
@@ -424,7 +425,7 @@ def _project_link_command_names(project: ProjectContext) -> dict[str, str]:
     if inc_command_cnt <= 0:
         return {}
     return {
-        str(cmd.get("name", "") or "").casefold(): str(cmd.get("name", "") or "")
+        ascii_lower(cmd.get("name")): str(cmd.get("name", "") or "")
         for cmd in list(iad.get("command_list") or [])[:inc_command_cnt]
         if str(cmd.get("name", "") or "")
     }
@@ -701,8 +702,8 @@ def _source_token_matches_text(source_text: str, token: SourceToken) -> bool:
         return False
     if token.end_char <= token.start_char:
         return False
-    return (
-        line_text[token.start_char : token.end_char].casefold() == token.text.casefold()
+    return ascii_lower(line_text[token.start_char : token.end_char]) == ascii_lower(
+        token.text
     )
 
 
@@ -763,6 +764,8 @@ def _atom_opt_int(atom: dict[str, Any], default: int) -> int:
 def _scene_name_from_label_atom(lad: dict[str, Any], atom: dict[str, Any]) -> str:
     labels = lad.get("label_list", []) if isinstance(lad, dict) else []
     idx = _atom_opt_int(atom, -1)
+    if atom.get("type") == C.LA_T["Z_LABEL"]:
+        idx = int(atom.get("subopt", -1))
     if 0 <= idx < len(labels):
         return "#" + str(labels[idx].get("name", "") or "")
     return "#"
@@ -987,7 +990,7 @@ def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
         )
         if not _source_token_matches_text(result.text, token):
             continue
-        key = text.casefold()
+        key = ascii_lower(text)
         if atom_type in label_types:
             kind = "label"
         elif atom_type in keyword_types or key in KEYWORD_DOCS:
@@ -1080,7 +1083,7 @@ def _collect_scene_symbols(
                 detail="normal label",
             )
             rec = span_record(rec, atom, name)
-            label_defs[name.casefold()] = rec
+            label_defs[ascii_lower(name)] = rec
             doc_symbols.append(rec)
             return
         if nt == C.NT_S_Z_LABEL:
@@ -1102,7 +1105,7 @@ def _collect_scene_symbols(
                 detail="z label",
             )
             rec = span_record(rec, atom, name)
-            z_label_defs[name.casefold()] = rec
+            z_label_defs[ascii_lower(name)] = rec
             doc_symbols.append(rec)
             return
         if nt == C.NT_S_DEF_CMD:
@@ -1659,7 +1662,7 @@ def word_at_position(
         while ed < len(src) and src[ed] in LABEL_CHARS:
             ed += 1
         token = src[st:ed]
-        kind = "directive" if token.casefold() in DIRECTIVE_DOCS else "label"
+        kind = "directive" if ascii_lower(token) in DIRECTIVE_DOCS else "label"
         return token, _range(line, st, ed, src, position_encoding), kind
 
     if src[idx] == "#":
@@ -1713,15 +1716,15 @@ def _is_ident_char(ch: str) -> bool:
 
 
 def _command_symbol_id(name: str) -> str:
-    return "cmd:" + str(name).casefold()
+    return "cmd:" + ascii_lower(name)
 
 
 def _local_command_symbol_id(path: str, name: str) -> str:
-    return "cmdlocal:" + _path_identity(path) + ":" + str(name).casefold()
+    return "cmdlocal:" + _path_identity(path) + ":" + ascii_lower(name)
 
 
 def _global_property_symbol_id(name: str) -> str:
-    return "gprop:" + str(name).casefold()
+    return "gprop:" + ascii_lower(name)
 
 
 def _local_call_property_symbol_id(path: str, command_name: str, name: str) -> str:
@@ -1729,14 +1732,14 @@ def _local_call_property_symbol_id(path: str, command_name: str, name: str) -> s
         "cproplocal:"
         + _path_identity(path)
         + ":"
-        + str(command_name).casefold()
+        + ascii_lower(command_name)
         + ":"
-        + str(name).casefold()
+        + ascii_lower(name)
     )
 
 
 def _macro_symbol_id(kind: str, name: str) -> str:
-    return "macro:" + str(kind).casefold() + ":" + str(name).casefold()
+    return "macro:" + str(kind).casefold() + ":" + ascii_lower(name)
 
 
 def _local_macro_symbol_id(kind: str, path: str, name: str) -> str:
@@ -1746,12 +1749,12 @@ def _local_macro_symbol_id(kind: str, path: str, name: str) -> str:
         + ":"
         + _path_identity(path)
         + ":"
-        + str(name).casefold()
+        + ascii_lower(name)
     )
 
 
-def _label_symbol_id(name: str) -> str:
-    return "label:" + str(name).casefold()
+def _label_symbol_id(path: str, name: str) -> str:
+    return "label:" + _path_identity(path) + ":" + ascii_lower(name)
 
 
 def _is_plain_identifier(name: str) -> bool:
@@ -1782,7 +1785,7 @@ def _definition_symbol_id_for_result(
     result: AnalysisResult, record: DefinitionRecord
 ) -> str:
     if record.kind == "command" and record.scope == C.FM_SCENE:
-        key = record.name.casefold()
+        key = ascii_lower(record.name)
         project_records = result.project.definitions.get(key, [])
         if not any(item.kind == "command" for item in project_records):
             return _local_command_symbol_id(result.path, record.name)
@@ -1810,7 +1813,7 @@ def _unique_macro_definitions(
         for record in records:
             if record.kind not in ("macro", "define", "replace"):
                 continue
-            key = record.name.casefold()
+            key = ascii_lower(record.name)
             if key in ambiguous:
                 continue
             prev = out.get(key)
@@ -1871,7 +1874,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     }
 
     def command_symbol_id(name: str) -> str:
-        key = name.casefold()
+        key = ascii_lower(name)
         if key in local_command_keys and key not in project_command_keys:
             return _local_command_symbol_id(result.path, name)
         return _command_symbol_id(name)
@@ -1950,7 +1953,10 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     ) -> None:
         if not isinstance(atom, dict) or not name or not symbol_id:
             return
-        token = _source_token_from_atom(result.lad, atom, name)
+        source_name = (
+            _scene_name_from_label_atom(result.lad, atom) if kind == "z_label" else name
+        )
+        token = _source_token_from_atom(result.lad, atom, source_name)
         if token is None:
             return
         if not _source_token_matches_text(result.text, token):
@@ -1968,7 +1974,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 end_char=token.end_char,
                 kind=kind,
                 semantic_type=semantic_type,
-                name=token.text,
+                name=name,
                 definition=definition,
                 renamable=renamable,
             )
@@ -1990,7 +1996,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     atom,
                     name,
-                    _label_symbol_id(name),
+                    _label_symbol_id(result.path, name),
                     "label",
                     "variable",
                     True,
@@ -2005,7 +2011,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     atom,
                     name,
-                    _label_symbol_id(name),
+                    _label_symbol_id(result.path, name),
                     "z_label",
                     "variable",
                     True,
@@ -2020,7 +2026,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     label_atom,
                     name,
-                    _label_symbol_id(name),
+                    _label_symbol_id(result.path, name),
                     "label",
                     "variable",
                     False,
@@ -2032,7 +2038,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                 add_request(
                     z_atom,
                     name,
-                    _label_symbol_id(name),
+                    _label_symbol_id(result.path, name),
                     "z_label",
                     "variable",
                     False,
@@ -2075,7 +2081,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             inner = node.get("def_prop") or {}
             name_atom = (inner.get("name") or {}).get("atom") or {}
             name = _unknown_name(result.lad, name_atom)
-            key = name.casefold()
+            key = ascii_lower(name)
             if current_command:
                 symbol_id = call_property_symbol_id(current_command, name)
                 renamable = True
@@ -2165,7 +2171,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
         if nt == C.NT_ELM_ELEMENT:
             name_atom = (node.get("name") or {}).get("atom") or {}
             name = _unknown_name(result.lad, name_atom)
-            key = name.casefold()
+            key = ascii_lower(name)
             element_type = int(node.get("element_type", 0) or 0)
             if element_type == C.ET_COMMAND:
                 is_element = key not in user_command_keys and _builtin_kind_defined(
@@ -2236,7 +2242,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
     scene_local_macro_defs.sort(
         key=lambda record: (
             int(record.line or 0),
-            str(record.name).casefold(),
+            ascii_lower(record.name),
             str(record.kind),
         )
     )
@@ -2289,7 +2295,7 @@ def _append_macro_use_occurrences(
             continue
         record = None
         for macro_defs in macro_maps or ():
-            record = macro_defs.get(token.text.casefold())
+            record = macro_defs.get(ascii_lower(token.text))
             if record is not None:
                 break
         if record is None and not token.text.startswith("@"):
@@ -2346,9 +2352,7 @@ def _append_iad2_body_occurrences(
         source_map = body.get("source_map")
         source_map = source_map if isinstance(source_map, list) else []
         arg_names = {
-            str(name or "").casefold()
-            for name in (body.get("args") or [])
-            if str(name or "")
+            ascii_lower(name) for name in (body.get("args") or []) if str(name or "")
         }
         if isinstance(replace_tree, dict):
             i = 0
@@ -2362,12 +2366,12 @@ def _append_iad2_body_occurrences(
                 if not name:
                     i += 1
                     continue
-                if name.casefold() in arg_names:
+                if ascii_lower(name) in arg_names:
                     i += max(1, len(name))
                     continue
                 record = None
                 for macro_defs in macro_maps:
-                    record = macro_defs.get(name.casefold())
+                    record = macro_defs.get(ascii_lower(name))
                     if record is not None:
                         break
                 token = _source_token_from_source_map(
@@ -2395,7 +2399,7 @@ def _append_iad2_body_occurrences(
             if atom_type != unknown_type:
                 continue
             name = _unknown_name(lad, atom)
-            key = name.casefold()
+            key = ascii_lower(name)
             if not name or key in arg_names:
                 continue
             token = _source_token_from_atom(lad, atom, name)
@@ -2931,7 +2935,7 @@ def completion_items(
     token, rng, token_kind = _token_range_kind_at_position(
         result, line, character, position_encoding
     )
-    prefix = token.casefold()
+    prefix = ascii_lower(token)
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -2952,12 +2956,12 @@ def completion_items(
         for rec in sorted(
             result.label_definitions.values(), key=lambda x: (x.line, x.name)
         ):
-            if rec.name.casefold().startswith(prefix):
+            if ascii_lower(rec.name).startswith(prefix):
                 add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
         for rec in sorted(
             result.z_label_definitions.values(), key=lambda x: (x.line, x.name)
         ):
-            if rec.name.casefold().startswith(prefix):
+            if ascii_lower(rec.name).startswith(prefix):
                 add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
         for label in DIRECTIVES:
             if label.startswith(prefix):
@@ -2970,7 +2974,7 @@ def completion_items(
         if not prefix or name.startswith(prefix):
             add(name, COMPLETION_KIND_KEYWORD, DIRECTIVE_DOCS.get(name, ""))
     for name in FORM_NAMES:
-        if not prefix or name.casefold().startswith(prefix):
+        if not prefix or ascii_lower(name).startswith(prefix):
             add(name, COMPLETION_KIND_TYPE_PARAMETER, FORM_DOCS.get(name, ""))
     for mapping in (
         result.project.definitions,
@@ -2992,10 +2996,10 @@ def completion_items(
                     kind = COMPLETION_KIND_CONSTANT
                 add(rec.name, kind, rec.detail or rec.signature or rec.scope)
     for rec in result.label_definitions.values():
-        if not prefix or rec.name.casefold().startswith(prefix):
+        if not prefix or ascii_lower(rec.name).startswith(prefix):
             add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
     for rec in result.z_label_definitions.values():
-        if not prefix or rec.name.casefold().startswith(prefix):
+        if not prefix or ascii_lower(rec.name).startswith(prefix):
             add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
     items.sort(
         key=lambda x: (str(x.get("label", "")).casefold(), int(x.get("kind", 999)))
@@ -3014,7 +3018,7 @@ def hover_for_position(
     )
     if not token or rng is None:
         return None
-    key = token.casefold()
+    key = ascii_lower(token)
     if key in KEYWORD_DOCS:
         return {
             "range": rng,
@@ -3077,7 +3081,7 @@ def definition_locations_for_occurrence(
     text_for_path: Any = None,
     uri_for_path: Any = None,
 ) -> list[dict[str, Any]]:
-    key = occurrence.name.casefold()
+    key = ascii_lower(occurrence.name)
     locations: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int, int]] = set()
 
@@ -3149,7 +3153,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 13
+LSP_INDEX_CACHE_VERSION = 14
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -4523,7 +4527,7 @@ class SSLanguageServer:
                 if commands:
                     any_labels = True
                 for rec in commands:
-                    key = rec.name.casefold()
+                    key = ascii_lower(rec.name)
                     if key in implemented:
                         implemented[key].append(rec)
             if any_labels:
@@ -4672,12 +4676,12 @@ class SSLanguageServer:
         self, directory: str, name: str
     ) -> list[dict[str, Any]]:
         entry = self.link_diagnostics_for_directory(directory)
-        key = str(name or "").casefold()
+        key = ascii_lower(name)
         locations: list[dict[str, Any]] = []
         seen: set[tuple[str, int, int, int]] = set()
         for records in entry.file_commands.values():
             for rec in records:
-                if rec.name.casefold() != key:
+                if ascii_lower(rec.name) != key:
                     continue
                 _append_definition_location(
                     locations,

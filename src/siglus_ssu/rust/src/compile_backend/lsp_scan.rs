@@ -11,15 +11,8 @@ use super::ma::SemanticAnalyzer;
 use super::sa::SyntaxAnalyzer;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PyString};
-use std::cell::RefCell;
+use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::{BTreeMap, HashMap, HashSet};
-
-thread_local! {
-    static CASEFOLD_CACHE: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-}
-
-const CASEFOLD_CACHE_LIMIT: usize = 4096;
 
 #[derive(Debug, Clone)]
 struct LspDefinition {
@@ -66,24 +59,7 @@ pub struct NativeLspProject {
 }
 
 fn key(text: &str) -> String {
-    CASEFOLD_CACHE.with(|cache| {
-        if let Some(value) = cache.borrow().get(text).cloned() {
-            return value;
-        }
-        let folded = Python::attach(|py| {
-            let value = PyString::new(py, text);
-            value
-                .call_method0("casefold")
-                .and_then(|value| value.extract::<String>())
-                .unwrap_or_else(|_| text.to_lowercase())
-        });
-        let mut cache = cache.borrow_mut();
-        if cache.len() >= CASEFOLD_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(text.to_string(), folded.clone());
-        folded
-    })
+    text.to_ascii_lowercase()
 }
 
 fn get_dict_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
@@ -391,8 +367,8 @@ fn local_macro_symbol_id(kind: &str, path_identity: &str, name: &str) -> String 
     format!("macrolocal:{}:{}:{}", key(kind), path_identity, key(name))
 }
 
-fn label_symbol_id(name: &str) -> String {
-    format!("label:{}", key(name))
+fn label_symbol_id(path_identity: &str, name: &str) -> String {
+    format!("label:{path_identity}:{}", key(name))
 }
 
 fn is_ident_start(ch: char) -> bool {
@@ -1000,7 +976,14 @@ impl<'a> OccurrenceContext<'a> {
         if name.is_empty() || symbol_id.is_empty() {
             return;
         }
-        let Some(token) = token_from_atom(self.lex, self.source_lines, atom, name) else {
+        let source_name =
+            (kind == "z_label").then(|| label_name(self.lex, atom.subopt.max(0) as usize));
+        let Some(token) = token_from_atom(
+            self.lex,
+            self.source_lines,
+            atom,
+            source_name.as_deref().unwrap_or(name),
+        ) else {
             return;
         };
         let rng = (token.line, token.start_char, token.end_char);
@@ -1018,7 +1001,7 @@ impl<'a> OccurrenceContext<'a> {
             end_char: token.end_char,
             kind: kind.to_string(),
             semantic_type: semantic_type.to_string(),
-            name: token.text,
+            name: name.to_string(),
             definition,
             renamable,
         });
@@ -1134,7 +1117,7 @@ fn walk_occurrences(
                     RequestSpec {
                         atom,
                         name: &name,
-                        symbol_id: label_symbol_id(&name),
+                        symbol_id: label_symbol_id(ctx.path_identity, &name),
                         kind: "label",
                         semantic_type: "variable",
                         definition: true,
@@ -1152,7 +1135,7 @@ fn walk_occurrences(
                     RequestSpec {
                         atom,
                         name: &name,
-                        symbol_id: label_symbol_id(&name),
+                        symbol_id: label_symbol_id(ctx.path_identity, &name),
                         kind: "z_label",
                         semantic_type: "variable",
                         definition: true,
@@ -1170,7 +1153,7 @@ fn walk_occurrences(
                     RequestSpec {
                         atom: target,
                         name: &name,
-                        symbol_id: label_symbol_id(&name),
+                        symbol_id: label_symbol_id(ctx.path_identity, &name),
                         kind: "label",
                         semantic_type: "variable",
                         definition: false,
@@ -1185,7 +1168,7 @@ fn walk_occurrences(
                     RequestSpec {
                         atom: target,
                         name: &name,
-                        symbol_id: label_symbol_id(&name),
+                        symbol_id: label_symbol_id(ctx.path_identity, &name),
                         kind: "z_label",
                         semantic_type: "variable",
                         definition: false,
