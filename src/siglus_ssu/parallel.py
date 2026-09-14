@@ -443,7 +443,14 @@ def parallel_source_encrypt(
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
         tasks.append(
-            (rel, ctx["source_bytes"].get(rel), src_path, cache_path, source_angou, skip)
+            (
+                rel,
+                ctx["source_bytes"].get(rel),
+                src_path,
+                cache_path,
+                source_angou,
+                skip,
+            )
         )
     workers = get_max_workers(None)
     results = {}

@@ -847,6 +847,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
     if not sources:
         return stats
     with tempfile.TemporaryDirectory(prefix="siglus_ssu_textmap_") as tmpdir:
+        tmpdir = os.path.realpath(tmpdir)
         ss_paths = []
         seen_ss_paths = set()
         for item in sources:
@@ -856,7 +857,15 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
             if not rel:
                 rel = "unknown.bin"
             rel_display = rel.replace("\\", "/")
-            out_path = os.path.join(tmpdir, rel)
+            try:
+                out_path = os.path.realpath(os.path.join(tmpdir, rel))
+                inside_tmpdir = (
+                    os.path.commonpath((tmpdir, os.path.dirname(out_path))) == tmpdir
+                )
+            except ValueError:
+                inside_tmpdir = False
+            if not inside_tmpdir:
+                raise OSError(f"invalid original-source path: {name!r}")
             os.makedirs(os.path.dirname(out_path) or tmpdir, exist_ok=True)
             if os.path.exists(out_path):
                 try:
