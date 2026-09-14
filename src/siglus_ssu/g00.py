@@ -19,7 +19,12 @@ from .common import (
     split_end_of_options,
     write_bytes,
 )
-from .path_policy import open_read, read_directory, resolve_read_path
+from .path_policy import (
+    open_read,
+    read_directory,
+    resolve_read_path,
+    windows_filename_key,
+)
 
 C = get_const_module()
 try:
@@ -1130,6 +1135,7 @@ def _plan_type2_updates(unp: bytes, cuts: list, updates: list):
     cut_map = {ci: (o, s) for ci, o, s in cuts}
     single = len(cuts) == 1
     planned = []
+    seen = {}
     for img_p, ci in updates:
         if ci is None:
             if not single:
@@ -1137,6 +1143,12 @@ def _plan_type2_updates(unp: bytes, cuts: list, updates: list):
             ci = cuts[0][0]
         if ci not in cut_map:
             raise ValueError(f"type2 cut not found: {ci}")
+        previous = seen.get(ci)
+        if previous is not None:
+            raise ValueError(
+                f"duplicate update for cut{ci:03d}: {previous} and {img_p}"
+            )
+        seen[ci] = img_p
         o, s = cut_map[ci]
         blk = unp[o : o + s]
         canvas, cw, ch = _render_cut_canvas(blk)
@@ -1432,10 +1444,19 @@ def _run_type2_layout_dir(ip: Path, out_arg, type_opt, refer_arg):
     ]
     if not cfgs:
         return None
-    out_dir = _resolve_compose_dir(out_arg, ip)
-    print(f"Compose(create:type2-json): {ip} -> {out_dir} ({len(cfgs)} layouts)")
+    targets = {}
     for cfg in cfgs:
         base_name = _layout_base_name(cfg)
+        key = windows_filename_key(base_name)
+        previous = targets.get(key)
+        if previous is not None:
+            raise ValueError(
+                f"output path collision: {previous[1]} and {cfg} -> {base_name}.g00"
+            )
+        targets[key] = (base_name, cfg)
+    out_dir = _resolve_compose_dir(out_arg, ip)
+    print(f"Compose(create:type2-json): {ip} -> {out_dir} ({len(cfgs)} layouts)")
+    for base_name, cfg in targets.values():
         out_path = out_dir / f"{base_name}.g00"
         new_bytes = _build_type2_official_g00_from_image(ip, layout_path=cfg)
         write_bytes(str(out_path), new_bytes)
@@ -1460,8 +1481,21 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
     groups = {}
     for p in imgs:
         base_name, cut_idx = _img_base_and_cut(p)
-        groups.setdefault(base_name, []).append((p, cut_idx))
+        key = windows_filename_key(base_name)
+        if key not in groups:
+            groups[key] = (base_name, [])
+        groups[key][1].append((p, cut_idx))
     do_update = refer_arg is not None
+    if not do_update:
+        for base_name, ups in groups.values():
+            if len(ups) > 1:
+                raise ValueError(
+                    f"output path collision: {ups[0][0]} and {ups[1][0]} -> {base_name}.g00"
+                )
+            if ups[0][1] is not None:
+                raise ValueError(
+                    f"create mode does not support multi-cut target: {base_name}"
+                )
     if do_update:
         refer_dir = Path(resolve_read_path(refer_arg, kind="dir"))
         out_dir = _resolve_compose_dir(
@@ -1479,7 +1513,7 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
             f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
         )
     total = changed = same = created = 0
-    for base_name, ups in groups.items():
+    for base_name, ups in groups.values():
         out_path = out_dir / f"{base_name}.g00"
         if do_update:
             base_path = _resolve_refer_base(refer_arg, base_name, dir_input=True)
@@ -1490,10 +1524,6 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
             same += int(new_bytes == base_bytes)
             changed += int(new_bytes != base_bytes)
         else:
-            if len(ups) != 1 or ups[0][1] is not None:
-                raise ValueError(
-                    f"create mode does not support multi-cut target: {base_name}"
-                )
             img_p, _ = ups[0]
             t, new_bytes, source_hint, report_layout = _build_create_bytes(
                 img_p, type_opt
