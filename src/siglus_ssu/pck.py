@@ -1607,6 +1607,24 @@ def _safe_relpath(name: str) -> str:
     return os.path.join(*parts) if parts else ""
 
 
+def _create_extract_dir(output_dir: str) -> str:
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp_ns = time.time_ns()
+    while True:
+        timestamp, nanoseconds = divmod(timestamp_ns, 1_000_000_000)
+        out_dir = os.path.join(
+            output_dir,
+            "output_"
+            + time.strftime("%Y%m%d_%H%M%S", time.localtime(timestamp))
+            + f"_{nanoseconds:09d}",
+        )
+        try:
+            os.mkdir(out_dir)
+            return out_dir
+        except FileExistsError:
+            timestamp_ns += 1
+
+
 def _unique_outpath(out_dir: str, name: str) -> str:
     s = os.path.basename(str(name or ""))
     if not s:
@@ -1798,10 +1816,7 @@ def extract_pck(
     if flix_info and (not looks_like_siglus_pck(dat)):
         names = flix_info["names"]
         entries = flix_info["entries"]
-        out_dir = os.path.join(
-            output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
-        )
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = _create_extract_dir(output_dir)
         sys.stdout.write(f"Output: {out_dir}\n")
         for i in range(flix_info["cnt"]):
             nm = names[i] or f"file_{i:d}.bin"
@@ -1827,10 +1842,7 @@ def extract_pck(
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1
-    out_dir = os.path.join(
-        output_dir, "output_" + time.strftime("%Y%m%d_%H%M%S", time.localtime())
-    )
-    os.makedirs(out_dir, exist_ok=True)
+    out_dir = _create_extract_dir(output_dir)
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")

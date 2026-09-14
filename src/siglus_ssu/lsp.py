@@ -2767,7 +2767,10 @@ def _valid_rename_name(
     if any(item.path.lower().endswith(".ss") for item in matches):
         if occurrence.symbol_id.startswith("macro:macro:"):
             return _is_plain_macro_name(new_name)
-        return _is_plain_identifier(new_name)
+        return _is_plain_identifier(new_name) and (
+            occurrence.symbol_id.startswith("macro:")
+            or (new_name.isascii() and ascii_lower(new_name) not in KEYWORD_DOCS)
+        )
     if occurrence.symbol_id.startswith("cmd:"):
         return not any(ch in " \t\r\n(:" for ch in new_name)
     if occurrence.symbol_id.startswith("gprop:"):

@@ -397,7 +397,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--angou <path\|angou=text\|key=bytes>` | 覆盖或补充场景/Gameexe 解密 key 来源。使用 [`-a` / `--analyze`](#-a----analyze--分析和比较文件) 中说明的公共 key-source 规则。 |
 | `--gei` | 不提取 `.pck`，而是将 `Gameexe.dat` 二进制文件解码还原为 `Gameexe.ini` 明文文件。输入参数可以是 `.dat` 文件本身或其父目录。key 候选会按公共 key-source 规则尝试。 |
 
-对 `.pck` 输入时，实际输出会写入 `output_YYYYMMDD_HHMMSS/` 目录。若包内存在原始 source，会与解码后的场景 `.dat` 一起还原出来。启用 `--disam` 时，命令结束前会打印反汇编总耗时；启用 `--decompile` 时，还会打印 hints 和反编译两个阶段的总耗时。
+对 `.pck` 输入时，每次提取都会写入独立的 `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` 目录。末尾九位表示纳秒，遇到重名时递增避让。若包内存在原始 source，会与解码后的场景 `.dat` 一起还原出来。启用 `--disam` 时，命令结束前会打印反汇编总耗时；启用 `--decompile` 时，还会打印 hints 和反编译两个阶段的总耗时。
 
 当前 decompiler 属于实验性质。`--decompile` 输出的 `decompiled/*.ss` 更适合拿来阅读和排查，不应视为对原始 source 的可靠还原，也不应默认当作稳定可回编的发布输入。
 

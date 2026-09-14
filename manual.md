@@ -397,7 +397,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
 
-With `.pck` input, extracted files are written into `output_YYYYMMDD_HHMMSS/`. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
+With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` directory for each extraction. The nine-digit suffix represents nanoseconds and is incremented on a name collision. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
 
 The current decompiler is experimental. Treat `--decompile` output in `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
 

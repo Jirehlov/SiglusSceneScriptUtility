@@ -8,7 +8,7 @@ root_project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8
 version = str(((root_project.get("project") or {}).get("version")) or "").strip()
 if not version:
     raise RuntimeError("Missing project.version in pyproject.toml")
-temp = root / ".pure-wheel-build"
+temp = root / "build" / "pure-wheel"
 if temp.exists():
     shutil.rmtree(temp)
 pkg_src = root / "src" / "siglus_ssu"
