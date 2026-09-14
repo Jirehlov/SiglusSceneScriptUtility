@@ -410,15 +410,58 @@ def iter_g00(p):
     )
 
 
+def _validate_extract_outputs(files):
+    sources = {windows_filename_key(p.stem): p for p in files}
+    candidates = set()
+    for name, path in sources.items():
+        match = re.fullmatch(r"(.*)_cut[0-9]{3,}", name)
+        if match is not None and match[1] in sources:
+            candidates.update((sources[match[1]], path))
+    targets = {}
+    for path in sorted(candidates):
+        data = read_bytes(path)
+        if not data:
+            raise ValueError(f"empty g00: {path}")
+        t = data[0]
+        pre = path.stem
+        if t in _SIMPLE_G00_TYPES:
+            _parse_simple_g00(data)
+            names = [f"{pre}{_SIMPLE_EXT[t]}"]
+        elif t == 2:
+            _w, _h, cut_cnt, _off, _unp, cuts = _type2_unp_and_cuts(data)
+            if not cuts:
+                raise ValueError(f"type2 no cuts: {path}")
+            single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
+            names = [
+                f"{pre}.png" if single else f"{pre}_cut{ci:03d}.png"
+                for ci, _o, _s in cuts
+            ]
+        else:
+            raise ValueError(f"unknown g00 type: {path}")
+        for name in names:
+            key = windows_filename_key(name)
+            previous = targets.get(key)
+            if previous is not None:
+                raise ValueError(
+                    f"output path collision: {previous} and {path} -> {name}"
+                )
+            targets[key] = path
+
+
 def run_extract(inp, out_dir, trim: bool = False):
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     try:
         fs = iter_g00(inp)
     except (FileNotFoundError, NotADirectoryError):
         return 2
     if not fs:
         return 2
+    try:
+        _validate_extract_outputs(fs)
+    except (EOFError, OSError, ValueError, struct.error) as exc:
+        print(f"[!] {exc}", file=sys.stderr)
+        return 1
+    out_dir.mkdir(parents=True, exist_ok=True)
     from .parallel import parallel_g00_extract
 
     ok, sk, bad = parallel_g00_extract(fs, out_dir, trim=trim)

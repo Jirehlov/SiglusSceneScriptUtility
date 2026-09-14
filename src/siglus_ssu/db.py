@@ -91,8 +91,7 @@ def _map_out_path(inp_root: str, out_root: str, csv_path: str, src_is_dir: bool)
     return os.path.join(out_root, rel_dir, out_name)
 
 
-def _extract_padding_pattern_from_dbs(dbs_path: str):
-    blob = read_bytes(dbs_path)
+def _extract_padding_pattern_from_dbs(blob: bytes):
     m_type, expanded = dbs.dbs_unpack(blob)
     info = dbs.parse_dbs(m_type, expanded)
     return m_type, expanded[info["data_size"] + 1 :]
@@ -288,7 +287,8 @@ def main(argv=None):
         except (FileNotFoundError, NotADirectoryError):
             eprint(f"error: expected dbs not found: {expected_dbs}")
             return 1
-        exp_m_type, pat = _extract_padding_pattern_from_dbs(expected_dbs)
+        expected_blob = read_bytes(expected_dbs)
+        exp_m_type, pat = _extract_padding_pattern_from_dbs(expected_blob)
         m_type = int(opt_type) if opt_type is not None else int(exp_m_type)
         seed = int(opt_seed) & 0xFFFFFFFF
         skip0 = int(test_skip0) if test_skip0_given else 0
@@ -303,7 +303,7 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             eprint(f"error: create failed: {exc}")
             return 1
-        if read_bytes(out_path) != read_bytes(expected_dbs):
+        if read_bytes(out_path) != expected_blob:
             eprint("error: test-shuffle mismatch")
             return 1
         eprint(f"[test-shuffle] using set-shuffle={seed} rand-skip={found}")
