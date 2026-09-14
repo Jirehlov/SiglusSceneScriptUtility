@@ -604,25 +604,28 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
     return "cp932"
 
 
-def _load_project_source_texts(base_dir, gameexe_ini, inc, ss, charset):
-    paths = []
+def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_files):
+    paths = {}
     if gameexe_ini:
-        paths.append((os.path.join(base_dir, gameexe_ini), None))
-    paths.extend((os.path.join(base_dir, name), "inc") for name in inc or [])
-    paths.extend((path, "ss") for path in ss or [])
+        paths[gameexe_ini] = None
+    paths.update((name, "inc") for name in inc)
+    paths.update((os.path.basename(path), "ss") for path in ss)
     texts = {}
     digests = {"inc": {}, "ss": {}}
-    for path, kind in paths:
+    source_bytes = {}
+    for name in dict.fromkeys([*paths, *original_files]):
+        path = os.path.join(base_dir, name)
         try:
-            resolved = resolve_read_path(path, kind="file")
-            data = read_bytes(resolved)
-            name = os.path.basename(resolved)
-            texts[name] = decode_text_auto(data, force_charset=charset)[0]
-            if kind is not None:
-                digests[kind][ascii_lower(name)] = content_digest(data)
+            data = read_bytes(resolve_read_path(path, kind="file"))
+            source_bytes[name] = data
+            if name in paths:
+                texts[name] = decode_text_auto(data, force_charset=charset)[0]
+                kind = paths[name]
+                if kind is not None:
+                    digests[kind][ascii_lower(name)] = content_digest(data)
         except Exception as exc:
             raise ValueError(f"{path}: {exc}") from exc
-    return texts, digests
+    return texts, digests, source_bytes
 
 
 def _collect_macro_stats(ctx, compile_stats):
@@ -1025,6 +1028,7 @@ def _native_compile_config(
             "inc_list": list(ctx.get("inc_list") or []),
             "ini_list": list(ctx.get("ini_list") or []),
             "source_texts": dict(ctx.get("source_texts") or {}),
+            "source_bytes": ctx["source_bytes"],
             "utf8": bool(ctx.get("utf8")),
             "debug_outputs": bool(ctx.get("debug_outputs")),
             "lzss_mode": bool(ctx.get("lzss_mode")),
@@ -1309,13 +1313,25 @@ def main(argv=None):
                 dir=out,
             )
     enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
+    original_files = []
+    if not a.gei and not a.no_angou and not a.no_lzss:
+        original_files = [
+            name
+            for name in files
+            if ascii_lower(name).endswith((".inc", ".ss"))
+            or (
+                ascii_lower(name).startswith("gameexe")
+                and ascii_lower(name).endswith(".ini")
+            )
+        ]
     try:
-        source_texts, source_digests = _load_project_source_texts(
+        source_texts, source_digests, source_bytes = _load_project_sources(
             inp,
             gei_ini,
-            [] if a.dat_repack or a.gei else inc,
+            [] if a.gei else inc,
             [] if a.dat_repack or a.gei else ss,
             charset,
+            original_files,
         )
     except ValueError as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1362,6 +1378,7 @@ def main(argv=None):
         "ini_list": ini,
         "source_texts": source_texts,
         "source_digests": source_digests,
+        "source_bytes": source_bytes,
         "utf8": bool(use_utf8),
         "charset": enc,
         "charset_force": charset,

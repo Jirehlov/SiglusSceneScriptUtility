@@ -1606,9 +1606,6 @@ fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
         base: &Path,
         path: PathBuf,
     ) {
-        if !path.is_file() {
-            return;
-        }
         let relative = path
             .strip_prefix(base)
             .unwrap_or(&path)
@@ -1695,10 +1692,14 @@ fn build_original_source_chunks(
             workers,
             || (),
             |(), (name, path)| -> Result<Option<(String, Vec<u8>)>, String> {
-                if !path.is_file() {
-                    return Ok(None);
-                }
-                let raw = fs::read(&path).map_err(|error| format_path_error(&path, error))?;
+                let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
+                    raw.clone()
+                } else {
+                    if !path.is_file() {
+                        return Ok(None);
+                    }
+                    fs::read(&path).map_err(|error| format_path_error(&path, error))?
+                };
                 let encrypted = encrypt_source(&raw, &name, &config.constants.source_angou)?;
                 if !tmp_dir.is_empty() {
                     write_cached_bytes(
@@ -1735,12 +1736,16 @@ fn build_original_source_chunks(
     } else {
         let mut out = Vec::new();
         for (name, path) in sources {
-            if !path.is_file() {
-                continue;
-            }
             let stage_start = Instant::now();
             log_stage(log, "OS", &scene_display_name(config, &name))?;
-            let raw = fs::read(&path).map_err(|error| format_path_error(&path, error))?;
+            let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
+                raw.clone()
+            } else {
+                if !path.is_file() {
+                    continue;
+                }
+                fs::read(&path).map_err(|error| format_path_error(&path, error))?
+            };
             let encrypted = encrypt_source(&raw, &name, &config.constants.source_angou)?;
             if !config.tmp_dir.is_empty() {
                 write_cached_bytes(

@@ -407,19 +407,20 @@ def parallel_lzss_compress(
 
 
 def _source_encrypt_task(
-    args: tuple[str, str, str, dict, bool],
+    args: tuple[str, bytes | None, str, str, dict, bool],
 ) -> tuple[str, int, bytes, Exception | None]:
-    rel, src_path, cache_path, source_angou, skip = args
+    rel, raw, src_path, cache_path, source_angou, skip = args
     try:
         from .common import read_bytes, write_cached_bytes
         from . import compiler as _m
 
-        try:
-            src_path = resolve_read_path(src_path, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            return (rel, 0, b"", None)
+        if raw is None:
+            try:
+                src_path = resolve_read_path(src_path, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
+                return (rel, 0, b"", None)
+            raw = read_bytes(src_path)
         ctx = {"source_angou": source_angou}
-        raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         write_cached_bytes(cache_path, enc_blob)
         size = len(enc_blob) & 0xFFFFFFFF
@@ -441,7 +442,9 @@ def parallel_source_encrypt(
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
-        tasks.append((rel, src_path, cache_path, source_angou, skip))
+        tasks.append(
+            (rel, ctx["source_bytes"].get(rel), src_path, cache_path, source_angou, skip)
+        )
     workers = get_max_workers(None)
     results = {}
     errors = []

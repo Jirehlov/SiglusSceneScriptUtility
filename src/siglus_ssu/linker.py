@@ -1,7 +1,6 @@
 import os
 import struct
 import time
-import fnmatch
 from ._const_manager import get_const_module
 from .CA import new_replace_tree
 from .common import (
@@ -26,29 +25,23 @@ from .common import (
 )
 from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
-from .path_policy import read_directory, resolve_read_path
+from .path_policy import resolve_read_path
 
 C = get_const_module()
 
 
-def _glob_sorted_rel(base, pattern):
-    base, entries = read_directory(base)
-    folded_pattern = ascii_lower(pattern)
-    rels = []
-    for entry in entries:
-        if entry.name.startswith(".") and not pattern.startswith("."):
-            continue
-        if entry.is_file() and fnmatch.fnmatchcase(
-            ascii_lower(entry.name), folded_pattern
-        ):
-            rels.append(os.path.relpath(entry.path, base).replace("/", "\\"))
-    rels.sort(key=ascii_lower)
-    return rels
-
-
-def _make_original_source_rel_list(scn_path):
-    out = []
-    out += _glob_sorted_rel(scn_path, "Gameexe*.ini")
+def _make_original_source_rel_list(ctx):
+    names = sorted(
+        (name for name in ctx["source_bytes"] if not name.startswith(".")),
+        key=ascii_lower,
+    )
+    out = [
+        name
+        for name in names
+        if ascii_lower(name).startswith("gameexe")
+        and ascii_lower(name).endswith(".ini")
+    ]
+    scn_path = ctx["scn_path"]
     p = find_named_path(scn_path, ANGOU_DAT_NAME)
     if p:
         out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
@@ -56,8 +49,8 @@ def _make_original_source_rel_list(scn_path):
         kp = find_named_path(scn_path, KEY_TXT_NAME)
         if kp:
             out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
-    out += _glob_sorted_rel(scn_path, "*.inc")
-    out += _glob_sorted_rel(scn_path, "*.ss")
+    out += [name for name in names if ascii_lower(name).endswith(".inc")]
+    out += [name for name in names if ascii_lower(name).endswith(".ss")]
     return out
 
 
@@ -274,7 +267,7 @@ def _build_original_source_chunks(ctx, lzss_mode):
         return (0, [])
     from . import compiler as _m
 
-    rel_list = _make_original_source_rel_list(scn_path)
+    rel_list = _make_original_source_rel_list(ctx)
     if not rel_list:
         return (0, [])
     if len(rel_list) > 1:
@@ -292,16 +285,18 @@ def _build_original_source_chunks(ctx, lzss_mode):
     chunks = []
     for rel in rel_list:
         src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
-        try:
-            src_path = resolve_read_path(src_path, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            continue
+        raw = ctx["source_bytes"].get(rel)
+        if raw is None:
+            try:
+                src_path = resolve_read_path(src_path, kind="file")
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            raw = read_bytes(src_path)
         start = time.time()
         log_stage("OS", rel, ctx)
         cache_path = (
             os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
         )
-        raw = read_bytes(src_path)
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         write_cached_bytes(cache_path, enc_blob)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
