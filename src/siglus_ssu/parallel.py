@@ -124,9 +124,11 @@ def parallel_process_completed_map(
                 on_result(item, result)
         return results
     from concurrent.futures import ProcessPoolExecutor
+    from ._const_manager import get_const_module
 
     workers = min(get_max_workers(max_workers), len(item_list))
     results = [None] * len(item_list)
+    const_module = get_const_module()
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
         executor = ProcessPoolExecutor(
@@ -136,6 +138,9 @@ def parallel_process_completed_map(
                 _runtime._LEGACY_COMPILE,
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
+                _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
+                getattr(const_module, "__file__", None),
+                getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None),
                 initializer,
                 initargs,
             ),
