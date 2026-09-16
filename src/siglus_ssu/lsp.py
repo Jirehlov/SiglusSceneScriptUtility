@@ -2018,7 +2018,7 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
                     False,
                 )
             return
-        if nt == C.NT_S_GOTO:
+        if nt in (C.NT_S_GOTO, C.NT_SMP_GOTO):
             inner = node.get("Goto") or {}
             label_atom = (inner.get("label") or {}).get("atom") or {}
             if label_atom:
@@ -2144,9 +2144,6 @@ def _collect_ss_occurrences(result: AnalysisResult) -> list[SymbolOccurrence]:
             return
         if nt == C.NT_SMP_EXP_LIST:
             walk(node.get("exp_list"), current_command)
-            return
-        if nt == C.NT_SMP_GOTO:
-            walk(node.get("Goto"), current_command)
             return
         if nt == C.NT_SMP_LITERAL:
             return
@@ -3156,7 +3153,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 14
+LSP_INDEX_CACHE_VERSION = 15
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 

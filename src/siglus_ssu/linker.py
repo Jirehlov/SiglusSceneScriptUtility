@@ -31,10 +31,7 @@ C = get_const_module()
 
 
 def _make_original_source_rel_list(ctx):
-    names = sorted(
-        (name for name in ctx["source_bytes"] if not name.startswith(".")),
-        key=ascii_lower,
-    )
+    names = sorted(ctx["source_bytes"], key=ascii_lower)
     out = [
         name
         for name in names
