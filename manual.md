@@ -261,8 +261,9 @@ siglus-ssu -lsp [--serial]
 
 - Workspace-wide symbol and link scans run in parallel by default, using half of the available CPU count as the default worker count. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
 - When the Rust native scanner is available, LSP workspace scans and document symbols use it automatically and fall back to the Python pipeline if native scanning is unavailable or cannot handle the document.
-- Workspace indexes persist across sessions. Cache compatibility includes the directory, `.inc` SHA-256 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's SHA-256 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
+- Workspace indexes persist across sessions. Indexes with an incompatible format version are rebuilt automatically. Cache compatibility includes the directory, `.inc` SHA-256 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's SHA-256 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Capabilities include semantic tokens, publish/pull diagnostics, completion, hover, go to definition, references, rename and conditional prepare-rename support, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis. Pull diagnostics are advertised only when the client supports `textDocument/diagnostic`. Semantic token categories include dialogue text, system elements, speaker names, and used/unused macro declarations.
+- Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
 - Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
 - Cyclic `#define` / `#define_s` expansion in macro arguments, defaults, or bodies can leave analysis running indefinitely, preventing diagnostics and subsequent requests from completing. The Python frontend writes its 10000-step warning only to `stderr` and does not stop expansion. Correct the document and restart the language server if it hangs; see [macro expansion](#macro).
@@ -280,6 +281,8 @@ When `--tmp` is not supplied, every compile invocation creates a uniquely named 
 Scene names written into the linked `.pck` use the same ASCII-only lowercase normalization as the official compiler: `A` through `Z` become `a` through `z`, while non-ASCII characters, including fullwidth Latin letters such as `ＥＤ`, are preserved.
 
 Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. Runtime input reads prefer an exact file or directory name. On every platform, a missing exact path falls back to Windows filename case matching and rejects ambiguous matches. Every directory enumeration rejects immediate entries such as `A.ss` and `a.ss` whose names collide under Windows filename lowercase rules. Output creation continues to use the target filesystem's native path semantics.
+
+When Original Source embedding is enabled, both backends include dot-prefixed `.ss` and `.inc` files, such as `.scene.ss` and `.defs.inc`. Keep these files with the other sources when recompiling.
 
 It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`. `Gameexe.ini` is optional in both normal and `--gei` compilation: when it is absent, the compiler warns and skips `Gameexe.dat` instead of creating an empty placeholder.
 
@@ -300,7 +303,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | Parameter | Description |
 |---|---|
-| `<input_dir>` | Directory containing at least one `.ss` source file, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. The `.ss` requirement does not apply to `--dat-repack` or `--gei`. |
+| `<input_dir>` | Directory containing at least one `.ss` source file, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. Source scanning is limited to this directory's immediate files. The `.ss` requirement does not apply to `--dat-repack` or `--gei`. |
 | `<output_pck \| output_dir>` | Output path. If the argument names an existing directory or ends with `/` or `\`, the directory is created if needed and `Scene.pck` is written inside it. Otherwise the argument is treated as the output file path; a non-existent path without a trailing separator is written as that exact file name even if it does not end in `.pck`. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
 | `--charset ENC` | Force one source encoding using any codec available to Python. CP932/Shift-JIS aliases (`jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`) intentionally select Windows CP932. UTF-8 aliases are also accepted. If omitted, each file is auto-detected as UTF-8 or CP932. |
@@ -339,9 +342,11 @@ Detailed project-wide statistics are omitted instead of printed as `n/a` when th
 
 #### Examples
 
+For the first example, use the extraction directory printed after `Output:`. Replace `output_YYYYMMDD_HHMMSS_nnnnnnnnn` with its actual name.
+
 ```bash
 # Compile a translation directory into a new Scene.pck
-siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
+siglus-ssu -c /path/to/translation_work/output_YYYYMMDD_HHMMSS_nnnnnnnnn /path/to/Scene_translated.pck
 
 # Compile with the default parallel workers and keep temp files for inspection
 siglus-ssu -c --debug /path/to/src /path/to/out/
@@ -407,13 +412,15 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 |---|---|
 | `<input_pck>` | Path to the `.pck` file to extract. Encrypted scene data requires a valid key source; extraction fails before creating an output directory when no valid key can be resolved. |
 | `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
-| `<output_dir>` | Directory where extracted files will be written. Optional for all `-x` modes. If omitted, output defaults to the input file directory, or to the input directory itself when the input is a directory. |
+| `<output_dir>` | Base output directory. A `.pck` extraction creates a timestamped subdirectory here. Optional for all `-x` modes. If omitted, the base directory defaults to the input file directory, or to the input directory itself when the input is a directory. |
 | `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
 | `--decompile` | With a complete `.pck` input, run the same disassembly pass as `--disam`, and additionally emit reconstructed `decompiled/<scene>.ss` files plus `decompiled/__decompiled.inc`. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
 | `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
 
 With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` directory for each extraction. The nine-digit suffix represents nanoseconds and is incremented on a name collision. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
+
+The actual extraction directory is printed after `Output:`. If original sources were restored, edit them in that directory and pass that directory to `-c`; the compiler does not scan subdirectories.
 
 The current decompiler is experimental. Treat `--decompile` output in `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
 

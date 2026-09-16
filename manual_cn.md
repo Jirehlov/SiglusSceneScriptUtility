@@ -261,8 +261,9 @@ siglus-ssu -lsp [--serial]
 
 - 工作区级别的符号扫描与链接扫描默认并行执行，默认 worker 数为可用 CPU 数的一半。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
 - 当 Rust 原生扫描器可用时，LSP 工作区扫描与文档符号会自动优先使用 Rust；若原生扫描不可用或不能处理该文档，则回退到 Python 流程。
-- 工作区索引会持久化到磁盘并跨会话复用。缓存兼容条件包括目录、`.inc` SHA-256 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 SHA-256 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
+- 工作区索引会持久化到磁盘并跨会话复用。索引格式版本不兼容时会自动重建。缓存兼容条件包括目录、`.inc` SHA-256 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 SHA-256 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 支持语义 token、push/pull 诊断、自动补全、悬停说明、跳转到定义、查找引用、改名、客户端支持时的准备改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新。只有客户端支持 `textDocument/diagnostic` 时才声明 pull 诊断。语义 token 分类包括台词文本、system element（系统指令）、角色名，以及已使用/未使用的宏声明。
+- 跳转到定义与查找引用支持 `goto`、`gosub`、`gosubstr` 的普通标签和数字 `#z` 标签目标，包括它们的表达式形式。数字标签的前导零不影响查找。
 - 服务会协商 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并校验文档 URI 与请求结构。
 - 分析过程会复用适用的 `-c` 阶段（`CA`、`LA`、`SA`、`MA`、`BS`）。项目模型按目录组织，与 `.inc` / `.ss` 联合分析及全局 `.inc #command` 链接一致。
 - 宏参数、默认参数或宏体中的循环 `#define` / `#define_s` 可能使分析一直运行，无法返回诊断或处理后续请求。Python 前端的 10000 次提醒仅写入 `stderr`，不会终止展开；需要修正文档并重启语言服务器，详见[宏展开说明](#macro)。
@@ -280,6 +281,8 @@ siglus-ssu -lsp [--serial]
 链接场景写入 `.pck` 时，场景名采用与官方编译器一致的 ASCII-only 小写规则：仅 `A` 至 `Z` 会变为 `a` 至 `z`，非 ASCII 字符不会大小写折叠，包括 `ＥＤ` 这类全角拉丁字母。
 
 编译后的 `.dat` payload 在 `.pck` 内不保留独立文件名；每个 payload 都通过规范化后的场景名寻址，因此场景查找对 ASCII 大小写不敏感。嵌入 Original Source 区域的 `.ss` 和 `.inc` 条目会保留源文件名拼写，但这些名称只是归档元数据，不是运行时场景键。运行时读取输入文件或目录时优先使用精确名称；在所有平台上，精确路径不存在时都会按 Windows 文件名大小写规则回退匹配，并拒绝多义结果。每次枚举目录都会拒绝 `A.ss` 与 `a.ss` 这类按 Windows 文件名小写规则发生碰撞的直接子项。创建输出时仍遵循目标文件系统的原生路径语义。
+
+启用 Original Source 嵌入时，两种后端都会包含文件名以点号开头的 `.ss` 和 `.inc`，例如 `.scene.ss` 和 `.defs.inc`。重新编译时，请将这些文件与其他源码一并保留。
 
 也支持通过 `--gei` 单独编译 `Gameexe.ini` → `Gameexe.dat`。无论普通编译还是 `--gei` 编译，`Gameexe.ini` 都不是必需输入：不存在时，编译器会警告并跳过 `Gameexe.dat`，而不是创建空占位文件。
 
@@ -300,7 +303,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | 参数 | 说明 |
 |---|---|
-| `<input_dir>` | 至少包含一个 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
+| `<input_dir>` | 至少包含一个 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。源码扫描仅限该目录当前层的文件。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
 | `<output_pck \| output_dir>` | 输出路径。若参数指向已存在目录，或以 `/`、`\` 结尾，则按需创建目录，并在其中写入 `Scene.pck`。否则按输出文件路径处理；不存在且末尾没有路径分隔符的路径，即使不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
 | `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`）有意统一为 Windows CP932；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
@@ -339,9 +342,11 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 #### 示例
 
+第一个示例使用提取时 `Output:` 后打印的目录。请将 `output_YYYYMMDD_HHMMSS_nnnnnnnnn` 替换为实际目录名。
+
 ```bash
 # 将翻译目录编译为新的 Scene.pck
-siglus-ssu -c /path/to/translation_work /path/to/Scene_translated.pck
+siglus-ssu -c /path/to/translation_work/output_YYYYMMDD_HHMMSS_nnnnnnnnn /path/to/Scene_translated.pck
 
 # 使用默认并行工作进程编译，并保留临时文件供检查
 siglus-ssu -c --debug /path/to/src /path/to/out/
@@ -407,13 +412,15 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 |---|---|
 | `<input_pck>` | 要提取的 `.pck` 文件路径。加密场景数据必须能解析到有效 key；没有有效 key 时会在创建输出目录前失败。 |
 | `<input_dir>` | 启用 `--disam` 时，用来扫描 `.dat` 的目录路径。只处理该目录当前层的 `.dat` 文件。 |
-| `<output_dir>` | 提取文件的输出目录。对所有 `-x` 模式都可省略；省略时默认输出到输入文件所在目录，若输入本身是目录，则默认输出到该目录。 |
+| `<output_dir>` | 输出基目录。提取 `.pck` 时，会在此目录下创建带时间戳的子目录。对所有 `-x` 模式都可省略；省略时以输入文件所在目录为基目录，若输入本身是目录，则以该目录为基目录。 |
 | `--disam` | 对 `.pck` 输入时，额外写出 `<scene>.dat.txt` 反汇编。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
 | `--decompile` | 对完整 `.pck` 输入执行与 `--disam` 相同的反汇编流程，并额外写出重建后的 `decompiled/<scene>.ss` 以及 `decompiled/__decompiled.inc`。单个 `.dat` 文件和 `.dat` 目录不支持该选项。不能与 `--gei` 同用。 |
 | `--angou <path\|angou=text\|key=bytes>` | 覆盖或补充场景/Gameexe 解密 key 来源。使用 [`-a` / `--analyze`](#-a----analyze--分析和比较文件) 中说明的公共 key-source 规则。 |
 | `--gei` | 不提取 `.pck`，而是将 `Gameexe.dat` 二进制文件解码还原为 `Gameexe.ini` 明文文件。输入参数可以是 `.dat` 文件本身或其父目录。key 候选会按公共 key-source 规则尝试。 |
 
 对 `.pck` 输入时，每次提取都会写入独立的 `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` 目录。末尾九位表示纳秒，遇到重名时递增避让。若包内存在原始 source，会与解码后的场景 `.dat` 一起还原出来。启用 `--disam` 时，命令结束前会打印反汇编总耗时；启用 `--decompile` 时，还会打印 hints 和反编译两个阶段的总耗时。
+
+实际提取目录会打印在 `Output:` 后。若已还原出原始源码，请在该目录内编辑，并将该目录直接传给 `-c`；编译器不会递归扫描子目录。
 
 当前 decompiler 属于实验性质。`--decompile` 输出的 `decompiled/*.ss` 更适合拿来阅读和排查，不应视为对原始 source 的可靠还原，也不应默认当作稳定可回编的发布输入。
 
