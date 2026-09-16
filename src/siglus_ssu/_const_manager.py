@@ -19,6 +19,7 @@ _COMMITS_API = (
     "?per_page={per_page}&page={page}"
 )
 _CONST_SHA512_ALLOWED = {
+    "63a4f4ac2ef63aa3fe7fd8619325bc12ddbea87a6abc81233511f8881760b9c165685ffad08d506b64d644855cae2f7652cff944e83bf8d707e1df048c1a44c2",
     "363ddb5660089611b6116c035a14d721558a648c90d27ad81a56aad9d4267e6f4672e6ccbd42119c61cdd48de192a7c3626ed685e904c21b3f0ea57f6730c0d7",
     "127e60b5010cd5c09c9391ab1f15fd832d12b723282f0b4a422b8e6e1227baf712ee79f519eabe93f09171cbedd647ad54ad048d64b1a306c8fbb029034db333",
     "4f1099d20542e8629517e81d88b4d846a92b2ce9d1141a318407fa92c3d6918be98a22cd06e0c727d97698ca2ad280519fd3f29d4cd4f29298bee972938799bc",
@@ -93,6 +94,13 @@ def _bind_const_module(module) -> None:
     pkg = sys.modules.get("siglus_ssu")
     if pkg is not None:
         pkg.const = module
+        if not pkg._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT:
+            pkg._SCENE_STRING_XOR_MULTIPLIER = int(
+                getattr(module, "SCENE_STRING_XOR_MULTIPLIER", 0x7087)
+            )
+    for name, loaded in tuple(sys.modules.items()):
+        if name.startswith("siglus_ssu.") and hasattr(loaded, "C"):
+            loaded.C = module
 
 
 def load_const_module(path: Path | None = None, profile: int | None = None) -> None:
@@ -122,6 +130,11 @@ def load_const_module(path: Path | None = None, profile: int | None = None) -> N
     sys.modules[name] = m
     try:
         exec(compile(data, str(p), "exec"), m.__dict__)
+        if profile is not None and getattr(m, "CONST_PROFILE", 0) != profile:
+            raise ValueError(
+                f"const.py does not support profile {profile}. "
+                "Run 'siglus-ssu init --force' to update it."
+            )
     except Exception:
         sys.modules.pop(name, None)
         raise

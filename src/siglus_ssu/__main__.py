@@ -33,8 +33,8 @@ def _usage():
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
-        "  --const-profile Select const profile (0-2, default: 0; not with -c --tmp)\n"
-        "  --string-xor-multiplier Set scene-string XOR multiplier (0..0xFFFF; default: 0x7087; 0 disables this XOR only)\n"
+        "  --const-profile Select const profile (0-4, default: 0; 3 uses old koe bytecode and plain strings; 4 supports Rewrite; not with -c --tmp)\n"
+        "  --string-xor-multiplier Override scene-string XOR multiplier (0..0xFFFF; default: 0 for profile 3, 0x7087 otherwise; 0 disables this XOR only)\n"
         "  --              After a mode, treat all remaining arguments as positional\n"
         "\n"
         "Modes:\n"
@@ -178,7 +178,7 @@ def _usage():
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --serial       Disable parallel compilation during rebuild\n"
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
-        "    const-profile  Compile tries profiles 0, 1, then 2 before reporting failure\n"
+        "    const-profile  Compile tries profiles 0, 1, 2, 3, then 4 before reporting failure\n"
     )
     sys.stdout.write(text)
 
@@ -270,9 +270,9 @@ def _consume_global_options(argv):
             profile = int(value, 0)
         except ValueError as exc:
             raise ValueError(f"invalid --const-profile value: {const_profile}") from exc
-        if profile not in (0, 1, 2):
+        if profile not in (0, 1, 2, 3, 4):
             raise ValueError(
-                f"invalid --const-profile value: {const_profile} (expected 0, 1, or 2)"
+                f"invalid --const-profile value: {const_profile} (expected 0, 1, 2, 3, or 4)"
             )
 
     multiplier = 0x7087
@@ -359,6 +359,7 @@ def main():
     _runtime._LEGACY_COMPILE = False
     _runtime._LEGACY_FULL = False
     _runtime._SCENE_STRING_XOR_MULTIPLIER = 0x7087
+    _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = False
     try:
         (
             argv,
@@ -368,6 +369,7 @@ def main():
             _runtime._SCENE_STRING_XOR_MULTIPLIER,
             string_xor_multiplier_explicit,
         ) = _consume_global_options(argv)
+        _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = string_xor_multiplier_explicit
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2

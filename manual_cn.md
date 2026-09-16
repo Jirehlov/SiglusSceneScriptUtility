@@ -56,7 +56,7 @@
 - 为 `SiglusEngine.exe` 打补丁（修改密钥或语言设置）
 - 提供SiglusSS语言的LSP
 
-> **兼容性提醒：** 本项目不支持版本过低的 **SiglusEngine** 所使用的相关资源文件。如果某个游戏使用了非常老的引擎版本，则其部分资源格式或常量定义可能与当前支持范围不一致，本手册中的工具和流程可能无法正常工作。
+> **兼容性提醒：** Profile 3 和 4 面向较老的场景格式，包括 TheGodofDeath HD 和原版 Rewrite 使用的格式。两者的命令与字符串规则不同，详见下方的常量 profile 说明。其他旧引擎版本仍可能使用尚未支持的资源格式或常量定义。
 
 ---
 
@@ -127,14 +127,30 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
-| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`2`，默认 `0`）。只有在目标引擎或编译器变体的 form / element 表与默认 profile 不一致时，才需要改用非默认 profile。不能与 `-c --tmp` 同用。 |
-| `--string-xor-multiplier N` | 设置本次调用在编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（默认值：`0x7087`）。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`4`，默认 `0`），控制 form / element 表、命令的已读标记与选择块规则，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
+| `--string-xor-multiplier N` | 覆盖编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（profile `3` 默认 `0`，其他 profile 默认 `0x7087`）。显式传入的值优先于 profile 默认值。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
+
+### 常量 profile
+
+| Profile | 类型 | 适用引擎 |
+|---|---|---|
+| `0` | 重构式 profile | 目前最新引擎，默认选项。 |
+| `1` | 官方 profile | 版本 `1.1.140.4`。 |
+| `2` | 官方 profile | 版本 `1.1.137.0`。 |
+| `3` | 重构式 profile | 较老的引擎，采用明文场景字符串且 `global.koe` 不带已读标记。 |
+| `4` | 重构式 profile | 较老的引擎，包括原版 Rewrite 使用的命令与选择块格式。 |
+
+Profile `3` 的 form / element 数值与 profile `2` 相同，read 表省略 `global.koe`，默认字符串 XOR 乘数为 `0`。
+
+Profile `4` 以 profile `2` 为基础，将 `global.wait_wipe`、`global.koe_wait_key`、`global.exkoe`、`pcmch.wait_key` 和 `pcmch.wait_fade_key` 的返回类型设为 `void`。它保留 profile `2` 的 read 表和默认乘数 `0x7087`，包括 `global.koe` 的已读标记字段。
+
+每个 profile 都有独立的 `SEL_GLOBAL_CODE_NAMES` 表。Profile `0`-`3` 保留现有选择命令规则；profile `4` 使用空表，编译选择命令时不生成 `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`。该表同时决定选择命令在表达式中的静态限制，Python 与 Rust 编译 backend 使用相同设置。Profile 编号不表示引擎版本先后。
 
 ### 场景字符串 XOR 乘数
 
-`--string-xor-multiplier N` 只改变已编译场景 `.dat` 字符串表中逐字符串的 XOR 变换。它不会关闭 LZSS 压缩或包/场景加密。`--no-angou` 控制这些外层处理，但它既不能替代本选项，也不会关闭场景字符串 XOR 变换。默认值 `0x7087` 保持引入本选项之前的行为。只有在目标作品的场景字符串确实以未 XOR 的 UTF-16LE 存储时才使用 `0`。本选项不会修改 `SiglusEngine.exe`，也不会改变 `-p --altkey` 使用的 key；重建后的场景只有在目标引擎变体采用相同场景字符串乘数时才能正常工作。
+`--string-xor-multiplier N` 只改变已编译场景 `.dat` 字符串表中逐字符串的 XOR 变换。它不会关闭 LZSS 压缩或包/场景加密。`--no-angou` 控制这些外层处理，但它既不能替代本选项，也不会关闭场景字符串 XOR 变换。Profile `0`-`2` 和 `4` 默认使用 `0x7087`，profile `3` 默认使用 `0`。只有在目标作品的场景字符串确实以未 XOR 的 UTF-16LE 存储时才使用 `0`。本选项不会修改 `SiglusEngine.exe`，也不会改变 `-p --altkey` 使用的 key；重建后的场景只有在目标引擎变体采用相同场景字符串乘数时才能正常工作。
 
-乘数不会自动检测，也不会写入提取出的工作目录。凡是会解码、分析、比较、改写、测试或重新编译该作品场景字符串的命令，都应传入同一数值。错误数值可能不破坏文件结构，却会产生不可读文本，因此程序不一定能检测出不匹配。一次调用只接受一个乘数，并应用于本次处理的全部场景；不支持在同一个 `.pck` 内按场景混用乘数。因此，一条比较命令无法正确解码使用不同乘数的两个输入。请分别分析它们，或先用同一设置重建其中一方。使用 `-c --tmp` 时，乘数会写入缓存元数据；改变乘数会触发全部缓存场景的重新编译。
+乘数由当前 profile 或显式覆盖值决定，不会写入提取出的工作目录。凡是会解码、分析、比较、改写或重新编译该作品场景字符串的命令，都应使用相同的 profile 和乘数设置。错误数值可能不破坏文件结构，却会产生不可读文本，因此程序不一定能检测出不匹配。每次编译或比较都将一个乘数应用于全部场景；不支持在同一个 `.pck` 内按场景混用乘数。因此，一条比较命令无法正确解码使用不同乘数的两个输入。请分别分析它们，或先用同一设置重建其中一方。`test` 在回退时尝试各 profile 的默认乘数；显式指定乘数则对所有尝试生效。使用 `-c --tmp` 时，乘数会写入缓存元数据；改变乘数会触发全部缓存场景的重新编译。
 
 不会解码或重建场景字符串表的模式会忽略本选项。具体而言，`-c --dat-repack` 只会原样复制现有 `.dat`，`-c --gei` 只处理 `Gameexe.dat`，普通 `-x` 提取也不会使用该乘数，除非同时请求反汇编或反编译。若在这些无效操作中显式传入本选项，程序会打印警告后继续执行。结构性 `-a` 分析、`-k --single` 以及其他非场景模式同样不会使用它。
 
@@ -1433,7 +1449,7 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 
 1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
 2. 将 archive 解压到临时测试目录；
-3. 对解压出的源码进行原地回编，并依次尝试 `const-profile` 0、1、2，直到某个 profile 得到 `EXACT` 或 `PAYLOAD_SAME`；
+3. 对解压出的源码进行原地回编，并依次尝试 `const-profile` 0、1、2、3、4，直到某个 profile 得到 `EXACT` 或 `PAYLOAD_SAME`；每次尝试使用该 profile 的已读标记与选择块规则和默认字符串乘数，显式覆盖的乘数则保持不变；
 4. 先检查回编 `.pck` 是否与原始 `.pck` 字节完全一致；若不一致，再采用规范化的 `-a --payload` 语义比较；
 5. 删除所有测试产生的临时文件。
 

@@ -56,7 +56,7 @@
 - Patching `SiglusEngine.exe` for alternative key or language settings
 - Providing an LSP for the SiglusSS language
 
-> **Compatibility Notice:** Resource files from very old versions of **SiglusEngine** are not supported by this project. If a game uses an unusually old engine build, some related resource formats or constants may differ and the tools described in this manual may not work correctly.
+> **Compatibility Notice:** Profiles 3 and 4 target older scene formats, including those used by TheGodofDeath HD and the original Rewrite. See Const Profiles below for their different command and string rules. Other old engine builds may use resource formats or constants that are not supported.
 
 ---
 
@@ -127,14 +127,30 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`2`, default: `0`). Use a non-default profile only when targeting an engine/compiler variant whose form or element tables differ from the default profile. Cannot be combined with `-c --tmp`. |
-| `--string-xor-multiplier N` | Set the per-invocation multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0x7087`). In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`4`, default: `0`). Profiles select form/element tables, command read-flag and selection-block rules, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
+| `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profile `3`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+
+### Const Profiles
+
+| Profile | Type | Target engine |
+|---|---|---|
+| `0` | Reconstructed profile | The current latest engine; the default option. |
+| `1` | Official profile | Version `1.1.140.4`. |
+| `2` | Official profile | Version `1.1.137.0`. |
+| `3` | Reconstructed profile | Older engines with plain scene strings and no read-flag field on `global.koe`. |
+| `4` | Reconstructed profile | Older engines, including the command and selection-block format used by the original Rewrite. |
+
+Profile `3` has the same form/element values as profile `2`, omits `global.koe` from its read table, and defaults the string XOR multiplier to `0`.
+
+Profile `4` is based on profile `2`, with `void` return types for `global.wait_wipe`, `global.koe_wait_key`, `global.exkoe`, `pcmch.wait_key`, and `pcmch.wait_fade_key`. It retains profile `2`'s read table and default multiplier of `0x7087`, including the read-flag field on `global.koe`.
+
+Each profile has its own `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3` retain the existing selection-command rules; profile `4` uses an empty table, so compiling selection commands does not emit `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`. This table also determines static restrictions on selection commands in expressions, with the same settings used by the Python and Rust compile backends. Profile numbers do not indicate engine version order.
 
 ### Scene String XOR Multiplier
 
-`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. The default value, `0x7087`, preserves the behavior used before this option was introduced. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
+`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. Profiles `0`-`2` and `4` default to `0x7087`; profile `3` defaults to `0`. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
 
-The multiplier is not auto-detected and is not saved in an extracted working directory. Pass the same value to every command that decodes, analyzes, compares, rewrites, tests, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. One invocation applies one multiplier to every scene it processes; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
+The multiplier is selected by the active profile or an explicit override and is not saved in an extracted working directory. Use the same profile and multiplier settings for every command that decodes, analyzes, compares, rewrites, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. Each compilation or comparison applies one multiplier to every scene; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. The `test` command tries profile defaults during fallback; an explicit multiplier applies to every attempt. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
 
 Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested. When the option is explicitly supplied to one of these no-op operations, the program prints a warning and continues. Structural `-a` analysis, `-k --single`, and non-scene modes likewise do not use it.
 
@@ -1433,7 +1449,7 @@ For each `.pck`, the command:
 
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
-3. recompiles the extracted source in place, trying `const-profile` 0, then 1, then 2 until one profile produces `EXACT` or `PAYLOAD_SAME`;
+3. recompiles the extracted source in place, trying `const-profile` 0, 1, 2, 3, then 4 until one profile produces `EXACT` or `PAYLOAD_SAME`; each attempt uses that profile's read-flag and selection-block rules and default string multiplier unless the multiplier was explicitly overridden;
 4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 

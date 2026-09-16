@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 
 ## [v0.4.1] - 2026-09-08
+- Added const profile 4 for the original Rewrite, with older command return types, selection calls without block markers, and round-trip fallback. All profiles now define their selection-command rules separately.
+- Added const profile 3 for older scenes with plain UTF-16LE strings and no read-flag field on `global.koe`, including round-trip fallback and consistent profile settings in comparison workers. Explicit string XOR multipliers override profile defaults.
 - Added global `--string-xor-multiplier` for engine variants with different scene-string XOR keys, including plain UTF-16LE strings, with matching Python/Rust behavior and compile-cache invalidation.
 - Fixed incremental compilation so both backends hash the exact source snapshots they compile, invalidate caches after failed or interrupted builds, and handle case-only source renames without linking stale data. Failure to remove stale cached scenes now stops the build.
 - Changed `-a --payload` to report `INCOMPLETE` and fail for truncated scene bytecode, missing `CD_EOF`, or invalid string-table indices, including identical and one-sided PCK scenes, rather than treating partial parses as complete payloads.

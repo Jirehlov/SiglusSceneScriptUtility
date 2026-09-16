@@ -29,7 +29,7 @@ _PAYLOAD_SUMMARY_RE = re.compile(
     r"scene_data payload:\s+same=(\d+)\s+text_only=(\d+)\s+real_diff=(\d+)\s+unavailable=(\d+)"
 )
 
-_CONST_PROFILES = (0, 1, 2)
+_CONST_PROFILES = (0, 1, 2, 3, 4)
 
 
 @dataclass
@@ -84,33 +84,6 @@ def _format_timings(timings) -> str:
         f"{stage}={_format_seconds(seconds)}" for stage, seconds in (timings or ())
     ]
     return " ".join(parts) if parts else "none"
-
-
-def _set_const_profile(profile: int) -> None:
-    load_const_module(profile=int(profile))
-    const_module = get_const_module()
-    globals()["C"] = const_module
-    for name in (
-        "siglus_ssu.common",
-        "siglus_ssu.pck",
-        "siglus_ssu.compiler",
-        "siglus_ssu.BS",
-        "siglus_ssu.CA",
-        "siglus_ssu.GEI",
-        "siglus_ssu.IA",
-        "siglus_ssu.LA",
-        "siglus_ssu.MA",
-        "siglus_ssu.SA",
-        "siglus_ssu.linker",
-        "siglus_ssu.dat",
-        "siglus_ssu.disam",
-        "siglus_ssu.decompiler",
-        "siglus_ssu.textmap",
-        __name__,
-    ):
-        module = sys.modules.get(name)
-        if module is not None and hasattr(module, "C"):
-            module.C = const_module
 
 
 def _const_profiles():
@@ -343,7 +316,7 @@ def _compile_payload_with_profile_fallback(
 ):
     attempts = []
     for profile in _const_profiles():
-        _set_const_profile(profile)
+        load_const_module(profile=profile)
         if os.path.isfile(rebuilt_pck):
             os.remove(rebuilt_pck)
         started = time.perf_counter()
@@ -441,7 +414,7 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
     detail = ""
     original_blob = b""
     try:
-        _set_const_profile(0)
+        load_const_module(profile=0)
         step_started = time.perf_counter()
         try:
             original_blob, hdr, err = _read_siglus_pck(path)

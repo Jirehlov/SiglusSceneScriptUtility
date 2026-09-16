@@ -39,10 +39,23 @@ def _multiprocessing_main():
         main_module.__spec__ = old_spec
 
 
-def _init_process(legacy_compile, legacy_full, multiplier, initializer, initargs):
+def _init_process(
+    legacy_compile,
+    legacy_full,
+    multiplier,
+    multiplier_explicit,
+    const_path,
+    const_profile,
+    initializer,
+    initargs,
+):
+    from ._const_manager import load_const_module
+
     _runtime._LEGACY_COMPILE = legacy_compile
     _runtime._LEGACY_FULL = legacy_full
     _runtime._SCENE_STRING_XOR_MULTIPLIER = multiplier
+    _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = multiplier_explicit
+    load_const_module(path=const_path, profile=const_profile)
     if initializer is not None:
         initializer(*initargs)
 
@@ -50,7 +63,9 @@ def _init_process(legacy_compile, legacy_full, multiplier, initializer, initargs
 @contextmanager
 def process_pool(max_workers: int, initializer=None, initargs=()):
     from concurrent.futures import ProcessPoolExecutor
+    from ._const_manager import get_const_module
 
+    const_module = get_const_module()
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
         with ProcessPoolExecutor(
@@ -60,6 +75,9 @@ def process_pool(max_workers: int, initializer=None, initargs=()):
                 _runtime._LEGACY_COMPILE,
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
+                _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
+                getattr(const_module, "__file__", None),
+                getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None),
                 initializer,
                 initargs,
             ),
