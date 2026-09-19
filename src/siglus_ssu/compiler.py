@@ -33,6 +33,7 @@ from .common import (
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
+    compile_source_bytes,
     content_digest,
     decode_text_auto,
     read_bytes,
@@ -588,6 +589,7 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
             raise
         except Exception:
             continue
+        b = compile_source_bytes(b)
         if b.startswith(b"\xef\xbb\xbf"):
             return "utf-8"
         try:
@@ -619,7 +621,9 @@ def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_file
             data = read_bytes(resolve_read_path(path, kind="file"))
             source_bytes[name] = data
             if name in paths:
-                texts[name] = decode_text_auto(data, force_charset=charset)[0]
+                texts[name] = decode_text_auto(
+                    compile_source_bytes(data), force_charset=charset
+                )[0]
                 kind = paths[name]
                 if kind is not None:
                     digests[kind][ascii_lower(name)] = content_digest(data)

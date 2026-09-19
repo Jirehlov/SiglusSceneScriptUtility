@@ -127,7 +127,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
-| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`4`，默认 `0`），控制 form / element 表、命令的已读标记与选择块规则，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`4`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
 | `--string-xor-multiplier N` | 覆盖编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（profile `3` 默认 `0`，其他 profile 默认 `0x7087`）。显式传入的值优先于 profile 默认值。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
 
 ### 常量 profile
@@ -140,7 +140,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `3` | 重构式 profile | 较老的引擎，采用明文场景字符串且 `global.koe` 不带已读标记。 |
 | `4` | 重构式 profile | 较老的引擎，包括原版 Rewrite 使用的命令与选择块格式。 |
 
-Profile `3` 的 form / element 数值与 profile `2` 相同，read 表省略 `global.koe`，默认字符串 XOR 乘数为 `0`。
+Profile `3` 的 form / element 编号与 profile `2` 相同，将 `global.wait_wipe`、`global.exkoe`、`global.exkoe_play_wait_key`、`counter.wait_key`、`pcmch.wait_fade_key` 和 `mov.play_wait_key` 的返回类型设为 `void`。它的 read 表省略 `global.koe`，默认字符串 XOR 乘数为 `0`，且不在 `global.ruby` 调用前自动插入 `msg_block`。这些规则由 Python 与 Rust 编译 backend 共用。
 
 Profile `4` 以 profile `2` 为基础，将 `global.wait_wipe`、`global.koe_wait_key`、`global.exkoe`、`pcmch.wait_key` 和 `pcmch.wait_fade_key` 的返回类型设为 `void`。它保留 profile `2` 的 read 表和默认乘数 `0x7087`，包括 `global.koe` 的已读标记字段。
 

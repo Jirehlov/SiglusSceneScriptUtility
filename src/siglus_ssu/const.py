@@ -7045,7 +7045,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
             "0:str;1:str,int;2:str,int,int;3:str,int,int,int;4:str,int,int,int,__args;-1:0=type=int,1=time=int,2=speed_mode=int,3=option=list,4=start_order=int,5=end_order=int,6=start_layer=int,7=end_layer=int,8=wait=int,9=key_skip=int,10=with_low_order=int,11=start_time=int;",
         ),
         (1, "global", "void", "wipe_end", 0, 0, 33, "0:;"),
-        (1, "global", "int", "wait_wipe", 0, 0, 103, "0:;-1:0=key_skip=int;"),
+        (1, "global", "void", "wait_wipe", 0, 0, 103, "0:;-1:0=key_skip=int;"),
         (1, "global", "int", "check_wipe", 0, 0, 109, "0:;"),
         (1, "global", "void", "capture", 0, 0, 80, "0:;"),
         (1, "global", "void", "capture_from_file", 0, 0, 163, "0:str;"),
@@ -7198,7 +7198,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (
             1,
             "global",
-            "int",
+            "void",
             "exkoe",
             0,
             0,
@@ -7206,7 +7206,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
             "0:int;1:int,int;-1:0=koe_no=int,1=chara_no=int,2=wait=int,3=key_skip=int,4=jitan=int;",
         ),
         (1, "global", "void", "exkoe_play_wait", 0, 0, 88, "0:int;1:int,int;"),
-        (1, "global", "int", "exkoe_play_wait_key", 0, 0, 89, "0:int;1:int,int;"),
+        (1, "global", "void", "exkoe_play_wait_key", 0, 0, 89, "0:int;1:int,int;"),
         (1, "global", "void", "clear_face", 0, 0, 72, "0:;"),
         (
             1,
@@ -7422,7 +7422,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (1, "counter", "void", "stop", 0, 0, 4, "0:;"),
         (1, "counter", "void", "resume", 0, 0, 5, "0:;"),
         (1, "counter", "void", "wait", 0, 0, 6, "0:int;"),
-        (1, "counter", "int", "wait_key", 0, 0, 8, "0:int;"),
+        (1, "counter", "void", "wait_key", 0, 0, 8, "0:int;"),
         (1, "counter", "int", "check_value", 0, 0, 7, "0:int;"),
         (1, "counter", "int", "check_active", 0, 0, 14, "0:;"),
         (0, "counterlist", "counter", "array", 0, 0, 0, ""),
@@ -8358,7 +8358,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (1, "pcmch", "void", "wait", 0, 0, 3, "0:;"),
         (1, "pcmch", "int", "wait_key", 0, 0, 6, "0:;"),
         (1, "pcmch", "void", "wait_fade", 0, 0, 8, "0:;"),
-        (1, "pcmch", "int", "wait_fade_key", 0, 0, 7, "0:;"),
+        (1, "pcmch", "void", "wait_fade_key", 0, 0, 7, "0:;"),
         (1, "pcmch", "int", "check", 0, 0, 4, "0:;"),
         (1, "pcmch", "int", "get_volume", 0, 0, 12, "0:;"),
         (1, "pcmch", "void", "set_volume", 0, 0, 13, "0:int;1:int,int;"),
@@ -8380,7 +8380,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (1, "se", "int", "get_volume", 0, 0, 4, "0:;"),
         (1, "mov", "void", "play", 0, 0, 0, "0:str;1:str,int,int,int,int;"),
         (1, "mov", "void", "play_wait", 0, 0, 2, "0:str;1:str,int,int,int,int;"),
-        (1, "mov", "int", "play_wait_key", 0, 0, 3, "0:str;1:str,int,int,int,int;"),
+        (1, "mov", "void", "play_wait_key", 0, 0, 3, "0:str;1:str,int,int,int,int;"),
         (1, "mov", "void", "stop", 0, 0, 1, "0:;"),
         (
             1,
@@ -11577,6 +11577,10 @@ _message_block_names = (
     (FM_MWND, "ELM_MWND_NL"),
     (FM_MWND, "ELM_MWND_NLI"),
 )
+if CONST_PROFILE == 3:
+    _message_block_names = tuple(
+        item for item in _message_block_names if item != (FM_GLOBAL, "ELM_GLOBAL_RUBY")
+    )
 _read_flag_names = _READ_FLAG_NAMES_PROFILES.get(
     CONST_PROFILE, _READ_FLAG_NAMES_PROFILES[CONST_PROFILE_DEFAULT]
 )

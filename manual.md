@@ -127,7 +127,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`4`, default: `0`). Profiles select form/element tables, command read-flag and selection-block rules, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`4`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
 | `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profile `3`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
 
 ### Const Profiles
@@ -140,7 +140,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `3` | Reconstructed profile | Older engines with plain scene strings and no read-flag field on `global.koe`. |
 | `4` | Reconstructed profile | Older engines, including the command and selection-block format used by the original Rewrite. |
 
-Profile `3` has the same form/element values as profile `2`, omits `global.koe` from its read table, and defaults the string XOR multiplier to `0`.
+Profile `3` has the same form/element codes as profile `2`, with `void` return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`. It omits `global.koe` from its read table, defaults the string XOR multiplier to `0`, and does not automatically insert `msg_block` before `global.ruby` calls. The Python and Rust compile backends share these rules.
 
 Profile `4` is based on profile `2`, with `void` return types for `global.wait_wipe`, `global.koe_wait_key`, `global.exkoe`, `pcmch.wait_key`, and `pcmch.wait_fade_key`. It retains profile `2`'s read table and default multiplier of `0x7087`, including the read-flag field on `global.koe`.
 

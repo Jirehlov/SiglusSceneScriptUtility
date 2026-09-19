@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.4.2] - 2026-09-19
+- Updated const profile 3 with older return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`, and omitted automatic message blocks before `global.ruby` calls in both compile backends.
+- Fixed DOS EOF handling across platforms by ending compile text at the first `0x1A` byte before charset detection and decoding, while preserving complete original source bytes and hashes.
+
+
 ## [v0.4.1] - 2026-09-16
 - Added const profile 4 for the original Rewrite, with older command return types, selection calls without block markers, and round-trip fallback. All profiles now define their selection-command rules separately.
 - Added const profile 3 for older scenes with plain UTF-16LE strings and no read-flag field on `global.koe`, including round-trip fallback and consistent profile settings in comparison workers. Explicit string XOR multipliers override profile defaults.

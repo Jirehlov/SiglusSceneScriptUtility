@@ -949,6 +949,14 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
     return _fix(t9), "cp932", had_bom
 
 
+def compile_source_bytes(data: bytes) -> bytes:
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("data must be bytes")
+    b = bytes(data)
+    eof = b.find(b"\x1a")
+    return b if eof < 0 else b[:eof]
+
+
 def read_text_auto(path: str, force_charset: str = "") -> str:
     data = read_bytes(path)
     return decode_text_auto(data, force_charset=force_charset)[0]
@@ -959,7 +967,8 @@ def read_compile_source(ctx: dict, path: str) -> str:
     name = os.path.basename(path)
     if name in source_texts:
         return source_texts[name]
-    return read_text_auto(path, force_charset=ctx.get("charset_force") or "")
+    data = compile_source_bytes(read_bytes(path))
+    return decode_text_auto(data, force_charset=ctx.get("charset_force") or "")[0]
 
 
 def first_line_text(text: str) -> str:
