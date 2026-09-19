@@ -7,7 +7,7 @@ import sys
 import time
 import tempfile
 from ._const_manager import get_const_module
-from .native_ops import lzss_unpack, xor_cycle_inplace
+from .native_ops import lzss_unpack, smd5_digest, xor_cycle_inplace
 from . import compiler
 from .word_count import count_text_units
 from .common import (
@@ -237,18 +237,19 @@ def _pck_sections(blob, preview=False):
         sec(tail_start, tail_start + os_hsz, "O", "original_source_header (encrypted)")
         tail_start += os_hsz
     source_entries = []
+    source_error = ""
+    if preview:
+        try:
+            source_entries = _pck_original_source_entries(blob, h)
+        except ValueError as exc:
+            source_error = str(exc)
     if tail_start < n:
-        source_entries = (
-            list(_pck_original_source_entries(blob, h, scn_data_end)) if preview else []
-        )
-        if source_entries and any(
-            nm and nm != "unknown.bin" for nm, _, _, _ in source_entries
-        ):
+        if source_entries:
             last = tail_start
             for nm, a, b, _raw in source_entries:
                 if a > last:
                     sec(last, a, "U", "unknown data")
-                sec(a, b, "T", nm if nm and nm != "unknown.bin" else "unknown data")
+                sec(a, b, "T", nm)
                 last = b
             if last < n:
                 sec(last, n, "U", "unknown data")
@@ -274,6 +275,8 @@ def _pck_sections(blob, preview=False):
         ),
         "item_cnt": item_cnt,
         "scene_script_ids": _scene_script_id_map(source_entries) if preview else {},
+        "original_source_count": len(source_entries),
+        "original_source_error": source_error,
     }
     return secs, meta
 
@@ -315,44 +318,60 @@ def _flix_pck_sections(blob, info):
     return secs, meta
 
 
-def _pck_original_source_entries(blob, h, scn_data_end, only_name=""):
+def _pck_original_source_entries(blob, h, only_name=""):
     out = []
-    try:
-        os_hsz = int(h.get("original_source_header_size", 0) or 0)
-    except Exception:
-        os_hsz = 0
-    if os_hsz <= 0:
+    os_hsz = int(h.get("original_source_header_size", 0) or 0)
+    if os_hsz == 0:
         return out
-    try:
-        pos = int(scn_data_end)
-    except Exception:
-        pos = 0
-    if pos < 0 or pos + os_hsz > len(blob):
-        return out
+    if os_hsz < 0:
+        raise ValueError("original-source (OS) header size is invalid")
+    scn_data_idx = read_struct_list(
+        blob,
+        h.get("scn_data_index_list_ofs", 0),
+        h.get("scn_data_index_cnt", 0),
+        I32_PAIR_STRUCT,
+    )
+    base = int(h.get("scn_data_list_ofs", 0))
+    if (
+        len(scn_data_idx) != h.get("scn_data_index_cnt", 0)
+        or base < 0
+        or base > len(blob)
+        or any(a < 0 or b < 0 or base + a + b > len(blob) for a, b in scn_data_idx)
+    ):
+        raise ValueError(
+            "cannot locate original-source (OS) section: invalid scene data index"
+        )
+    pos = base + max_pair_end(scn_data_idx)
+    if pos == len(blob):
+        raise ValueError("original-source (OS) section is declared but missing")
+    if pos + os_hsz > len(blob):
+        raise ValueError("original-source (OS) header is truncated")
     ctx = {"source_angou": C.SOURCE_ANGOU}
     try:
         size_bytes, _ = source_angou_decrypt(blob[pos : pos + os_hsz], ctx)
-    except Exception:
-        return out
-    if (not size_bytes) or (len(size_bytes) % 4):
-        return out
+    except (ValueError, RuntimeError, struct.error) as exc:
+        raise ValueError(
+            f"original-source (OS) header cannot be decoded: {exc}"
+        ) from exc
+    if len(size_bytes) % 4:
+        raise ValueError("original-source (OS) size table is invalid")
     sizes = struct.unpack("<" + "I" * (len(size_bytes) // 4), size_bytes)
     pos += os_hsz
-    for sz in sizes:
-        sz = int(sz) & 0xFFFFFFFF
-        if sz <= 0 or pos + sz > len(blob):
-            break
+    if any(sz == 0 for sz in sizes):
+        raise ValueError("original-source (OS) size table contains an empty chunk")
+    if sum(sizes) > len(blob) - pos:
+        raise ValueError("original-source (OS) data is truncated")
+    for index, sz in enumerate(sizes):
         try:
             raw, nm = source_angou_decrypt(
                 blob[pos : pos + sz], ctx, only_name=only_name
             )
-        except Exception:
-            raw = b""
-            nm = ""
-        if not nm:
-            nm = "unknown.bin"
+        except (ValueError, RuntimeError, struct.error) as exc:
+            raise ValueError(
+                f"original-source (OS) chunk {index:d} at {pos:#x} cannot be decoded: {exc}"
+            ) from exc
         if not only_name or is_named_filename(os.path.basename(nm), only_name):
-            out.append((str(nm), pos, pos + sz, bytes(raw or b"")))
+            out.append((nm, pos, pos + sz, raw))
         pos += sz
     return out
 
@@ -432,32 +451,21 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None, only_name=""):
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     if not hdr:
         return
-    scn_data_idx = read_struct_list(
-        blob,
-        hdr.get("scn_data_index_list_ofs", 0),
-        hdr.get("scn_data_index_cnt", 0),
-        I32_PAIR_STRUCT,
-    )
-    blob_end = hdr.get("scn_data_list_ofs", 0) + max(
-        [a + b for a, b in scn_data_idx], default=0
-    )
     for name, _a, _b, raw in _pck_original_source_entries(
-        blob, hdr, blob_end, only_name=only_name
+        blob, hdr, only_name=only_name
     ):
-        if name == "unknown.bin" and not raw:
-            continue
-        yield {"name": str(name or ""), "raw": bytes(raw or b"")}
+        yield {"name": name, "raw": raw}
 
 
 def iter_pck_angou_dat_items(blob: bytes, hdr=None):
-    cands = []
-    for item in _iter_pck_original_source_items(
-        blob, hdr=hdr, only_name=ANGOU_DAT_NAME
-    ):
-        cands.append((item["name"], item["raw"]))
-    cands.sort(key=lambda x: (len(x[0]), x[0].casefold()))
-    for name, raw in cands:
-        yield {"name": name, "raw": raw}
+    try:
+        cands = list(
+            _iter_pck_original_source_items(blob, hdr=hdr, only_name=ANGOU_DAT_NAME)
+        )
+    except ValueError:
+        return
+    cands.sort(key=lambda item: (len(item["name"]), item["name"].casefold()))
+    yield from cands
 
 
 def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
@@ -974,7 +982,11 @@ def pck_word_count(
         explicit_angou=explicit_angou,
         scene_exe_el=scene_exe_el,
     )
-    ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
+    try:
+        ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
+    except ValueError as exc:
+        sys.stderr.write(f"analyze: {exc}\n")
+        return 1
     rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
     csv_path = _pck_word_csv_path(input_pck, output_csv)
     _write_pck_word_csv(csv_path, rows)
@@ -1049,6 +1061,14 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
     print(f"  header_size={h.get('header_size', 0):d}")
     print(f"  scn_data_exe_angou_mod={h.get('scn_data_exe_angou_mod', 0):d}")
     print(f"  original_source_header_size={h.get('original_source_header_size', 0):d}")
+    source_error = meta["original_source_error"]
+    if source_error:
+        print("original_sources: unavailable")
+        sys.stderr.write(f"analyze: {source_error}\n")
+    elif h.get("original_source_header_size", 0) == 0:
+        print("original_sources: not embedded")
+    else:
+        print(f"original_sources: {meta['original_source_count']:d} files")
     print("counts:")
     print(
         f"  inc_prop={h.get('inc_prop_cnt', 0):d}  inc_cmd={h.get('inc_cmd_cnt', 0):d}"
@@ -1123,7 +1143,7 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
         print()
         print(f"=== {ANGOU_DAT_NAME} ===")
         print(angou)
-    return 0
+    return 1 if source_error else 0
 
 
 def _payload_compare_scene_task(args):
@@ -1257,16 +1277,16 @@ def compare_pck(
         if scenes is None or len(idx) != header.get("scn_data_index_cnt", 0):
             sys.stderr.write(f"analyze: INCOMPLETE scene_data directory: {path}\n")
             return 1
-    source_entries1 = list(
-        _pck_original_source_entries(
-            b1, h1, h1.get("scn_data_list_ofs", 0) + max_pair_end(idx1)
-        )
-    )
-    source_entries2 = list(
-        _pck_original_source_entries(
-            b2, h2, h2.get("scn_data_list_ofs", 0) + max_pair_end(idx2)
-        )
-    )
+    source_entries = []
+    source_failed = False
+    for path, blob, header in ((p1, b1, h1), (p2, b2, h2)):
+        try:
+            source_entries.append(_pck_original_source_entries(blob, header))
+        except ValueError as exc:
+            sys.stderr.write(f"analyze: {path}: {exc}\n")
+            source_entries.append([])
+            source_failed = True
+    source_entries1, source_entries2 = source_entries
     sid1 = _scene_script_id_map(source_entries1)
     sid2 = _scene_script_id_map(source_entries2)
     show_ids = bool(sid1 or sid2)
@@ -1447,7 +1467,11 @@ def compare_pck(
             print("Sections: identical by (name,size,bytes)")
         if (not os1) and (not os2):
             print()
-            print("Original sources: none")
+            print(
+                "Original sources: unavailable"
+                if source_failed
+                else "Original sources: none"
+            )
     else:
         print()
         print("Section differences:")
@@ -1544,7 +1568,7 @@ def compare_pck(
                     int(payload_cmp_counts.get("INCOMPLETE", 0) or 0),
                 )
             )
-    return 1 if payload_cmp_counts["INCOMPLETE"] else 0
+    return 1 if source_failed or payload_cmp_counts["INCOMPLETE"] else 0
 
 
 def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
@@ -1672,36 +1696,43 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
     lg = parse_code(sa.get("last_code"))
     ng = parse_code(sa.get("name_code"))
     hs = int(sa.get("header_size") or 0)
-    if not all([eg, mg, gg, lg, ng]) or hs <= 0:
+    if not all([eg, mg, gg, lg, ng]) or hs < 72:
         raise RuntimeError("source_angou: missing codes/params")
-    if not enc or len(enc) < hs + 4:
-        return (b"", "")
+    if len(enc) < hs + 4:
+        raise ValueError("source_angou: truncated header")
     last_index = int(sa.get("last_index", 0))
     dec = bytearray(enc[: hs + 4] if only_name else enc)
     xor_cycle_inplace(dec, lg, last_index)
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
-        raise RuntimeError("source_angou: bad version")
+        raise ValueError(f"source_angou: unsupported version {ver:d}")
     smd5_code = dec[4:hs]
     name_len = struct.unpack_from("<I", dec, hs)[0]
     p = hs + 4
+    if name_len == 0 or name_len % 2:
+        raise ValueError("source_angou: invalid filename length")
+    if name_len > len(enc) - p:
+        raise ValueError("source_angou: truncated filename")
     if only_name:
         nameb = bytearray(enc[p : p + name_len])
         xor_cycle_inplace(nameb, lg, last_index + p)
     else:
         nameb = dec[p : p + name_len]
     xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
-    try:
-        name = nameb.decode("utf-16le", "surrogatepass")
-    except Exception:
-        name = ""
-    if only_name and not is_named_filename(os.path.basename(name), only_name):
-        return (b"", name)
+    name = nameb.decode("utf-16le", "surrogatepass")
     p += name_len
     lzsz = read_u32_le(smd5_code, 64, default=0)
+    if lzsz > len(enc) - p or 0 < lzsz < 8:
+        raise ValueError("source_angou: invalid compressed size")
     mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
         smd5_code, sa, mg, lzsz
     )
+    if mapt * 2 > len(enc) - p:
+        raise ValueError("source_angou: truncated payload")
+    if mapt * 2 != len(enc) - p:
+        raise ValueError("source_angou: unexpected trailing data")
+    if only_name and not is_named_filename(os.path.basename(name), only_name):
+        return (b"", name)
     if only_name:
         dec = bytearray(enc[p : p + mapt * 2])
         xor_cycle_inplace(dec, lg, last_index + p)
@@ -1709,8 +1740,6 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
     dec_mv = memoryview(dec)
     dp1 = bytes(dec_mv[p : p + mapt])
     dp2 = bytes(dec_mv[p + mapt : p + mapt * 2])
-    if len(dp1) < mapt or len(dp2) < mapt:
-        raise RuntimeError("source_angou: truncated payload")
     lzb = bytearray(mapt * 2)
     repx = int(sa.get("tile_repx", 0))
     repy = int(sa.get("tile_repy", 0))
@@ -1722,9 +1751,19 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
     compiler.tile_copy(sp1, dp2, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
     compiler.tile_copy(sp2, dp2, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
     compiler.tile_copy(sp2, dp1, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
-    lz = lzb[:lzsz]
+    packed = bytes(lzb[:lzsz])
+    if smd5_digest(packed) != smd5_code[:16]:
+        packed = dp1[:bh] + dp2[: lzsz - bh]
+        if smd5_digest(packed) != smd5_code[:16]:
+            raise ValueError("source_angou: checksum mismatch for both source layouts")
+    lz = bytearray(packed)
     xor_cycle_inplace(lz, eg, int(sa.get("easy_index", 0)))
-    raw = lzss_unpack(bytes(lz))
+    if lz and read_u32_le(lz, 0) != lzsz:
+        raise ValueError("source_angou: compressed size does not match LZSS header")
+    try:
+        raw = lzss_unpack(bytes(lz))
+    except ValueError as exc:
+        raise ValueError(f"source_angou: invalid compressed data: {exc}") from exc
     return (raw, name)
 
 
@@ -1841,6 +1880,13 @@ def extract_pck(
         sys.stderr.write("Invalid pck\n")
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    source_items = []
+    source_failed = False
+    try:
+        source_items = list(_iter_pck_original_source_items(dat, hdr=hdr))
+    except ValueError as exc:
+        source_failed = True
+        sys.stderr.write(f"Failed to extract original sources: {exc}\n")
     try:
         scene_exe_el = require_pck_scene_exe_el(
             dat,
@@ -1855,9 +1901,9 @@ def extract_pck(
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")
-    if int(hdr.get("original_source_header_size", 0) or 0) > 0:
+    if not source_failed and int(hdr.get("original_source_header_size", 0) or 0) != 0:
         try:
-            for item in _iter_pck_original_source_items(dat, hdr=hdr):
+            for item in source_items:
                 raw = bytes(item.get("raw") or b"")
                 rel = _safe_relpath(str(item.get("name") or ""))
                 if not rel:
@@ -1865,8 +1911,12 @@ def extract_pck(
                 out_name = os.path.basename(rel) or rel
                 out_path = _unique_outpath(os_dir, out_name)
                 write_bytes(out_path, raw)
+            sys.stdout.write(f"Extracted original sources: {len(source_items):d}\n")
         except Exception as e:
-            sys.stderr.write(f"warning: failed to extract original sources: {e}\n")
+            source_failed = True
+            sys.stderr.write(f"Failed to extract original sources: {e}\n")
+    elif not source_failed:
+        sys.stdout.write("Original sources: not embedded\n")
     D = None
     disam_stats = None
     dat_items = []
@@ -1930,4 +1980,4 @@ def extract_pck(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
         )
         write_disam_totals(sys.stdout, disam_stats)
-    return 1 if fail_cnt or disam_fail_cnt else 0
+    return 1 if source_failed or fail_cnt or disam_fail_cnt else 0

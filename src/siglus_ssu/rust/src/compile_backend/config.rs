@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct SystemArgConfig {
@@ -10,6 +10,7 @@ pub struct SystemArgConfig {
     pub form: String,
     pub def_int: i32,
     pub def_exist: bool,
+    pub preserve_int_reference: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,7 @@ pub struct SourceAngouConfig {
 #[derive(Debug, Clone)]
 pub struct CompileConstants {
     pub form_code: HashMap<String, i32>,
+    pub form_ids: HashMap<String, i32>,
     pub form_names: HashMap<String, String>,
     pub la_type: HashMap<String, i32>,
     pub op_code: HashMap<String, i32>,
@@ -73,6 +75,7 @@ pub struct CompileConstants {
     pub pack_header_fields: Vec<String>,
     pub pack_header_size: usize,
     pub z_label_count: usize,
+    pub logical_and_precedence: i32,
     pub easy_angou_code: Vec<u8>,
     pub gameexe_dat_angou_code: Vec<u8>,
     pub exe_org: Vec<u8>,
@@ -82,6 +85,7 @@ pub struct CompileConstants {
     pub message_block_command_codes: Vec<(i32, i32)>,
     pub read_flag_command_codes: Vec<(i32, i32)>,
     pub selection_command_codes: Vec<(i32, i32)>,
+    pub allow_property_out_of_command: bool,
     pub scene_string_xor_multiplier: u16,
 }
 
@@ -99,11 +103,11 @@ impl CompileConstants {
             .ok_or_else(|| format!("missing native compile form name: {name}"))
     }
 
-    pub fn form_code_of(&self, form: &str) -> Result<i32, String> {
-        self.form_code
+    pub fn form_id_of(&self, form: &str) -> Result<i32, String> {
+        self.form_ids
             .get(form)
             .copied()
-            .ok_or_else(|| format!("missing native compile form code: {form}"))
+            .ok_or_else(|| format!("missing native compile form id: {form}"))
     }
 
     pub fn la(&self, name: &str) -> Result<i32, String> {
@@ -332,6 +336,7 @@ fn get_system_elements(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Syst
                             form: get_str(arg, "form")?,
                             def_int: get_i64(arg, "def_int")? as i32,
                             def_exist: get_bool(arg, "def_exist")?,
+                            preserve_int_reference: get_bool(arg, "preserve_int_reference")?,
                         });
                     }
                 }
@@ -387,8 +392,27 @@ fn get_source_angou(dict: &Bound<'_, PyDict>) -> PyResult<SourceAngouConfig> {
 pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileConstants> {
     let constants_dict = constants.cast_into::<PyDict>()?;
     let source_angou_dict = get_dict(&constants_dict, "source_angou")?;
+    let form_code = get_i32_map(&constants_dict, "form_code")?;
+    let mut form_ids = HashMap::with_capacity(form_code.len());
+    let mut seen_codes = HashSet::with_capacity(form_code.len());
+    let mut next_id = form_code.values().copied().max().unwrap_or(0);
+    let mut form_names: Vec<_> = form_code.keys().collect();
+    form_names.sort_unstable();
+    for name in form_names {
+        let code = form_code[name];
+        let id = if seen_codes.insert(code) {
+            code
+        } else {
+            next_id = next_id
+                .checked_add(1)
+                .ok_or_else(|| PyValueError::new_err("native compile form id out of range"))?;
+            next_id
+        };
+        form_ids.insert(name.clone(), id);
+    }
     Ok(CompileConstants {
-        form_code: get_i32_map(&constants_dict, "form_code")?,
+        form_code,
+        form_ids,
         form_names: get_string_map(&constants_dict, "form_names")?,
         la_type: get_i32_map(&constants_dict, "la_type")?,
         op_code: get_i32_map(&constants_dict, "op_code")?,
@@ -401,6 +425,7 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
         pack_header_fields: get_string_list(&constants_dict, "pack_header_fields")?,
         pack_header_size: get_i64(&constants_dict, "pack_header_size")? as usize,
         z_label_count: get_i64(&constants_dict, "z_label_count")? as usize,
+        logical_and_precedence: get_i64(&constants_dict, "logical_and_precedence")? as i32,
         easy_angou_code: get_bytes(&constants_dict, "easy_angou_code")?,
         gameexe_dat_angou_code: get_bytes(&constants_dict, "gameexe_dat_angou_code")?,
         exe_org: get_bytes(&constants_dict, "exe_org")?,
@@ -410,6 +435,7 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
         message_block_command_codes: get_i32_pairs(&constants_dict, "message_block_command_codes")?,
         read_flag_command_codes: get_i32_pairs(&constants_dict, "read_flag_command_codes")?,
         selection_command_codes: get_i32_pairs(&constants_dict, "selection_command_codes")?,
+        allow_property_out_of_command: get_bool(&constants_dict, "allow_property_out_of_command")?,
         scene_string_xor_multiplier: u16::try_from(get_i64(
             &constants_dict,
             "scene_string_xor_multiplier",

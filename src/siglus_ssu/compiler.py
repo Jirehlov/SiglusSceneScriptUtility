@@ -895,6 +895,9 @@ def _native_compile_constants_config():
                             "form": str(arg.get("form", C.FM_INT) or C.FM_INT),
                             "def_int": int(arg.get("def_int", 0) or 0),
                             "def_exist": bool(arg.get("def_exist", False)),
+                            "preserve_int_reference": bool(
+                                arg.get("preserve_int_reference", False)
+                            ),
                         }
                     )
                 arg_map.append({"id": int(list_id), "args": args_snapshot})
@@ -962,6 +965,7 @@ def _native_compile_constants_config():
         "pack_header_fields": list(C.PACK_HDR_FIELDS),
         "pack_header_size": int(C.PACK_HDR_SIZE),
         "z_label_count": int(C.TNM_Z_LABEL_CNT),
+        "logical_and_precedence": int(getattr(C, "LOGICAL_AND_PRECEDENCE", 2)),
         "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
         "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
         "exe_org": bytes(C.EXE_ORG),
@@ -975,6 +979,9 @@ def _native_compile_constants_config():
             [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
         ],
         "selection_command_codes": selection_command_codes,
+        "allow_property_out_of_command": bool(
+            getattr(C, "ALLOW_PROPERTY_OUT_OF_COMMAND", False)
+        ),
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
 

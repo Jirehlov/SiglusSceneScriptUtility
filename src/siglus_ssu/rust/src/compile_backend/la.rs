@@ -318,7 +318,10 @@ pub fn lex_scene_text_with_source_map(
             let name: String = chars[start..i].iter().collect();
             let is_z = matches!(name.len(), 2..=4)
                 && name.starts_with('z')
-                && name[1..].chars().all(|c| c.is_ascii_digit());
+                && name[1..].chars().all(|c| c.is_ascii_digit())
+                && name[1..]
+                    .parse::<usize>()
+                    .is_ok_and(|index| index < codes.z_label_count);
             if is_z {
                 atom.atom_type = codes.z_label;
                 atom.opt = name[1..].parse::<i32>().unwrap_or(0);

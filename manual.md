@@ -56,7 +56,7 @@
 - Patching `SiglusEngine.exe` for alternative key or language settings
 - Providing an LSP for the SiglusSS language
 
-> **Compatibility Notice:** Profiles 3 and 4 target older scene formats, including those used by TheGodofDeath HD and the original Rewrite. See Const Profiles below for their different command and string rules. Other old engine builds may use resource formats or constants that are not supported.
+> **Compatibility Notice:** Profiles 3 through 8 target older scene formats, including those used by TheGodofDeath HD, the original Rewrite, nanami/Kisaragi, Karumaruka, Rurumi, Yamiiro, and the Rewrite trial. See Const Profiles below for their different command, string, local property, logical precedence, and z-label rules. Other old engine builds may use resource formats or constants that are not supported.
 
 ---
 
@@ -127,8 +127,8 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`4`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
-| `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profile `3`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`8`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
+| `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profiles `3`, `5`, and `8`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
 
 ### Const Profiles
 
@@ -139,16 +139,28 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `2` | Official profile | Version `1.1.137.0`. |
 | `3` | Reconstructed profile | Older engines with plain scene strings and no read-flag field on `global.koe`. |
 | `4` | Reconstructed profile | Older engines, including the command and selection-block format used by the original Rewrite. |
+| `5` | Reconstructed profile | Older engine variants used by nanami/Kisaragi, with plain scene strings, older command return types, and no automatic `msg_block` before `global.ruby`. |
+| `6` | Reconstructed profile | Older engines that allow local `property` declarations outside `command`, including Karumaruka. |
+| `7` | Reconstructed profile | Older engines used by Rurumi and Yamiiro, with equal `&&` / `||` precedence and a 100-entry z-label table. |
+| `8` | Reconstructed profile | The Rewrite trial, with legacy form codes, plain scene strings, and references preserved for the `key_skip` argument of `wipe` and `mask_wipe`. |
 
-Profile `3` has the same form/element codes as profile `2`, with `void` return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`. It omits `global.koe` from its read table, defaults the string XOR multiplier to `0`, and does not automatically insert `msg_block` before `global.ruby` calls. The Python and Rust compile backends share these rules.
+Profile `3` has the same form/element codes and command return types as profile `2`. It omits `global.koe` from its read table and defaults the string XOR multiplier to `0`. It retains automatic `msg_block` insertion before `global.ruby` and the `int` return type of `mov.play_wait_key`, as used by TheGodofDeath HD. The Python and Rust compile backends share these rules.
 
 Profile `4` is based on profile `2`, with `void` return types for `global.wait_wipe`, `global.koe_wait_key`, `global.exkoe`, `pcmch.wait_key`, and `pcmch.wait_fade_key`. It retains profile `2`'s read table and default multiplier of `0x7087`, including the read-flag field on `global.koe`.
 
-Each profile has its own `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3` retain the existing selection-command rules; profile `4` uses an empty table, so compiling selection commands does not emit `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`. This table also determines static restrictions on selection commands in expressions, with the same settings used by the Python and Rust compile backends. Profile numbers do not indicate engine version order.
+Profile `5` has the same form/element codes, read table, selection-block rules, and plain scene strings as profile `3`. It sets the return types of `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key` to `void` and does not automatically insert `msg_block` before `global.ruby` calls. Each profile defines its configuration tables in full, independently of other profiles.
+
+Profile `6` has the same form/element tables, message-block, read-flag and selection-block rules, and default string XOR multiplier of `0x7087` as profile `2`. Each profile explicitly configures `ALLOW_PROPERTY_OUT_OF_COMMAND`: profiles `0`-`5` disable it and profiles `6`-`8` enable it. These declarations retain local call property semantics and do not become scene or global `#property` declarations. Python and Rust use the same setting.
+
+Profile `7` independently defines the same form/element codes, message-block rules, read table, empty selection-command table, and default string XOR multiplier as profile `4`, but changes `counter.wait_key` to return `void` and allows local properties outside commands. It treats `&&` and `||` as equal-precedence, left-associative operators. Its z-label limit is `100`; names such as `#z100` are ordinary labels. Each profile explicitly defines `LOGICAL_AND_PRECEDENCE` and `TNM_Z_LABEL_CNT`: profiles `0`-`6` retain higher precedence for `&&` and a limit of `1000`. Python and Rust share these settings.
+
+Profile `8` defines its tables independently. It uses profile `5`'s command return types, message-block, read-flag and selection-block rules, and plain scene strings, with `frameaction = 1212` and `intlistref = 11`. It allows local properties outside commands, has a `100`-entry z-label table, and retains higher precedence for `&&` than `||`. Its `NAMED_INT_REFERENCE_ARGUMENTS` table preserves integer variable references only for `global.wipe(key_skip=...)` and `global.mask_wipe(key_skip=...)`; constants and other integer value expressions remain values. Profiles `0`-`7` explicitly use empty tables. The same parameter metadata drives Python and Rust compilation.
+
+Each profile has a `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3`, `5`, `6`, and `8` retain the existing selection-command rules; profiles `4` and `7` use empty tables, so compiling selection commands does not emit `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`. This table also determines static restrictions on selection commands in expressions, with the same settings used by the Python and Rust compile backends. Profile numbers do not indicate engine version order.
 
 ### Scene String XOR Multiplier
 
-`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. Profiles `0`-`2` and `4` default to `0x7087`; profile `3` defaults to `0`. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
+`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. Profiles `0`-`2`, `4`, `6`, and `7` default to `0x7087`; profiles `3`, `5`, and `8` default to `0`. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
 
 The multiplier is selected by the active profile or an explicit override and is not saved in an extracted working directory. Use the same profile and multiplier settings for every command that decodes, analyzes, compares, rewrites, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. Each compilation or comparison applies one multiplier to every scene; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. The `test` command tries profile defaults during fallback; an explicit multiplier applies to every attempt. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
 
@@ -1456,7 +1468,7 @@ For each `.pck`, the command:
 
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
-3. recompiles the extracted source in place, trying `const-profile` 0, 1, 2, 3, then 4 until one profile produces `EXACT` or `PAYLOAD_SAME`; each attempt uses that profile's read-flag and selection-block rules and default string multiplier unless the multiplier was explicitly overridden;
+3. recompiles the extracted source in place, trying `const-profile` 0 through 8 in order until one profile produces `EXACT` or `PAYLOAD_SAME`; each attempt uses that profile's compiler rules and default string multiplier unless the multiplier was explicitly overridden;
 4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 
@@ -1726,6 +1738,8 @@ Expression precedence, from lowest to highest, is:
 | 9 | `+`, `-` | left |
 | 10 | `*`, `/`, `%` | left |
 | unary | `+`, `-`, `~` | prefix |
+
+Profile `7` treats `&&` and `||` as the same precedence level, evaluated left to right. All other profiles use the table above.
 
 ### The `.inc` declaration language
 
@@ -2015,7 +2029,7 @@ An assignment shall satisfy:
 
 #### Statement-level constraints
 
-1. `property` statements shall appear only inside a `command` body; top-level `property` is syntactically recognized but semantically ill-formed;
+1. in profiles `0`-`5`, `property` statements shall appear only inside a `command` body; top-level `property` is syntactically recognized but semantically ill-formed. Profiles `6`-`8` allow local `property` declarations outside `command`, retaining call property numbering and storage semantics;
 2. conditions of `if`, `for`, and `while` shall be `int` or `intref`;
 3. the `switch` condition shall be `int`, `intref`, `str`, or `strref`, and each `case` value shall belong to the same integer family or string family as the condition;
 4. the form of `goto` as an expression is `void`; `gosub` is `int`; `gosubstr` is `str`;

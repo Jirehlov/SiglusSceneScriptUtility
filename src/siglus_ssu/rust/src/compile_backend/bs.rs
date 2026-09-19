@@ -123,6 +123,10 @@ impl<'a> BytecodeBuilder<'a> {
         self.stream.push_i32(value);
     }
 
+    fn push_form(&mut self, form: i32) {
+        self.stream.push_i32(self.codes.form_bytecode[&form]);
+    }
+
     fn is_value(&self, form: i32) -> bool {
         [
             self.codes.forms.void.code,
@@ -253,7 +257,7 @@ impl<'a> BytecodeBuilder<'a> {
                     self.compile_expression(value, true)?;
                     self.push_u8(self.codes.cd.return_);
                     self.push_i32(1);
-                    self.push_i32(self.dereference(value.form));
+                    self.push_form(self.dereference(value.form));
                 } else {
                     self.push_u8(self.codes.cd.return_);
                     self.push_i32(0);
@@ -359,26 +363,26 @@ impl<'a> BytecodeBuilder<'a> {
                 let right_form = self.dereference(right.form);
                 if *operator != 0 {
                     self.push_u8(self.codes.cd.operate_2);
-                    self.push_i32(left_form);
-                    self.push_i32(right_form);
+                    self.push_form(left_form);
+                    self.push_form(right_form);
                     self.push_u8(*operator);
                 }
                 self.push_u8(self.codes.cd.assign);
-                self.push_i32(left.form);
-                self.push_i32(self.dereference(*equal_form));
+                self.push_form(left.form);
+                self.push_form(self.dereference(*equal_form));
                 self.push_i32(*assignment_list_id);
                 Ok(())
             }
             AstPayload::Command { expression } => {
                 self.compile_element_expression(expression, true)?;
                 self.push_u8(self.codes.cd.pop);
-                self.push_i32(expression.form);
+                self.push_form(expression.form);
                 Ok(())
             }
             AstPayload::Text { string_index } => {
                 self.push_message_block();
                 self.push_u8(self.codes.cd.push);
-                self.push_i32(self.codes.forms.str_.code);
+                self.push_form(self.codes.forms.str_.code);
                 self.push_i32(*string_index as i32);
                 self.push_u8(self.codes.cd.text);
                 self.push_i32(self.current_read_flag);
@@ -389,7 +393,7 @@ impl<'a> BytecodeBuilder<'a> {
             AstPayload::Name { string_index } => {
                 self.push_message_block();
                 self.push_u8(self.codes.cd.push);
-                self.push_i32(self.codes.forms.str_.code);
+                self.push_form(self.codes.forms.str_.code);
                 self.push_i32(*string_index as i32);
                 self.push_u8(self.codes.cd.name);
                 self.namae_list.push(*string_index as i32);
@@ -419,12 +423,12 @@ impl<'a> BytecodeBuilder<'a> {
                 self.compile_expression(index, true)?;
             } else {
                 self.push_u8(self.codes.cd.push);
-                self.push_i32(self.codes.forms.int.code);
+                self.push_form(self.codes.forms.int.code);
                 self.push_i32(0);
             }
         }
         self.push_u8(self.codes.cd.dec_prop);
-        self.push_i32(form_code);
+        self.push_form(form_code);
         self.push_i32(property_id);
         Ok(())
     }
@@ -455,11 +459,11 @@ impl<'a> BytecodeBuilder<'a> {
         self.push_i32(label);
         self.push_i32(args.args.len() as i32);
         for argument in &args.args {
-            self.push_i32(self.dereference(argument.value.temp_form));
+            self.push_form(self.dereference(argument.value.temp_form));
         }
         if !keep_value {
             self.push_u8(self.codes.cd.pop);
-            self.push_i32(if kind == GotoKind::Gosub {
+            self.push_form(if kind == GotoKind::Gosub {
                 self.codes.forms.int.code
             } else {
                 self.codes.forms.str_.code
@@ -481,23 +485,23 @@ impl<'a> BytecodeBuilder<'a> {
         self.compile_expression(condition, true)?;
         for (case, label) in cases.iter().zip(&case_labels) {
             self.push_u8(self.codes.cd.copy);
-            self.push_i32(condition_form);
+            self.push_form(condition_form);
             self.compile_expression(&case.value, true)?;
             self.push_u8(self.codes.cd.operate_2);
-            self.push_i32(condition_form);
-            self.push_i32(self.dereference(case.value.form));
+            self.push_form(condition_form);
+            self.push_form(self.dereference(case.value.form));
             self.push_u8(self.codes.op.equal);
             self.push_u8(self.codes.cd.goto_true);
             self.push_i32(*label);
         }
         self.push_u8(self.codes.cd.pop);
-        self.push_i32(condition_form);
+        self.push_form(condition_form);
         self.push_u8(self.codes.cd.goto);
         self.push_i32(default_label.unwrap_or(out_label));
         for (case, label) in cases.iter().zip(&case_labels) {
             self.set_label(*label);
             self.push_u8(self.codes.cd.pop);
-            self.push_i32(condition_form);
+            self.push_form(condition_form);
             self.compile_statements(&case.body)?;
             self.push_u8(self.codes.cd.goto);
             self.push_i32(out_label);
@@ -542,7 +546,7 @@ impl<'a> BytecodeBuilder<'a> {
                 }
                 self.compile_expression(value, true)?;
                 self.push_u8(self.codes.cd.operate_1);
-                self.push_i32(self.dereference(value.form));
+                self.push_form(self.dereference(value.form));
                 self.push_u8(*operator);
                 Ok(())
             }
@@ -557,8 +561,8 @@ impl<'a> BytecodeBuilder<'a> {
                 self.compile_expression(left, true)?;
                 self.compile_expression(right, true)?;
                 self.push_u8(self.codes.cd.operate_2);
-                self.push_i32(self.dereference(left.form));
-                self.push_i32(self.dereference(right.form));
+                self.push_form(self.dereference(left.form));
+                self.push_form(self.dereference(right.form));
                 self.push_u8(*operator);
                 Ok(())
             }
@@ -572,10 +576,10 @@ impl<'a> BytecodeBuilder<'a> {
     fn compile_literal(&mut self, atom: &Atom, form: i32) -> Result<(), ()> {
         self.push_u8(self.codes.cd.push);
         if atom.atom_type == self.codes.la.label || form == self.codes.forms.label.code {
-            self.push_i32(self.codes.forms.int.code);
+            self.push_form(self.codes.forms.int.code);
             self.push_i32(atom.opt);
         } else {
-            self.push_i32(form);
+            self.push_form(form);
             self.push_i32(atom.opt);
         }
         Ok(())
@@ -599,9 +603,12 @@ impl<'a> BytecodeBuilder<'a> {
         else {
             return self.error(TNMSERR_BS_NEED_VALUE, node);
         };
-        let command_key = elements
-            .last()
-            .map(|element| (element.parent_form, element.element_code));
+        let command_key = elements.last().map(|element| {
+            (
+                self.codes.form_bytecode[&element.parent_form],
+                element.element_code,
+            )
+        });
         let message_block = command_key
             .map(|key| {
                 self.ia_data
@@ -628,7 +635,7 @@ impl<'a> BytecodeBuilder<'a> {
             .unwrap_or(false)
         {
             self.push_u8(self.codes.cd.push);
-            self.push_i32(self.codes.forms.int.code);
+            self.push_form(self.codes.forms.int.code);
             self.push_i32(self.codes.elm.global_cur_call);
         }
         for element in elements {
@@ -667,7 +674,7 @@ impl<'a> BytecodeBuilder<'a> {
     fn compile_element(&mut self, element: &ElementPart, node: &AstNode) -> Result<(), ()> {
         if element.name.is_some() {
             self.push_u8(self.codes.cd.push);
-            self.push_i32(self.codes.forms.int.code);
+            self.push_form(self.codes.forms.int.code);
             self.push_i32(element.element_code);
             if element.element_type == self.codes.element_type.command {
                 let mut argument_count = element.args.args.len();
@@ -691,7 +698,7 @@ impl<'a> BytecodeBuilder<'a> {
                             break;
                         }
                         self.push_u8(self.codes.cd.push);
-                        self.push_i32(form);
+                        self.push_form(form);
                         if form != self.codes.forms.int.code {
                             return self.error(TNMSERR_BS_ILLEGAL_DEFAULT_ARG, node);
                         }
@@ -711,15 +718,15 @@ impl<'a> BytecodeBuilder<'a> {
                         {
                             break;
                         }
-                        self.push_i32(form);
+                        self.push_form(form);
                     }
                 }
                 for argument in element.args.args.iter().rev() {
-                    self.push_i32(argument.value.temp_form);
+                    self.push_form(argument.value.temp_form);
                     if let AstPayload::ExpressionList { forms, .. } = &argument.value.payload {
                         self.push_i32(forms.len() as i32);
                         for form in forms.iter().rev() {
-                            self.push_i32(self.dereference(*form));
+                            self.push_form(self.dereference(*form));
                         }
                     }
                 }
@@ -729,12 +736,12 @@ impl<'a> BytecodeBuilder<'a> {
                         self.push_i32(argument.name_id);
                     }
                 }
-                self.push_i32(element.form);
+                self.push_form(element.form);
             }
             return Ok(());
         }
         self.push_u8(self.codes.cd.push);
-        self.push_i32(self.codes.forms.int.code);
+        self.push_form(self.codes.forms.int.code);
         self.push_i32(self.codes.elm.array);
         if let Some(index) = &element.array_index {
             self.compile_expression(index, true)?;
@@ -752,13 +759,13 @@ impl<'a> BytecodeBuilder<'a> {
     fn push_message_block(&mut self) {
         self.push_u8(self.codes.cd.elm_point);
         self.push_u8(self.codes.cd.push);
-        self.push_i32(self.codes.forms.int.code);
+        self.push_form(self.codes.forms.int.code);
         self.push_i32(self.codes.elm.global_msg_block);
         self.push_u8(self.codes.cd.command);
         self.push_i32(0);
         self.push_i32(0);
         self.push_i32(0);
-        self.push_i32(self.codes.forms.void.code);
+        self.push_form(self.codes.forms.void.code);
     }
 
     pub fn compile_root(
@@ -777,7 +784,7 @@ impl<'a> BytecodeBuilder<'a> {
         self.loop_labels.clear();
         self.ia_data = Some(ia_data);
         self.label_list = vec![0; label_count];
-        self.z_label_list = vec![0; self.codes.z_label_count];
+        self.z_label_list = vec![0; self.codes.la.z_label_count];
         self.cmd_label_list.clear();
         self.namae_list.clear();
         self.read_flag_list.clear();
@@ -794,13 +801,11 @@ impl<'a> BytecodeBuilder<'a> {
         let mut scn_prop_list = Vec::new();
         let mut scn_prop_name_list = Vec::new();
         for property in user_properties {
-            scn_prop_list.push((
-                ia_data
-                    .form_table
-                    .form_code_of(&property.form)
-                    .unwrap_or(self.codes.forms.int.code),
-                property.size,
-            ));
+            let form = ia_data
+                .form_table
+                .form_code_of(&property.form)
+                .unwrap_or(self.codes.forms.int.code);
+            scn_prop_list.push((self.codes.form_bytecode[&form], property.size));
             scn_prop_name_list.push(property.name.clone());
         }
         let scn_cmd_name_list = ia_data

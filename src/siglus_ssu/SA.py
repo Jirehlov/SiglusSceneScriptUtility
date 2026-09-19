@@ -1172,6 +1172,7 @@ class SA:
 
     def sa_operator_2(s, i, lastp):
         p = i
+        logical_and_precedence = getattr(C, "LOGICAL_AND_PRECEDENCE", 2)
 
         def ck(tp, op, np):
             nonlocal p
@@ -1185,8 +1186,10 @@ class SA:
             ok, p2, x, np = ck(C.LA_T["LOGICAL_OR"], C.OP_LOGICAL_OR, 1)
             if ok:
                 return 1, p2, x, np
-        if lastp <= 1:
-            ok, p2, x, np = ck(C.LA_T["LOGICAL_AND"], C.OP_LOGICAL_AND, 2)
+        if lastp < logical_and_precedence:
+            ok, p2, x, np = ck(
+                C.LA_T["LOGICAL_AND"], C.OP_LOGICAL_AND, logical_and_precedence
+            )
             if ok:
                 return 1, p2, x, np
         if lastp <= 2:

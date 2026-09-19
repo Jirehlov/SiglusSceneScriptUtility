@@ -3,8 +3,13 @@
 All notable changes to this project will be documented in this file.
 
 
-## [v0.4.2] - 2026-09-19
-- Updated const profile 3 with older return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`, and omitted automatic message blocks before `global.ruby` calls in both compile backends.
+## [v0.4.2] - 2026-09-20
+- Added const profile 8 for the Rewrite trial, with independent tables, legacy form codes, plain scene strings, a 100-entry z-label table, command-external local properties, and integer-reference preservation for the `key_skip` argument of `wipe` and `mask_wipe`. Python and Rust share the parameter rules; profiles 0-7 remain unchanged.
+- Separated Rust semantic type IDs from bytecode form codes so legacy aliases such as profile 8's `intlist` and `intlistref` remain distinct during member lookup and type checking while retaining their shared output code.
+- Added const profile 7 for Rurumi and Yamiiro, with independent configuration tables, equal left-associative `&&` / `||` precedence, a 100-entry z-label table, `void` `counter.wait_key`, local properties outside commands, and selection calls without block markers. Python and Rust share these settings, while profiles 0-6 retain their existing rules.
+- Added automatic original-source layout detection with SMD5 validation, including the non-interleaved layout used by the Rewrite trial. Extraction, analysis, and round-trip testing now report missing, truncated, or undecodable source sections explicitly.
+- Added const profile 6 for local `property` declarations outside `command`, with full independent configuration tables and round-trip fallback. Every profile explicitly controls this rule; profiles 0-5 reject it and profiles 6-8 accept it in both Python and Rust.
+- Added const profile 5 for nanami/Kisaragi, with `void` return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`, and no automatic message blocks before `global.ruby` calls. Profile 3 retains its original return types and message-block rules for TheGodofDeath HD.
 - Fixed DOS EOF handling across platforms by ending compile text at the first `0x1A` byte before charset detection and decoding, while preserving complete original source bytes and hashes.
 
 

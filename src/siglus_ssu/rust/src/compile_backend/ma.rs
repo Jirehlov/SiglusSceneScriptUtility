@@ -129,7 +129,7 @@ impl<'a> SemanticAnalyzer<'a> {
         form: &mut FormSpec,
         property_id: &mut i32,
     ) -> Result<(), ()> {
-        if self.command_depth == 0 {
+        if self.command_depth == 0 && !self.codes.allow_property_out_of_command {
             return self.fail("TNMSERR_MA_PROPERTY_OUT_OF_COMMAND", line, None);
         }
         self.analyze_form(form)?;
@@ -707,7 +707,9 @@ impl<'a> SemanticAnalyzer<'a> {
                 if expected_form == self.codes.forms.int.code
                     && real_form == self.codes.forms.intref.code
                 {
-                    argument.value.temp_form = self.codes.forms.int.code;
+                    if !expected.preserve_int_reference {
+                        argument.value.temp_form = self.codes.forms.int.code;
+                    }
                 } else if expected_form == self.codes.forms.str_.code
                     && real_form == self.codes.forms.strref.code
                 {
@@ -722,9 +724,10 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn is_selection_command(&self, parent: &str, element_code: i32) -> bool {
-        self.ia_data
-            .selection_command_codes
-            .contains(&(self.form_code(parent), element_code))
+        self.ia_data.selection_command_codes.contains(&(
+            self.codes.form_bytecode[&self.form_code(parent)],
+            element_code,
+        ))
     }
 
     fn binary_result(&self, left: i32, right: i32, operator: i32) -> i32 {

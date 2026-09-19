@@ -1097,6 +1097,7 @@ impl IncAnalyzer {
                     form: arg.form,
                     def_int: arg.def_int,
                     def_exist: arg.def_exist,
+                    preserve_int_reference: false,
                 })
                 .collect();
             let mut arg_map = HashMap::new();

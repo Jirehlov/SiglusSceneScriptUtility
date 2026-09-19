@@ -233,6 +233,7 @@ def la_analize(pcad):
                 len(name) in (2, 3, 4)
                 and name[0] == "z"
                 and all("0" <= ch <= "9" for ch in name[1:])
+                and int(name[1:]) < C.TNM_Z_LABEL_CNT
             ):
                 a["type"] = C.LA_T["Z_LABEL"]
                 a["opt"] = int(name[1:])

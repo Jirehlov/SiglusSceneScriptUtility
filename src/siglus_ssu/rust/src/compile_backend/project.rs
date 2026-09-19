@@ -2561,7 +2561,12 @@ fn compile_project_inner(
             .property_list
             .iter()
             .map(|property| IncPropertyPack {
-                form: base_ia.form_table.form_code_of(&property.form).unwrap_or(0),
+                form: config
+                    .constants
+                    .form_code
+                    .get(&property.form)
+                    .copied()
+                    .unwrap_or(0),
                 size: property.size,
             })
             .collect(),

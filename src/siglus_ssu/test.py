@@ -29,7 +29,7 @@ _PAYLOAD_SUMMARY_RE = re.compile(
     r"scene_data payload:\s+same=(\d+)\s+text_only=(\d+)\s+real_diff=(\d+)\s+unavailable=(\d+)"
 )
 
-_CONST_PROFILES = (0, 1, 2, 3, 4)
+_CONST_PROFILES = (0, 1, 2, 3, 4, 5, 6, 7, 8)
 
 
 @dataclass
@@ -433,13 +433,13 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                 original_source_header_size = int(
                     hdr.get("original_source_header_size", 0) or 0
                 )
-                if original_source_header_size <= 0:
+                if original_source_header_size == 0:
                     print("  analyze: os=no")
                     status = "SKIP"
-                    detail = "missing original-source (OS) section"
+                    detail = "original-source (OS) section is not embedded"
                 else:
                     print(
-                        "  analyze: os=yes "
+                        "  analyze: os=declared "
                         f"original_source_header_size={original_source_header_size:d}"
                     )
 
@@ -453,6 +453,8 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                 _print_tail("extract", out, err_text)
                 status = "FAIL"
                 detail = "extract failed"
+                if err_text.strip():
+                    detail += ": " + err_text.strip().splitlines()[-1]
             else:
                 extract_dir = _find_extract_dir(tmp_root)
                 if not extract_dir:
@@ -462,7 +464,7 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                     detail = "extract output directory not found"
                 else:
                     ss_count = _count_files_with_ext(extract_dir)
-                    print(f"  extract: ok source_ss={ss_count:d}")
+                    print(f"  extract: ok os=yes source_ss={ss_count:d}")
                     if ss_count <= 0:
                         status = "FAIL"
                         detail = "extracted OS section contains no .ss files"

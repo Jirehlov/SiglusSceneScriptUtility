@@ -155,6 +155,15 @@ class FormTable:
             )
             if not name or et is None:
                 continue
+            named_args = args.get(-1) or []
+            if isinstance(named_args, dict):
+                named_args = named_args.get("arg_list") or []
+            for arg in named_args:
+                arg["preserve_int_reference"] = (
+                    parent,
+                    name,
+                    arg.get("name"),
+                ) in getattr(C, "NAMED_INT_REFERENCE_ARGUMENTS", ())
             info = {
                 "type": et,
                 "code": C.create_elm_code(owner, group, int(code)),
@@ -382,7 +391,9 @@ class MA:
         return 1
 
     def ma_def_prop(s, n):
-        if s.psad.get("command_in", 0) == 0:
+        if s.psad.get("command_in", 0) == 0 and not getattr(
+            C, "ALLOW_PROPERTY_OUT_OF_COMMAND", False
+        ):
             return s.error(
                 "TNMSERR_MA_PROPERTY_OUT_OF_COMMAND",
                 (n or {}).get("Property", {}).get("atom"),
@@ -1054,7 +1065,8 @@ class MA:
             rf = forms[i]
             if rf != tf:
                 if tf == C.FM_INT and rf == C.FM_INTREF:
-                    forms[i] = C.FM_INT
+                    if not tmp[no].get("preserve_int_reference", False):
+                        forms[i] = C.FM_INT
                 elif tf == C.FM_STR and rf == C.FM_STRREF:
                     forms[i] = C.FM_STR
                 else:

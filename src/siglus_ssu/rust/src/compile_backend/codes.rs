@@ -1,4 +1,5 @@
 use super::config::CompileConstants;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct FormValue {
@@ -28,6 +29,7 @@ pub struct FormCodes {
 
 #[derive(Debug, Clone)]
 pub struct LexCodes {
+    pub z_label_count: usize,
     pub none: i32,
     pub eof: i32,
     pub assign: i32,
@@ -168,12 +170,14 @@ pub struct ElementTypeCodes {
 #[derive(Debug, Clone)]
 pub struct RuntimeCodes {
     pub forms: FormCodes,
+    pub form_bytecode: HashMap<i32, i32>,
     pub la: LexCodes,
     pub op: OperatorCodes,
     pub cd: BytecodeCodes,
     pub elm: ElementCodes,
     pub element_type: ElementTypeCodes,
-    pub z_label_count: usize,
+    pub logical_and_precedence: i32,
+    pub allow_property_out_of_command: bool,
 }
 
 impl RuntimeCodes {
@@ -197,7 +201,13 @@ impl RuntimeCodes {
                 strlistref: form_value(constants, "FM_STRLISTREF")?,
                 strref: form_value(constants, "FM_STRREF")?,
             },
+            form_bytecode: constants
+                .form_ids
+                .iter()
+                .map(|(name, id)| (*id, constants.form_code[name]))
+                .collect(),
             la: LexCodes {
+                z_label_count: constants.z_label_count,
                 none: constants.la("NONE")?,
                 eof: constants.la("EOF")?,
                 assign: constants.la("ASSIGN")?,
@@ -326,13 +336,14 @@ impl RuntimeCodes {
                 property: constants.element_type("ET_PROPERTY")?,
                 command: constants.element_type("ET_COMMAND")?,
             },
-            z_label_count: constants.z_label_count,
+            logical_and_precedence: constants.logical_and_precedence,
+            allow_property_out_of_command: constants.allow_property_out_of_command,
         })
     }
 }
 
 fn form_value(constants: &CompileConstants, name: &str) -> Result<FormValue, String> {
     let form = constants.form_name(name)?.to_string();
-    let code = constants.form_code_of(&form)?;
+    let code = constants.form_id_of(&form)?;
     Ok(FormValue { name: form, code })
 }

@@ -15,6 +15,7 @@ pub struct ArgInfo {
     pub form: String,
     pub def_int: i32,
     pub def_exist: bool,
+    pub preserve_int_reference: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -54,7 +55,7 @@ pub struct FormTable {
 
 impl FormTable {
     pub fn new(constants: &CompileConstants) -> Result<Self, String> {
-        let form_code = constants.form_code.clone();
+        let form_code = constants.form_ids.clone();
         let code_form = form_code
             .iter()
             .map(|(name, code)| (*code, name.clone()))
@@ -172,6 +173,7 @@ impl FormTable {
                                 form: arg.form.clone(),
                                 def_int: arg.def_int,
                                 def_exist: arg.def_exist,
+                                preserve_int_reference: arg.preserve_int_reference,
                             })
                             .collect(),
                     },

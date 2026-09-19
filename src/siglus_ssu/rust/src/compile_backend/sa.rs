@@ -35,7 +35,7 @@ pub struct SyntaxAnalyzer {
 
 impl SyntaxAnalyzer {
     pub fn new(lex: &LexResult, codes: RuntimeCodes) -> Self {
-        let z_label_count = codes.z_label_count;
+        let z_label_count = codes.la.z_label_count;
         Self {
             codes,
             atoms: lex.atom_list.clone(),
@@ -488,6 +488,7 @@ impl SyntaxAnalyzer {
                             form: arg.form,
                             def_int: arg.def_int,
                             def_exist: arg.def_exist,
+                            preserve_int_reference: false,
                         })
                         .collect(),
                 },
@@ -1227,7 +1228,11 @@ impl SyntaxAnalyzer {
         let atom_type = self.atom_type(index);
         [
             (self.codes.la.logical_or, self.codes.op.logical_or, 1),
-            (self.codes.la.logical_and, self.codes.op.logical_and, 2),
+            (
+                self.codes.la.logical_and,
+                self.codes.op.logical_and,
+                self.codes.logical_and_precedence,
+            ),
             (self.codes.la.or, self.codes.op.or, 3),
             (self.codes.la.hat, self.codes.op.hat, 4),
             (self.codes.la.and, self.codes.op.and, 5),
