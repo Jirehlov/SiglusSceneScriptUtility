@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-**版本：** 0.4.1（使用 `siglus-ssu --version` 查看已安装版本）
+**版本：** 0.4.2（使用 `siglus-ssu --version` 查看已安装版本）
 
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -250,7 +250,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.4.1
+siglus-ssu init --force --ref v0.4.2
 ```
 
 ---

@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.4.1 (check the installed version with `siglus-ssu --version`)
+**Version:** 0.4.2 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -250,7 +250,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.4.1
+siglus-ssu init --force --ref v0.4.2
 ```
 
 ---
