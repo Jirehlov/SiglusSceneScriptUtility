@@ -545,7 +545,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 if argument_selection {
                     return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_ARG", element.line, None);
                 }
-                let Some(argument_list_id) = self.check_argument_list(&info, &mut element.args)?
+                let Some(argument_list_id) = self.check_argument_list(&info, &mut element.args)
                 else {
                     return self.fail("TNMSERR_MA_ARG_TYPE_NO_MATCH", element.line, None);
                 };
@@ -580,11 +580,7 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok((element.form, element.element_type))
     }
 
-    fn check_argument_list(
-        &mut self,
-        info: &ElementInfo,
-        real: &mut ArgumentList,
-    ) -> Result<Option<i32>, ()> {
+    fn check_argument_list(&mut self, info: &ElementInfo, real: &mut ArgumentList) -> Option<i32> {
         let mut ids: Vec<i32> = info
             .arg_map
             .keys()
@@ -596,13 +592,11 @@ impl<'a> SemanticAnalyzer<'a> {
             let Some(expected) = info.arg_map.get(&id) else {
                 continue;
             };
-            if self.check_positional_arguments(&expected.arg_list, real)
-                && self.check_named_arguments(info, real)?
-            {
-                return Ok(Some(id));
+            if self.check_positional_arguments(&expected.arg_list, real) {
+                return self.check_named_arguments(info, real).then_some(id);
             }
         }
-        Ok(None)
+        None
     }
 
     fn check_positional_arguments(&self, expected: &[ArgInfo], real: &mut ArgumentList) -> bool {
@@ -677,29 +671,18 @@ impl<'a> SemanticAnalyzer<'a> {
         }
     }
 
-    fn check_named_arguments(
-        &mut self,
-        info: &ElementInfo,
-        real: &mut ArgumentList,
-    ) -> Result<bool, ()> {
+    fn check_named_arguments(&mut self, info: &ElementInfo, real: &mut ArgumentList) -> bool {
         if real.named_count == 0 {
-            return Ok(true);
+            return true;
         }
         let Some(named_list) = info.arg_map.get(&-1) else {
-            return self.fail(
-                "TNMSERR_MA_CMD_NO_NAMED_ARG_LIST",
-                real.args
-                    .last()
-                    .map(|argument| argument.line)
-                    .unwrap_or_default(),
-                None,
-            );
+            return false;
         };
         let named_start = real.args.len() - real.named_count;
         for argument in &mut real.args[named_start..] {
             let name = argument.name.as_deref().unwrap_or_default();
             let Some(expected) = named_list.arg_list.iter().find(|item| item.name == name) else {
-                return self.fail("TNMSERR_MA_CMD_ILLEGAL_NAMED_ARG", argument.line, None);
+                return false;
             };
             let expected_form = self.form_code(&expected.form);
             let real_form = argument.value.temp_form;
@@ -715,12 +698,12 @@ impl<'a> SemanticAnalyzer<'a> {
                 {
                     argument.value.temp_form = self.codes.forms.str_.code;
                 } else {
-                    return self.fail("TNMSERR_MA_ARG_TYPE_NO_MATCH", argument.line, None);
+                    return false;
                 }
             }
             argument.name_id = expected.id;
         }
-        Ok(true)
+        true
     }
 
     fn is_selection_command(&self, parent: &str, element_code: i32) -> bool {

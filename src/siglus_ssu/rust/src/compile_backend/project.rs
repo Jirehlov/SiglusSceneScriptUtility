@@ -12,7 +12,6 @@ use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes
 use super::sa::SyntaxAnalyzer;
 use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat};
 use super::source_angou::{encrypt_source, exe_angou_element};
-use encoding_rs::{SHIFT_JIS, UTF_8};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io;
@@ -318,105 +317,6 @@ fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, St
         .get(&name)
         .map(String::as_str)
         .ok_or_else(|| format!("source text not loaded: {}", path.display()))
-}
-
-fn decode_strict(bytes: &[u8], encoding: &'static encoding_rs::Encoding) -> Option<String> {
-    let (decoded, _, had_errors) = encoding.decode(bytes);
-    (!had_errors).then(|| decoded.into_owned())
-}
-
-fn is_cp932_lead(byte: u8) -> bool {
-    (0x81..=0x9F).contains(&byte) || (0xE0..=0xFC).contains(&byte)
-}
-
-fn is_cp932_trail(byte: u8) -> bool {
-    (0x40..=0x7E).contains(&byte) || (0x80..=0xFC).contains(&byte)
-}
-
-fn decode_cp932_strict(bytes: &[u8]) -> Option<String> {
-    let mut out = String::new();
-    let mut segment_start = 0usize;
-    let mut index = 0usize;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if is_cp932_lead(byte) && index + 1 < bytes.len() && is_cp932_trail(bytes[index + 1]) {
-            index += 2;
-            continue;
-        }
-        let special = match byte {
-            0xA0 => Some('\u{F8F0}'),
-            0xFD => Some('\u{F8F1}'),
-            0xFE => Some('\u{F8F2}'),
-            0xFF => Some('\u{F8F3}'),
-            _ => None,
-        };
-        if let Some(ch) = special {
-            if segment_start < index {
-                let decoded = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(
-                    &bytes[segment_start..index],
-                )?;
-                out.push_str(&decoded);
-            }
-            out.push(ch);
-            index += 1;
-            segment_start = index;
-            continue;
-        }
-        index += 1;
-    }
-    if segment_start < bytes.len() {
-        let decoded = SHIFT_JIS
-            .decode_without_bom_handling_and_without_replacement(&bytes[segment_start..])?;
-        out.push_str(&decoded);
-    }
-    Some(out)
-}
-
-fn text_decode_penalty(text: &str) -> i32 {
-    let mut score = 0i32;
-    for ch in text.chars() {
-        let value = ch as u32;
-        if (value < 32 && ch != '\n' && ch != '\t') || (0x80..=0x9f).contains(&value) {
-            score += 2;
-        } else if (0xff61..=0xff9f).contains(&value) {
-            score += 1;
-        } else if (0xe000..=0xf8ff).contains(&value) {
-            score += 2;
-        }
-    }
-    score
-}
-
-fn normalize_text_newlines(text: String) -> String {
-    text.strip_prefix('\u{feff}')
-        .unwrap_or(text.as_str())
-        .replace("\r\n", "\n")
-        .replace('\r', "\n")
-}
-
-fn decode_utf8_ignore(bytes: &[u8]) -> String {
-    let mut out = String::new();
-    let mut rest = bytes;
-    loop {
-        match std::str::from_utf8(rest) {
-            Ok(text) => {
-                out.push_str(text);
-                break;
-            }
-            Err(error) => {
-                let valid = error.valid_up_to();
-                if valid > 0 {
-                    out.push_str(std::str::from_utf8(&rest[..valid]).unwrap_or(""));
-                }
-                let skip = error.error_len().unwrap_or(1);
-                if valid + skip >= rest.len() {
-                    break;
-                }
-                rest = &rest[valid + skip..];
-            }
-        }
-    }
-    out
 }
 
 fn encode_shift_jis_ignore(text: &str) -> Vec<u8> {
@@ -1402,115 +1302,9 @@ fn scene_semantic_error(
     scene_error(code, display_name, line)
 }
 
-fn decode_key_text_auto(bytes: &[u8]) -> String {
-    let utf8 = decode_strict(bytes, UTF_8);
-    let cp932 = decode_cp932_strict(bytes);
-    let text = match (utf8, cp932) {
-        (Some(text), None) => text,
-        (None, Some(text)) => text,
-        (Some(utf8_text), Some(cp932_text)) => {
-            if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
-                utf8_text
-            } else {
-                let utf8_not_cp932 = encode_cp932(&utf8_text, false).is_err();
-                if utf8_not_cp932
-                    || text_decode_penalty(&utf8_text) <= text_decode_penalty(&cp932_text)
-                {
-                    utf8_text
-                } else {
-                    cp932_text
-                }
-            }
-        }
-        (None, None) => decode_utf8_ignore(bytes),
-    };
-    normalize_text_newlines(text)
-}
-
-fn parse_exe_key_text(text: &str) -> Vec<u8> {
-    let chars = text.trim().chars().collect::<Vec<_>>();
-    if chars.is_empty() {
-        return Vec::new();
-    }
-    let mut prefixed = Vec::new();
-    let mut i = 0usize;
-    while i + 3 < chars.len() {
-        if chars[i] == '0'
-            && (chars[i + 1] == 'x' || chars[i + 1] == 'X')
-            && chars[i + 2].is_ascii_hexdigit()
-            && chars[i + 3].is_ascii_hexdigit()
-        {
-            let hex = format!("{}{}", chars[i + 2], chars[i + 3]);
-            if let Ok(value) = u8::from_str_radix(&hex, 16) {
-                prefixed.push(value);
-            }
-            i += 4;
-        } else {
-            i += 1;
-        }
-    }
-    if prefixed.len() >= 16 {
-        prefixed.truncate(16);
-        return prefixed;
-    }
-
-    fn python_word(ch: char) -> bool {
-        ch == '_' || ch.is_alphanumeric()
-    }
-
-    fn word_boundary(chars: &[char], index: usize) -> bool {
-        let left = index.checked_sub(1).and_then(|i| chars.get(i)).copied();
-        let right = chars.get(index).copied();
-        left.is_none_or(|ch| !python_word(ch)) != right.is_none_or(|ch| !python_word(ch))
-    }
-
-    let mut hex_tokens = Vec::new();
-    for i in 0..chars.len().saturating_sub(1) {
-        if word_boundary(&chars, i)
-            && word_boundary(&chars, i + 2)
-            && chars[i].is_ascii_hexdigit()
-            && chars[i + 1].is_ascii_hexdigit()
-        {
-            let hex = format!("{}{}", chars[i], chars[i + 1]);
-            if let Ok(value) = u8::from_str_radix(&hex, 16) {
-                hex_tokens.push(value);
-            }
-        }
-    }
-    if hex_tokens.len() >= 16 {
-        hex_tokens.truncate(16);
-        return hex_tokens;
-    }
-
-    let mut decimal_tokens = Vec::new();
-    let mut i = 0usize;
-    while i < chars.len() {
-        if !word_boundary(&chars, i) || !chars[i].is_ascii_digit() {
-            i += 1;
-            continue;
-        }
-        let mut end = i;
-        while end < chars.len() && end - i < 3 && chars[end].is_ascii_digit() {
-            end += 1;
-        }
-        if word_boundary(&chars, end) {
-            let token = chars[i..end].iter().collect::<String>();
-            if let Ok(value) = token.parse::<u16>() {
-                decimal_tokens.push((value & 0xff) as u8);
-            }
-        }
-        i += 1;
-    }
-    if decimal_tokens.len() >= 16 {
-        decimal_tokens.truncate(16);
-        return decimal_tokens;
-    }
-    Vec::new()
-}
-
-fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
+fn resolve_exe_key(config: &CompileConfig) -> Option<Vec<u8>> {
     if !config.context.exe_angou_mode {
-        return Ok(None);
+        return None;
     }
     if let Some(content) = config
         .angou_content
@@ -1519,22 +1313,13 @@ fn resolve_exe_key(config: &CompileConfig) -> Result<Option<Vec<u8>>, String> {
     {
         let key = exe_angou_element(&encode_shift_jis_ignore(content), &config.constants.exe_org);
         if key.len() == 16 {
-            return Ok(Some(key));
+            return Some(key);
         }
     }
-    if !config.context.key_path.is_empty() {
-        let key_path = Path::new(&config.context.key_path);
-        let raw = fs::read(key_path).map_err(|error| format_path_error(key_path, error))?;
-        if raw.len() == 16 {
-            return Ok(Some(raw));
-        }
-        let text = decode_key_text_auto(&raw);
-        let key = parse_exe_key_text(&text);
-        if key.len() == 16 {
-            return Ok(Some(key));
-        }
+    if config.context.exe_el_key.len() == 16 {
+        return Some(config.context.exe_el_key.clone());
     }
-    Ok(None)
+    None
 }
 
 fn write_gameexe_dat(
@@ -2105,7 +1890,7 @@ fn compile_project_inner(
     };
     let gameexe_source = config.context.source_texts.get(gameexe_ini);
     let exe_key = if gameexe_source.is_some() || !config.options.gei {
-        resolve_exe_key(config)?
+        resolve_exe_key(config)
     } else {
         None
     };

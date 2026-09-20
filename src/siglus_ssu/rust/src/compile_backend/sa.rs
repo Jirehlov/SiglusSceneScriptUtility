@@ -203,7 +203,7 @@ impl SyntaxAnalyzer {
 
     fn parse_sentence(&mut self, index: usize, iad: &mut IaData) -> ParseResult<AstNode> {
         let atom_type = self.atom_type(index);
-        if atom_type == self.codes.la.label {
+        let result = if atom_type == self.codes.la.label {
             self.parse_label(index)
         } else if atom_type == self.codes.la.z_label {
             self.parse_z_label(index)
@@ -252,6 +252,10 @@ impl SyntaxAnalyzer {
             Ok(Some((next, AstNode::from_atom(atom, AstPayload::Eof))))
         } else {
             self.parse_command_or_assign(index, iad)
+        };
+        match result? {
+            Some(statement) => Ok(Some(statement)),
+            None => self.fail("TNMSERR_SA_SENTENCE_ILLEGAL", index),
         }
     }
 
@@ -308,7 +312,7 @@ impl SyntaxAnalyzer {
         };
         let name = self.unknown_name(&atom);
         if iad.form_table.form_code_of(&name).is_none() {
-            return self.fail("TNMSERR_SA_DEF_PROP_ILLEGAL_FORM", index);
+            return self.fail("TNMSERR_SA_DEF_PROP_ILLEGAL_FORM", pos);
         }
         let mut array_index = None;
         if let Some((next, _open)) = self.accept(pos, self.codes.la.open_bracket) {
@@ -346,7 +350,7 @@ impl SyntaxAnalyzer {
         };
         if let Some((next, _colon)) = self.accept(pos, self.codes.la.colon) {
             let Some((after_form, parsed_form)) = self.parse_form(next, iad)? else {
-                return self.fail("TNMSERR_SA_DEF_PROP_ILLEGAL_FORM", next);
+                return Ok(None);
             };
             pos = after_form;
             form = parsed_form;
@@ -546,7 +550,7 @@ impl SyntaxAnalyzer {
             pos = next;
             atom
         } else {
-            return self.fail("TNMSERR_SA_GOTO_NO_LABEL", pos);
+            return self.fail("TNMSERR_SA_GOTO_NO_LABEL", index);
         };
         Ok(Some((
             pos,
@@ -561,10 +565,10 @@ impl SyntaxAnalyzer {
         let mut value = None;
         if let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) {
             let Some((after_value, expression)) = self.parse_expression(next, 0, iad)? else {
-                return self.fail("TNMSERR_SA_RETURN_ILLEGAL_EXP", next);
+                return self.fail("TNMSERR_SA_RETURN_ILLEGAL_EXP", index);
             };
             let Some((after_close, _)) = self.accept(after_value, self.codes.la.close_paren) else {
-                return self.fail("TNMSERR_SA_RETURN_NO_CLOSE_PAREN", after_value);
+                return self.fail("TNMSERR_SA_RETURN_NO_CLOSE_PAREN", index);
             };
             pos = after_close;
             value = Some(Box::new(expression));
@@ -1162,7 +1166,6 @@ impl SyntaxAnalyzer {
             return Ok(Some((
                 after_value,
                 Argument {
-                    line: name_atom.line,
                     name: Some(self.unknown_name(&name_atom)),
                     value,
                     name_id: 0,
@@ -1175,7 +1178,6 @@ impl SyntaxAnalyzer {
         Ok(Some((
             next,
             Argument {
-                line: value.line,
                 name: None,
                 value,
                 name_id: 0,
@@ -1284,10 +1286,17 @@ impl SyntaxAnalyzer {
             .enumerate()
             .find(|(_, label)| !label.exists)
         {
-            return self.fail(
+            self.set_error(
                 "TNMSERR_SA_LABEL_NOT_EXIST",
-                self.atoms.len() + index + label.line,
+                Atom {
+                    id: 0,
+                    line: label.line,
+                    atom_type: self.codes.la.label,
+                    opt: index as i32,
+                    subopt: 0,
+                },
             );
+            return Err(());
         }
         if !self
             .z_labels

@@ -37,6 +37,7 @@ from .common import (
     content_digest,
     decode_text_auto,
     read_bytes,
+    read_exe_el_key,
     read_text_auto,
     first_line_text,
     write_text,
@@ -1034,6 +1035,13 @@ def _native_compile_config(
             "gameexe_ini": ctx.get("gameexe_ini"),
             "angou_path": ctx.get("angou_path"),
             "key_path": ctx.get("key_path"),
+            "exe_el_key": (
+                read_exe_el_key(ctx["key_path"])
+                if ctx.get("exe_angou_mode")
+                and ctx.get("key_path")
+                and not angou_content
+                else b""
+            ),
             "scn_list": list(ctx.get("scn_list") or []),
             "scene_display_names": scene_display_names,
             "inc_list": list(ctx.get("inc_list") or []),

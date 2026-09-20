@@ -26,7 +26,6 @@ pub struct Parameter {
 
 #[derive(Debug, Clone)]
 pub struct Argument {
-    pub line: usize,
     pub name: Option<String>,
     pub value: AstNode,
     pub name_id: i32,

@@ -593,7 +593,7 @@ impl CharacterAnalyzer {
             else {
                 return self.error(self.current_line, "Not enough macro arguments.");
             };
-            let expanded = self.expand_all(&source, default_tree, added_tree, false)?;
+            let expanded = self.expand_macro_text(&source, default_tree, added_tree, "argument")?;
             arg_replacements.push(Replacement {
                 kind: ReplaceKind::Replace,
                 name: arg.name.clone(),
@@ -608,7 +608,35 @@ impl CharacterAnalyzer {
         for replacement in arg_replacements {
             arg_tree.add(&replacement.name.clone(), replacement);
         }
-        self.expand_all(&macro_def.after, default_tree, &arg_tree, false)
+        self.expand_macro_text(&macro_def.after, default_tree, &arg_tree, "body")
+    }
+
+    fn expand_macro_text(
+        &mut self,
+        input: &str,
+        default_tree: &ReplaceTree,
+        added_tree: &ReplaceTree,
+        context: &str,
+    ) -> Result<String, ()> {
+        let mut text: Vec<char> = input.chars().chain(std::iter::once('\0')).collect();
+        let mut pos = 0usize;
+        let mut replacements = 0usize;
+        while text.get(pos) != Some(&'\0') {
+            let old_pos = pos;
+            let edit;
+            (text, pos, edit) = self.replace_one_detail(text, pos, default_tree, added_tree)?;
+            if replacements < 10_000 && (pos == old_pos || edit.is_some_and(|edit| edit.changed)) {
+                replacements += 1;
+                if replacements == 10_000 {
+                    eprintln!(
+                        "warning: macro {context} expansion reached 10000 replacements at line {}; check for cyclic #define references; continuing without truncation.",
+                        self.current_line
+                    );
+                }
+            }
+        }
+        text.truncate(pos);
+        Ok(text.into_iter().collect())
     }
 
     fn replace_one_detail(
@@ -694,7 +722,6 @@ impl CharacterAnalyzer {
         input: &str,
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
-        count_lines: bool,
     ) -> Result<String, ()> {
         let mut text: Vec<char> = input.chars().chain(std::iter::once('\0')).collect();
         let mut pos = 0usize;
@@ -702,9 +729,7 @@ impl CharacterAnalyzer {
         let mut rest_min = text.len();
         while text.get(pos) != Some(&'\0') {
             if text[pos] == '\n' {
-                if count_lines {
-                    self.current_line += 1;
-                }
+                self.current_line += 1;
                 pos += 1;
             } else {
                 (text, pos) = self.replace_one(text, pos, default_tree, added_tree)?;
@@ -730,7 +755,7 @@ impl CharacterAnalyzer {
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {
         self.current_line = 1;
         let empty_tree = ReplaceTree::new();
-        self.expand_all(input, replace_tree, &empty_tree, true)
+        self.expand_all(input, replace_tree, &empty_tree)
     }
 
     pub fn analyze_scene_line_with_map(

@@ -278,7 +278,7 @@ siglus-ssu -lsp [--serial]
 - Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
 - Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
-- Cyclic `#define` / `#define_s` expansion in macro arguments, defaults, or bodies can leave analysis running indefinitely, preventing diagnostics and subsequent requests from completing. The Python frontend writes its 10000-step warning only to `stderr` and does not stop expansion. Correct the document and restart the language server if it hangs; see [macro expansion](#macro).
+- Cyclic `#define` / `#define_s` expansion in macro arguments, defaults, or bodies can leave analysis running indefinitely, preventing diagnostics and subsequent requests from completing. Both frontends write their 10000-step warning only to `stderr` and do not stop expansion. Correct the document and restart the language server if it hangs; see [macro expansion](#macro).
 
 ---
 
@@ -1795,7 +1795,7 @@ The replacement system also has two normative details:
 1. within a single replacement tree, matching uses **longest-prefix search**;
 2. when the default replacement tree and a temporary added tree both match at the same position, the current implementation chooses the candidate whose `name` field is lexicographically larger, not by declaration order or by a global cross-tree longest-match rule; a conforming implementation shall reproduce this behavior.
 
-Ordinary text expansion retains a guard that reports an error after more than 10000 consecutive steps without a new minimum remaining-text length. Handling inside macros differs by backend, as described below; the outer guard cannot be relied on to stop a loop inside a macro.
+Ordinary text expansion retains a guard that reports an error after more than 10000 consecutive steps without a new minimum remaining-text length. Both backends warn and continue inside macros, as described below; the outer guard cannot be relied on to stop a loop inside a macro.
 
 #### `#macro`
 
@@ -1813,9 +1813,9 @@ Rules:
 4. argument splitting is parenthesis-depth aware, and commas or parentheses inside string and character literals do not participate in outer-level splitting;
 5. the macro body is expanded with a temporary replacement tree for the macro parameters; after the final result is inserted, scanning advances past that inserted result, so it is not immediately rescanned at the same position.
 
-**Expansion loops and warnings:** Avoid triggering self-referential or mutually recursive `#define` / `#define_s` expansion inside macro arguments, defaults, or bodies. The Python frontend does not stop macro expansion solely because of its replacement count, so a genuine infinite expansion can leave compilation or LSP analysis running indefinitely.
+**Expansion loops and warnings:** Avoid triggering self-referential or mutually recursive `#define` / `#define_s` expansion inside macro arguments, defaults, or bodies. Neither frontend stops macro expansion solely because of its replacement count, so a genuine infinite expansion can leave compilation or LSP analysis running indefinitely.
 
-For each macro argument (including a default) or body expansion, the Python frontend writes one warning to `stderr` when the replacement counter reaches **10000**, then continues without truncating the result. Steps that change the text or leave the scan position unchanged count toward this threshold; ordinary character scanning does not. This is not proof of an infinite loop: a long but finite expansion can still complete. The warning applies to the Python compile backend (including `--legacy`, `--legacy-full`, and pure-Python installations) and the LSP Python analysis path. Existing threshold errors in ordinary expansion and the Rust native backend are unchanged. If a cycle is confirmed, stop compilation (`Ctrl+C` in a terminal) and fix the definitions; if LSP hangs, correct the document and restart the server.
+For each macro argument (including a default) or body expansion, both frontends write one warning to `stderr` when the replacement counter reaches **10000**, then continue without truncating the result. Steps that change the text or leave the scan position unchanged count toward this threshold; ordinary character scanning does not. This is not proof of an infinite loop: a long but finite expansion can still complete. The warning applies to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and both LSP analysis paths. Existing threshold errors in ordinary expansion are unchanged. If a cycle is confirmed, stop compilation (`Ctrl+C` in a terminal) and fix the definitions; if LSP hangs, correct the document and restart the server.
 
 #### `#property`
 
