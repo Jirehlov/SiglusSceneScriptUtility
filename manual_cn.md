@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-**版本：** 0.4.2（使用 `siglus-ssu --version` 查看已安装版本）
+**版本：** 0.4.3（使用 `siglus-ssu --version` 查看已安装版本）
 
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -56,7 +56,7 @@
 - 为 `SiglusEngine.exe` 打补丁（修改密钥或语言设置）
 - 提供SiglusSS语言的LSP
 
-> **兼容性提醒：** Profile 3 至 8 面向较老的场景格式，包括 TheGodofDeath HD、原版 Rewrite、nanami/キサラギ、カルマルカ、ルルミ、闇色和 Rewrite 体验版使用的格式。各 profile 的命令、字符串、局部 property、逻辑运算优先级与 z-label 规则不同，详见下方的常量 profile 说明。其他旧引擎版本仍可能使用尚未支持的资源格式或常量定义。
+> **兼容性提醒：** Profile 3 至 9 面向较老的场景格式，包括 TheGodofDeath HD、原版 Rewrite、nanami/キサラギ、カルマルカ、ルルミ、闇色、Rewrite 体验版和 Rewrite Harvest festa! 使用的格式。各 profile 的元素、命令、字符串、局部 property、逻辑运算优先级与 z-label 规则不同，详见下方的常量 profile 说明。其他旧引擎版本仍可能使用尚未支持的资源格式或常量定义。
 
 ---
 
@@ -127,7 +127,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
-| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`8`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`9`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
 | `--string-xor-multiplier N` | 覆盖编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（profile `3`、`5` 和 `8` 默认 `0`，其他 profile 默认 `0x7087`）。显式传入的值优先于 profile 默认值。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
 
 ### 常量 profile
@@ -143,6 +143,7 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `6` | 重构式 profile | 允许在 `command` 外声明局部 `property` 的较老引擎，包括カルマルカ。 |
 | `7` | 重构式 profile | ルルミ和闇色使用的较老引擎，`&&` / `||` 同优先级，z-label 表为 100 项。 |
 | `8` | 重构式 profile | Rewrite 体验版，采用旧 form 编号、明文场景字符串，并保留 `wipe` / `mask_wipe` 的 `key_skip` 参数引用。 |
+| `9` | 重构式 profile | Rewrite Harvest festa!，将元素编号 47 定义为旧式全局 `world` 属性，而不是 `msgbtn` 命令。 |
 
 Profile `3` 的 form / element 编号和命令返回类型与 profile `2` 相同。它的 read 表省略 `global.koe`，默认字符串 XOR 乘数为 `0`。它保留 `global.ruby` 前自动插入 `msg_block` 的行为，以及 `mov.play_wait_key` 的 `int` 返回类型，对应 TheGodofDeath HD 使用的格式。这些规则由 Python 与 Rust 编译 backend 共用。
 
@@ -150,17 +151,19 @@ Profile `4` 以 profile `2` 为基础，将 `global.wait_wipe`、`global.koe_wai
 
 Profile `5` 的 form / element 编号、read 表、选择块规则和明文场景字符串规则与 profile `3` 相同。它将 `global.wait_wipe`、`global.exkoe`、`global.exkoe_play_wait_key`、`counter.wait_key`、`pcmch.wait_fade_key` 和 `mov.play_wait_key` 的返回类型设为 `void`，且不在 `global.ruby` 调用前自动插入 `msg_block`。每个 profile 均完整、独立地定义配置表，不从其他 profile 派生。
 
-Profile `6` 的 form / element 表、消息块、已读标记与选择块规则和默认字符串 XOR 乘数 `0x7087` 与 profile `2` 相同。每个 profile 都显式配置 `ALLOW_PROPERTY_OUT_OF_COMMAND`：profile `0`-`5` 禁止，profile `6`-`8` 允许。这些声明仍保持局部 call property 语义，不会变成 scene 或全局 `#property` 声明。Python 与 Rust 使用同一设置。
+Profile `6` 的 form / element 表、消息块、已读标记与选择块规则和默认字符串 XOR 乘数 `0x7087` 与 profile `2` 相同。每个 profile 都显式配置 `ALLOW_PROPERTY_OUT_OF_COMMAND`：profile `0`-`5` 和 `9` 禁止，profile `6`-`8` 允许。这些声明仍保持局部 call property 语义，不会变成 scene 或全局 `#property` 声明。Python 与 Rust 使用同一设置。
 
-Profile `7` 独立、完整地定义了与 profile `4` 相同的 form / element 编号、消息块规则、read 表、空选择命令表和默认字符串 XOR 乘数，但将 `counter.wait_key` 的返回类型改为 `void`，并允许 command 外局部 property。它将 `&&` 和 `||` 视为同优先级、左结合的运算符。其 z-label 上限为 `100`，`#z100` 等名称作为普通标签处理。每个 profile 都显式定义 `LOGICAL_AND_PRECEDENCE` 和 `TNM_Z_LABEL_CNT`：profile `0`-`6` 保持 `&&` 高于 `||`，z-label 上限为 `1000`。Python 与 Rust 共用这些设置。
+Profile `7` 独立、完整地定义了与 profile `4` 相同的 form / element 编号、消息块规则、read 表、空选择命令表和默认字符串 XOR 乘数，但将 `counter.wait_key` 的返回类型改为 `void`，并允许 command 外局部 property。它将 `&&` 和 `||` 视为同优先级、左结合的运算符。其 z-label 上限为 `100`，`#z100` 等名称作为普通标签处理。每个 profile 都显式定义 `LOGICAL_AND_PRECEDENCE` 和 `TNM_Z_LABEL_CNT`：profile `0`-`6` 和 `9` 保持 `&&` 高于 `||`，z-label 上限为 `1000`。Python 与 Rust 共用这些设置。
 
-Profile `8` 独立、完整地定义全部配置。其命令返回类型、消息块、已读标记、选择块规则和明文场景字符串规则与 profile `5` 相同，但使用 `frameaction = 1212`、`intlistref = 11`。它允许 command 外局部 property，z-label 表为 `100` 项，且保持 `&&` 高于 `||`。其 `NAMED_INT_REFERENCE_ARGUMENTS` 表仅为 `global.wipe(key_skip=...)` 和 `global.mask_wipe(key_skip=...)` 保留整数变量引用；常量和其他整数值表达式仍按值传递。Profile `0`-`7` 均显式配置为空表。Python 与 Rust 编译共用这些参数元数据。
+Profile `8` 独立、完整地定义全部配置。其命令返回类型、消息块、已读标记、选择块规则和明文场景字符串规则与 profile `5` 相同，但使用 `frameaction = 1212`、`intlistref = 11`。它允许 command 外局部 property，z-label 表为 `100` 项，且保持 `&&` 高于 `||`。其 `NAMED_INT_REFERENCE_ARGUMENTS` 表仅为 `global.wipe(key_skip=...)` 和 `global.mask_wipe(key_skip=...)` 保留整数变量引用；常量和其他整数值表达式仍按值传递。Profile `0`-`7` 和 `9` 均显式配置为空表。Python 与 Rust 编译共用这些参数元数据。
 
-每个 profile 都有 `SEL_GLOBAL_CODE_NAMES` 表。Profile `0`-`3`、`5`、`6` 和 `8` 保留现有选择命令规则；profile `4` 和 `7` 使用空表，编译选择命令时不生成 `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`。该表同时决定选择命令在表达式中的静态限制，Python 与 Rust 编译 backend 使用相同设置。Profile 编号不表示引擎版本先后。
+Profile `9` 独立、完整地定义全部配置表。它与 profile `2` 的唯一元素差异，是将编号 `47` 定义为 `worldlist` 类型的 `global.world` 属性，替代 `global.msgbtn`；同一编号的两种不兼容含义由不同 profile 隔离。它保留 profile `2` 的命令返回类型、消息块、已读标记与选择块规则、默认乘数 `0x7087`、`&&` 高于 `||` 的优先级和 `1000` 项 z-label 表，禁止 command 外局部 property，且具名整数引用参数表为空。Python 与 Rust 共用这些定义。从旧版本升级后，选择 profile `9` 前请运行 `siglus-ssu init --force` 刷新已有的用户数据 `const.py`。
+
+每个 profile 都有 `SEL_GLOBAL_CODE_NAMES` 表。Profile `0`-`3`、`5`、`6`、`8` 和 `9` 保留现有选择命令规则；profile `4` 和 `7` 使用空表，编译选择命令时不生成 `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`。该表同时决定选择命令在表达式中的静态限制，Python 与 Rust 编译 backend 使用相同设置。Profile 编号不表示引擎版本先后。
 
 ### 场景字符串 XOR 乘数
 
-`--string-xor-multiplier N` 只改变已编译场景 `.dat` 字符串表中逐字符串的 XOR 变换。它不会关闭 LZSS 压缩或包/场景加密。`--no-angou` 控制这些外层处理，但它既不能替代本选项，也不会关闭场景字符串 XOR 变换。Profile `0`-`2`、`4`、`6` 和 `7` 默认使用 `0x7087`，profile `3`、`5` 和 `8` 默认使用 `0`。只有在目标作品的场景字符串确实以未 XOR 的 UTF-16LE 存储时才使用 `0`。本选项不会修改 `SiglusEngine.exe`，也不会改变 `-p --altkey` 使用的 key；重建后的场景只有在目标引擎变体采用相同场景字符串乘数时才能正常工作。
+`--string-xor-multiplier N` 只改变已编译场景 `.dat` 字符串表中逐字符串的 XOR 变换。它不会关闭 LZSS 压缩或包/场景加密。`--no-angou` 控制这些外层处理，但它既不能替代本选项，也不会关闭场景字符串 XOR 变换。Profile `0`-`2`、`4`、`6`、`7` 和 `9` 默认使用 `0x7087`，profile `3`、`5` 和 `8` 默认使用 `0`。只有在目标作品的场景字符串确实以未 XOR 的 UTF-16LE 存储时才使用 `0`。本选项不会修改 `SiglusEngine.exe`，也不会改变 `-p --altkey` 使用的 key；重建后的场景只有在目标引擎变体采用相同场景字符串乘数时才能正常工作。
 
 乘数由当前 profile 或显式覆盖值决定，不会写入提取出的工作目录。凡是会解码、分析、比较、改写或重新编译该作品场景字符串的命令，都应使用相同的 profile 和乘数设置。错误数值可能不破坏文件结构，却会产生不可读文本，因此程序不一定能检测出不匹配。每次编译或比较都将一个乘数应用于全部场景；不支持在同一个 `.pck` 内按场景混用乘数。因此，一条比较命令无法正确解码使用不同乘数的两个输入。请分别分析它们，或先用同一设置重建其中一方。`test` 在回退时尝试各 profile 的默认乘数；显式指定乘数则对所有尝试生效。使用 `-c --tmp` 时，乘数会写入缓存元数据；改变乘数会触发全部缓存场景的重新编译。
 
@@ -250,7 +253,7 @@ siglus-ssu init
 siglus-ssu init --force
 
 # 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.4.2
+siglus-ssu init --force --ref v0.4.3
 ```
 
 ---
@@ -1469,7 +1472,7 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 
 1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
 2. 将 archive 解压到临时测试目录；
-3. 对解压出的源码进行原地回编，并按顺序尝试 `const-profile` 0 到 8，直到某个 profile 得到 `EXACT` 或 `PAYLOAD_SAME`；每次尝试使用该 profile 的编译规则和默认字符串乘数，显式覆盖的乘数则保持不变；
+3. 对解压出的源码进行原地回编，并按顺序尝试 `const-profile` 0 到 9，直到某个 profile 得到 `EXACT` 或 `PAYLOAD_SAME`；每次尝试使用该 profile 的编译规则和默认字符串乘数，显式覆盖的乘数则保持不变；
 4. 先检查回编 `.pck` 是否与原始 `.pck` 字节完全一致；若不一致，再采用规范化的 `-a --payload` 语义比较；
 5. 删除所有测试产生的临时文件。
 
@@ -2030,7 +2033,7 @@ call  ->  scene  ->  global
 
 #### 语句级约束
 
-1. profile `0`-`5` 中，`property` 语句只能出现在 `command` 体内部；顶层 `property` 虽然能被语法识别，但语义上是不良构。Profile `6`-`8` 允许在 `command` 外声明局部 `property`，仍使用 call property 的编号与存储语义；
+1. profile `0`-`5` 和 `9` 中，`property` 语句只能出现在 `command` 体内部；顶层 `property` 虽然能被语法识别，但语义上是不良构。Profile `6`-`8` 允许在 `command` 外声明局部 `property`，仍使用 call property 的编号与存储语义；
 2. `if`、`for`、`while` 的条件应为 `int` 或 `intref`；
 3. `switch` 条件应为 `int` / `intref` / `str` / `strref`；每个 `case` 值必须与条件同属整数家族或字符串家族；
 4. `goto` 表达式 form 为 `void`；`gosub` 为 `int`；`gosubstr` 为 `str`；

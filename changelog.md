@@ -3,6 +3,10 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.4.3] - 2026-09-21
+- Added const profile 9 for Rewrite Harvest festa!, with complete independent configuration tables. It exposes the legacy `global.world` property as `worldlist` at element code 47 instead of the `global.msgbtn` command; all other rules match profile 2, and profiles 0-8 remain unchanged. Python and Rust consume the same definitions without compiler backend changes.
+
+
 ## [v0.4.2] - 2026-09-20
 - Added const profile 8 for the Rewrite trial, with independent tables, legacy form codes, plain scene strings, a 100-entry z-label table, command-external local properties, and integer-reference preservation for the `key_skip` argument of `wipe` and `mask_wipe`. Python and Rust share the parameter rules; profiles 0-7 remain unchanged.
 - Separated Rust semantic type IDs from bytecode form codes so legacy aliases such as profile 8's `intlist` and `intlistref` remain distinct during member lookup and type checking while retaining their shared output code.

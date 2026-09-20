@@ -29,7 +29,7 @@ _PAYLOAD_SUMMARY_RE = re.compile(
     r"scene_data payload:\s+same=(\d+)\s+text_only=(\d+)\s+real_diff=(\d+)\s+unavailable=(\d+)"
 )
 
-_CONST_PROFILES = (0, 1, 2, 3, 4, 5, 6, 7, 8)
+_CONST_PROFILES = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 
 @dataclass

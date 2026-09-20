@@ -33,7 +33,7 @@ def _usage():
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
-        "  --const-profile Select const profile (0-8, default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; not with -c --tmp)\n"
+        "  --const-profile Select const profile (0-9, default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; 9 supports Rewrite Harvest festa!; not with -c --tmp)\n"
         "  --string-xor-multiplier Override scene-string XOR multiplier (0..0xFFFF; default: 0 for profiles 3, 5, and 8, 0x7087 otherwise; 0 disables this XOR only)\n"
         "  --              After a mode, treat all remaining arguments as positional\n"
         "\n"
@@ -178,7 +178,7 @@ def _usage():
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --serial       Disable parallel compilation during rebuild\n"
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
-        "    const-profile  Compile tries profiles 0, 1, 2, 3, 4, 5, 6, 7, then 8 before reporting failure\n"
+        "    const-profile  Compile tries profiles 0, 1, 2, 3, 4, 5, 6, 7, 8, then 9 before reporting failure\n"
     )
     sys.stdout.write(text)
 
@@ -270,9 +270,9 @@ def _consume_global_options(argv):
             profile = int(value, 0)
         except ValueError as exc:
             raise ValueError(f"invalid --const-profile value: {const_profile}") from exc
-        if profile not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
+        if profile not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9):
             raise ValueError(
-                f"invalid --const-profile value: {const_profile} (expected 0, 1, 2, 3, 4, 5, 6, 7, or 8)"
+                f"invalid --const-profile value: {const_profile} (expected 0, 1, 2, 3, 4, 5, 6, 7, 8, or 9)"
             )
 
     multiplier = 0x7087
