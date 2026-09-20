@@ -883,10 +883,17 @@ def norm_charset(cs: str) -> str:
     return name
 
 
-def decode_text_auto(data: bytes, force_charset: str = ""):
+def decode_text_auto(
+    data: bytes, force_charset: str = "", *, stop_at_dos_eof: bool = False
+):
     if not isinstance(data, (bytes, bytearray)):
         raise TypeError("data must be bytes")
     b = bytes(data)
+    cs = norm_charset(force_charset)
+    if force_charset and not cs:
+        raise ValueError(f"unsupported charset: {force_charset}")
+    if stop_at_dos_eof and cs in ("", "cp932", "utf-8"):
+        b = b.partition(b"\x1a")[0]
     had_bom = b.startswith(b"\xef\xbb\xbf")
 
     def _d8():
@@ -897,17 +904,32 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
         return b.decode("cp932", "strict")
 
     def _fix(t: str) -> str:
+        if stop_at_dos_eof:
+            t = t.partition("\x1a")[0]
         return t.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
 
-    cs = norm_charset(force_charset)
-    if force_charset and not cs:
-        raise ValueError(f"unsupported charset: {force_charset}")
     if cs:
         if cs == "cp932":
             return _fix(_d9()), "cp932", had_bom
         if cs == "utf-8":
             return _fix(_d8()), "utf-8", had_bom
-        return _fix(b.decode(cs, "strict")), cs, had_bom
+        try:
+            text = b.decode(cs, "strict")
+        except UnicodeDecodeError:
+            if not stop_at_dos_eof:
+                raise
+            decoder = codecs.getincrementaldecoder(cs)("strict")
+            parts = []
+            for i in range(len(b)):
+                part, eof, _ = decoder.decode(b[i : i + 1]).partition("\x1a")
+                if part:
+                    parts.append(part)
+                if eof:
+                    break
+            else:
+                parts.append(decoder.decode(b"", final=True))
+            text = "".join(parts)
+        return _fix(text), cs, had_bom
     t8 = t9 = None
     try:
         t8 = _d8()
@@ -949,14 +971,6 @@ def decode_text_auto(data: bytes, force_charset: str = ""):
     return _fix(t9), "cp932", had_bom
 
 
-def compile_source_bytes(data: bytes) -> bytes:
-    if not isinstance(data, (bytes, bytearray)):
-        raise TypeError("data must be bytes")
-    b = bytes(data)
-    eof = b.find(b"\x1a")
-    return b if eof < 0 else b[:eof]
-
-
 def read_text_auto(path: str, force_charset: str = "") -> str:
     data = read_bytes(path)
     return decode_text_auto(data, force_charset=force_charset)[0]
@@ -967,8 +981,11 @@ def read_compile_source(ctx: dict, path: str) -> str:
     name = os.path.basename(path)
     if name in source_texts:
         return source_texts[name]
-    data = compile_source_bytes(read_bytes(path))
-    return decode_text_auto(data, force_charset=ctx.get("charset_force") or "")[0]
+    return decode_text_auto(
+        read_bytes(path),
+        force_charset=ctx.get("charset_force") or "",
+        stop_at_dos_eof=True,
+    )[0]
 
 
 def first_line_text(text: str) -> str:

@@ -33,7 +33,6 @@ from .common import (
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
-    compile_source_bytes,
     content_digest,
     decode_text_auto,
     read_bytes,
@@ -281,7 +280,7 @@ def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, increment
     cur_ss = source_digests["ss"]
     full_compile = True
     cache_meta = {
-        "schema": 5,
+        "schema": 6,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
@@ -590,7 +589,7 @@ def _guess_charset_from_files(base_dir, ini, inc, ss):
             raise
         except Exception:
             continue
-        b = compile_source_bytes(b)
+        b = b.partition(b"\x1a")[0]
         if b.startswith(b"\xef\xbb\xbf"):
             return "utf-8"
         try:
@@ -623,7 +622,7 @@ def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_file
             source_bytes[name] = data
             if name in paths:
                 texts[name] = decode_text_auto(
-                    compile_source_bytes(data), force_charset=charset
+                    data, force_charset=charset, stop_at_dos_eof=True
                 )[0]
                 kind = paths[name]
                 if kind is not None:

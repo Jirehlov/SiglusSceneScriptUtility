@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - Added automatic original-source layout detection with SMD5 validation, including the non-interleaved layout used by the Rewrite trial. Extraction, analysis, and round-trip testing now report missing, truncated, or undecodable source sections explicitly.
 - Added const profile 6 for local `property` declarations outside `command`, with full independent configuration tables and round-trip fallback. Every profile explicitly controls this rule; profiles 0-5 reject it and profiles 6-8 accept it in both Python and Rust.
 - Added const profile 5 for nanami/Kisaragi, with `void` return types for `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key`, and no automatic message blocks before `global.ruby` calls. Profile 3 retains its original return types and message-block rules for TheGodofDeath HD.
-- Fixed DOS EOF handling across platforms by ending compile text at the first `0x1A` byte before charset detection and decoding, while preserving complete original source bytes and hashes.
+- Fixed DOS EOF handling across platforms by ending compile text at the first U+001A character in the selected encoding, without mistaking bytes inside UTF-16/UTF-32 characters for EOF. Invalid bytes after EOF are ignored, complete original source bytes and hashes are preserved, and older compile caches are invalidated.
 
 
 ## [v0.4.1] - 2026-09-16
