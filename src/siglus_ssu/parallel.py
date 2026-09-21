@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 import siglus_ssu as _runtime
+from . import const as C
 from .native_ops import find_shuffle_seed_first, is_native_available
 from .path_policy import resolve_read_path
 
@@ -44,18 +45,15 @@ def _init_process(
     legacy_full,
     multiplier,
     multiplier_explicit,
-    const_path,
     const_profile,
     initializer,
     initargs,
 ):
-    from ._const_manager import load_const_module
-
     _runtime._LEGACY_COMPILE = legacy_compile
     _runtime._LEGACY_FULL = legacy_full
     _runtime._SCENE_STRING_XOR_MULTIPLIER = multiplier
     _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = multiplier_explicit
-    load_const_module(path=const_path, profile=const_profile)
+    C.set_profile(const_profile)
     if initializer is not None:
         initializer(*initargs)
 
@@ -63,9 +61,7 @@ def _init_process(
 @contextmanager
 def process_pool(max_workers: int, initializer=None, initargs=()):
     from concurrent.futures import ProcessPoolExecutor
-    from ._const_manager import get_const_module
 
-    const_module = get_const_module()
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
         with ProcessPoolExecutor(
@@ -76,8 +72,7 @@ def process_pool(max_workers: int, initializer=None, initargs=()):
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
-                getattr(const_module, "__file__", None),
-                getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None),
+                C.CONST_PROFILE,
                 initializer,
                 initargs,
             ),
@@ -124,11 +119,9 @@ def parallel_process_completed_map(
                 on_result(item, result)
         return results
     from concurrent.futures import ProcessPoolExecutor
-    from ._const_manager import get_const_module
 
     workers = min(get_max_workers(max_workers), len(item_list))
     results = [None] * len(item_list)
-    const_module = get_const_module()
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
         executor = ProcessPoolExecutor(
@@ -139,8 +132,7 @@ def parallel_process_completed_map(
                 _runtime._LEGACY_FULL,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER,
                 _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
-                getattr(const_module, "__file__", None),
-                getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None),
+                C.CONST_PROFILE,
                 initializer,
                 initargs,
             ),
@@ -217,13 +209,8 @@ def _init_compile_worker(
     enc: str,
     utf8: bool,
     debug_outputs: bool,
-    const_path: str | None,
-    const_profile: int | None,
 ) -> None:
     global _COMPILE_WORKER_STATE
-    from ._const_manager import load_const_module
-
-    load_const_module(path=const_path, profile=const_profile)
     _COMPILE_WORKER_STATE = (tmp_path, ia_data, enc, utf8, debug_outputs)
 
 
@@ -282,7 +269,6 @@ def parallel_compile(
         merge_macro_stat_counts,
         merge_source_stat_counts,
     )
-    from ._const_manager import get_const_module
     from .common import format_scene_name
 
     workers = get_max_workers(max_workers)
@@ -292,9 +278,6 @@ def parallel_compile(
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
     source_texts = ctx.get("source_texts") or {}
-    const_module = get_const_module()
-    const_path = getattr(const_module, "_SIGLUS_SSU_CONST_SOURCE_PATH", None)
-    const_profile = getattr(const_module, "_SIGLUS_SSU_CONST_PROFILE", None)
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
     errors = []
     completed = 0
@@ -312,8 +295,6 @@ def parallel_compile(
             enc,
             utf8,
             debug_outputs,
-            const_path,
-            const_profile,
         ),
     ) as executor:
         futures = [

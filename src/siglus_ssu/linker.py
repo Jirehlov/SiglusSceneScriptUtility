@@ -1,7 +1,7 @@
 import os
 import struct
 import time
-from ._const_manager import get_const_module
+from . import const as C
 from .CA import new_replace_tree
 from .common import (
     ascii_lower,
@@ -26,8 +26,6 @@ from .common import (
 from .BS import build_ia_data
 from .native_ops import xor_cycle_inplace
 from .path_policy import resolve_read_path
-
-C = get_const_module()
 
 
 def _make_original_source_rel_list(ctx):

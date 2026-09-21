@@ -5,7 +5,7 @@ import struct
 import sys
 import time
 from .path_policy import read_file_stat, resolve_read_path
-from ._const_manager import get_const_module
+from . import const as C
 from . import disam
 from . import pck
 from .decompiler import build_decompile_hints, write_decompiled_ss
@@ -36,8 +36,6 @@ from .common import (
     format_exe_el_source,
     scene_string_xor_key,
 )
-
-C = get_const_module()
 
 
 def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):

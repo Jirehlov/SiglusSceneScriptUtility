@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.4.3 (check the installed version with `siglus-ssu --version`)
+**Version:** 0.5.0 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -21,7 +21,6 @@
    - [Python Module API](#python-module-api)
    - [Getting Help](#getting-help)
 4. [Modes Reference](#modes-reference)
-   - [init — Install / Refresh Required Constants](#init--install--refresh-required-constants)
    - [-lsp — Start the Language Server](#-lsp--start-the-language-server)
    - [-c / --compile — Compile Scripts](#-c----compile--compile-scripts)
    - [-x / --extract — Extract Files](#-x----extract--extract-files)
@@ -68,17 +67,11 @@
 pip install siglus-ssu
 ```
 
-After installation, if this machine does not already have a verified user-data `const.py`, run `init` once to install it:
-
-```bash
-siglus-ssu init
-```
+All wheels and source distributions include `const.py`. Constants are loaded only from the installed package, so no separate download or network access is needed after installation. Upgrade `siglus-ssu` to update the bundled constants.
 
 > **Note:** Python 3.12 or later is required. PyPI publishes platform wheels with the native Rust extension and a universal `py3-none-any` pure-Python fallback wheel. If no compatible native wheel is available, pip can install the pure-Python wheel; supported operations use Python fallbacks and may run more slowly. Build from source with Rust only when native acceleration is required on that platform.
->
-> `const.py` is stored in a platform-specific user data directory:
-> - **Windows:** `%APPDATA%\siglus-ssu\const.py`
-> - **Unix/Linux/macOS:** `~/.local/share/siglus-ssu/const.py` (or `$XDG_DATA_HOME/siglus-ssu/const.py`)
+
+Starting with v0.5.0, `init` and `--init` are removed. Delete initialization steps from existing scripts. Old user-data copies at `%APPDATA%\siglus-ssu\const.py` or `$XDG_DATA_HOME/siglus-ssu/const.py` (default: `~/.local/share/siglus-ssu/const.py`) are ignored and left untouched for older installations. If the bundled file is missing, reinstall the package.
 
 ### Option 2: Install from Source
 
@@ -105,11 +98,7 @@ siglus-ssu init
    uv run siglus-ssu --help
    ```
 
-   When running from this repository checkout, the bundled `src/siglus_ssu/const.py` is searched before the user-data copy. That means commands usually work immediately after `uv sync`. Run `uv run siglus-ssu init` only when you want to install or refresh the user-data copy, or when you are running from a layout that does not include the bundled source copy:
-
-   ```bash
-   uv run siglus-ssu init
-   ```
+   Source-checkout runs use `src/siglus_ssu/const.py` directly. No separate initialization is required.
 
 ---
 
@@ -157,7 +146,7 @@ Profile `7` independently defines the same form/element codes, message-block rul
 
 Profile `8` defines its tables independently. It uses profile `5`'s command return types, message-block, read-flag and selection-block rules, and plain scene strings, with `frameaction = 1212` and `intlistref = 11`. It allows local properties outside commands, has a `100`-entry z-label table, and retains higher precedence for `&&` than `||`. Its `NAMED_INT_REFERENCE_ARGUMENTS` table preserves integer variable references only for `global.wipe(key_skip=...)` and `global.mask_wipe(key_skip=...)`; constants and other integer value expressions remain values. Profiles `0`-`7` and `9` explicitly use empty tables. The same parameter metadata drives Python and Rust compilation.
 
-Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these definitions. After upgrading from an older release, run `siglus-ssu init --force` to refresh an existing user-data `const.py` before selecting profile `9`.
+Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
 
 Each profile has a `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3`, `5`, `6`, `8`, and `9` retain the existing selection-command rules; profiles `4` and `7` use empty tables, so compiling selection commands does not emit `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`. This table also determines static restrictions on selection commands in expressions, with the same settings used by the Python and Rust compile backends. Profile numbers do not indicate engine version order.
 
@@ -191,7 +180,6 @@ The CLI also accepts a few convenience aliases:
 
 - `siglus-ssu help` behaves the same as `siglus-ssu --help`
 - `siglus-ssu version` behaves the same as `siglus-ssu --version`
-- `siglus-ssu --init ...` behaves the same as `siglus-ssu init ...`
 
 After selecting a mode and any required sub-operation, `--` ends option parsing so that a positional path beginning with `-` can be passed unchanged, for example `siglus-ssu test -- --sample.pck`. All options, including global options, must precede `--`. For an option value whose path begins with `-`, use an absolute path or prefix the relative path with `./`.
 
@@ -217,46 +205,6 @@ siglus-ssu -c --help
 ---
 
 ## Modes Reference
-
-### `init` — Install / Refresh Required Constants
-
-Installs the user-data `const.py` file containing engine-specific constants (opcode tables, key derivation parameters, etc.). When the file is missing or you force a refresh, `init` downloads it from the project's GitHub repository.
-
-At normal startup, the loader searches a source-tree copy at `src/siglus_ssu/const.py` before the user-data copy. In this repository checkout, that bundled file is present, so source-tree runs may use it even after `init` installs a user-data copy.
-
-Before using any mode other than `init`, make sure at least one verified `const.py` will be found. PyPI installs rely on the user-data copy because wheels exclude the bundled source-tree `const.py`; source-checkout runs from this repository can also use the bundled `src/siglus_ssu/const.py`.
-
-#### Syntax
-
-```
-siglus-ssu init [--force | -f] [--ref <git-ref>]
-```
-
-#### Parameters
-
-| Parameter | Description |
-|---|---|
-| `--force`, `-f` | Overwrite the user-data `const.py` even if one already exists. |
-| `--ref <git-ref>` | Choose the Git branch, tag, or commit hash used when `init` downloads `const.py`. If the user-data target already exists, pair `--ref` with `--force` to actually redownload it. By default, `init` tries refs associated with the current package version, including matching version commits discovered from git/GitHub and tag-like refs. |
-
-`init` only needs GitHub API access when it actually has to fetch `const.py`. If `--force` is not specified and the user-data target already exists, the command reuses that file instead of downloading it again, then verifies it while loading.
-
-Any downloaded `const.py` is verified against a built-in SHA-512 allowlist. The default download refs are derived from the current package version; explicit `--ref` values still work as long as they resolve to an allowlisted `const.py` content.
-
-#### Examples
-
-```bash
-# Ensure the default user-data const.py is installed
-siglus-ssu init
-
-# Redownload into the user-data location even if const.py already exists
-siglus-ssu init --force
-
-# Force a download from a specific tagged release
-siglus-ssu init --force --ref v0.4.3
-```
-
----
 
 ### `-lsp` — Start the Language Server
 

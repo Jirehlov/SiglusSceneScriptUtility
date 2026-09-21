@@ -1,8 +1,6 @@
 import copy
-from ._const_manager import get_const_module
+from . import const as C
 from .common import normalize_atom
-
-C = get_const_module()
 
 
 def _form_name(f):
@@ -163,7 +161,7 @@ class FormTable:
                     parent,
                     name,
                     arg.get("name"),
-                ) in getattr(C, "NAMED_INT_REFERENCE_ARGUMENTS", ())
+                ) in C.NAMED_INT_REFERENCE_ARGUMENTS
             info = {
                 "type": et,
                 "code": C.create_elm_code(owner, group, int(code)),
@@ -309,10 +307,6 @@ class MA:
             else {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0}
         )
 
-    @staticmethod
-    def _is_sel_cmd(parent_form, element_code):
-        return bool(C.is_global_sel_command(parent_form, element_code))
-
     def analize(s):
         s.psad["command_in"] = 0
         if not s.ma_ss((s.psad or {}).get("root")):
@@ -391,9 +385,7 @@ class MA:
         return 1
 
     def ma_def_prop(s, n):
-        if s.psad.get("command_in", 0) == 0 and not getattr(
-            C, "ALLOW_PROPERTY_OUT_OF_COMMAND", False
-        ):
+        if s.psad.get("command_in", 0) == 0 and not C.ALLOW_PROPERTY_OUT_OF_COMMAND:
             return s.error(
                 "TNMSERR_MA_PROPERTY_OUT_OF_COMMAND",
                 (n or {}).get("Property", {}).get("atom"),
@@ -912,7 +904,9 @@ class MA:
                         (n.get("name") or {}).get("atom"),
                     )
                 n["arg_list_id"] = aid
-                if sel is not None and s._is_sel_cmd(parent, n.get("element_code", 0)):
+                if sel is not None and C.is_global_sel_command(
+                    parent, n.get("element_code", 0)
+                ):
                     sel[0] = True
             return 1
         if n.get("node_type") == C.NT_ELM_ARRAY:

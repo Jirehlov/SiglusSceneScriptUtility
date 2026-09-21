@@ -2,7 +2,7 @@ import csv
 import os
 import re
 import sys
-from ._const_manager import get_const_module
+from . import const as C
 from . import dat
 from . import pck
 from . import sound
@@ -24,7 +24,6 @@ from .path_policy import (
     walk_read_directory,
 )
 
-C = get_const_module()
 _VOICE_CALL_NAMES = frozenset(
     {
         "koe",

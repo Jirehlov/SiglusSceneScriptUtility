@@ -5,7 +5,7 @@ import struct
 import hashlib
 import re
 import siglus_ssu as _runtime
-from ._const_manager import get_const_module
+from . import const as C
 from .path_policy import (
     FilenameCaseCollisionError,
     open_read,
@@ -15,7 +15,6 @@ from .path_policy import (
     windows_filename_key,
 )
 
-C = get_const_module()
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
@@ -44,36 +43,17 @@ def merge_macro_stat_counts(dst, src):
         dst[kind]["unused"] += src[kind]["unused"]
 
 
-def invert_form_code_map(const_module=None):
-    constants = C if const_module is None else const_module
-    out = {}
-    fm = constants._FORM_CODE
-    if isinstance(fm, dict):
-        for k, v in fm.items():
-            out[int(v)] = str(k)
-    return out
+def invert_form_code_map():
+    return {int(code): name for name, code in C._FORM_CODE.items()}
 
 
-def augment_receiver_form_codes(forms=None, const_module=None):
-    constants = C if const_module is None else const_module
-    out = set()
-    for form in forms or ():
-        try:
-            out.add(int(form))
-        except (TypeError, ValueError):
-            continue
-    fm = constants._FORM_CODE
-    if not isinstance(fm, dict):
-        fm = {}
-    for name in (
-        constants.FM_INTREF,
-        constants.FM_STRREF,
-        constants.FM_INTLISTREF,
-        constants.FM_STRLISTREF,
-    ):
-        if name in fm:
-            out.add(int(fm[name]))
-    return out
+def augment_receiver_form_codes(forms):
+    return set(forms) | {
+        C._FORM_CODE[C.FM_INTREF],
+        C._FORM_CODE[C.FM_STRREF],
+        C._FORM_CODE[C.FM_INTLISTREF],
+        C._FORM_CODE[C.FM_STRLISTREF],
+    }
 
 
 def quote_ss_text(text):
@@ -434,54 +414,41 @@ def split_element_code(code):
     return ((code >> 24) & 0xFF, code & 0xFFFF)
 
 
-def build_operator_render_tables(const_module=None):
-    constants = C if const_module is None else const_module
-    unary_int_ops = {
-        int(x)
-        for x in (
-            getattr(constants, "OP_PLUS", -1),
-            getattr(constants, "OP_MINUS", -1),
-            getattr(constants, "OP_TILDE", -1),
-        )
-        if isinstance(x, int)
-    }
+def build_operator_render_tables():
+    unary_int_ops = {C.OP_PLUS, C.OP_MINUS, C.OP_TILDE}
     string_cmp_ops = {
-        int(x)
-        for x in (
-            getattr(constants, "OP_EQUAL", -1),
-            getattr(constants, "OP_NOT_EQUAL", -1),
-            getattr(constants, "OP_GREATER", -1),
-            getattr(constants, "OP_GREATER_EQUAL", -1),
-            getattr(constants, "OP_LESS", -1),
-            getattr(constants, "OP_LESS_EQUAL", -1),
-        )
-        if isinstance(x, int)
+        C.OP_EQUAL,
+        C.OP_NOT_EQUAL,
+        C.OP_GREATER,
+        C.OP_GREATER_EQUAL,
+        C.OP_LESS,
+        C.OP_LESS_EQUAL,
     }
     unary_text = {
-        int(getattr(constants, "OP_PLUS", -1)): "+",
-        int(getattr(constants, "OP_MINUS", -1)): "-",
-        int(getattr(constants, "OP_TILDE", -1)): "~",
+        C.OP_PLUS: "+",
+        C.OP_MINUS: "-",
+        C.OP_TILDE: "~",
     }
     binary_text = {
-        int(getattr(constants, "OP_PLUS", -1)): "+",
-        int(getattr(constants, "OP_MINUS", -1)): "-",
-        int(getattr(constants, "OP_MULTIPLE", -1)): "*",
-        int(getattr(constants, "OP_DIVIDE", -1)): "/",
-        int(getattr(constants, "OP_AMARI", -1)): "%",
-        int(getattr(constants, "OP_EQUAL", -1)): "==",
-        int(getattr(constants, "OP_NOT_EQUAL", -1)): "!=",
-        int(getattr(constants, "OP_GREATER", -1)): ">",
-        int(getattr(constants, "OP_GREATER_EQUAL", -1)): ">=",
-        int(getattr(constants, "OP_LESS", -1)): "<",
-        int(getattr(constants, "OP_LESS_EQUAL", -1)): "<=",
-        int(getattr(constants, "OP_LOGICAL_AND", -1)): "&&",
-        int(getattr(constants, "OP_LOGICAL_OR", -1)): "||",
-        int(getattr(constants, "OP_AND", -1)): "&",
-        int(getattr(constants, "OP_OR", -1)): "|",
-        int(getattr(constants, "OP_HAT", -1)): "^",
-        int(getattr(constants, "OP_SL", -1)): "<<",
-        int(getattr(constants, "OP_SR", -1)): ">>",
-        int(getattr(constants, "OP_SR3", -1)): ">>>",
+        C.OP_PLUS: "+",
+        C.OP_MINUS: "-",
+        C.OP_MULTIPLE: "*",
+        C.OP_DIVIDE: "/",
+        C.OP_AMARI: "%",
+        C.OP_EQUAL: "==",
+        C.OP_NOT_EQUAL: "!=",
+        C.OP_GREATER: ">",
+        C.OP_GREATER_EQUAL: ">=",
+        C.OP_LESS: "<",
+        C.OP_LESS_EQUAL: "<=",
+        C.OP_LOGICAL_AND: "&&",
+        C.OP_LOGICAL_OR: "||",
+        C.OP_AND: "&",
+        C.OP_OR: "|",
+        C.OP_HAT: "^",
+        C.OP_SL: "<<",
+        C.OP_SR: ">>",
+        C.OP_SR3: ">>>",
     }
     return unary_int_ops, string_cmp_ops, unary_text, binary_text
 
@@ -505,11 +472,11 @@ def binary_result_form(form_l, form_r, opr, fm_int, fm_str, string_cmp_ops):
     if form_l == int(fm_int) and form_r == int(fm_int):
         return fm_int
     if form_l == int(fm_str) and form_r == int(fm_int):
-        if opr == int(getattr(C, "OP_MULTIPLE", -1)):
+        if opr == C.OP_MULTIPLE:
             return fm_str
         return None
     if form_l == int(fm_str) and form_r == int(fm_str):
-        if opr == int(getattr(C, "OP_PLUS", -1)):
+        if opr == C.OP_PLUS:
             return fm_str
         if opr in string_cmp_ops:
             return fm_int

@@ -9,7 +9,7 @@ import csv
 import tempfile
 from contextlib import suppress
 import siglus_ssu as _runtime
-from ._const_manager import get_const_module, package_version
+from . import const as C, package_version
 from .BS import (
     compile_all,
     compile_one,
@@ -103,7 +103,6 @@ class _CompileCacheLock:
             self.file.close()
 
 
-C = get_const_module()
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
 
@@ -284,8 +283,8 @@ def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, increment
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
-        "const_profile": int(getattr(C, "CONST_PROFILE", 0) or 0),
-        "const_sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+        "const_profile": C.CONST_PROFILE,
+        "const_sha512": C.CONST_SHA512,
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
     if incremental:
@@ -867,12 +866,6 @@ def _print_summary(ctx, ok=False):
 def _native_compile_constants_config():
     from .MA import FormTable
 
-    def _const_int(name):
-        value = getattr(C, name, None)
-        if value is None:
-            return 0
-        return int(value)
-
     form_table = FormTable()
     form_table.create_system_form_table()
     system_elements = []
@@ -948,16 +941,16 @@ def _native_compile_constants_config():
             name: int(getattr(C, name)) for name in dir(C) if name.startswith("CD_")
         },
         "element_code": {
-            "ELM_ARRAY": _const_int("ELM_ARRAY"),
-            "ELM_GLOBAL_CUR_CALL": _const_int("ELM_GLOBAL_CUR_CALL"),
-            "ELM_GLOBAL_MSG_BLOCK": _const_int("ELM_GLOBAL_MSG_BLOCK"),
-            "ELM_OWNER_CALL_PROP": _const_int("ELM_OWNER_CALL_PROP"),
-            "ELM_OWNER_USER_CMD": _const_int("ELM_OWNER_USER_CMD"),
-            "ELM_OWNER_USER_PROP": _const_int("ELM_OWNER_USER_PROP"),
+            "ELM_ARRAY": C.ELM_ARRAY,
+            "ELM_GLOBAL_CUR_CALL": C.ELM_GLOBAL_CUR_CALL,
+            "ELM_GLOBAL_MSG_BLOCK": C.ELM_GLOBAL_MSG_BLOCK,
+            "ELM_OWNER_CALL_PROP": C.ELM_OWNER_CALL_PROP,
+            "ELM_OWNER_USER_CMD": C.ELM_OWNER_USER_CMD,
+            "ELM_OWNER_USER_PROP": C.ELM_OWNER_USER_PROP,
         },
         "element_type": {
-            "ET_COMMAND": _const_int("ET_COMMAND"),
-            "ET_PROPERTY": _const_int("ET_PROPERTY"),
+            "ET_COMMAND": C.ET_COMMAND,
+            "ET_PROPERTY": C.ET_PROPERTY,
         },
         "system_elements": system_elements,
         "scn_header_fields": list(C.SCN_HDR_FIELDS),
@@ -965,7 +958,7 @@ def _native_compile_constants_config():
         "pack_header_fields": list(C.PACK_HDR_FIELDS),
         "pack_header_size": int(C.PACK_HDR_SIZE),
         "z_label_count": int(C.TNM_Z_LABEL_CNT),
-        "logical_and_precedence": int(getattr(C, "LOGICAL_AND_PRECEDENCE", 2)),
+        "logical_and_precedence": C.LOGICAL_AND_PRECEDENCE,
         "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
         "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
         "exe_org": bytes(C.EXE_ORG),
@@ -979,9 +972,7 @@ def _native_compile_constants_config():
             [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
         ],
         "selection_command_codes": selection_command_codes,
-        "allow_property_out_of_command": bool(
-            getattr(C, "ALLOW_PROPERTY_OUT_OF_COMMAND", False)
-        ),
+        "allow_property_out_of_command": C.ALLOW_PROPERTY_OUT_OF_COMMAND,
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
 

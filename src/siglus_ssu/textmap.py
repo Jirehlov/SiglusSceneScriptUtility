@@ -7,7 +7,7 @@ from . import BS
 from . import LA
 from . import MA
 from . import SA
-from ._const_manager import get_const_module
+from . import const as C
 from . import dat as DAT
 from . import pck
 from .native_ops import lzss_pack, xor_cycle_inplace
@@ -29,7 +29,6 @@ from .common import (
 )
 from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
 
-C = get_const_module()
 TEXTMAP_KIND_DIALOGUE = 1
 TEXTMAP_KIND_NAME = 2
 TEXTMAP_KIND_OTHER = 3

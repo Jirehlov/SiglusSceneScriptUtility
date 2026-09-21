@@ -1114,9 +1114,6 @@ class _PlayerScreen:
         size = shutil.get_terminal_size(fallback=(120, 30))
         return max(int(size.columns), 40), max(int(size.lines), 12)
 
-    def _fit(self, text: str, width: int) -> str:
-        return _fit_terminal_text(text, width)
-
     def _compose_lines(self, lines) -> str:
         return "\x1b[K\r\n".join(lines) + "\x1b[K"
 
@@ -1172,7 +1169,7 @@ class _PlayerScreen:
             if index == current_index:
                 marker = "||" if paused else ">>"
             text = f"{marker} {index + 1:>3}. {entries[index].display_name}"
-            lines.append(self._fit(text, width))
+            lines.append(_fit_terminal_text(text, width))
         return header, lines
 
     def _prompt_line(self, width: int) -> tuple[str, int]:
@@ -1271,10 +1268,10 @@ class _PlayerScreen:
             resource_path = os.path.abspath(current.plan.entry.path)
         else:
             resource_path = os.path.abspath(entries[current_index].path)
-        lines.append(self._fit(resource_path, width))
+        lines.append(_fit_terminal_text(resource_path, width))
         if current is None:
-            lines.append(self._fit("state stopped", width))
-            lines.append(self._fit("[>.......] 00:00/00:00", width))
+            lines.append(_fit_terminal_text("state stopped", width))
+            lines.append(_fit_terminal_text("[>.......] 00:00/00:00", width))
         else:
             plan = current.plan
             position_sample, phase = _get_playback_position_sample(current)
@@ -1289,18 +1286,18 @@ class _PlayerScreen:
                 state_text = phase
             bar_width = min(width - 24, 60)
             lines.append(
-                self._fit(
+                _fit_terminal_text(
                     f"bgm {plan.bgm_name}  state {state_text}  start {_format_player_time(plan.start_sample / plan.sample_rate)}  loop {_format_player_time(plan.repeat_sample / plan.sample_rate)}  end {_format_player_time(end_sec)}",
                     width,
                 )
             )
             lines.append(
-                self._fit(
+                _fit_terminal_text(
                     f"[{_build_progress_bar(progress, bar_width)}] {_format_player_time(position_sec)}/{_format_player_time(end_sec)}",
                     width,
                 )
             )
-        lines.append(self._fit(_format_playlist_help(len(entries) > 1), width))
+        lines.append(_fit_terminal_text(_format_playlist_help(len(entries) > 1), width))
         footer_rows = 2
         playlist_rows = height - len(lines) - footer_rows
         playlist_header, playlist_lines = self._build_playlist_lines(
@@ -1310,13 +1307,13 @@ class _PlayerScreen:
             playlist_rows - 1,
             width,
         )
-        lines.append(self._fit(playlist_header, width))
+        lines.append(_fit_terminal_text(playlist_header, width))
         lines.extend(playlist_lines)
         while len(lines) < height - footer_rows:
             lines.append("")
-        lines.append(self._fit(self.message, width))
+        lines.append(_fit_terminal_text(self.message, width))
         prompt_line, prompt_col = self._prompt_line(width)
-        lines.append(self._fit(prompt_line, width))
+        lines.append(_fit_terminal_text(prompt_line, width))
         size = (width, height)
         frame = (
             ("\x1b[2J\x1b[H" if size != self._last_size else "\x1b[H")

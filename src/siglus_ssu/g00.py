@@ -3,7 +3,7 @@ import struct
 import sys
 import re
 from pathlib import Path
-from ._const_manager import get_const_module
+from . import const as C
 from .native_ops import (
     lzss_unpack,
     lzss_pack,
@@ -26,7 +26,6 @@ from .path_policy import (
     windows_filename_key,
 )
 
-C = get_const_module()
 try:
     from PIL import Image, ImageChops
 except Exception:

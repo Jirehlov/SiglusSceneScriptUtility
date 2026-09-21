@@ -1,11 +1,10 @@
 import os
 import re
 import struct
-from ._const_manager import get_const_module
+from . import const as C
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
 from .common import content_digest, dn
 
-C = get_const_module()
 
 _GLOBAL_APPLY_INT_RE = re.compile(r"^(G|Z|cg_table|bgm_table)\[(\d+)\]\s*:\s*(.*?)\s*$")
 _GLOBAL_APPLY_CHRKOE_RE = re.compile(r"^chrkoe\[(\d+)\]\.look_flag\s*:\s*(.*?)\s*$")

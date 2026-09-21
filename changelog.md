@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.0] - 2026-09-21
+- Bundled `const.py` in native wheels, pure-Python wheels, and source distributions. Constants now follow the installed package version and work offline without a separate download.
+- Removed `init` / `--init`, the const manager, GitHub download and version-ref discovery, and the external-file SHA-512 allowlist. Existing user-data copies are ignored and left untouched.
+
+
 ## [v0.4.3] - 2026-09-21
 - Added const profile 9 for Rewrite Harvest festa!, with complete independent configuration tables. It exposes the legacy `global.world` property as `worldlist` at element code 47 instead of the `global.msgbtn` command; all other rules match profile 2, and profiles 0-8 remain unchanged. Python and Rust consume the same definitions without compiler backend changes.
 

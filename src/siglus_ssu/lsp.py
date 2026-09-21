@@ -10,7 +10,7 @@ import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
-from ._const_manager import get_const_module
+from . import const as C, package_version
 from .BS import BS, copy_ia_data
 from .CA import (
     CharacterAnalizer,
@@ -24,7 +24,6 @@ from .IA import IncAnalyzer
 from .LA import la_analize
 from .MA import MA, FormTable
 from .SA import SA
-from ._const_manager import package_version
 from .common import (
     ascii_lower,
     build_empty_ia_data,
@@ -46,7 +45,6 @@ from .path_policy import (
     windows_filename_key,
 )
 
-C = get_const_module()
 SEVERITY_ERROR = 1
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
@@ -438,7 +436,7 @@ def _format_form(form: Any) -> str:
         fv = int(form)
     except (TypeError, ValueError):
         return str(form)
-    for name, code in getattr(C, "_FORM_CODE", {}).items():
+    for name, code in C._FORM_CODE.items():
         try:
             if int(code) == fv:
                 return str(name)
@@ -2884,7 +2882,7 @@ def _builtin_records() -> dict[str, list[DefinitionRecord]]:
 
 
 BUILTIN_RECORDS = _builtin_records()
-FORM_NAMES = sorted({str(k) for k in getattr(C, "_FORM_CODE", {}).keys()})
+FORM_NAMES = sorted({str(k) for k in C._FORM_CODE.keys()})
 KEYWORDS = sorted(KEYWORD_DOCS)
 DIRECTIVES = sorted(DIRECTIVE_DOCS)
 
@@ -3358,8 +3356,8 @@ def _lsp_index_cache_path(directory: str, inputs: dict[str, dict[str, str]]) -> 
 
 def _lsp_index_const_signature() -> dict[str, Any]:
     return {
-        "profile": getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
-        "sha512": str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
+        "profile": C.CONST_PROFILE,
+        "sha512": C.CONST_SHA512,
     }
 
 

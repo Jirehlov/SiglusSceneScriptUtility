@@ -1,5 +1,5 @@
 from functools import lru_cache
-from ._const_manager import get_const_module
+from . import const as C
 from .common import (
     eprint,
     mark_named_usage,
@@ -7,8 +7,6 @@ from .common import (
     next_elseif_ifdef_state,
     scan_text_comments,
 )
-
-C = get_const_module()
 
 
 def is_alpha(c):

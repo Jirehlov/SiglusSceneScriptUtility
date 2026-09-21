@@ -1,4 +1,4 @@
-from ._const_manager import get_const_module
+from . import const as C
 from .CA import (
     CharacterAnalizer,
     get_form_code_by_name,
@@ -14,8 +14,6 @@ from .common import (
     scan_text_comments,
     to_i32,
 )
-
-C = get_const_module()
 
 
 class IncAnalyzer:

@@ -1,7 +1,6 @@
-from ._const_manager import get_const_module
+from . import const as C
 from .common import hx, read_i32_le_advancing, print_limited_diffs
 
-C = get_const_module()
 _GAN_CODE_VERSION = 10000
 _GAN_VERSION_10000 = 10000
 _GAN_OPS = {
@@ -16,10 +15,6 @@ _GAN_OPS = {
     30105: "Z",
     999999: "PAT_END",
 }
-
-
-def _gan_read_i32(blob, ofs):
-    return read_i32_le_advancing(blob, ofs)
 
 
 def _gan_parse(blob, want_disasm=True):
@@ -38,8 +33,8 @@ def _gan_parse(blob, want_disasm=True):
         out["errors"].append("too small for gan header")
         return out
     ofs = 0
-    cv, ofs = _gan_read_i32(blob, ofs)
-    ver, ofs = _gan_read_i32(blob, ofs)
+    cv, ofs = read_i32_le_advancing(blob, ofs)
+    ver, ofs = read_i32_le_advancing(blob, ofs)
     out["code_version"] = cv
     out["version"] = ver
     if want_disasm:
@@ -69,11 +64,11 @@ def _gan_parse(blob, want_disasm=True):
     while ofs < len(blob) and ins_cnt < 200000:
         ins_cnt += 1
         ofs0 = ofs
-        code, ofs = _gan_read_i32(blob, ofs)
+        code, ofs = read_i32_le_advancing(blob, ofs)
         if code is None:
             break
         if code == 10100:
-            ln, ofs = _gan_read_i32(blob, ofs)
+            ln, ofs = read_i32_le_advancing(blob, ofs)
             if ln is None:
                 out["ok"] = False
                 out["errors"].append(f"truncated at {hx(ofs0)}")
@@ -88,7 +83,7 @@ def _gan_parse(blob, want_disasm=True):
             _add_ins(ofs0, code, ln, s)
             continue
         if code == 20000:
-            set_cnt, ofs = _gan_read_i32(blob, ofs)
+            set_cnt, ofs = read_i32_le_advancing(blob, ofs)
             if set_cnt is None:
                 out["ok"] = False
                 out["errors"].append(f"truncated at {hx(ofs0)}")
@@ -100,7 +95,7 @@ def _gan_parse(blob, want_disasm=True):
                 break
             for _si in range(set_cnt):
                 ofs1 = ofs
-                c2, ofs = _gan_read_i32(blob, ofs)
+                c2, ofs = read_i32_le_advancing(blob, ofs)
                 if c2 is None:
                     out["ok"] = False
                     out["errors"].append(f"truncated at {hx(ofs1)}")
@@ -109,7 +104,7 @@ def _gan_parse(blob, want_disasm=True):
                     out["warnings"].append(
                         f"expected PAT_COUNT(30000) but got {c2!r} at {hx(ofs1)}"
                     )
-                pat_cnt, ofs = _gan_read_i32(blob, ofs)
+                pat_cnt, ofs = read_i32_le_advancing(blob, ofs)
                 if pat_cnt is None:
                     out["ok"] = False
                     out["errors"].append(f"truncated at {hx(ofs1)}")
@@ -129,7 +124,7 @@ def _gan_parse(blob, want_disasm=True):
                     }
                     while True:
                         ofs2 = ofs
-                        c3, ofs = _gan_read_i32(blob, ofs)
+                        c3, ofs = read_i32_le_advancing(blob, ofs)
                         if c3 is None:
                             out["ok"] = False
                             out["errors"].append(f"truncated at {hx(ofs2)}")
@@ -140,7 +135,7 @@ def _gan_parse(blob, want_disasm=True):
                             pat["keika_time"] = keika
                             s["pats"].append(pat)
                             break
-                        val, ofs = _gan_read_i32(blob, ofs)
+                        val, ofs = read_i32_le_advancing(blob, ofs)
                         if val is None:
                             out["ok"] = False
                             out["errors"].append(f"truncated at {hx(ofs2)}")

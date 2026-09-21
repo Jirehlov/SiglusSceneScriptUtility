@@ -3,6 +3,7 @@ import sys
 from importlib import import_module
 
 import siglus_ssu as _runtime
+from . import package_version
 
 
 def _prog():
@@ -12,22 +13,16 @@ def _prog():
     return p
 
 
-def _get_version() -> str:
-    from ._const_manager import package_version
-
-    return package_version() or "unknown"
-
-
 def _print_version() -> None:
     p = _prog()
-    sys.stdout.write(f"{p} {_get_version()}\n")
+    sys.stdout.write(f"{p} {package_version() or 'unknown'}\n")
 
 
 def _usage():
     p = _prog()
     text = (
-        f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"{p} {package_version() or 'unknown'}\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
@@ -39,7 +34,6 @@ def _usage():
         "\n"
         "Modes:\n"
         "  -lsp            Start the SiglusSceneScript language server (stdio LSP)\n"
-        "  init            Download required const.py\n"
         "  -c, --compile   Compile scripts\n"
         "  -x, --extract   Extract/decompile .pck, disassemble .dat, or restore Gameexe.ini from Gameexe.dat\n"
         "  -a, --analyze   Analyze/compare files\n"
@@ -53,11 +47,6 @@ def _usage():
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
         "  -t, --tutorial  Generate static tutorial graph JSON from a .pck\n"
         "  test            Round-trip compile-test .pck files with embedded original sources; reports EXACT or PAYLOAD_SAME\n"
-        "\n"
-        "Init mode:\n"
-        f"  {p} init [--force|-f] [--ref <git-ref>]\n"
-        "    --force, -f   Overwrite existing const.py\n"
-        "    --ref         Git ref (branch/tag/commit), default: current package version release ref\n"
         "\n"
         "LSP mode:\n"
         f"  {p} -lsp [--serial]\n"
@@ -186,8 +175,8 @@ def _usage():
 def _usage_short():
     p = _prog()
     text = (
-        f"{p} {_get_version()}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"{p} {package_version() or 'unknown'}\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     sys.stderr.write(text)
@@ -211,13 +200,6 @@ def _parse_scene_string_xor_multiplier(value):
             f"invalid --string-xor-multiplier value: {value} (expected 0..0xFFFF)"
         )
     return multiplier
-
-
-def _drop_const_module():
-    sys.modules.pop("siglus_ssu.const", None)
-    pkg = sys.modules.get("siglus_ssu")
-    if pkg is not None and hasattr(pkg, "const"):
-        del pkg.const
 
 
 def _consume_global_options(argv):
@@ -373,7 +355,6 @@ def main():
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2
-    _drop_const_module()
     if argv and argv[0] in ("-V", "--version", "version"):
         _print_version()
         return 0
@@ -394,67 +375,16 @@ def main():
         return 0
     if (
         string_xor_multiplier_explicit
-        and (mode in MODE_MODULES or mode in ("-lsp", "init", "--init"))
+        and (mode in MODE_MODULES or mode == "-lsp")
         and not _uses_string_xor_multiplier(mode, argv[1:])
     ):
         sys.stderr.write(
             f"{_prog()}: warning: --string-xor-multiplier has no effect for this operation\n"
         )
-    if mode in ("init", "--init"):
-        from ._const_manager import (
-            _fallback_const_path,
-            download_const,
-            load_const_module,
-        )
-
-        force = False
-        ref = None
-        init_args = argv[1:]
-        if "--" in init_args:
-            marker = init_args.index("--")
-            positional_args = init_args[marker + 1 :]
-            init_args = init_args[:marker]
-            if positional_args:
-                sys.stderr.write(
-                    f"{_prog()}: unexpected init argument: {positional_args[0]}\n"
-                )
-                return 2
-        it = iter(init_args)
-        for a in it:
-            if a in ("--force", "-f"):
-                force = True
-            elif a == "--ref":
-                try:
-                    ref = next(it)
-                except StopIteration:
-                    sys.stderr.write(f"{_prog()}: --ref requires a value\n")
-                    return 2
-                if str(ref).startswith("-"):
-                    sys.stderr.write(f"{_prog()}: --ref requires a value\n")
-                    return 2
-            elif a == "help":
-                _usage()
-                return 0
-            else:
-                sys.stderr.write(f"{_prog()}: unknown init option: {a}\n")
-                return 2
-        try:
-            path = download_const(ref=ref, force=force)
-            load_const_module(path, profile=const_profile)
-        except Exception as e:
-            sys.stderr.write(f"{_prog()}: init failed: {e}\n")
-            return 1
-        fallback_const = _fallback_const_path()
-        if fallback_const.is_file():
-            sys.stderr.write(
-                f"{_prog()}: warning: package source const.py exists at {fallback_const}; normal runs from this source tree may load it before the user-data const.py.\n"
-            )
-        sys.stdout.write(f"const.py installed at: {path}\n")
-        return 0
-    from ._const_manager import load_const_module
-
     try:
-        load_const_module(profile=const_profile)
+        from . import const as C
+
+        C.set_profile(const_profile)
     except FileNotFoundError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2

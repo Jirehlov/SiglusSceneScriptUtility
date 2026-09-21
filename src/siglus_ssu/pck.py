@@ -6,7 +6,7 @@ import os
 import sys
 import time
 import tempfile
-from ._const_manager import get_const_module
+from . import const as C
 from .native_ops import lzss_unpack, smd5_digest, xor_cycle_inplace
 from . import compiler
 from .word_count import count_text_units
@@ -42,7 +42,6 @@ from .common import (
 )
 from .path_policy import FilenameCaseCollisionError, resolve_read_path
 
-C = get_const_module()
 MAX_SCENE_LIST = 2000
 
 

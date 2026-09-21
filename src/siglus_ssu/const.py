@@ -1,3 +1,7 @@
+from hashlib import file_digest
+import siglus_ssu as _runtime
+
+
 CD_NONE = 0
 CD_NL = 1
 CD_PUSH = 2
@@ -22815,55 +22819,6 @@ _FORM_SET_PROFILES = {
 }
 
 
-def _resolve_const_profile():
-    raw = globals().get("_SIGLUS_SSU_CONST_PROFILE", CONST_PROFILE_DEFAULT)
-    try:
-        value = int(str(raw).strip(), 0)
-    except Exception:
-        return CONST_PROFILE_DEFAULT
-    if (
-        value in _FORM_CODE_PROFILES
-        and value in _SYSTEM_ELEMENT_DEFS_PROFILES
-        and value in _FORM_SET_PROFILES
-        and value in _MESSAGE_BLOCK_NAMES_PROFILES
-        and value in _READ_FLAG_NAMES_PROFILES
-        and value in _SEL_GLOBAL_CODE_NAMES_PROFILES
-        and value in _SCENE_STRING_XOR_MULTIPLIER_PROFILES
-        and value in _ALLOW_PROPERTY_OUT_OF_COMMAND_PROFILES
-        and value in _LOGICAL_AND_PRECEDENCE_PROFILES
-        and value in _Z_LABEL_COUNT_PROFILES
-        and value in _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES
-    ):
-        return value
-    return CONST_PROFILE_DEFAULT
-
-
-CONST_PROFILE = _resolve_const_profile()
-NAMED_INT_REFERENCE_ARGUMENTS = frozenset(
-    _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES.get(
-        CONST_PROFILE, _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES[CONST_PROFILE_DEFAULT]
-    )
-)
-TNM_Z_LABEL_CNT = _Z_LABEL_COUNT_PROFILES.get(
-    CONST_PROFILE, _Z_LABEL_COUNT_PROFILES[CONST_PROFILE_DEFAULT]
-)
-LOGICAL_AND_PRECEDENCE = _LOGICAL_AND_PRECEDENCE_PROFILES.get(
-    CONST_PROFILE, _LOGICAL_AND_PRECEDENCE_PROFILES[CONST_PROFILE_DEFAULT]
-)
-ALLOW_PROPERTY_OUT_OF_COMMAND = _ALLOW_PROPERTY_OUT_OF_COMMAND_PROFILES.get(
-    CONST_PROFILE, _ALLOW_PROPERTY_OUT_OF_COMMAND_PROFILES[CONST_PROFILE_DEFAULT]
-)
-SCENE_STRING_XOR_MULTIPLIER = _SCENE_STRING_XOR_MULTIPLIER_PROFILES.get(
-    CONST_PROFILE, _SCENE_STRING_XOR_MULTIPLIER_PROFILES[CONST_PROFILE_DEFAULT]
-)
-_FORM_CODE = dict(
-    _FORM_CODE_PROFILES.get(CONST_PROFILE, _FORM_CODE_PROFILES[CONST_PROFILE_DEFAULT])
-)
-SYSTEM_ELEMENT_DEFS = list(
-    _SYSTEM_ELEMENT_DEFS_PROFILES.get(
-        CONST_PROFILE, _SYSTEM_ELEMENT_DEFS_PROFILES[CONST_PROFILE_DEFAULT]
-    )
-)
 LA_NAMES = [
     "NONE",
     "EOF",
@@ -22933,9 +22888,6 @@ LA_NAMES = [
     "SR3_ASSIGN",
 ]
 LA_T = {s: i for i, s in enumerate(LA_NAMES)}
-FORM_SET = set(
-    _FORM_SET_PROFILES.get(CONST_PROFILE, _FORM_SET_PROFILES[CONST_PROFILE_DEFAULT])
-)
 FM_CALL = "call"
 FM_GLOBAL = "global"
 FM_MWND = "mwnd"
@@ -22957,16 +22909,7 @@ ELM_OWNER_USER_PROP = 127
 ELM_OWNER_USER_CMD = 126
 ELM_OWNER_CALL_PROP = 125
 ELM_ARRAY = -1
-ELM_GLOBAL_SEL = None
-ELM_GLOBAL_SEL_CANCEL = None
-ELM_GLOBAL_SELMSG = None
-ELM_GLOBAL_SELMSG_CANCEL = None
-ELM_GLOBAL_SEL_IMAGE = None
-ELM_GLOBAL_CUR_CALL = 83
-ELM_GLOBAL_MSG_BLOCK = None
-SEL_GLOBAL_CODE_NAMES = _SEL_GLOBAL_CODE_NAMES_PROFILES.get(
-    CONST_PROFILE, _SEL_GLOBAL_CODE_NAMES_PROFILES[CONST_PROFILE_DEFAULT]
-)
+_PROFILE_ELEMENT_NAMES = ()
 
 
 def is_global_sel_command(parent_form, element_code):
@@ -23017,41 +22960,50 @@ def _sanitize_ident(s):
     return t
 
 
-_defs = SYSTEM_ELEMENT_DEFS or []
-for it in _defs:
-    if not isinstance(it, (list, tuple)) or len(it) < 7:
-        continue
-    tp, parent, form, name, owner, group, code, *rest = it
-    if not isinstance(parent, str) or not isinstance(name, str):
-        continue
-    k = f"ELM_{_sanitize_ident(parent)}_{_sanitize_ident(name)}"
-    globals()[k] = create_elm_code(owner, group, code)
-_fm_global_code = int(_FORM_CODE[FM_GLOBAL])
-_fm_mwnd_code = int(_FORM_CODE[FM_MWND])
-_message_block_names = _MESSAGE_BLOCK_NAMES_PROFILES.get(
-    CONST_PROFILE, _MESSAGE_BLOCK_NAMES_PROFILES[CONST_PROFILE_DEFAULT]
-)
-_read_flag_names = _READ_FLAG_NAMES_PROFILES.get(
-    CONST_PROFILE, _READ_FLAG_NAMES_PROFILES[CONST_PROFILE_DEFAULT]
-)
-MESSAGE_BLOCK_COMMAND_CODES = frozenset(
-    {
-        (
-            _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
-            int(globals()[element_name]),
-        )
-        for parent, element_name in _message_block_names
-    }
-)
-READ_FLAG_COMMAND_CODES = frozenset(
-    {
-        (
-            _fm_global_code if parent == FM_GLOBAL else _fm_mwnd_code,
-            int(globals()[element_name]),
-        )
-        for parent, element_name in _read_flag_names
-    }
-)
+def set_profile(profile=CONST_PROFILE_DEFAULT):
+    global CONST_PROFILE, _FORM_CODE, SYSTEM_ELEMENT_DEFS, FORM_SET
+    global NAMED_INT_REFERENCE_ARGUMENTS, TNM_Z_LABEL_CNT, LOGICAL_AND_PRECEDENCE
+    global ALLOW_PROPERTY_OUT_OF_COMMAND, SCENE_STRING_XOR_MULTIPLIER
+    global SEL_GLOBAL_CODE_NAMES, MESSAGE_BLOCK_COMMAND_CODES, READ_FLAG_COMMAND_CODES
+    global _PROFILE_ELEMENT_NAMES
+
+    if profile is None:
+        profile = CONST_PROFILE_DEFAULT
+    if profile not in _FORM_CODE_PROFILES:
+        raise ValueError(f"unsupported const profile: {profile}")
+    CONST_PROFILE = profile
+    _FORM_CODE = dict(_FORM_CODE_PROFILES[profile])
+    SYSTEM_ELEMENT_DEFS = list(_SYSTEM_ELEMENT_DEFS_PROFILES[profile])
+    FORM_SET = set(_FORM_SET_PROFILES[profile])
+    NAMED_INT_REFERENCE_ARGUMENTS = frozenset(
+        _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES[profile]
+    )
+    TNM_Z_LABEL_CNT = _Z_LABEL_COUNT_PROFILES[profile]
+    LOGICAL_AND_PRECEDENCE = _LOGICAL_AND_PRECEDENCE_PROFILES[profile]
+    ALLOW_PROPERTY_OUT_OF_COMMAND = _ALLOW_PROPERTY_OUT_OF_COMMAND_PROFILES[profile]
+    SCENE_STRING_XOR_MULTIPLIER = _SCENE_STRING_XOR_MULTIPLIER_PROFILES[profile]
+    SEL_GLOBAL_CODE_NAMES = _SEL_GLOBAL_CODE_NAMES_PROFILES[profile]
+    elements = {}
+    for it in SYSTEM_ELEMENT_DEFS:
+        tp, parent, form, name, owner, group, code, *rest = it
+        key = f"ELM_{_sanitize_ident(parent)}_{_sanitize_ident(name)}"
+        elements[key] = create_elm_code(owner, group, code)
+    MESSAGE_BLOCK_COMMAND_CODES = frozenset(
+        (int(_FORM_CODE[parent]), int(elements[name]))
+        for parent, name in _MESSAGE_BLOCK_NAMES_PROFILES[profile]
+    )
+    READ_FLAG_COMMAND_CODES = frozenset(
+        (int(_FORM_CODE[parent]), int(elements[name]))
+        for parent, name in _READ_FLAG_NAMES_PROFILES[profile]
+    )
+    for name in _PROFILE_ELEMENT_NAMES:
+        globals().pop(name, None)
+    globals().update(elements)
+    _PROFILE_ELEMENT_NAMES = tuple(elements)
+    if not _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT:
+        _runtime._SCENE_STRING_XOR_MULTIPLIER = SCENE_STRING_XOR_MULTIPLIER
+
+
 OP_AMARI = 5
 OP_AND = 49
 OP_DIVIDE = 4
@@ -23269,3 +23221,8 @@ G00_CUT_SZ = 116
 G00_CHIP_SZ = 92
 NAME_W = 40
 MAX_LIST_PREVIEW = 8
+
+with open(__file__, "rb") as _source_file:
+    CONST_SHA512 = file_digest(_source_file, "sha512").hexdigest()
+
+set_profile()

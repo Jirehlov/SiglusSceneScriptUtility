@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from .BS import set_shuffle_seed
 from . import compiler
 from . import pck
-from ._const_manager import get_const_module, load_const_module
+from . import const as C
 from .common import (
     format_elapsed_seconds as _format_seconds,
     iter_files_by_ext,
@@ -23,13 +23,10 @@ from .common import (
 )
 from .path_policy import FilenameCaseCollisionError, read_directory, resolve_read_path
 
-C = get_const_module()
 
 _PAYLOAD_SUMMARY_RE = re.compile(
     r"scene_data payload:\s+same=(\d+)\s+text_only=(\d+)\s+real_diff=(\d+)\s+unavailable=(\d+)"
 )
-
-_CONST_PROFILES = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9)
 
 
 @dataclass
@@ -84,18 +81,6 @@ def _format_timings(timings) -> str:
         f"{stage}={_format_seconds(seconds)}" for stage, seconds in (timings or ())
     ]
     return " ".join(parts) if parts else "none"
-
-
-def _const_profiles():
-    try:
-        const_module = get_const_module(profile=0)
-        raw = getattr(const_module, "_FORM_CODE_PROFILES", {})
-        profiles = tuple(sorted(int(profile) for profile in raw.keys()))
-        if profiles and 0 in profiles:
-            return profiles
-    except Exception:
-        pass
-    return _CONST_PROFILES
 
 
 def _print_tail(stage: str, stdout_text: str, stderr_text: str) -> None:
@@ -315,8 +300,8 @@ def _compile_payload_with_profile_fallback(
     serial=False,
 ):
     attempts = []
-    for profile in _const_profiles():
-        load_const_module(profile=profile)
+    for profile in sorted(C._FORM_CODE_PROFILES):
+        C.set_profile(profile)
         if os.path.isfile(rebuilt_pck):
             os.remove(rebuilt_pck)
         started = time.perf_counter()
@@ -414,7 +399,7 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
     detail = ""
     original_blob = b""
     try:
-        load_const_module(profile=0)
+        C.set_profile(0)
         step_started = time.perf_counter()
         try:
             original_blob, hdr, err = _read_siglus_pck(path)

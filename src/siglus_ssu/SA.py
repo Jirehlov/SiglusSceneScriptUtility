@@ -1,8 +1,6 @@
-from ._const_manager import get_const_module
+from . import const as C
 from .CA import get_form_code_by_name
 from .common import normalize_atom
-
-C = get_const_module()
 
 
 def N(ln, **k):
@@ -1172,7 +1170,7 @@ class SA:
 
     def sa_operator_2(s, i, lastp):
         p = i
-        logical_and_precedence = getattr(C, "LOGICAL_AND_PRECEDENCE", 2)
+        logical_and_precedence = C.LOGICAL_AND_PRECEDENCE
 
         def ck(tp, op, np):
             nonlocal p

@@ -1,8 +1,7 @@
-from ._const_manager import get_const_module
+from . import const as C
 from .CA import is_zen
 from .common import to_i32
 
-C = get_const_module()
 
 _LA_SYMBOLS = (
     (">>>=", "SR3_ASSIGN"),

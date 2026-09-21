@@ -3,7 +3,7 @@ import os
 import sys
 import csv
 import re
-from ._const_manager import get_const_module
+from . import const as C
 from .native_ops import (
     is_native_available,
     lzss_pack,
@@ -13,8 +13,6 @@ from .native_ops import (
 )
 from .common import content_digest, read_bytes, write_bytes
 from .path_policy import open_read
-
-C = get_const_module()
 
 
 def _xor32_inplace(barr, code):

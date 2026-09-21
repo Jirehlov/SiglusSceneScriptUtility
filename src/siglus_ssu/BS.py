@@ -3,7 +3,7 @@ import struct
 import copy
 import time
 from collections import Counter
-from ._const_manager import get_const_module
+from . import const as C
 from .CA import CharacterAnalizer, copy_replace_tree, new_replace_tree
 from .IA import IncAnalyzer
 from .LA import la_analize
@@ -30,7 +30,6 @@ from .common import (
 )
 from .path_policy import read_directory, resolve_read_path
 
-C = get_const_module()
 TNMSERR_BS_NONE = 0
 TNMSERR_BS_ILLEGAL_DEFAULT_ARG = 1
 TNMSERR_BS_CONTINUE_NO_LOOP = 2
@@ -765,12 +764,6 @@ class BS:
         s.last_error = {"type": int(etype or 0), "atom": at}
         return False
 
-    def scn_push_u8(s, v):
-        s.out_scn["scn"].push_u8(v)
-
-    def scn_push_i32(s, v):
-        s.out_scn["scn"].push_i32(v)
-
     def _first_atom(s, node):
         if isinstance(node, dict):
             a = node.get("atom")
@@ -822,8 +815,8 @@ class BS:
         return None
 
     def _bs_write_cd_nl(s, node_line):
-        s.scn_push_u8(C.CD_NL)
-        s.scn_push_i32(int(node_line or 0))
+        s.out_scn["scn"].push_u8(C.CD_NL)
+        s.out_scn["scn"].push_i32(int(node_line or 0))
 
     def bs_block(s, block):
         if block is None:
@@ -846,11 +839,11 @@ class BS:
         is_inc = bool(sentense.get("is_include_sel"))
         s._bs_write_cd_nl(node_line)
         if is_inc:
-            s.scn_push_u8(C.CD_SEL_BLOCK_START)
+            s.out_scn["scn"].push_u8(C.CD_SEL_BLOCK_START)
         if not s.bs_sentence_sub(sentense):
             return False
         if is_inc:
-            s.scn_push_u8(C.CD_SEL_BLOCK_END)
+            s.out_scn["scn"].push_u8(C.CD_SEL_BLOCK_END)
         return True
 
     def bs_sentence_sub(s, node):
@@ -955,12 +948,12 @@ class BS:
                 if not s.bs_exp(idx, True):
                     return False
             else:
-                s.scn_push_u8(C.CD_PUSH)
-                s.scn_push_i32(_fc(C.FM_INT))
-                s.scn_push_i32(0)
-        s.scn_push_u8(C.CD_DEC_PROP)
-        s.scn_push_i32(_fc(form_code))
-        s.scn_push_i32(int(def_prop.get("prop_id", 0) or 0))
+                s.out_scn["scn"].push_u8(C.CD_PUSH)
+                s.out_scn["scn"].push_i32(_fc(C.FM_INT))
+                s.out_scn["scn"].push_i32(0)
+        s.out_scn["scn"].push_u8(C.CD_DEC_PROP)
+        s.out_scn["scn"].push_i32(_fc(form_code))
+        s.out_scn["scn"].push_i32(int(def_prop.get("prop_id", 0) or 0))
         return True
 
     def bs_def_cmd(s, def_cmd):
@@ -970,8 +963,8 @@ class BS:
             return False
         label_no_end = len(s.out_scn["label_list"])
         s.out_scn["label_list"].append(0)
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no_end)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no_end)
         cmd_label = {
             "cmd_id": int(def_cmd.get("cmd_id", 0) or 0),
             "offset": s.out_scn["scn"].size(),
@@ -980,11 +973,11 @@ class BS:
         for p in def_cmd.get("prop_list") or []:
             if not s.bs_def_prop(p):
                 return False
-        s.scn_push_u8(C.CD_ARG)
+        s.out_scn["scn"].push_u8(C.CD_ARG)
         if not s.bs_block(def_cmd.get("block")):
             return False
-        s.scn_push_u8(C.CD_RETURN)
-        s.scn_push_i32(0)
+        s.out_scn["scn"].push_u8(C.CD_RETURN)
+        s.out_scn["scn"].push_i32(0)
         s.out_scn["label_list"][label_no_end] = s.out_scn["scn"].size()
         inc_cnt = int(s.m_piad.get("inc_command_cnt", 0) or 0)
         if cmd_label["cmd_id"] >= inc_cnt:
@@ -1018,15 +1011,15 @@ class BS:
                     or (gt.get("z_label") or {}).get("opt", 0)
                     or 0
                 )
-            s.scn_push_u8(C.CD_GOTO)
-            s.scn_push_i32(lid)
+            s.out_scn["scn"].push_u8(C.CD_GOTO)
+            s.out_scn["scn"].push_i32(lid)
             return True
         if nt in (C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
             if not s.bs_goto_exp(gt):
                 return False
             form = C.FM_INT if nt == C.NT_GOTO_GOSUB else C.FM_STR
-            s.scn_push_u8(C.CD_POP)
-            s.scn_push_i32(_fc(form))
+            s.out_scn["scn"].push_u8(C.CD_POP)
+            s.out_scn["scn"].push_i32(_fc(form))
             return True
         return False
 
@@ -1046,16 +1039,16 @@ class BS:
             or 0
         )
         if nt == C.NT_GOTO_GOSUB:
-            s.scn_push_u8(C.CD_GOSUB)
-            s.scn_push_i32(label_no)
+            s.out_scn["scn"].push_u8(C.CD_GOSUB)
+            s.out_scn["scn"].push_i32(label_no)
         else:
-            s.scn_push_u8(C.CD_GOSUBSTR)
-            s.scn_push_i32(label_no)
+            s.out_scn["scn"].push_u8(C.CD_GOSUBSTR)
+            s.out_scn["scn"].push_i32(label_no)
         args = list((goto.get("arg_list") or {}).get("arg") or [])
-        s.scn_push_i32(len(args))
+        s.out_scn["scn"].push_i32(len(args))
         for a in args:
             form = dereference(((a or {}).get("exp") or {}).get("tmp_form"))
-            s.scn_push_i32(_fc(form))
+            s.out_scn["scn"].push_i32(_fc(form))
         return True
 
     def bs_return(s, ret):
@@ -1070,14 +1063,14 @@ class BS:
         if nt == C.NT_RETURN_WITH_ARG:
             if not s.bs_exp(rt.get("exp"), True):
                 return False
-            s.scn_push_u8(C.CD_RETURN)
-            s.scn_push_i32(1)
+            s.out_scn["scn"].push_u8(C.CD_RETURN)
+            s.out_scn["scn"].push_i32(1)
             form = _fc(dereference((rt.get("exp") or {}).get("node_form")))
-            s.scn_push_i32(form)
+            s.out_scn["scn"].push_i32(form)
             return True
         if nt == C.NT_RETURN_WITHOUT_ARG:
-            s.scn_push_u8(C.CD_RETURN)
-            s.scn_push_i32(0)
+            s.out_scn["scn"].push_u8(C.CD_RETURN)
+            s.out_scn["scn"].push_i32(0)
             return True
         return False
 
@@ -1099,12 +1092,12 @@ class BS:
                 s.out_scn["label_list"].append(0)
                 if not s.bs_exp(sb.get("cond"), True):
                     return False
-                s.scn_push_u8(C.CD_GOTO_FALSE)
-                s.scn_push_i32(label_no_if)
+                s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
+                s.out_scn["scn"].push_i32(label_no_if)
                 if not s.bs_block(sb.get("block")):
                     return False
-                s.scn_push_u8(C.CD_GOTO)
-                s.scn_push_i32(label_no_end)
+                s.out_scn["scn"].push_u8(C.CD_GOTO)
+                s.out_scn["scn"].push_i32(label_no_end)
                 s.out_scn["label_list"][label_no_if] = s.out_scn["scn"].size()
             else:
                 if not s.bs_block(sb.get("block")):
@@ -1125,20 +1118,20 @@ class BS:
         s.loop_label.append({"Continue": label_no_loop, "Break": label_no_out})
         if not s.bs_block(for_.get("init")):
             return False
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no_init)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no_init)
         s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
         if not s.bs_block(for_.get("loop")):
             return False
         s.out_scn["label_list"][label_no_init] = s.out_scn["scn"].size()
         if not s.bs_exp(for_.get("cond"), True):
             return False
-        s.scn_push_u8(C.CD_GOTO_FALSE)
-        s.scn_push_i32(label_no_out)
+        s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
+        s.out_scn["scn"].push_i32(label_no_out)
         if not s.bs_block(for_.get("block")):
             return False
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no_loop)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no_loop)
         s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         s.loop_label.pop()
         return True
@@ -1156,12 +1149,12 @@ class BS:
         s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
         if not s.bs_exp(while_.get("cond"), True):
             return False
-        s.scn_push_u8(C.CD_GOTO_FALSE)
-        s.scn_push_i32(label_no_out)
+        s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
+        s.out_scn["scn"].push_i32(label_no_out)
         if not s.bs_block(while_.get("block")):
             return False
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no_loop)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no_loop)
         s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         s.loop_label.pop()
         return True
@@ -1174,8 +1167,8 @@ class BS:
                 TNMSERR_BS_CONTINUE_NO_LOOP, (cont.get("Continue") or {}).get("atom")
             )
         label_no = s.loop_label[-1].get("Continue", 0)
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no)
         return True
 
     def bs_break(s, brk):
@@ -1186,8 +1179,8 @@ class BS:
                 TNMSERR_BS_BREAK_NO_LOOP, (brk.get("Break") or {}).get("atom")
             )
         label_no = s.loop_label[-1].get("Break", 0)
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(label_no)
         return True
 
     def bs_switch(s, switch):
@@ -1208,34 +1201,36 @@ class BS:
             return False
         for idx, cs in enumerate(cases):
             form_r = _fc(dereference((cs.get("value") or {}).get("node_form")))
-            s.scn_push_u8(C.CD_COPY)
-            s.scn_push_i32(form_l)
+            s.out_scn["scn"].push_u8(C.CD_COPY)
+            s.out_scn["scn"].push_i32(form_l)
             if not s.bs_exp(cs.get("value"), True):
                 return False
-            s.scn_push_u8(C.CD_OPERATE_2)
-            s.scn_push_i32(form_l)
-            s.scn_push_i32(form_r)
-            s.scn_push_u8(C.OP_EQUAL)
-            s.scn_push_u8(C.CD_GOTO_TRUE)
-            s.scn_push_i32(label_no_case + idx)
-        s.scn_push_u8(C.CD_POP)
-        s.scn_push_i32(form_l)
-        s.scn_push_u8(C.CD_GOTO)
-        s.scn_push_i32(label_no_default if switch.get("Default") else label_no_out)
+            s.out_scn["scn"].push_u8(C.CD_OPERATE_2)
+            s.out_scn["scn"].push_i32(form_l)
+            s.out_scn["scn"].push_i32(form_r)
+            s.out_scn["scn"].push_u8(C.OP_EQUAL)
+            s.out_scn["scn"].push_u8(C.CD_GOTO_TRUE)
+            s.out_scn["scn"].push_i32(label_no_case + idx)
+        s.out_scn["scn"].push_u8(C.CD_POP)
+        s.out_scn["scn"].push_i32(form_l)
+        s.out_scn["scn"].push_u8(C.CD_GOTO)
+        s.out_scn["scn"].push_i32(
+            label_no_default if switch.get("Default") else label_no_out
+        )
         for idx, cs in enumerate(cases):
             s.out_scn["label_list"][label_no_case + idx] = s.out_scn["scn"].size()
-            s.scn_push_u8(C.CD_POP)
-            s.scn_push_i32(form_l)
+            s.out_scn["scn"].push_u8(C.CD_POP)
+            s.out_scn["scn"].push_i32(form_l)
             if not s.bs_block(cs.get("block")):
                 return False
-            s.scn_push_u8(C.CD_GOTO)
-            s.scn_push_i32(label_no_out)
+            s.out_scn["scn"].push_u8(C.CD_GOTO)
+            s.out_scn["scn"].push_i32(label_no_out)
         if switch.get("Default"):
             s.out_scn["label_list"][label_no_default] = s.out_scn["scn"].size()
             if not s.bs_block((switch.get("Default") or {}).get("block")):
                 return False
-            s.scn_push_u8(C.CD_GOTO)
-            s.scn_push_i32(label_no_out)
+            s.out_scn["scn"].push_u8(C.CD_GOTO)
+            s.out_scn["scn"].push_i32(label_no_out)
         s.out_scn["label_list"][label_no_out] = s.out_scn["scn"].size()
         return True
 
@@ -1248,22 +1243,22 @@ class BS:
             return False
         opr_opt = ((assign.get("equal") or {}).get("atom") or {}).get("opt", C.OP_NONE)
         if opr_opt != C.OP_NONE:
-            s.scn_push_u8(C.CD_COPY_ELM)
-            s.scn_push_u8(C.CD_PROPERTY)
+            s.out_scn["scn"].push_u8(C.CD_COPY_ELM)
+            s.out_scn["scn"].push_u8(C.CD_PROPERTY)
         if not s.bs_exp(assign.get("right"), not bool(assign.get("set_flag"))):
             return False
         form_l = _fc(dereference((assign.get("left") or {}).get("node_form")))
         form_r = _fc(dereference((assign.get("right") or {}).get("node_form")))
         if opr_opt != C.OP_NONE:
-            s.scn_push_u8(C.CD_OPERATE_2)
-            s.scn_push_i32(form_l)
-            s.scn_push_i32(form_r)
+            s.out_scn["scn"].push_u8(C.CD_OPERATE_2)
+            s.out_scn["scn"].push_i32(form_l)
+            s.out_scn["scn"].push_i32(form_r)
             s.bs_operator_1(assign.get("equal"))
         form_r2 = _fc(dereference(assign.get("equal_form", assign.get("node_form"))))
-        s.scn_push_u8(C.CD_ASSIGN)
-        s.scn_push_i32(_fc((assign.get("left") or {}).get("node_form")))
-        s.scn_push_i32(form_r2)
-        s.scn_push_i32(int(assign.get("al_id", 0) or 0))
+        s.out_scn["scn"].push_u8(C.CD_ASSIGN)
+        s.out_scn["scn"].push_i32(_fc((assign.get("left") or {}).get("node_form")))
+        s.out_scn["scn"].push_i32(form_r2)
+        s.out_scn["scn"].push_i32(int(assign.get("al_id", 0) or 0))
         return True
 
     def bs_command(s, command):
@@ -1274,8 +1269,8 @@ class BS:
         if not s.bs_elm_exp(command.get("command"), True):
             return False
         form = _fc((command.get("command") or {}).get("node_form"))
-        s.scn_push_u8(C.CD_POP)
-        s.scn_push_i32(form)
+        s.out_scn["scn"].push_u8(C.CD_POP)
+        s.out_scn["scn"].push_i32(form)
         return True
 
     def bs_text(s, text):
@@ -1288,11 +1283,11 @@ class BS:
         line = int(
             ((text.get("text") or text or {}).get("atom") or {}).get("line", 0) or 0
         )
-        s.scn_push_u8(C.CD_PUSH)
-        s.scn_push_i32(_fc(C.FM_STR))
-        s.scn_push_i32(opt)
-        s.scn_push_u8(C.CD_TEXT)
-        s.scn_push_i32(s.cur_read_flag_no)
+        s.out_scn["scn"].push_u8(C.CD_PUSH)
+        s.out_scn["scn"].push_i32(_fc(C.FM_STR))
+        s.out_scn["scn"].push_i32(opt)
+        s.out_scn["scn"].push_u8(C.CD_TEXT)
+        s.out_scn["scn"].push_i32(s.cur_read_flag_no)
         s.cur_read_flag_no += 1
         s.out_scn["read_flag_list"].append({"line_no": line})
         return True
@@ -1304,7 +1299,7 @@ class BS:
         if not s.bs_literal(name.get("name")):
             return False
         opt = int(((name.get("name") or {}).get("atom") or {}).get("opt", 0) or 0)
-        s.scn_push_u8(C.CD_NAME)
+        s.out_scn["scn"].push_u8(C.CD_NAME)
         new_name = True
         sl = s.out_scn.get("str_list") or []
         for nid in s.out_scn.get("namae_list") or []:
@@ -1318,7 +1313,7 @@ class BS:
         return True
 
     def bs_eof(s):
-        s.scn_push_u8(C.CD_EOF)
+        s.out_scn["scn"].push_u8(C.CD_EOF)
         return True
 
     def bs_exp(s, exp, need_value):
@@ -1335,8 +1330,8 @@ class BS:
             if not s.bs_exp(exp.get("exp_1"), True):
                 return False
             form = _fc(dereference((exp.get("exp_1") or {}).get("node_form")))
-            s.scn_push_u8(C.CD_OPERATE_1)
-            s.scn_push_i32(form)
+            s.out_scn["scn"].push_u8(C.CD_OPERATE_1)
+            s.out_scn["scn"].push_i32(form)
             return s.bs_operator_1(exp.get("opr"))
         if nt == C.NT_EXP_OPR2:
             if not need_value:
@@ -1347,9 +1342,9 @@ class BS:
                 return False
             form_l = _fc(dereference((exp.get("exp_1") or {}).get("node_form")))
             form_r = _fc(dereference((exp.get("exp_2") or {}).get("node_form")))
-            s.scn_push_u8(C.CD_OPERATE_2)
-            s.scn_push_i32(form_l)
-            s.scn_push_i32(form_r)
+            s.out_scn["scn"].push_u8(C.CD_OPERATE_2)
+            s.out_scn["scn"].push_i32(form_l)
+            s.out_scn["scn"].push_i32(form_r)
             return s.bs_operator_1(exp.get("opr"))
         return False
 
@@ -1411,9 +1406,9 @@ class BS:
             return False
         nt = int(element.get("node_type", 0) or 0)
         if nt == C.NT_ELM_ELEMENT:
-            s.scn_push_u8(C.CD_PUSH)
-            s.scn_push_i32(_fc(C.FM_INT))
-            s.scn_push_i32(_to_int(element.get("element_code", 0) or 0))
+            s.out_scn["scn"].push_u8(C.CD_PUSH)
+            s.out_scn["scn"].push_i32(_fc(C.FM_INT))
+            s.out_scn["scn"].push_i32(_to_int(element.get("element_code", 0) or 0))
             if int(element.get("element_type", 0) or 0) == C.ET_COMMAND:
                 arg_list = element.get("arg_list") or {}
                 arg_cnt = (
@@ -1439,10 +1434,12 @@ class BS:
                         tf = (ta or {}).get("form")
                         if tf in (C.FM___ARGS, C.FM___ARGSREF):
                             break
-                        s.scn_push_u8(C.CD_PUSH)
-                        s.scn_push_i32(_fc(tf))
+                        s.out_scn["scn"].push_u8(C.CD_PUSH)
+                        s.out_scn["scn"].push_i32(_fc(tf))
                         if tf == C.FM_INT:
-                            s.scn_push_i32(int((ta or {}).get("def_int", 0) or 0))
+                            s.out_scn["scn"].push_i32(
+                                int((ta or {}).get("def_int", 0) or 0)
+                            )
                         else:
                             return s.error(
                                 TNMSERR_BS_ILLEGAL_DEFAULT_ARG,
@@ -1452,9 +1449,9 @@ class BS:
                             int(s.out_scn.get("default_arg_fills", 0) or 0) + 1
                         )
                         arg_cnt += 1
-                s.scn_push_u8(C.CD_COMMAND)
-                s.scn_push_i32(int(element.get("arg_list_id", 0) or 0))
-                s.scn_push_i32(int(arg_cnt))
+                s.out_scn["scn"].push_u8(C.CD_COMMAND)
+                s.out_scn["scn"].push_i32(int(element.get("arg_list_id", 0) or 0))
+                s.out_scn["scn"].push_i32(int(arg_cnt))
                 if isinstance(temp_args, list) and len(arg_list.get("arg") or []) < len(
                     temp_args
                 ):
@@ -1462,10 +1459,10 @@ class BS:
                         tf = (ta or {}).get("form")
                         if tf in (C.FM___ARGS, C.FM___ARGSREF):
                             break
-                        s.scn_push_i32(_fc(tf))
+                        s.out_scn["scn"].push_i32(_fc(tf))
                 for a in reversed(list(arg_list.get("arg") or [])):
                     tf = ((a or {}).get("exp") or {}).get("tmp_form")
-                    s.scn_push_i32(_fc(tf))
+                    s.out_scn["scn"].push_i32(_fc(tf))
                     if tf == C.FM_LIST:
                         fl = list(
                             ((a.get("exp") or {}).get("smp_exp") or {})
@@ -1473,19 +1470,21 @@ class BS:
                             .get("form_list")
                             or []
                         )
-                        s.scn_push_i32(len(fl))
+                        s.out_scn["scn"].push_i32(len(fl))
                         for f0 in reversed(fl):
-                            s.scn_push_i32(_fc(dereference(f0)))
-                s.scn_push_i32(int((arg_list or {}).get("named_arg_cnt", 0) or 0))
+                            s.out_scn["scn"].push_i32(_fc(dereference(f0)))
+                s.out_scn["scn"].push_i32(
+                    int((arg_list or {}).get("named_arg_cnt", 0) or 0)
+                )
                 for a in reversed(list(arg_list.get("arg") or [])):
                     if int((a or {}).get("node_type", 0) or 0) == C.NT_ARG_WITH_NAME:
-                        s.scn_push_i32(int((a or {}).get("name_id", 0) or 0))
-                s.scn_push_i32(_fc(element.get("node_form")))
+                        s.out_scn["scn"].push_i32(int((a or {}).get("name_id", 0) or 0))
+                s.out_scn["scn"].push_i32(_fc(element.get("node_form")))
             return True
         if nt == C.NT_ELM_ARRAY:
-            s.scn_push_u8(C.CD_PUSH)
-            s.scn_push_i32(_fc(C.FM_INT))
-            s.scn_push_i32(int(C.ELM_ARRAY))
+            s.out_scn["scn"].push_u8(C.CD_PUSH)
+            s.out_scn["scn"].push_i32(_fc(C.FM_INT))
+            s.out_scn["scn"].push_i32(int(C.ELM_ARRAY))
             s.bs_exp(element.get("exp"), True)
             return True
         return False
@@ -1495,21 +1494,21 @@ class BS:
             return True
         if not isinstance(elm_list, dict):
             return False
-        s.scn_push_u8(C.CD_ELM_POINT)
+        s.out_scn["scn"].push_u8(C.CD_ELM_POINT)
         if elm_list.get("parent_form_code") == C.FM_CALL:
             cur = C.ELM_GLOBAL_CUR_CALL
             if not isinstance(cur, int):
                 return False
-            s.scn_push_u8(C.CD_PUSH)
-            s.scn_push_i32(_fc(C.FM_INT))
-            s.scn_push_i32(int(cur))
+            s.out_scn["scn"].push_u8(C.CD_PUSH)
+            s.out_scn["scn"].push_i32(_fc(C.FM_INT))
+            s.out_scn["scn"].push_i32(int(cur))
         for el in elm_list.get("element") or []:
             if not s.bs_element(el):
                 return False
             if (
                 (_to_int((el or {}).get("element_code", 0)) >> 24) & 0xFF
             ) == C.ELM_OWNER_CALL_PROP and not is_value((el or {}).get("node_form")):
-                s.scn_push_u8(C.CD_PROPERTY)
+                s.out_scn["scn"].push_u8(C.CD_PROPERTY)
         return True
 
     def bs_left(s, left):
@@ -1533,7 +1532,7 @@ class BS:
             if not s.bs_elm_list(elm_list):
                 return False
             if (parent_form_code, element_code) in C.READ_FLAG_COMMAND_CODES:
-                s.scn_push_i32(s.cur_read_flag_no)
+                s.out_scn["scn"].push_i32(s.cur_read_flag_no)
                 s.cur_read_flag_no += 1
                 s.out_scn["read_flag_list"].append(
                     {"line_no": int((el[-1] or {}).get("node_line", 0) if el else 0)}
@@ -1548,7 +1547,7 @@ class BS:
             if is_value(nf):
                 pass
             elif nf in (C.FM_INTREF, C.FM_STRREF, C.FM_INTLISTREF, C.FM_STRLISTREF):
-                s.scn_push_u8(C.CD_PROPERTY)
+                s.out_scn["scn"].push_u8(C.CD_PROPERTY)
             else:
                 return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         return True
@@ -1568,28 +1567,30 @@ class BS:
         if not isinstance(Literal, dict):
             return False
         form = Literal["node_form"]
-        s.scn_push_u8(C.CD_PUSH)
-        s.scn_push_i32(_fc(C.FM_INT if form == C.FM_LABEL else form))
-        s.scn_push_i32(int(Literal["atom"]["opt"]))
+        s.out_scn["scn"].push_u8(C.CD_PUSH)
+        s.out_scn["scn"].push_i32(_fc(C.FM_INT if form == C.FM_LABEL else form))
+        s.out_scn["scn"].push_i32(int(Literal["atom"]["opt"]))
         return True
 
     def bs_operator_1(s, opr):
-        s.scn_push_u8(int(((opr or {}).get("atom") or {}).get("opt", 0) or 0))
+        s.out_scn["scn"].push_u8(
+            int(((opr or {}).get("atom") or {}).get("opt", 0) or 0)
+        )
         return True
 
     def bs_push_msg_block(s):
-        s.scn_push_u8(C.CD_ELM_POINT)
-        s.scn_push_u8(C.CD_PUSH)
-        s.scn_push_i32(_fc(C.FM_INT))
+        s.out_scn["scn"].push_u8(C.CD_ELM_POINT)
+        s.out_scn["scn"].push_u8(C.CD_PUSH)
+        s.out_scn["scn"].push_i32(_fc(C.FM_INT))
         msg_block = C.ELM_GLOBAL_MSG_BLOCK
         if not isinstance(msg_block, int):
             msg_block = int(msg_block or 0)
-        s.scn_push_i32(int(msg_block))
-        s.scn_push_u8(C.CD_COMMAND)
-        s.scn_push_i32(0)
-        s.scn_push_i32(0)
-        s.scn_push_i32(0)
-        s.scn_push_i32(_fc(C.FM_VOID))
+        s.out_scn["scn"].push_i32(int(msg_block))
+        s.out_scn["scn"].push_u8(C.CD_COMMAND)
+        s.out_scn["scn"].push_i32(0)
+        s.out_scn["scn"].push_i32(0)
+        s.out_scn["scn"].push_i32(0)
+        s.out_scn["scn"].push_i32(_fc(C.FM_VOID))
 
     def compile(s, piad, plad, psad, pbsd):
         s.clear_error()

@@ -18,12 +18,9 @@ for src in pkg_src.rglob("*"):
     if src.is_dir():
         continue
     rel = src.relative_to(pkg_src)
-    rel_posix = rel.as_posix()
     if "__pycache__" in rel.parts:
         continue
     if src.suffix in {".dll", ".dylib", ".pyd", ".pyc", ".pyo", ".so"}:
-        continue
-    if rel_posix == "const.py":
         continue
     if rel.parts and rel.parts[0] == "rust":
         continue

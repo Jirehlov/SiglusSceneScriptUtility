@@ -4,6 +4,7 @@ import struct
 import math
 
 import siglus_ssu as _runtime
+from . import const as C
 
 
 try:
@@ -52,26 +53,9 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
     )
 
 
-def _payload_native_config():
-    from ._const_manager import get_const_module
-
-    C = get_const_module()
-    return _payload_native_config_cached(
-        getattr(C, "_SIGLUS_SSU_CONST_PROFILE", None),
-        str(getattr(C, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
-        str(getattr(C, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
-        _runtime._SCENE_STRING_XOR_MULTIPLIER,
-    )
-
-
 @lru_cache(maxsize=8)
-def _payload_native_config_cached(
-    _profile, _sha512, _source_path, scene_string_xor_multiplier
-):
-    from ._const_manager import get_const_module
-
-    C = get_const_module()
-    fm = dict(C._FORM_CODE or {})
+def _payload_native_config_cached(_profile, scene_string_xor_multiplier):
+    fm = C._FORM_CODE
 
     def form(name):
         return int(fm[getattr(C, name)])
@@ -170,7 +154,9 @@ def scn_payload_hash_bundles_native(blob: bytes, pack_context=None, *, hashes=Tr
     try:
         return native_accel.scn_payload_hash_bundles(
             bytes(blob),
-            _payload_native_config(),
+            _payload_native_config_cached(
+                C.CONST_PROFILE, _runtime._SCENE_STRING_XOR_MULTIPLIER
+            ),
             pack_context,
             hashes=hashes,
         )

@@ -1,7 +1,7 @@
 from functools import lru_cache, partial
 import struct
 from types import SimpleNamespace
-from ._const_manager import get_const_module
+from . import const as C
 from .common import (
     augment_receiver_form_codes,
     array_element_info,
@@ -21,7 +21,6 @@ from .common import (
     normalize_stack_start,
 )
 
-C = get_const_module()
 _DISAM_OP_NAMES = (
     "CD_NONE",
     "CD_NL",
@@ -51,199 +50,94 @@ _DISAM_OP_NAMES = (
 )
 
 
-def _read_flag_command_codes(const_module):
-    codes = const_module.READ_FLAG_COMMAND_CODES
-    return frozenset((int(a), int(b)) for a, b in (codes or ()))
+def _build_system_element_index():
+    from collections import defaultdict
+    from .MA import parse_arg_spec
 
+    fm = C._FORM_CODE
 
-def _build_system_element_index(const_module):
-    out = {}
-    try:
-        defs = const_module.SYSTEM_ELEMENT_DEFS
-        if not isinstance(defs, (list, tuple)):
-            return out
-        fm = const_module._FORM_CODE or {}
-        try:
-            from .MA import parse_arg_spec
-        except Exception:
-            parse_arg_spec = None
+    def _to_code(form):
+        form = form.strip()
+        return fm.get(form, form) if form else None
 
-        def _to_code(t):
-            try:
-                t = str(t).strip()
-            except Exception:
-                return None
-            if not t:
-                return None
-            if t in fm:
-                return int(fm[t])
-            return t
+    def _pick_name(names):
+        uniq = list(dict.fromkeys(name for name in names if name))
+        plain = [name for name in uniq if not name.startswith("_")]
+        return (plain or uniq or [""])[0]
 
-        def _pick_name(names):
-            uniq = []
-            seen = set()
-            for name in names or []:
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                uniq.append(str(name))
-            if not uniq:
-                return ""
-            plain = [x for x in uniq if not x.startswith("_")]
-            if plain:
-                return plain[0]
-            return uniq[0]
+    def _decorate_entry(info):
+        one = dict(info)
+        one["q"] = f"{one['parent']}.{one['name']}" if one["parent"] else one["name"]
+        return one
 
-        def _decorate_entry(info):
-            one = dict(info or {})
-            one["q"] = (
-                (one.get("parent", "") + "." + one.get("name", ""))
-                if one.get("parent")
-                else one.get("name", "")
-            )
-            return one
-
-        from collections import defaultdict
-
-        bucket = defaultdict(list)
-        for it in defs:
-            try:
-                if not isinstance(it, (list, tuple)) or len(it) < 7:
-                    continue
-                tp = int(it[0])
-                parent = str(it[1])
-                ret = _to_code(it[2])
-                name = str(it[3])
-                owner = int(it[4])
-                group = int(it[5])
-                code = int(it[6])
-                spec = str(it[7]) if len(it) >= 8 else ""
-                arg_map = (
-                    parse_arg_spec(spec)
-                    if callable(parse_arg_spec) and isinstance(spec, str)
-                    else {}
-                )
-                parent_code = _to_code(parent)
-                if not isinstance(parent_code, int):
-                    continue
-                ec = const_module.create_elm_code(owner, group, code)
-                bucket[(parent_code, ec)].append(
-                    {
-                        "type": tp,
-                        "parent": parent,
-                        "parent_code": parent_code,
-                        "name": name,
-                        "ret": ret,
-                        "spec": spec,
-                        "arg_map": arg_map,
-                        "ec": ec,
-                    }
-                )
-            except Exception:
-                continue
-        for key, items in bucket.items():
-            if not items:
-                continue
-            if len(items) == 1:
-                one = _decorate_entry(items[0])
-                out[key] = one
-                continue
-            types = {int(x.get("type", -1)) for x in items}
-            rets = {x.get("ret") for x in items}
-            specs = {x.get("spec", "") for x in items}
-            if len(types) == 1 and len(rets) == 1 and len(specs) == 1:
-                one = _decorate_entry(items[0])
-                names = [str(x.get("name", "")) for x in items if x.get("name")]
-                picked = _pick_name(names)
-                one["name"] = picked
-                one["q"] = (
-                    (one.get("parent", "") + "." + picked)
-                    if one.get("parent")
-                    else picked
-                )
-                out[key] = one
-                continue
-            if len(types) == 1 and len(specs) == 1:
-                variants = [_decorate_entry(x) for x in items]
-                one = dict(variants[0])
-                one["alts"] = variants
-                out[key] = one
-                continue
-            out[key] = None
-    except Exception:
-        return out
-    return out
-
-
-def _build_array_element_index(const_module):
-    out = {}
-    try:
-        defs = const_module.SYSTEM_ELEMENT_DEFS
-        if not isinstance(defs, (list, tuple)):
-            return out
-        fm = const_module._FORM_CODE or {}
-        for it in defs:
-            try:
-                if not isinstance(it, (list, tuple)) or len(it) < 7:
-                    continue
-                if int(it[0]) != int(const_module.ET_PROPERTY):
-                    continue
-                parent = str(it[1])
-                ret = str(it[2])
-                name = str(it[3])
-                if name != "array":
-                    continue
-                if parent not in fm or ret not in fm:
-                    continue
-                out[int(fm[parent])] = {
-                    "type": int(const_module.ET_PROPERTY),
-                    "parent": parent,
-                    "parent_code": int(fm[parent]),
-                    "name": name,
-                    "ret": int(fm[ret]),
-                    "q": f"{parent}.{name}",
-                }
-            except Exception:
-                continue
-    except Exception:
-        return out
-    return out
-
-
-class _ConstCacheKey:
-    __slots__ = ("const_module", "identity")
-
-    def __init__(self, const_module):
-        self.const_module = const_module
-        self.identity = (
-            int(getattr(const_module, "CONST_PROFILE", 0)),
-            str(getattr(const_module, "_SIGLUS_SSU_CONST_SHA512", "") or ""),
-            str(getattr(const_module, "_SIGLUS_SSU_CONST_SOURCE_PATH", "") or ""),
+    bucket = defaultdict(list)
+    for tp, parent, ret, name, owner, group, code, spec in C.SYSTEM_ELEMENT_DEFS:
+        parent_code = fm[parent]
+        ec = C.create_elm_code(owner, group, code)
+        bucket[(parent_code, ec)].append(
+            {
+                "type": tp,
+                "parent": parent,
+                "parent_code": parent_code,
+                "name": name,
+                "ret": _to_code(ret),
+                "spec": spec,
+                "arg_map": parse_arg_spec(spec),
+                "ec": ec,
+            }
         )
+    out = {}
+    for key, items in bucket.items():
+        if len(items) == 1:
+            out[key] = _decorate_entry(items[0])
+            continue
+        types = {item["type"] for item in items}
+        rets = {item["ret"] for item in items}
+        specs = {item["spec"] for item in items}
+        if len(types) == 1 and len(rets) == 1 and len(specs) == 1:
+            one = dict(items[0])
+            one["name"] = _pick_name(item["name"] for item in items)
+            out[key] = _decorate_entry(one)
+            continue
+        if len(types) == 1 and len(specs) == 1:
+            variants = [_decorate_entry(item) for item in items]
+            one = dict(variants[0])
+            one["alts"] = variants
+            out[key] = one
+            continue
+        out[key] = None
+    return out
 
-    def __hash__(self):
-        return hash(self.identity)
 
-    def __eq__(self, other):
-        return isinstance(other, _ConstCacheKey) and self.identity == other.identity
+def _build_array_element_index():
+    fm = C._FORM_CODE
+    return {
+        fm[parent]: {
+            "type": C.ET_PROPERTY,
+            "parent": parent,
+            "parent_code": fm[parent],
+            "name": name,
+            "ret": fm[ret],
+            "q": f"{parent}.{name}",
+        }
+        for tp, parent, ret, name, _, _, _, _ in C.SYSTEM_ELEMENT_DEFS
+        if tp == C.ET_PROPERTY and name == "array"
+    }
 
 
 @lru_cache(maxsize=4)
-def _cached_disassembly_tables(cache_key):
-    const_module = cache_key.const_module
-    form_rev = invert_form_code_map(const_module)
-    op_names = {int(getattr(const_module, nm)): nm for nm in _DISAM_OP_NAMES}
-    read_flag_command_codes = _read_flag_command_codes(const_module)
-    elm_exact = _build_system_element_index(const_module)
-    elm_array_exact = _build_array_element_index(const_module)
+def _cached_disassembly_tables(_profile):
+    form_rev = invert_form_code_map()
+    op_names = {getattr(C, name): name for name in _DISAM_OP_NAMES}
+    read_flag_command_codes = C.READ_FLAG_COMMAND_CODES
+    elm_exact = _build_system_element_index()
+    elm_array_exact = _build_array_element_index()
     receiver_forms = set()
     receiver_forms.update(int(key[0]) for key in elm_exact)
     receiver_forms.update(int(key) for key in elm_array_exact)
-    receiver_forms = frozenset(
-        augment_receiver_form_codes(receiver_forms, const_module)
-    )
+    receiver_forms = frozenset(augment_receiver_form_codes(receiver_forms))
     unary_int_ops, string_cmp_ops, unary_text, binary_text = (
-        build_operator_render_tables(const_module)
+        build_operator_render_tables()
     )
     return (
         form_rev,
@@ -256,12 +150,6 @@ def _cached_disassembly_tables(cache_key):
         string_cmp_ops,
         unary_text,
         binary_text,
-    )
-
-
-def _shared_disassembly_tables(const_module=None):
-    return _cached_disassembly_tables(
-        _ConstCacheKey(C if const_module is None else const_module)
     )
 
 
@@ -1007,8 +895,8 @@ def disassemble_scn_bytes(
         string_cmp_ops,
         unary_text,
         binary_text,
-    ) = _shared_disassembly_tables(C)
-    _form_codes = C._FORM_CODE if isinstance(C._FORM_CODE, dict) else {}
+    ) = _cached_disassembly_tables(C.CONST_PROFILE)
+    _form_codes = C._FORM_CODE
 
     def _form_code(value):
         if isinstance(value, int):

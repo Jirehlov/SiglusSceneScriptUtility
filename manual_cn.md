@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-**版本：** 0.4.3（使用 `siglus-ssu --version` 查看已安装版本）
+**版本：** 0.5.0（使用 `siglus-ssu --version` 查看已安装版本）
 
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -21,7 +21,6 @@
    - [Python 模块 API](#python-模块-api)
    - [获取帮助](#获取帮助)
 4. [模式参考](#模式参考)
-   - [init — 安装/刷新运行时常量](#init--安装刷新运行时常量)
    - [-lsp — 启动语言服务器](#-lsp--启动语言服务器)
    - [-c / --compile — 编译脚本](#-c----compile--编译脚本)
    - [-x / --extract — 提取文件](#-x----extract--提取文件)
@@ -68,17 +67,11 @@
 pip install siglus-ssu
 ```
 
-安装后，如果这台机器里还没有通过校验的用户数据 `const.py`，请运行一次 `init` 来安装它：
-
-```bash
-siglus-ssu init
-```
+所有 wheel 和源码发行包均包含 `const.py`。程序只加载当前安装包内的常量表，安装后无需额外下载或联网。常量表随 `siglus-ssu` 升级而更新。
 
 > **注意：** 需要 Python 3.12 或更高版本。PyPI 同时发布带 Rust 原生扩展的平台 wheel 和通用的 `py3-none-any` 纯 Python 回退 wheel。如果没有兼容的原生 wheel，pip 仍可安装纯 Python wheel；受支持的操作会使用 Python 回退实现，但运行速度可能较慢。只有在该平台上需要原生加速时，才需要配备 Rust 从源码构建。
->
-> `const.py` 存储在平台特定的用户数据目录：
-> - **Windows：** `%APPDATA%\siglus-ssu\const.py`
-> - **Unix/Linux/macOS：** `~/.local/share/siglus-ssu/const.py`（或 `$XDG_DATA_HOME/siglus-ssu/const.py`）
+
+从 v0.5.0 起，`init` 和 `--init` 已移除，请从现有脚本中删去初始化步骤。旧的 `%APPDATA%\siglus-ssu\const.py` 或 `$XDG_DATA_HOME/siglus-ssu/const.py`（默认 `~/.local/share/siglus-ssu/const.py`）不再读取，也不会自动删除，以免影响旧版程序。若包内常量文件缺失，请重新安装程序。
 
 ### 方式二：从源码安装
 
@@ -105,11 +98,7 @@ siglus-ssu init
    uv run siglus-ssu --help
    ```
 
-   在当前这个仓库 checkout 中运行时，程序会先查找内置的 `src/siglus_ssu/const.py`，再查找用户数据副本。因此 `uv sync` 完成后通常就可以直接使用。只有在您想安装或刷新用户数据副本，或者当前运行布局不包含这份源码树内置副本时，才需要执行 `uv run siglus-ssu init`：
-
-   ```bash
-   uv run siglus-ssu init
-   ```
+   从源码树运行时直接使用 `src/siglus_ssu/const.py`，无需额外初始化。
 
 ---
 
@@ -157,7 +146,7 @@ Profile `7` 独立、完整地定义了与 profile `4` 相同的 form / element 
 
 Profile `8` 独立、完整地定义全部配置。其命令返回类型、消息块、已读标记、选择块规则和明文场景字符串规则与 profile `5` 相同，但使用 `frameaction = 1212`、`intlistref = 11`。它允许 command 外局部 property，z-label 表为 `100` 项，且保持 `&&` 高于 `||`。其 `NAMED_INT_REFERENCE_ARGUMENTS` 表仅为 `global.wipe(key_skip=...)` 和 `global.mask_wipe(key_skip=...)` 保留整数变量引用；常量和其他整数值表达式仍按值传递。Profile `0`-`7` 和 `9` 均显式配置为空表。Python 与 Rust 编译共用这些参数元数据。
 
-Profile `9` 独立、完整地定义全部配置表。它与 profile `2` 的唯一元素差异，是将编号 `47` 定义为 `worldlist` 类型的 `global.world` 属性，替代 `global.msgbtn`；同一编号的两种不兼容含义由不同 profile 隔离。它保留 profile `2` 的命令返回类型、消息块、已读标记与选择块规则、默认乘数 `0x7087`、`&&` 高于 `||` 的优先级和 `1000` 项 z-label 表，禁止 command 外局部 property，且具名整数引用参数表为空。Python 与 Rust 共用这些定义。从旧版本升级后，选择 profile `9` 前请运行 `siglus-ssu init --force` 刷新已有的用户数据 `const.py`。
+Profile `9` 独立、完整地定义全部配置表。它与 profile `2` 的唯一元素差异，是将编号 `47` 定义为 `worldlist` 类型的 `global.world` 属性，替代 `global.msgbtn`；同一编号的两种不兼容含义由不同 profile 隔离。它保留 profile `2` 的命令返回类型、消息块、已读标记与选择块规则、默认乘数 `0x7087`、`&&` 高于 `||` 的优先级和 `1000` 项 z-label 表，禁止 command 外局部 property，且具名整数引用参数表为空。Python 与 Rust 共用这些包内定义；升级程序会同步更新所有 profile。
 
 每个 profile 都有 `SEL_GLOBAL_CODE_NAMES` 表。Profile `0`-`3`、`5`、`6`、`8` 和 `9` 保留现有选择命令规则；profile `4` 和 `7` 使用空表，编译选择命令时不生成 `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`。该表同时决定选择命令在表达式中的静态限制，Python 与 Rust 编译 backend 使用相同设置。Profile 编号不表示引擎版本先后。
 
@@ -191,7 +180,6 @@ CLI 也接受几个便利用法：
 
 - `siglus-ssu help` 等同于 `siglus-ssu --help`
 - `siglus-ssu version` 等同于 `siglus-ssu --version`
-- `siglus-ssu --init ...` 等同于 `siglus-ssu init ...`
 
 选择模式及其必需的子操作后，`--` 会结束选项解析，使以 `-` 开头的路径能够作为位置参数原样传入，例如 `siglus-ssu test -- --sample.pck`。所有选项，包括全局选项，都必须放在 `--` 之前。若某个选项的路径值以 `-` 开头，请使用绝对路径，或为相对路径加上 `./` 前缀。
 
@@ -217,46 +205,6 @@ siglus-ssu -c --help
 ---
 
 ## 模式参考
-
-### `init` — 安装/刷新运行时常量
-
-把包含引擎特定常量（操作码表、密钥推导参数等）的用户数据 `const.py` 安装到本机。只有在该文件缺失，或您显式要求刷新时，`init` 才会从项目 GitHub 仓库下载它。
-
-正常启动时，加载器会先查找源码树里的 `src/siglus_ssu/const.py`，再查找用户数据副本。在当前这个仓库 checkout 中，这份内置文件是存在的，所以即使您执行过 `init`，直接从源码树运行时也仍可能优先使用内置副本。
-
-在使用除 `init` 以外的任何模式前，请先确保至少有一份能通过校验的 `const.py` 会被找到。PyPI 安装依赖用户数据副本，因为 wheel 会排除源码树内置的 `const.py`；而从当前仓库源码树运行时，也可以直接使用内置的 `src/siglus_ssu/const.py`。
-
-#### 语法
-
-```
-siglus-ssu init [--force | -f] [--ref <git-ref>]
-```
-
-#### 参数
-
-| 参数 | 说明 |
-|---|---|
-| `--force`, `-f` | 即使用户数据位置已经存在 `const.py`，也强制覆盖。 |
-| `--ref <git-ref>` | 指定 `init` 下载 `const.py` 时使用的 Git 分支、标签或提交哈希。如果用户数据目标已经存在文件，请把 `--ref` 与 `--force` 配合使用，才能真正重新下载。默认情况下，`init` 会尝试与当前包版本关联的 ref，包括从 git/GitHub 发现的匹配版本提交，以及类似标签名的 ref。 |
-
-`init` 只有在确实需要获取 `const.py` 时才需要联网访问 GitHub API。若未加 `--force` 且用户数据目标位置已经存在文件，命令会直接复用该文件，不会重复下载，并在后续加载时完成校验。
-
-下载得到的 `const.py` 会与内置的 SHA-512 白名单进行校验。默认下载 ref 根据当前包版本推导；显式传入的 `--ref` 只要最终解析到白名单允许的 `const.py` 内容，仍然可以使用。
-
-#### 示例
-
-```bash
-# 确保默认的用户数据 const.py 已安装
-siglus-ssu init
-
-# 即使已有 const.py，也重新下载到用户数据位置
-siglus-ssu init --force
-
-# 强制从特定标签重新下载 const.py
-siglus-ssu init --force --ref v0.4.3
-```
-
----
 
 ### `-lsp` — 启动语言服务器
 

@@ -4,7 +4,7 @@ import os
 import re
 from contextlib import suppress
 from .CA import is_zen
-from ._const_manager import get_const_module
+from . import const as C
 from . import disam
 from .common import (
     array_element_info,
@@ -20,7 +20,6 @@ from .common import (
     write_text,
 )
 
-C = get_const_module()
 _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"
 
@@ -115,7 +114,9 @@ def _form_name(form):
     if s and (not re.fullmatch(r"-?\d+", s)):
         return s
     try:
-        return str(disam._shared_disassembly_tables(C)[0].get(int(form), "int"))
+        return str(
+            disam._cached_disassembly_tables(C.CONST_PROFILE)[0].get(int(form), "int")
+        )
     except (TypeError, ValueError):
         return "int"
 
@@ -260,7 +261,7 @@ def _annotation_cache_signature(
 
 
 def _element_indexes():
-    tables = disam._shared_disassembly_tables(C)
+    tables = disam._cached_disassembly_tables(C.CONST_PROFILE)
     return tables[3], tables[4], tables[5]
 
 
@@ -340,7 +341,7 @@ def _merge_arg_layout(current, incoming):
     def _specificity(layout):
         vals = _copy_arg_layout(layout)
         try:
-            fm_int = int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0))
+            fm_int = int(C._FORM_CODE.get(C.FM_INT, 0))
         except Exception:
             fm_int = 0
         return (
@@ -363,9 +364,9 @@ def _prefer_return_form(forms):
         return list(vals)[0]
     if len(vals) > 1:
         for fm in (
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STR, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INT, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_VOID, None),
+            C._FORM_CODE.get(C.FM_STR, None),
+            C._FORM_CODE.get(C.FM_INT, None),
+            C._FORM_CODE.get(C.FM_VOID, None),
         ):
             if fm in vals:
                 return fm
@@ -374,7 +375,7 @@ def _prefer_return_form(forms):
 
 
 def _default_return_form():
-    return getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0)
+    return C._FORM_CODE.get(C.FM_INT, 0)
 
 
 def _prefer_property_form(forms):
@@ -403,10 +404,10 @@ def _prefer_property_form(forms):
         best = max(counts.values())
         vals = {k for k, v in counts.items() if v == best}
         for fm in (
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STRLIST, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INTLIST, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STR, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INT, None),
+            C._FORM_CODE.get(C.FM_STRLIST, None),
+            C._FORM_CODE.get(C.FM_INTLIST, None),
+            C._FORM_CODE.get(C.FM_STR, None),
+            C._FORM_CODE.get(C.FM_INT, None),
         ):
             if fm in vals:
                 return fm
@@ -420,10 +421,10 @@ def _property_form_from_value_form(form, has_array=False):
     except Exception:
         return None
     if bool(has_array):
-        if form_i == int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0)):
-            return getattr(C, "_FORM_CODE", {}).get(C.FM_INTLIST, None)
-        if form_i == int(getattr(C, "_FORM_CODE", {}).get(C.FM_STR, 0)):
-            return getattr(C, "_FORM_CODE", {}).get(C.FM_STRLIST, None)
+        if form_i == int(C._FORM_CODE.get(C.FM_INT, 0)):
+            return C._FORM_CODE.get(C.FM_INTLIST, None)
+        if form_i == int(C._FORM_CODE.get(C.FM_STR, 0)):
+            return C._FORM_CODE.get(C.FM_STRLIST, None)
     return form_i
 
 
@@ -503,7 +504,7 @@ def _infer_bundle_global_property_count(bundle):
             value = int(ev.get("value"))
         except Exception:
             continue
-        if form != int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0)):
+        if form != int(C._FORM_CODE.get(C.FM_INT, 0)):
             continue
         owner, code_idx = _element_owner(value)
         if owner == C.ELM_OWNER_USER_PROP:
@@ -967,7 +968,7 @@ def _render_decl_form(arg):
         form = int(arg.get("form", 0) or 0)
     except Exception:
         form = 0
-    if form == getattr(C, "_FORM_CODE", {}).get(C.FM_LIST, -1):
+    if form == C._FORM_CODE.get(C.FM_LIST, -1):
         sub = list(arg.get("sub") or [])
         return "list[" + ", ".join(_render_decl_form(x) for x in sub) + "]"
     return _form_name(form)
@@ -1154,26 +1155,18 @@ def build_decompile_hints(bundles, status=None):
             if isinstance(it, dict)
         }
         ref_forms = {
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INTREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_INT, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STRREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_STR, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INTLISTREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_INTLIST, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STRLISTREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_STRLIST, None),
+            C._FORM_CODE.get(C.FM_INTREF, None): C._FORM_CODE.get(C.FM_INT, None),
+            C._FORM_CODE.get(C.FM_STRREF, None): C._FORM_CODE.get(C.FM_STR, None),
+            C._FORM_CODE.get(C.FM_INTLISTREF, None): C._FORM_CODE.get(
+                C.FM_INTLIST, None
+            ),
+            C._FORM_CODE.get(C.FM_STRLISTREF, None): C._FORM_CODE.get(
+                C.FM_STRLIST, None
+            ),
         }
         array_ref_forms = {
-            getattr(C, "_FORM_CODE", {}).get(C.FM_INTREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_INTLIST, None),
-            getattr(C, "_FORM_CODE", {}).get(C.FM_STRREF, None): getattr(
-                C, "_FORM_CODE", {}
-            ).get(C.FM_STRLIST, None),
+            C._FORM_CODE.get(C.FM_INTREF, None): C._FORM_CODE.get(C.FM_INTLIST, None),
+            C._FORM_CODE.get(C.FM_STRREF, None): C._FORM_CODE.get(C.FM_STRLIST, None),
         }
 
         def _is_local_prop_code(code_idx):
@@ -1216,7 +1209,7 @@ def build_decompile_hints(bundles, status=None):
                 value = int(ev.get("value"))
             except Exception:
                 continue
-            if form != int(getattr(C, "_FORM_CODE", {}).get(C.FM_INT, 0)):
+            if form != int(C._FORM_CODE.get(C.FM_INT, 0)):
                 continue
             owner, code_idx = _element_owner(value)
             if owner != C.ELM_OWNER_USER_PROP:
@@ -2460,7 +2453,7 @@ class _Decompiler:
             except Exception:
                 ret_form = None
             try:
-                fm_void = int(getattr(C, "_FORM_CODE", {}).get(C.FM_VOID, -1))
+                fm_void = int(C._FORM_CODE.get(C.FM_VOID, -1))
             except Exception:
                 fm_void = -1
             if ret_form is None:
@@ -4051,9 +4044,6 @@ class _Decompiler:
                 tail = f"[{size_val:d}]"
         return _format_property_decl("property", name, form, tail)
 
-    def _render_decl_stmt(self, ev, ctx=None):
-        return self._render_param(-1, ev, ctx)
-
     def _has_explicit_compound_assign(self, ops):
         for ev in ops or []:
             if str((ev or {}).get("op") or "") == "CD_COPY_ELM":
@@ -4133,7 +4123,7 @@ class _Decompiler:
             else ctx
         )
         try:
-            fm_void = int(getattr(C, "_FORM_CODE", {}).get(C.FM_VOID, -1))
+            fm_void = int(C._FORM_CODE.get(C.FM_VOID, -1))
         except Exception:
             fm_void = -1
         for idx, ev in enumerate(ops):
@@ -4148,7 +4138,7 @@ class _Decompiler:
                 macro = str((self.name_macros or {}).get(text) or "")
                 part = _OPEN_NAME + (macro if macro else text) + _CLOSE_NAME
             elif op == "CD_DEC_PROP":
-                part = self._render_decl_stmt(ev, ctx)
+                part = self._render_param(-1, ev, ctx)
             elif op == "CD_ASSIGN":
                 part = self._expr(str(ev.get("_expr") or ""), assign_ctx)
             elif op == "CD_RETURN":
@@ -4537,7 +4527,7 @@ class _Decompiler:
             lines.append(f"return({expr})" if expr else "return")
             return self._with_event(idx, lines), idx + 1
         if op == "CD_DEC_PROP":
-            lines.append(self._render_decl_stmt(ev, ctx))
+            lines.append(self._render_param(-1, ev, ctx))
             return self._with_event(idx, lines), idx + 1
         return self._with_event(idx, lines), idx + 1
 
