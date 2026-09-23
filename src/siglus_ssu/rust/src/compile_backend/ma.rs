@@ -64,10 +64,6 @@ impl<'a> SemanticAnalyzer<'a> {
             self.codes.forms.int.code
         } else if form == self.codes.forms.strref.code {
             self.codes.forms.str_.code
-        } else if form == self.codes.forms.intlistref.code {
-            self.codes.forms.intlist.code
-        } else if form == self.codes.forms.strlistref.code {
-            self.codes.forms.strlist.code
         } else {
             form
         }
