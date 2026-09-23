@@ -336,11 +336,8 @@ def link_pack(ctx):
     for c in inc_cmds:
         c["is_defined"] = False
     if inc_command_cnt > 0:
-        any_labels = False
         for scn_no, dat in enumerate(dat_list):
             labels = _parse_cmd_labels(dat)
-            if labels:
-                any_labels = True
             for cmd_id, off in labels:
                 if cmd_id < inc_command_cnt and 0 <= cmd_id < len(inc_cmds):
                     if inc_cmds[cmd_id]["is_defined"]:
@@ -349,10 +346,9 @@ def link_pack(ctx):
                         )
                     inc_cmd_list[cmd_id] = (scn_no, off)
                     inc_cmds[cmd_id]["is_defined"] = True
-        if any_labels:
-            for i in range(min(inc_command_cnt, len(inc_cmds))):
-                if not inc_cmds[i]["is_defined"]:
-                    raise RuntimeError(f"command {inc_cmds[i]['name']} is not defined")
+        for i in range(min(inc_command_cnt, len(inc_cmds))):
+            if not inc_cmds[i]["is_defined"]:
+                raise RuntimeError(f"command {inc_cmds[i]['name']} is not defined")
     noangou_scene_data = lzss_list if lzss_mode else dat_list
     exe_on, exe_el = _resolve_exe_angou(ctx)
     original_hsz, original_chunks = _build_original_source_chunks(ctx, lzss_mode)

@@ -3151,7 +3151,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 15
+LSP_INDEX_CACHE_VERSION = 16
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -4518,44 +4518,38 @@ class SSLanguageServer:
             implemented: dict[str, list[DefinitionRecord]] = {
                 key: [] for key in global_names
             }
-            any_labels = False
             for scene_path in scene_paths:
                 self.raise_if_request_cancelled()
                 commands = entry.file_commands.get(scene_path, [])
-                if commands:
-                    any_labels = True
                 for rec in commands:
                     key = ascii_lower(rec.name)
                     if key in implemented:
                         implemented[key].append(rec)
-            if any_labels:
-                for key, name in global_names.items():
-                    records = implemented.get(key, [])
-                    if len(records) > 1:
-                        for rec in records:
-                            diagnostics.setdefault(
-                                os.path.abspath(rec.path), []
-                            ).append(
-                                SourceDiagnostic(
-                                    path=os.path.abspath(rec.path),
-                                    line=rec.line,
-                                    message=f"command {name} defined more than once",
-                                    code="LINK",
-                                )
-                            )
-                        continue
-                    if records:
-                        continue
-                    for scene_path in scene_paths:
-                        self.raise_if_request_cancelled()
-                        diagnostics.setdefault(scene_path, []).append(
+            for key, name in global_names.items():
+                records = implemented.get(key, [])
+                if len(records) > 1:
+                    for rec in records:
+                        diagnostics.setdefault(os.path.abspath(rec.path), []).append(
                             SourceDiagnostic(
-                                path=scene_path,
-                                line=1,
-                                message=f"command {name} is not defined",
+                                path=os.path.abspath(rec.path),
+                                line=rec.line,
+                                message=f"command {name} defined more than once",
                                 code="LINK",
                             )
                         )
+                    continue
+                if records:
+                    continue
+                for scene_path in scene_paths:
+                    self.raise_if_request_cancelled()
+                    diagnostics.setdefault(scene_path, []).append(
+                        SourceDiagnostic(
+                            path=scene_path,
+                            line=1,
+                            message=f"command {name} is not defined",
+                            code="LINK",
+                        )
+                    )
         if rebuild_all or removed or dirty_paths:
             entry.revision += 1
         entry.diagnostics = diagnostics

@@ -2190,21 +2190,16 @@ fn compile_project_inner(
         }
     }
 
-    if scene_records
+    for (index, defined) in inc_command_defined
         .iter()
-        .any(|record| !record.command_labels.is_empty())
+        .take(base_ia.inc_command_cnt.max(0) as usize)
+        .enumerate()
     {
-        for (index, defined) in inc_command_defined
-            .iter()
-            .take(base_ia.inc_command_cnt.max(0) as usize)
-            .enumerate()
-        {
-            if !defined {
-                return Err(format!(
-                    "command {} is not defined",
-                    base_ia.command_list[index].name
-                ));
-            }
+        if !defined {
+            return Err(format!(
+                "command {} is not defined",
+                base_ia.command_list[index].name
+            ));
         }
     }
     let mut lzss_results = std::collections::HashMap::new();

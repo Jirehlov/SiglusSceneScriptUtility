@@ -2038,7 +2038,7 @@ scene 中的 `command` 定义有两种来源：
 3. 若某命令被多个 scene 实现，linker 判为“defined more than once”；
 4. 若某命令没有任何 scene 实现，linker 判为“is not defined”。
 
-当前实现还有一个需要视为规范的怪癖：只有当 linker 在整个目录里至少见到过一个 scene `command` 标签之后，才会执行“缺失实现”检查。如果整个目录里完全没有任何 scene `command` 定义，当前 linker 不会报“is not defined”。
+即使整个目录里没有任何 scene `command` 定义，也会检查所有全局 `.inc #command` 是否得到实现。
 
 因此，一个实现若只复现单文件前端，而不复现该目录级约束，就不能视为与当前 `-c` 语言定义完全一致。
 

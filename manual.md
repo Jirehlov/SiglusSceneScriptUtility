@@ -2038,7 +2038,7 @@ When `-c` compiles and packs a whole directory, the following shall also hold:
 3. if more than one scene implements the same command, the linker reports it as “defined more than once”;
 4. if no scene implements it, the linker reports it as “is not defined”.
 
-One current implementation quirk is also normative: the missing-definition pass runs only after the linker has seen at least one scene `command` label anywhere in the directory. In a degenerate directory with zero scene `command` definitions overall, the current linker does not emit the “is not defined” error.
+Missing definitions are checked for all global `.inc #command` declarations even if no scene in the directory contains a `command` definition.
 
 Therefore, an implementation that reproduces only the single-file front-end but not these directory-level constraints is not fully conforming to the present `-c` language definition.
 
