@@ -221,7 +221,7 @@ class FormTable:
                 and e.get("type") == C.ET_PROPERTY
             ):
                 return
-        bucket[nm] = e
+        bucket.setdefault(nm, e)
         form["element_map_by_name"] = bucket
         code = e.get("code", 0)
         try:
@@ -229,7 +229,7 @@ class FormTable:
         except (TypeError, ValueError):
             code = None
         if code is not None:
-            code_bucket[code] = e
+            code_bucket.setdefault(code, e)
         form["element_map_by_code"] = code_bucket
 
     def get(s, fc, name):

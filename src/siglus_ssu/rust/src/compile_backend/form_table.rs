@@ -114,9 +114,11 @@ impl FormTable {
             return;
         }
         info.element_map_by_code
-            .insert(element.code, element.clone());
+            .entry(element.code)
+            .or_insert_with(|| element.clone());
         info.element_map_by_name
-            .insert(element.name.clone(), element);
+            .entry(element.name.clone())
+            .or_insert(element);
     }
 
     pub fn get(&self, form: &str, name: &str) -> Option<&ElementInfo> {
