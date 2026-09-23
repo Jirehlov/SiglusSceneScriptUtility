@@ -99,6 +99,9 @@ impl<'a> SemanticAnalyzer<'a> {
         for statement in statements {
             let mut statement_selection = false;
             self.analyze_node(statement, &mut statement_selection)?;
+            if statement_selection && matches!(&statement.payload, AstPayload::Goto { .. }) {
+                return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_GOTO", statement.line, None);
+            }
             statement.include_selection = statement_selection;
         }
         Ok(())
@@ -201,11 +204,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.codes.forms.void.code
             }
             AstPayload::Goto { kind, args, .. } => {
-                let mut goto_selection = false;
-                self.analyze_arguments(args, &mut goto_selection)?;
-                if goto_selection {
-                    return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_GOTO", node.line, None);
-                }
+                self.analyze_arguments(args, selection)?;
                 match kind {
                     GotoKind::Goto => self.codes.forms.void.code,
                     GotoKind::Gosub => self.codes.forms.int.code,
