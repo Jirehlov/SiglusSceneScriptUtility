@@ -843,7 +843,7 @@ def norm_charset(cs: str) -> str:
         name = codecs.lookup(s).name
     except LookupError:
         return ""
-    if name == "cp932":
+    if name in ("cp932", "shift_jis"):
         return "cp932"
     if name == "utf-8-sig":
         return "utf-8"

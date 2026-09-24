@@ -319,7 +319,7 @@ fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, St
         .ok_or_else(|| format!("source text not loaded: {}", path.display()))
 }
 
-fn encode_shift_jis_ignore(text: &str) -> Vec<u8> {
+fn encode_cp932_ignore(text: &str) -> Vec<u8> {
     encode_cp932(text, true).unwrap_or_default()
 }
 
@@ -1311,7 +1311,7 @@ fn resolve_exe_key(config: &CompileConfig) -> Option<Vec<u8>> {
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        let key = exe_angou_element(&encode_shift_jis_ignore(content), &config.constants.exe_org);
+        let key = exe_angou_element(&encode_cp932_ignore(content), &config.constants.exe_org);
         if key.len() == 16 {
             return Some(key);
         }

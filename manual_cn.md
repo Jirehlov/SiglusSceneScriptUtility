@@ -269,7 +269,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<input_dir>` | 至少包含一个 `.ss` 源文件的目录，可选包含 `.inc`、`.ini` / `Gameexe.ini`、`暗号.dat`。源码扫描仅限该目录当前层的文件。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
 | `<output_pck \| output_dir>` | 输出路径。若参数指向已存在目录，或以 `/`、`\` 结尾，则按需创建目录，并在其中写入 `Scene.pck`。否则按输出文件路径处理；不存在且末尾没有路径分隔符的路径，即使不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
-| `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`）有意统一为 Windows CP932；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
+| `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`，以及 Python 识别的 `csshiftjis`、`s_jis` 等别名）有意统一为 Windows CP932。这是兼容规则：Python 的 `shift_jis` 和 `cp932` 在扩展字符及部分字符映射上并不等价；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
 | `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。同目录 `.inc` 会用于重建包级 include 命令元数据；没有 `.inc` 时继续打包，但会打印警告并省略该元数据。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和外层 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。场景字符串 XOR 变换仍由 `--string-xor-multiplier` 控制。不能与 `--tmp` 同用。 |
@@ -347,6 +347,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 - **源文件解码：** 若未指定 `--charset`，每个源文件都会独立尝试 UTF-8 与 CP932，并根据 BOM、严格解码结果和确定性的歧义评分选择编码。其他 Python codec 必须显式指定，并采用严格解码；DOS EOF 之前的非法字节序列会令编译失败。解码会移除一个开头的 Unicode BOM，并把 CRLF 或孤立 CR 归一化为 LF，但不会进行 Unicode 规范化。两个编译后端接收同一份解码后的文本快照。
 - **DOS EOF：** 编译时按源文件编码识别首个 U+001A 字符，并忽略其后的全部字节，包括非法字节。其他 UTF-16/UTF-32 字符内部的 `0x1A` 字节不视为 EOF。嵌入的原始源码及源码哈希仍使用完整文件字节；普通非编译文本读取不受影响。
 - **与编码无关的编译：** 源文件编码不会选择另一套词法规则。解码完成后，CP932、UTF-8 和其他编码都使用与官方日文编译器一致、固定的 CP932 双字节字符分类。因此，内容等价的 CP932 与 UTF-8 源文件会得到相同编译结果。固定集合以外的字符可以写在引号字符串内，但不会被当作无引号的全角文本。
+- **暗号字符串与跨平台一致性：** 从 `暗号.dat` 或 `angou=text` 派生密钥时，两个后端在所有平台上固定使用 Python `cp932` 的编码结果，并忽略无法编码的字符；这套规则不随 Windows 版本或系统代码页变化。官方使用 Windows `WideCharToMultiByte(CP_ACP, 0, ...)`，因此相同字符串不保证得到相同密钥。例如在日文 CP932 环境下，`髙` 在 SSU 中编码为 `EE E0`，官方为 `FB FC`；`¥` 在 SSU 中被忽略，官方转换为 `5C`。差异可能导致 `Scene.pck` 或 `Gameexe.dat` 解密失败，也可能改变编码后至少 8 字节才启用加密的判断。与官方产物互通时，可使用从对应引擎取得的原始 16 字节 key：编译时使用 `key.txt`，并确保输入目录没有优先级更高的 `暗号.dat`；分析、解包等支持 `--angou` 的操作可直接指定 `key=bytes` 或对应的 `SiglusEngine.exe`。
 - **增量编译：** 当指定 `--tmp` 时，编译器会缓存所有 `.ss` 和 `.inc` 文件的 SHA-256 哈希。每个哈希与该文件的编译文本都来自同一次读取的原始字节；若文件在快照读取后被保存，下次运行会识别出变化。缓存兼容条件包括 `siglus-ssu` 版本、源码字符集、当前 `const.py` 内容/profile，以及场景字符串 XOR 乘数。下次兼容运行时仅重编译已更改（或缺少对应 `.dat`）的文件，并复用已有 `.lzss` 产物。若某个场景源码发生变化，或对应 `.lzss` 缺失，则重新生成该场景的 `.lzss`。场景源文件仅修改文件名大小写时，若需要重新编译，也会删除冲突的旧 `.dat`，并忽略文件名大小写使对应的旧 `.lzss` 失效。若任一 `.inc` 文件新增、变化或被删除，或缓存元数据不兼容，则触发全量重编译。
 - **缓存失败恢复：** 更新增量缓存前，会先删除旧的 `_source_hashes.json` 有效标记；只有最终 `.pck` 链接并写入成功后，才写入新标记。若编译、链接、缓存标记写入失败，或进程在更新缓存期间被中断，下次运行会重建全部场景，而不会信任未完成的产物。旧 `.lzss` 无法删除时会停止构建；请解除文件占用或修正权限后重试。这保证的是缓存复用的有效性，并不代表全部输出文件会被原子替换。
 - **字符串混淆：** 编译器会用 MSVC 兼容 `rand()` 种子打乱每个 `.dat` 的字符串表；字符串顺序不影响普通翻译工作。`--test-shuffle` 根据第一个 scene 寻找种子，再串行重建全部 scene；后续若有不匹配仍会生成请求的输出，但命令返回失败。已知种子可通过 `--set-shuffle` 使用。
@@ -470,6 +471,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。该模式可以使用 `--angou`，但会拒绝其他 analyze 修饰选项，例如 `--disam`、`--readall`、`--apply`、`--payload` 和 `--word`。 |
 
 比较 `.pck` 或 `.dat` 时，`text_only` 和 `real_diff` 这类差异属于报告结果，而不是命令错误；仅凭退出状态 `0` 不能判定输入相同。即使两份输入包含相同的不完整数据，`INCOMPLETE` 也会返回 `1`，不会被视为 payload 相同。`.pck` 的检查也覆盖字节相同及仅存在于一侧的场景。
+
+通过 `暗号.dat` 或 `angou=text` 推导 key 时，同样采用编译说明中的固定 CP932 规则，可能与官方 Windows 转换得到不同结果。需要精确匹配已有文件时，可直接提供原始 16 字节 `key=bytes` 或对应的 `SiglusEngine.exe`。
 
 尝试解密候选时会向 stderr 打印 key-source 诊断信息：每行包含来源、类型、适用时的路径或包内文件、具体 `exe_el` 值，以及该候选是 accepted 还是 rejected 并继续 fallback。
 
@@ -637,7 +640,7 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 
 当行列布局一致时，`-d --a` 按解码后的文本比较字符串单元格，而不是只比较字符串池偏移。最多扫描 2,000,000 个单元格，并显示最多 20 处单元格差异；达到任一限制时会在输出中说明。
 
-编译 `m_type=0` 时，每个字符串都必须能严格编码为 Shift-JIS；其他类型使用严格 UTF-16LE 编码。无法编码的单元格会报告 CSV 路径、记录起始行、列和 call number，且不会写出无效 `.dbs`。
+`m_type=0` 的字符串在所有平台上固定使用 Windows CP932 编解码，支持 `①`、`髙` 等扩展字符，不依赖系统代码页。编译时每个字符串都必须能严格编码为 CP932；其他类型使用严格 UTF-16LE 编码。无法编码的单元格会报告 CSV 路径、记录起始行、列和 call number，且不会写出无效 `.dbs`。
 
 #### CSV 格式
 

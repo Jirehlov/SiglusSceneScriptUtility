@@ -77,7 +77,7 @@ def _gan_parse(blob, want_disasm=True):
                 out["ok"] = False
                 out["errors"].append(f"invalid string length {ln!r} at {hx(ofs0)}")
                 break
-            s = blob[ofs : ofs + ln].decode("shift_jis", errors="replace")
+            s = blob[ofs : ofs + ln].decode("cp932", errors="replace")
             ofs += ln
             out["g00_file_name"] = s
             _add_ins(ofs0, code, ln, s)

@@ -77,7 +77,7 @@ def _dbs_get_str(m_type, sblob: bytes, ofs: int) -> str:
         end = sblob.find(b"\x00", ofs)
         if end < 0:
             end = len(sblob)
-        return sblob[ofs:end].decode("shift_jis", errors="replace")
+        return sblob[ofs:end].decode("cp932", errors="replace")
     end = ofs
     while end + 1 < len(sblob):
         if sblob[end] == 0 and sblob[end + 1] == 0:
@@ -530,5 +530,5 @@ def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
 def _dbs_encode_text(m_type: int, text: str) -> bytes:
     s = "" if text is None else str(text)
     if int(m_type) == 0:
-        return s.encode("shift_jis") + b"\x00"
+        return s.encode("cp932") + b"\x00"
     return s.encode("utf-16le") + b"\x00\x00"
