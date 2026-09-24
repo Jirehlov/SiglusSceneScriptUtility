@@ -45,7 +45,7 @@ class IncAnalyzer:
             single_quote_mode="string",
             single_escape_chars='"\\n',
             double_escape_chars='"\\n',
-            block_comment_enter_advance=2,
+            block_comment_enter_advance=1,
             newline_single_message="Found newline inside single quotes.",
             newline_double_message="Found newline inside double quotes.",
             unclosed_single_message="Single quote is not closed.",

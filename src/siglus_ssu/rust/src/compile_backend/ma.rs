@@ -20,7 +20,7 @@ pub struct SemanticAnalyzer<'a> {
     pub call_property_names: Vec<String>,
     pub current_call_property_count: i32,
     pub total_call_property_count: i32,
-    command_depth: usize,
+    command_in: bool,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -34,7 +34,7 @@ impl<'a> SemanticAnalyzer<'a> {
             call_property_names: Vec::new(),
             current_call_property_count: 0,
             total_call_property_count: 0,
-            command_depth: 0,
+            command_in: false,
         }
     }
 
@@ -128,7 +128,7 @@ impl<'a> SemanticAnalyzer<'a> {
         form: &mut FormSpec,
         property_id: &mut i32,
     ) -> Result<(), ()> {
-        if self.command_depth == 0 && !self.codes.allow_property_out_of_command {
+        if !self.command_in && !self.codes.allow_property_out_of_command {
             return self.fail("TNMSERR_MA_PROPERTY_OUT_OF_COMMAND", line, None);
         }
         self.analyze_form(form)?;
@@ -187,18 +187,14 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.codes.forms.void.code
             }
             AstPayload::DefCommand {
-                form,
-                parameters,
-                body,
-                ..
+                parameters, body, ..
             } => {
-                self.analyze_form(form)?;
-                self.command_depth += 1;
+                self.command_in = true;
                 for parameter in parameters {
                     self.analyze_parameter(parameter)?;
                 }
                 self.analyze_statements(body)?;
-                self.command_depth -= 1;
+                self.command_in = false;
                 self.ia_data.form_table.reset_call();
                 self.current_call_property_count = 0;
                 self.codes.forms.void.code

@@ -1528,6 +1528,8 @@ Both scene text and `.inc` text accept these comment forms:
 
 `/* ... */` does not nest. An unterminated block comment is ill-formed. Comment openers inside single-quoted and double-quoted literals are ignored.
 
+For compatibility with the official compiler, block comment delimiters in scene text, `.inc`, and `Gameexe.ini` may share one `*`, so `/*/` is a closed empty comment. In `/*/text*/`, `text*/` remains outside the comment; write `/* text */` to comment out the text. This rule is identical across platforms and the Python and Rust compile backends.
+
 #### Conditional compilation
 
 Both scene text and `.inc` text support:
@@ -1897,6 +1899,8 @@ Supplementary rules:
 2. named and positional arguments may be mixed syntactically; after parsing, named arguments are moved to the tail of the argument sequence while preserving the relative order within the positional and named subsets;
 3. `form[exp]` in scene `property` and `command` parameter declarations only requires the index expression to have form `int`; unlike `.inc #property`, the current implementation does not preserve that size as true array metadata for call-local properties.
 
+The `[exp]` following a `command` return form is not semantically analyzed and generates no runtime evaluation code; `form-name` still determines the return form. This matches the official compiler.
+
 #### Expressions
 
 ```text
@@ -1916,6 +1920,7 @@ literal ::= integer-literal | string-token | label-token
 Additionally:
 
 - a list literal `[...]` shall contain at least one element; an empty list `[]` is not accepted;
+- parentheses around a list argument do not change its element count or type information; for example, `wipe(option=([1,2]))` and `wipe(option=[1,2])` are equivalent;
 - `goto`, `gosub`, and `gosubstr` may appear both as statements and as expressions inside larger expressions.
 
 ### Name lookup and form rules
@@ -1991,6 +1996,8 @@ An assignment shall satisfy:
 5. `continue` and `break` used outside loops are rejected at the BS stage;
 6. certain commands marked by the active profile as selection-related shall not appear in conditions, ordinary arguments, goto arguments, or index expressions;
 7. `name-stmt` emits a name-display event, and `text-stmt` emits a text-display event and consumes a read-flag slot.
+
+As in the official compiler, the state indicating whether analysis is inside a `command` is Boolean; leaving a nested `command` does not restore the enclosing state. Profiles `0`-`5` and `9` therefore reject a `property` later in the enclosing body outside any subsequent `command` definition. Profiles `6`-`8` still allow these declarations.
 
 #### Matching command definitions to declarations
 

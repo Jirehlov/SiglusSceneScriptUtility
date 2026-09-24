@@ -1028,9 +1028,11 @@ class BS:
             return True
         if not isinstance(goto, dict):
             return False
+        nt = int(goto.get("node_type", 0) or 0)
+        if nt == C.NT_GOTO_GOTO:
+            return s.bs_goto({"Goto": goto})
         if not s.bs_arg_list(goto.get("arg_list"), True):
             return False
-        nt = int(goto.get("node_type", 0) or 0)
         label_no = int(
             ((goto.get("label") or {}).get("atom") or {}).get("opt", 0)
             or (goto.get("label") or {}).get("label_id", 0)
@@ -1464,12 +1466,10 @@ class BS:
                     tf = ((a or {}).get("exp") or {}).get("tmp_form")
                     s.out_scn["scn"].push_i32(_fc(tf))
                     if tf == C.FM_LIST:
-                        fl = list(
-                            ((a.get("exp") or {}).get("smp_exp") or {})
-                            .get("exp_list", {})
-                            .get("form_list")
-                            or []
-                        )
+                        smp = (a.get("exp") or {}).get("smp_exp") or {}
+                        while smp.get("node_type") == C.NT_SMP_KAKKO:
+                            smp = (smp.get("exp") or {}).get("smp_exp") or {}
+                        fl = list(smp.get("exp_list", {}).get("form_list") or [])
                         s.out_scn["scn"].push_i32(len(fl))
                         for f0 in reversed(fl):
                             s.out_scn["scn"].push_i32(_fc(dereference(f0)))

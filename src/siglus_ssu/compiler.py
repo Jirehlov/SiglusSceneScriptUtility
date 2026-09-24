@@ -279,7 +279,7 @@ def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, increment
     cur_ss = source_digests["ss"]
     full_compile = True
     cache_meta = {
-        "schema": 6,
+        "schema": 7,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,

@@ -1332,7 +1332,7 @@ fn write_gameexe_dat(
         case_mode: CaseMode::Upper,
         single_quote_mode: SingleQuoteMode::None,
         double_escape_chars: "\\\"".to_string(),
-        block_comment_enter_advance: 2,
+        block_comment_enter_advance: 1,
         newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
         unclosed_double_message: "Unclosed double quote.".to_string(),
         unclosed_block_message: "Unclosed /* comment.".to_string(),

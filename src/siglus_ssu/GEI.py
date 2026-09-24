@@ -42,7 +42,7 @@ class IniFileAnalizer:
             case_mode="upper",
             single_quote_mode="none",
             double_escape_chars='\\"',
-            block_comment_enter_advance=2,
+            block_comment_enter_advance=1,
             newline_double_message="Newline is not allowed inside double quotes.",
             unclosed_double_message="Unclosed double quote.",
             unclosed_block_message="Unclosed /* comment.",

@@ -195,7 +195,7 @@ impl IncAnalyzer {
             single_quote_mode: SingleQuoteMode::String,
             single_escape_chars: "\"\\n".to_string(),
             double_escape_chars: "\"\\n".to_string(),
-            block_comment_enter_advance: 2,
+            block_comment_enter_advance: 1,
             newline_single_message: "Found newline inside single quotes.".to_string(),
             newline_double_message: "Found newline inside double quotes.".to_string(),
             unclosed_single_message: "Single quote is not closed.".to_string(),

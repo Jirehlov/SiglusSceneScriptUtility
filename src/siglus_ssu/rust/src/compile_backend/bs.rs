@@ -723,7 +723,11 @@ impl<'a> BytecodeBuilder<'a> {
                 }
                 for argument in element.args.args.iter().rev() {
                     self.push_form(argument.value.temp_form);
-                    if let AstPayload::ExpressionList { forms, .. } = &argument.value.payload {
+                    let mut value = &argument.value;
+                    while let AstPayload::Paren { expression } = &value.payload {
+                        value = expression;
+                    }
+                    if let AstPayload::ExpressionList { forms, .. } = &value.payload {
                         self.push_i32(forms.len() as i32);
                         for form in forms.iter().rev() {
                             self.push_form(self.dereference(*form));
