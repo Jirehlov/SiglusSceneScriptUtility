@@ -148,7 +148,11 @@ def _payload_metadata_trace(meta, pack_context):
         out.append(event)
 
     for op, key in (("meta_label", "label_list"), ("meta_z_label", "z_label_list")):
-        emit(op, offsets=[int(value) for value in meta.get(key) or []])
+        offsets = [int(value) for value in meta.get(key) or []]
+        if key == "z_label_list":
+            while offsets and offsets[-1] == 0:
+                offsets.pop()
+        emit(op, offsets=offsets)
     for command_id, offset in meta.get("cmd_label_list") or []:
         emit("meta_command_label", id=int(command_id), offset=int(offset))
     for op, key in (

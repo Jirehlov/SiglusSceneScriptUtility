@@ -1212,6 +1212,14 @@ impl<'a> Scanner<'a> {
             ("meta_label", &self.dat.label_offsets),
             ("meta_z_label", &self.dat.z_label_offsets),
         ] {
+            let mut offsets = offsets.as_slice();
+            if op == "meta_z_label" {
+                let len = offsets
+                    .iter()
+                    .rposition(|&offset| offset != 0)
+                    .map_or(0, |index| index + 1);
+                offsets = &offsets[..len];
+            }
             self.hasher.event(Event {
                 op: Cow::Borrowed(op),
                 line: None,
