@@ -1972,7 +1972,7 @@ def disassemble_scn_bytes(
             )
             arg_values = []
             named_values = {}
-            if not payload_trace:
+            if with_trace and not payload_trace:
                 arg_values = _peek_arg_list(arg_forms, _pop_arg_value)
                 named_values = named_command_value_map(info, arg_values, named_ids)
             if render_text:
@@ -1984,11 +1984,12 @@ def disassemble_scn_bytes(
                     lambda: (
                         f"{ofs:08X}: {opname} arg_list={int(arg_list_id):d} "
                         f"argc={len(arg_forms or []):d} args=[{', '.join(_format_arg_layout(arg_forms))}] "
-                        f"named={int(named_cnt):d} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
+                        f"named={int(named_cnt):d} named_ids={named_ids} "
+                        f"ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
                     )
                 )
             cmd_fields = {}
-            if not payload_trace:
+            if with_trace and not payload_trace:
                 cmd_fields = {
                     "_call_name": (qname or None),
                     "_call_base_name": (str(info.get("name") or "") or None),
@@ -1997,7 +1998,7 @@ def disassemble_scn_bytes(
                         dict(named_values) if isinstance(named_values, dict) else {}
                     ),
                 }
-            if not koe_trace:
+            if with_trace and not koe_trace:
                 cmd_fields.update(
                     {
                         "arg_layout": _clone_arg_layout(arg_forms),

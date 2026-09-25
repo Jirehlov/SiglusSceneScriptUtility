@@ -163,6 +163,7 @@ enum Field<'a> {
     Name(Vec<u16>),
     NamedIds(&'a [i32]),
     Offset(i32),
+    Offsets(&'a [i32]),
     Opr(i32),
     PropId(i32),
     ReadFlag(Option<i32>),
@@ -328,9 +329,16 @@ impl PayloadHasher {
             return;
         }
         let full = encode_event(&event, false);
-        let no_text = encode_event(&event, true);
         self.update_full(&full);
-        self.update_no_text(&no_text);
+        if event
+            .fields
+            .iter()
+            .any(|field| matches!(field, Field::Text(Some(_))))
+        {
+            self.update_no_text(&encode_event(&event, true));
+        } else {
+            self.update_no_text(&full);
+        }
     }
 
     fn update_full(&mut self, data: &[u8]) {
@@ -1180,8 +1188,8 @@ impl<'a> Scanner<'a> {
     }
 
     fn emit_string_metadata(&mut self) {
-        let mut strings = self.dat.strings.clone();
-        strings.sort();
+        let mut strings: Vec<_> = self.dat.strings.iter().collect();
+        strings.sort_unstable();
         let mut text = Vec::new();
         for value in &strings {
             text.push(b'S' as u16);
@@ -1197,37 +1205,17 @@ impl<'a> Scanner<'a> {
                 Field::Text(Some(text)),
             ],
         });
-        for (id, value) in self.dat.namae.clone().into_iter().enumerate() {
-            let text = to_usize(value)
-                .and_then(|index| self.dat.strings.get(index))
-                .cloned();
-            let mut fields = vec![Field::Id(id as i32)];
-            if let Some(text) = text {
-                fields.push(Field::Text(Some(text)));
-            } else {
-                fields.push(Field::Value(value));
-            }
-            self.emit(Event {
-                op: Cow::Borrowed("meta_namae"),
-                line: None,
-                fields,
-            });
-        }
     }
 
     fn emit_metadata(&mut self) {
-        for (id, offset) in self.dat.label_offsets.clone().into_iter().enumerate() {
-            self.emit(Event {
-                op: Cow::Borrowed("meta_label"),
+        for (op, offsets) in [
+            ("meta_label", &self.dat.label_offsets),
+            ("meta_z_label", &self.dat.z_label_offsets),
+        ] {
+            self.hasher.event(Event {
+                op: Cow::Borrowed(op),
                 line: None,
-                fields: vec![Field::Id(id as i32), Field::Offset(offset)],
-            });
-        }
-        for (id, offset) in self.dat.z_label_offsets.clone().into_iter().enumerate() {
-            self.emit(Event {
-                op: Cow::Borrowed("meta_z_label"),
-                line: None,
-                fields: vec![Field::Id(id as i32), Field::Offset(offset)],
+                fields: vec![Field::Offsets(offsets)],
             });
         }
         for (id, offset) in self.dat.command_labels.clone() {
@@ -2006,6 +1994,7 @@ fn encode_event(event: &Event<'_>, omit_text: bool) -> Vec<u8> {
             Field::Name(v) => pairs.push(("name", JsonValue::Text(v))),
             Field::NamedIds(v) => pairs.push(("named_ids", JsonValue::Ints(v))),
             Field::Offset(v) => pairs.push(("offset", JsonValue::Int(*v as i64))),
+            Field::Offsets(v) => pairs.push(("offsets", JsonValue::Ints(v))),
             Field::Opr(v) => pairs.push(("opr", JsonValue::Int(*v as i64))),
             Field::PropId(v) => pairs.push(("prop_id", JsonValue::Int(*v as i64))),
             Field::ReadFlag(Some(v)) => pairs.push(("read_flag", JsonValue::Int(*v as i64))),

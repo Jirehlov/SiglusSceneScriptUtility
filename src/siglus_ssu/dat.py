@@ -147,10 +147,8 @@ def _payload_metadata_trace(meta, pack_context):
         event.update({key: value for key, value in fields.items() if value is not None})
         out.append(event)
 
-    for idx, offset in enumerate(meta.get("label_list") or []):
-        emit("meta_label", id=int(idx), offset=int(offset))
-    for idx, offset in enumerate(meta.get("z_label_list") or []):
-        emit("meta_z_label", id=int(idx), offset=int(offset))
+    for op, key in (("meta_label", "label_list"), ("meta_z_label", "z_label_list")):
+        emit(op, offsets=[int(value) for value in meta.get(key) or []])
     for command_id, offset in meta.get("cmd_label_list") or []:
         emit("meta_command_label", id=int(command_id), offset=int(offset))
     for op, key in (
@@ -229,7 +227,7 @@ def _payload_metadata_trace(meta, pack_context):
     return out
 
 
-def _payload_string_trace(meta, str_list):
+def _payload_string_trace(str_list):
     strings = sorted(
         str_list, key=lambda value: value.encode("utf-16-be", "surrogatepass")
     )
@@ -237,13 +235,7 @@ def _payload_string_trace(meta, str_list):
     for value in strings:
         size = len(value.encode("utf-16-le", "surrogatepass")) // 2
         encoded.extend((f"S{size:d}:", value))
-    out = [{"op": "meta_string_pool", "size": len(strings), "text": "".join(encoded)}]
-    for idx, value in enumerate(meta.get("namae_list") or []):
-        if 0 <= value < len(str_list):
-            out.append({"op": "meta_namae", "id": idx, "text": str_list[value]})
-        else:
-            out.append({"op": "meta_namae", "id": idx, "value": value})
-    return out
+    return [{"op": "meta_string_pool", "size": len(strings), "text": "".join(encoded)}]
 
 
 def dat_disassembly_bundle(
@@ -263,7 +255,7 @@ def dat_disassembly_bundle(
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
-        meta = dat_sections(blob)[1]
+        sections, meta = dat_sections(blob)
         h = meta.get("header") or {}
         so, ss = bounds
         scn = blob[so : so + ss]
@@ -319,10 +311,11 @@ def dat_disassembly_bundle(
             trace = (
                 _payload_metadata_trace(meta, pack_context)
                 + runtime_trace
-                + _payload_string_trace(meta, str_list)
+                + _payload_string_trace(str_list)
             )
         return {
             "header": h,
+            "sections": sections,
             "meta": meta,
             "scn": scn,
             "str_list": str_list,
@@ -354,7 +347,7 @@ def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
         if not isinstance(bundle, dict):
             if not isinstance(blob, (bytes, bytearray)):
                 return None, None
-            bundle = dat_disassembly_bundle(blob, dat_path)
+            bundle = dat_disassembly_bundle(blob, dat_path, with_trace=False)
         if not isinstance(bundle, dict):
             return None, None
         return out_dir, bundle
@@ -470,6 +463,29 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
             lines.append(f"Z{i:d} = {int(ofs):08X}")
         except Exception:
             lines.append(f"Z{i:d} = {ofs!r}")
+    used = [(0, min(C.SCN_HDR_SIZE, len(blob)))]
+    used.extend(
+        (start, end)
+        for start, end, kind, _ in bundle.get("sections") or []
+        if kind not in {"H", "G", "S", "s", "n", "Q"}
+    )
+    for name in ("str", "scn_prop_name", "scn_cmd_name", "call_prop_name"):
+        base = int(h.get(f"{name}_list_ofs", 0))
+        for offset, length in meta.get(f"{name}_index_list") or []:
+            start = base + offset * 2
+            end = start + length * 2
+            if base >= 0 and offset >= 0 and 0 <= start <= end <= len(blob):
+                used.append((start, end))
+    gaps = []
+    add_gap_sections(gaps, used, len(blob))
+    if gaps:
+        lines.append("")
+        lines.append("---- uncovered_bytes ----")
+        for start, end, _, _ in gaps:
+            for offset in range(start, end, 16):
+                lines.append(
+                    f"{offset:08X}: {blob[offset : min(offset + 16, end)].hex(' ')}"
+                )
     lines.append("")
     lines.append("---- scn_bytes disassembly ----")
     lines.extend(dis)
@@ -531,6 +547,7 @@ def process_dat_output_items(items, stats=None, decompile=False):
             pack_context=item.get("pack_context"),
             scene_no=item.get("scene_no"),
             scene_name=item.get("scene_name"),
+            with_trace=decompile,
         )
         add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
         if not isinstance(bundle, dict):
@@ -546,12 +563,13 @@ def process_dat_output_items(items, stats=None, decompile=False):
         if not out_path:
             failed_paths.append(dat_path)
             continue
-        bundle_list.append(bundle)
+        if decompile:
+            bundle_list.append(bundle)
         ready_items.append(
             {
                 "dat_path": dat_path,
                 "out_dir": out_dir,
-                "bundle": bundle,
+                "bundle": bundle if decompile else None,
                 "txt_path": out_path,
             }
         )
