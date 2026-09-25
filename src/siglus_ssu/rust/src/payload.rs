@@ -468,7 +468,8 @@ impl PackContext {
         }
         out.current_scene = dict
             .get_item("payload_scene_name")?
-            .and_then(|x| x.extract::<String>().ok())
+            .map(|x| x.extract::<String>())
+            .transpose()?
             .map(|x| x.encode_utf16().collect());
         if let Some(v) = dict.get_item("inc_property_defs")?
             && let Ok(list) = v.cast::<PyList>()
@@ -491,7 +492,8 @@ impl PackContext {
                     .unwrap_or(0);
                 let name = d
                     .get_item("name")?
-                    .and_then(|x| x.extract::<String>().ok())
+                    .map(|x| x.extract::<String>())
+                    .transpose()?
                     .unwrap_or_default()
                     .encode_utf16()
                     .collect();
@@ -512,7 +514,7 @@ impl PackContext {
                     continue;
                 };
                 let name = match d.get_item("name")? {
-                    Some(x) => x.extract::<String>().unwrap_or_default(),
+                    Some(x) => x.extract::<String>()?,
                     None => String::new(),
                 };
                 let id = d
@@ -531,7 +533,8 @@ impl PackContext {
                     dict.get_item("scene_names")?
                         .and_then(|x| x.cast_into::<PyList>().ok())
                         .and_then(|list| list.get_item(scene_no as usize).ok())
-                        .and_then(|x| x.extract::<String>().ok())
+                        .map(|x| x.extract::<String>())
+                        .transpose()?
                         .map(|x| x.encode_utf16().collect())
                 } else {
                     None
@@ -805,8 +808,11 @@ impl<'a> Scanner<'a> {
             self.emit_metadata();
         }
         let mut i = 0usize;
+        let mut instruction_starts = vec![false; self.dat.scn.len()];
+        let mut jump_labels = HashSet::new();
         while i < self.dat.scn.len() {
             let ofs = i;
+            instruction_starts[ofs] = true;
             if self.dat.cmd_label_offsets.contains(&ofs) {
                 self.call_slots.clear();
                 self.call_decl_forms.clear();
@@ -955,6 +961,7 @@ impl<'a> Scanner<'a> {
                     return false;
                 };
                 i += 4;
+                jump_labels.insert(label_id);
                 self.emit(Event {
                     op: opname,
                     line: self.cur_line,
@@ -973,6 +980,7 @@ impl<'a> Scanner<'a> {
                     return false;
                 };
                 i = next;
+                jump_labels.insert(label_id);
                 self.emit(Event {
                     op: opname,
                     line: self.cur_line,
@@ -1172,6 +1180,15 @@ impl<'a> Scanner<'a> {
                 continue;
             }
             if op != c.cd_eof || i != self.dat.scn.len() {
+                return false;
+            }
+            if jump_labels.iter().any(|&label| {
+                to_usize(label)
+                    .and_then(|index| self.dat.label_offsets.get(index))
+                    .and_then(|&offset| to_usize(offset))
+                    .and_then(|offset| instruction_starts.get(offset))
+                    != Some(&true)
+            }) {
                 return false;
             }
             self.emit(Event {

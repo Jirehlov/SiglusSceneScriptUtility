@@ -214,7 +214,14 @@ def _pck_sections(blob, preview=False):
         sec(h.get("scn_data_list_ofs", 0), scn_data_end, "L", "scn_data_list")
     scn_names = (
         decode_utf16le_strings(
-            blob, scn_name_idx, h.get("scn_name_list_ofs", 0), sn_end
+            blob,
+            scn_name_idx,
+            h.get("scn_name_list_ofs", 0),
+            sn_end,
+            errors="surrogatepass",
+            strip_null=False,
+            on_error="append_default",
+            allow_empty_blob=True,
         )
         if scn_name_idx
         else []
@@ -265,14 +272,28 @@ def _pck_sections(blob, preview=False):
         "scn_names": scn_names,
         "inc_prop_names": (
             decode_utf16le_strings(
-                blob, inc_prop_name_idx, h.get("inc_prop_name_list_ofs", 0), ipp_end
+                blob,
+                inc_prop_name_idx,
+                h.get("inc_prop_name_list_ofs", 0),
+                ipp_end,
+                errors="surrogatepass",
+                strip_null=False,
+                on_error="append_default",
+                allow_empty_blob=True,
             )
             if inc_prop_name_idx
             else []
         ),
         "inc_cmd_names": (
             decode_utf16le_strings(
-                blob, inc_cmd_name_idx, h.get("inc_cmd_name_list_ofs", 0), icn_end
+                blob,
+                inc_cmd_name_idx,
+                h.get("inc_cmd_name_list_ofs", 0),
+                icn_end,
+                errors="surrogatepass",
+                strip_null=False,
+                on_error="append_default",
+                allow_empty_blob=True,
             )
             if inc_cmd_name_idx
             else []

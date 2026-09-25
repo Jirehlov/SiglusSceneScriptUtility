@@ -1388,8 +1388,11 @@ def disassemble_scn_bytes(
     expr_state.clear()
     call_slot_next = 0
     complete = False
+    instruction_starts = bytearray(scn_len)
+    jump_labels = set()
     while i < len(scn):
         ofs = i
+        instruction_starts[ofs] = 1
         if ofs in cmd_label_offsets:
             call_slot_info = {}
             call_decl_forms = []
@@ -1565,7 +1568,6 @@ def disassemble_scn_bytes(
                 form_i = None
             if form_i in (fm_intlist, fm_strlist):
                 size_val = _stack_int_value(stack[-1]) if stack else None
-                _pop_stack_top()
             name = ""
             try:
                 bi = int(b)
@@ -1592,6 +1594,8 @@ def disassemble_scn_bytes(
                         f"{ofs:08X}: {opname} {fmt_form(a)}, {int(b):d}{size_s}{name_s}{size_expr_s}"
                     )
                 )
+            if form_i in (fm_intlist, fm_strlist):
+                _pop_stack_top()
             _trace(
                 opname,
                 ofs,
@@ -1629,6 +1633,7 @@ def disassemble_scn_bytes(
                 _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i += 4
+            jump_labels.add(lid)
             if render_text:
                 dest = ""
                 try:
@@ -1665,6 +1670,7 @@ def disassemble_scn_bytes(
                 _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i = p_next
+            jump_labels.add(lid)
             if render_text:
                 dest = ""
                 try:
@@ -2037,6 +2043,16 @@ def disassemble_scn_bytes(
         _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)
         break
+    if complete:
+        for lid in sorted(jump_labels):
+            target = label_list[lid] if 0 <= lid < len(label_list or []) else None
+            if (
+                target is None
+                or not 0 <= target < scn_len
+                or not instruction_starts[target]
+            ):
+                _emit(lambda: f"L{lid:d}: <invalid jump target {target}>")
+                complete = False
     if parse_status is not None:
         parse_status["complete"] = complete
     if trace is not None:
