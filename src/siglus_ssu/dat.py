@@ -31,6 +31,7 @@ from .common import (
     new_disam_stats,
     add_elapsed_seconds,
     read_scn_metadata,
+    decode_utf16le_strings,
     write_status,
     write_disam_totals,
     format_exe_el_source,
@@ -139,6 +140,7 @@ def _build_read_flag_defs(read_flag_list):
 
 def _payload_metadata_trace(meta, pack_context):
     out = []
+    names = meta.get("raw_names") or {}
 
     def emit(op, **fields):
         event = {"op": op}
@@ -148,17 +150,19 @@ def _payload_metadata_trace(meta, pack_context):
     for idx, offset in enumerate(meta.get("label_list") or []):
         emit("meta_label", id=int(idx), offset=int(offset))
     for idx, offset in enumerate(meta.get("z_label_list") or []):
-        if int(offset) > 0:
-            emit("meta_z_label", id=int(idx), offset=int(offset))
-    command_labels = sorted(
-        meta.get("cmd_label_list") or [],
-        key=lambda item: (int(item[0]), int(item[1])),
-    )
-    for command_id, offset in command_labels:
+        emit("meta_z_label", id=int(idx), offset=int(offset))
+    for command_id, offset in meta.get("cmd_label_list") or []:
         emit("meta_command_label", id=int(command_id), offset=int(offset))
+    for op, key in (
+        ("meta_scene_property_name_index", "scn_prop_name_index_list"),
+        ("meta_scene_command_name_index", "scn_cmd_name_index_list"),
+        ("meta_call_property_name_index", "call_prop_name_index_list"),
+    ):
+        for idx, (offset, size) in enumerate(meta.get(key) or []):
+            emit(op, id=int(idx), offset=int(offset), size=int(size))
 
     prop_list = list(meta.get("scn_prop_list") or [])
-    prop_names = list(meta.get("scn_prop_names") or [])
+    prop_names = list(names.get("scn_prop_names") or [])
     for idx in range(max(len(prop_list), len(prop_names))):
         item = prop_list[idx] if idx < len(prop_list) else None
         emit(
@@ -170,7 +174,7 @@ def _payload_metadata_trace(meta, pack_context):
         )
 
     command_list = list(meta.get("scn_cmd_list") or [])
-    command_names = list(meta.get("scn_cmd_names") or [])
+    command_names = list(names.get("scn_cmd_names") or [])
     for idx in range(max(len(command_list), len(command_names))):
         emit(
             "meta_scene_command",
@@ -179,7 +183,7 @@ def _payload_metadata_trace(meta, pack_context):
             name=str(command_names[idx]) if idx < len(command_names) else None,
         )
 
-    for idx, name in enumerate(meta.get("call_prop_names") or []):
+    for idx, name in enumerate(names.get("call_prop_names") or []):
         emit("meta_call_property", id=int(idx), name=str(name))
 
     for idx, value in enumerate(meta.get("read_flag_list") or []):
@@ -225,65 +229,21 @@ def _payload_metadata_trace(meta, pack_context):
     return out
 
 
-def _payload_namae_trace(meta, str_list, str_idx, trace):
-    candidates = []
-    for event in trace or []:
-        if not isinstance(event, dict) or event.get("op") != "CD_NAME":
-            continue
-        try:
-            candidates.append(int(event.get("_str_id")))
-        except (TypeError, ValueError):
-            continue
-    order = sorted(
-        range(len(str_idx or [])),
-        key=lambda idx: (
-            int(str_idx[idx][0]),
-            1 if int(str_idx[idx][1]) > 0 else 0,
-            idx,
-        ),
+def _payload_string_trace(meta, str_list):
+    strings = sorted(
+        str_list, key=lambda value: value.encode("utf-16-be", "surrogatepass")
     )
-    expected = []
-    seen = []
-    derivable = len(order) == len(str_list or [])
-    for candidate in candidates:
-        if candidate < 0 or candidate >= len(order):
-            derivable = False
-            continue
-        physical = order[candidate]
-        if physical < 0 or physical >= len(str_list or []):
-            derivable = False
-            continue
-        value = str(str_list[physical])
-        if value not in seen:
-            seen.append(value)
-            expected.append(candidate)
-    actual = []
-    for value in meta.get("namae_list") or []:
-        try:
-            actual.append(int(value))
-        except (TypeError, ValueError):
-            derivable = False
-    valid = derivable and actual == expected
-    values = []
-    if valid:
-        for candidate in candidates:
-            if 0 <= candidate < len(str_list or []):
-                value = str(str_list[candidate])
-                if value not in values:
-                    values.append(value)
-    else:
-        values = [
-            str(str_list[value]) if 0 <= value < len(str_list or []) else None
-            for value in actual
-        ]
-    encoded = ["V" if valid else "R"]
-    for idx, value in enumerate(values):
-        if value is None:
-            encoded.append(f"I{actual[idx]:d};")
-            continue
+    encoded = []
+    for value in strings:
         size = len(value.encode("utf-16-le", "surrogatepass")) // 2
         encoded.extend((f"S{size:d}:", value))
-    return [{"op": "meta_namae", "text": "".join(encoded)}]
+    out = [{"op": "meta_string_pool", "size": len(strings), "text": "".join(encoded)}]
+    for idx, value in enumerate(meta.get("namae_list") or []):
+        if 0 <= value < len(str_list):
+            out.append({"op": "meta_namae", "id": idx, "text": str_list[value]})
+        else:
+            out.append({"op": "meta_namae", "id": idx, "value": value})
+    return out
 
 
 def dat_disassembly_bundle(
@@ -342,7 +302,11 @@ def dat_disassembly_bundle(
             cmd_label_list=meta.get("cmd_label_list"),
             scn_prop_defs=meta.get("scn_prop_defs"),
             scn_cmd_names=meta.get("scn_cmd_names"),
-            call_prop_names=meta.get("call_prop_names"),
+            call_prop_names=(
+                (meta.get("raw_names") or {}).get("call_prop_names")
+                if payload_trace
+                else meta.get("call_prop_names")
+            ),
             pack_context=pack_context,
             with_trace=with_trace,
             emit_text=emit_text,
@@ -355,7 +319,7 @@ def dat_disassembly_bundle(
             trace = (
                 _payload_metadata_trace(meta, pack_context)
                 + runtime_trace
-                + _payload_namae_trace(meta, str_list, str_idx, runtime_trace)
+                + _payload_string_trace(meta, str_list)
             )
         return {
             "header": h,
@@ -373,7 +337,7 @@ def dat_disassembly_bundle(
             "read_flag_defs": read_flag_defs,
             "trace": trace,
             "dis": dis,
-            "complete": parse_status["complete"],
+            "complete": parse_status["complete"] and scn_structure_valid(blob),
         }
     except Exception:
         return None
@@ -408,7 +372,7 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     dis = bundle.get("dis") or []
     so = int(h.get("scn_ofs", 0) or 0)
     ss = int(h.get("scn_size", 0) or 0)
-    ended_unexpectedly = (not dis) or ("CD_EOF" not in dis[-1])
+    ended_unexpectedly = not bundle.get("complete")
     if isinstance(stats, dict):
         stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
         if ended_unexpectedly:
@@ -443,6 +407,33 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
             lines.append(f"scene_no: {bundle.get('scene_no')!r}")
     if bundle.get("scene_name") not in (None, ""):
         lines.append(f"scene_name: {bundle.get('scene_name')}")
+    lines.append("")
+    lines.append("---- header ----")
+    for key, value in h.items():
+        lines.append(f"{key}: {value:d}")
+    meta = bundle.get("meta") or {}
+    for key in (
+        "str_index_list",
+        "cmd_label_list",
+        "scn_prop_list",
+        "scn_prop_names",
+        "scn_prop_name_index_list",
+        "scn_cmd_list",
+        "scn_cmd_names",
+        "scn_cmd_name_index_list",
+        "call_prop_names",
+        "call_prop_name_index_list",
+    ):
+        lines.append("")
+        lines.append(f"---- {key} ----")
+        values = (meta.get("raw_names") or {}).get(key, meta.get(key)) or []
+        for idx, value in enumerate(values):
+            lines.append(f"[{idx:d}] {value!r}")
+    if bundle.get("pack_context"):
+        lines.append("")
+        lines.append("---- pack_context ----")
+        for key, value in bundle["pack_context"].items():
+            lines.append(f"{key}: {value!r}")
     lines.append("")
     lines.append("---- str_list (xor utf16le) ----")
     for i, s in enumerate(str_list or []):
@@ -661,6 +652,11 @@ def scn_structure_valid(blob):
                 return False
             if blob_ofs + (offset + length) * 2 > size:
                 return False
+    for value in read_struct_list(
+        blob, header["namae_list_ofs"], header["namae_cnt"], I32_STRUCT
+    ):
+        if not 0 <= value < header["str_cnt"]:
+            return False
     return True
 
 
@@ -914,6 +910,23 @@ def dat_sections(blob):
         "call_prop_name_index_list": cpn_idx,
         "namae_list": namae_list,
         "read_flag_list": read_flag_list,
+        "raw_names": {
+            f"{name}s": decode_utf16le_strings(
+                blob,
+                indices,
+                h.get(f"{name}_list_ofs", 0),
+                len(blob),
+                errors="surrogatepass",
+                strip_null=False,
+                on_error="append_default",
+                allow_empty_blob=True,
+            )
+            for name, indices in (
+                ("scn_prop_name", spn_idx),
+                ("scn_cmd_name", scn_idx),
+                ("call_prop_name", cpn_idx),
+            )
+        },
     }
     return secs, meta
 
@@ -937,19 +950,19 @@ def dat(path, blob: bytes, disam_out_dir=None) -> int:
     print(
         f"  namae_cnt={h.get('namae_cnt', 0):d}  read_flag_cnt={h.get('read_flag_cnt', 0):d}"
     )
-    sp = meta.get("scn_prop_names") or []
+    sp = (meta.get("raw_names") or {}).get("scn_prop_names") or []
     if sp:
         pv = sp[: C.MAX_LIST_PREVIEW]
         print(
             f"scn_prop_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(sp) > len(pv) else '')}"
         )
-    sc = meta.get("scn_cmd_names") or []
+    sc = (meta.get("raw_names") or {}).get("scn_cmd_names") or []
     if sc:
         pv = sc[: C.MAX_LIST_PREVIEW]
         print(
             f"scn_cmd_names (preview): {', '.join([repr(s) for s in pv]) + (' ...' if len(sc) > len(pv) else '')}"
         )
-    cp = meta.get("call_prop_names") or []
+    cp = (meta.get("raw_names") or {}).get("call_prop_names") or []
     if cp:
         pv = cp[: C.MAX_LIST_PREVIEW]
         print(

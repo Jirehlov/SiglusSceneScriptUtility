@@ -1123,6 +1123,14 @@ def disassemble_scn_bytes(
                         "ec": code,
                         "q": name,
                     }
+            return {
+                "type": C.ET_COMMAND,
+                "parent_code": fm_global,
+                "name": "",
+                "ret": None,
+                "ec": code,
+                "q": f"__cmd_{code_idx:d}",
+            }
         return None
 
     def _receiver_value_form_cb(form):
@@ -1301,10 +1309,10 @@ def disassemble_scn_bytes(
 
     def _read_arg_layout(p):
         argc = read_i32(p)
-        if argc is None:
+        if argc is None or argc < 0:
             return (None, None)
         p += 4
-        argc_i = max(0, argc)
+        argc_i = argc
         if argc_i > (scn_len - p) // 4:
             return (None, None)
         args = [None] * argc_i
@@ -1742,8 +1750,7 @@ def disassemble_scn_bytes(
                     "left_form": int(a),
                     "right_form": int(b),
                 }
-                if not payload_trace:
-                    assign_fields["arg_list_id"] = int(c)
+                assign_fields["arg_list_id"] = int(c)
             _trace(opname, ofs, **assign_fields)
             stack_start = latest_stack_start(elm_points, len(stack))
             if stack_start is not None:
@@ -1880,11 +1887,7 @@ def disassemble_scn_bytes(
                     else None
                 ),
             }
-            if sid is not None and payload_trace:
-                sid_i = _int_or_none(sid)
-                if sid_i is not None:
-                    name_fields["_str_id"] = sid_i
-            elif sid is not None and not koe_trace:
+            if sid is not None and not (koe_trace or payload_trace):
                 sid_i = _int_or_none(sid)
                 if sid_i is not None:
                     name_fields["str_id"] = sid_i
@@ -1905,7 +1908,7 @@ def disassemble_scn_bytes(
                 _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             named_cnt = read_i32(p_next)
-            if named_cnt is None:
+            if named_cnt is None or named_cnt < 0:
                 _emit(lambda: f"{ofs:08X}: {opname} <truncated>")
                 break
             i = p_next + 4
@@ -2008,8 +2011,7 @@ def disassemble_scn_bytes(
                         ),
                     }
                 )
-                if not payload_trace:
-                    cmd_fields["arg_list_id"] = int(arg_list_id)
+                cmd_fields["arg_list_id"] = int(arg_list_id)
             _trace(opname, ofs, **cmd_fields)
             if cmd_stack_start is not None:
                 _collapse_command_expr(
@@ -2029,7 +2031,7 @@ def disassemble_scn_bytes(
         if op == cd_eof:
             _emit(lambda: f"{ofs:08X}: {opname}")
             _trace(opname, ofs)
-            complete = True
+            complete = i == len(scn)
             break
         _emit(lambda: f"{ofs:08X}: {opname}")
         _trace(opname, ofs)

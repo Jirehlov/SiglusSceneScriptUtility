@@ -154,6 +154,7 @@ struct Event<'a> {
 
 enum Field<'a> {
     ArgLayout(&'a [ArgInfo]),
+    ArgListId(i32),
     ElementCode(Option<i32>),
     Form(i32),
     Id(i32),
@@ -411,7 +412,7 @@ fn scn_payload_hash_bundles_with_config(
     hashes: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
     let pack = PackContext::from_py(pack_context)?;
-    let Some(parsed) = ParsedDat::parse(blob, cfg, &pack) else {
+    let Some(parsed) = ParsedDat::parse(blob, cfg) else {
         return Ok(None);
     };
     let mut scanner = Scanner::new(cfg, &pack, parsed, hashes);
@@ -427,7 +428,6 @@ struct PackContext {
     inc_property_cnt: i32,
     inc_command_cnt: i32,
     inc_property_forms: HashMap<i32, i32>,
-    inc_command_ids: HashSet<i32>,
     inc_properties: Vec<MetaProperty>,
     inc_commands: Vec<MetaCommand>,
     current_scene: Option<Vec<u16>>,
@@ -439,7 +439,6 @@ impl PackContext {
             inc_property_cnt: 0,
             inc_command_cnt: 0,
             inc_property_forms: HashMap::new(),
-            inc_command_ids: HashSet::new(),
             inc_properties: Vec::new(),
             inc_commands: Vec::new(),
             current_scene: None,
@@ -530,9 +529,6 @@ impl PackContext {
                     None
                 };
                 let normalized_scene_no = scene.is_none().then_some(scene_no);
-                if !name.is_empty() {
-                    out.inc_command_ids.insert(id);
-                }
                 out.inc_commands.push(MetaCommand {
                     id,
                     name: name.encode_utf16().collect(),
@@ -587,7 +583,6 @@ impl ScnHeaderLayout {
 struct ParsedDat {
     scn: Vec<u8>,
     strings: Vec<Vec<u16>>,
-    string_order: Vec<usize>,
     label_offsets: Vec<i32>,
     z_label_offsets: Vec<i32>,
     command_labels: Vec<(i32, i32)>,
@@ -595,27 +590,24 @@ struct ParsedDat {
     scn_properties: Vec<(i32, i32)>,
     scn_prop_forms: Vec<i32>,
     scn_property_names: Vec<Vec<u16>>,
+    scn_property_name_indices: Vec<(i32, i32)>,
     scn_commands: Vec<i32>,
     scn_command_names: Vec<Vec<u16>>,
-    scn_cmd_active: HashSet<i32>,
+    scn_command_name_indices: Vec<(i32, i32)>,
     call_prop_names: Vec<Vec<u16>>,
+    call_prop_name_indices: Vec<(i32, i32)>,
     namae: Vec<i32>,
     read_flags: Vec<i32>,
 }
 
 impl ParsedDat {
-    fn parse(blob: &[u8], cfg: &Config, pack: &PackContext) -> Option<Self> {
+    fn parse(blob: &[u8], cfg: &Config) -> Option<Self> {
         if blob.len() < cfg.scn_header.size {
             return None;
         }
         let h = ScnHeader::parse(blob, &cfg.scn_header)?;
         let scn = read_bytes(blob, h.scn_ofs, h.scn_size)?.to_vec();
         let str_idx = read_pairs(blob, h.str_index_list_ofs, h.str_index_cnt)?;
-        let mut string_order: Vec<usize> = (0..str_idx.len()).collect();
-        string_order.sort_by_key(|index| {
-            let (offset, size) = str_idx[*index];
-            (offset, i32::from(size > 0), *index)
-        });
         let str_blob_end = h
             .str_list_ofs
             .checked_add(max_pair_end(&str_idx).checked_mul(2)?)?;
@@ -629,9 +621,8 @@ impl ParsedDat {
         let label_offsets = read_i32_list(blob, h.label_list_ofs, h.label_cnt).unwrap_or_default();
         let z_label_offsets =
             read_i32_list(blob, h.z_label_list_ofs, h.z_label_cnt).unwrap_or_default();
-        let mut command_labels =
+        let command_labels =
             read_pairs(blob, h.cmd_label_list_ofs, h.cmd_label_cnt).unwrap_or_default();
-        command_labels.sort_unstable();
         let cmd_label_offsets = command_labels
             .iter()
             .copied()
@@ -646,11 +637,8 @@ impl ParsedDat {
             h.scn_prop_name_index_cnt,
         )
         .unwrap_or_default();
-        let scn_prop_end = h
-            .scn_prop_name_list_ofs
-            .checked_add(max_pair_end(&scn_prop_idx).checked_mul(2)?)?;
         let scn_property_names =
-            decode_plain_strings(blob, &scn_prop_idx, h.scn_prop_name_list_ofs, scn_prop_end);
+            decode_plain_strings(blob, &scn_prop_idx, h.scn_prop_name_list_ofs)?;
         let scn_commands =
             read_i32_list(blob, h.scn_cmd_list_ofs, h.scn_cmd_cnt).unwrap_or_default();
         let scn_cmd_idx = read_pairs(
@@ -659,35 +647,20 @@ impl ParsedDat {
             h.scn_cmd_name_index_cnt,
         )
         .unwrap_or_default();
-        let scn_cmd_end = h
-            .scn_cmd_name_list_ofs
-            .checked_add(max_pair_end(&scn_cmd_idx).checked_mul(2)?)?;
-        let scn_command_names =
-            decode_plain_strings(blob, &scn_cmd_idx, h.scn_cmd_name_list_ofs, scn_cmd_end);
-        let mut scn_cmd_active = HashSet::new();
-        for (idx, name) in scn_command_names.iter().enumerate() {
-            if !name.is_empty() {
-                scn_cmd_active.insert(pack.inc_command_cnt + idx as i32);
-            }
-        }
+        let scn_command_names = decode_plain_strings(blob, &scn_cmd_idx, h.scn_cmd_name_list_ofs)?;
         let cpn_idx = read_pairs(
             blob,
             h.call_prop_name_index_list_ofs,
             h.call_prop_name_index_cnt,
         )
         .unwrap_or_default();
-        let cpn_end = h
-            .call_prop_name_list_ofs
-            .checked_add(max_pair_end(&cpn_idx).checked_mul(2)?)?;
-        let call_prop_names =
-            decode_plain_strings(blob, &cpn_idx, h.call_prop_name_list_ofs, cpn_end);
+        let call_prop_names = decode_plain_strings(blob, &cpn_idx, h.call_prop_name_list_ofs)?;
         let namae = read_i32_list(blob, h.namae_list_ofs, h.namae_cnt).unwrap_or_default();
         let read_flags =
             read_i32_list(blob, h.read_flag_list_ofs, h.read_flag_cnt).unwrap_or_default();
         Some(Self {
             scn,
             strings,
-            string_order,
             label_offsets,
             z_label_offsets,
             command_labels,
@@ -695,10 +668,12 @@ impl ParsedDat {
             scn_properties,
             scn_prop_forms,
             scn_property_names,
+            scn_property_name_indices: scn_prop_idx,
             scn_commands,
             scn_command_names,
-            scn_cmd_active,
+            scn_command_name_indices: scn_cmd_idx,
             call_prop_names,
+            call_prop_name_indices: cpn_idx,
             namae,
             read_flags,
         })
@@ -791,7 +766,6 @@ struct Scanner<'a> {
     call_decl_forms: Vec<ArgInfo>,
     call_slot_next: i32,
     cur_line: Option<i32>,
-    namae_candidates: Vec<i32>,
 }
 
 impl<'a> Scanner<'a> {
@@ -807,11 +781,18 @@ impl<'a> Scanner<'a> {
             call_decl_forms: Vec::new(),
             call_slot_next: 0,
             cur_line: None,
-            namae_candidates: Vec::new(),
         }
     }
 
     fn scan(&mut self) -> bool {
+        if self
+            .dat
+            .namae
+            .iter()
+            .any(|value| to_usize(*value).is_none_or(|index| index >= self.dat.strings.len()))
+        {
+            return false;
+        }
         if self.hasher.hashes {
             self.emit_metadata();
         }
@@ -1019,14 +1000,18 @@ impl<'a> Scanner<'a> {
                 let Some(right) = self.read_i32(i + 4) else {
                     return false;
                 };
-                if self.read_i32(i + 8).is_none() {
+                let Some(arg_list_id) = self.read_i32(i + 8) else {
                     return false;
-                }
+                };
                 i += 12;
                 self.emit(Event {
                     op: opname,
                     line: self.cur_line,
-                    fields: vec![Field::LeftForm(left), Field::RightForm(right)],
+                    fields: vec![
+                        Field::LeftForm(left),
+                        Field::RightForm(right),
+                        Field::ArgListId(arg_list_id),
+                    ],
                 });
                 if let Some(start) = self.latest_stack_start() {
                     self.drop_stack_tail(start);
@@ -1101,13 +1086,6 @@ impl<'a> Scanner<'a> {
                 continue;
             }
             if op == c.cd_name {
-                let string_id = self.stack.last().and_then(|item| {
-                    if item.form == Some(c.fm_str) {
-                        item.val
-                    } else {
-                        None
-                    }
-                });
                 let text = self
                     .stack
                     .last()
@@ -1118,14 +1096,11 @@ impl<'a> Scanner<'a> {
                     line: self.cur_line,
                     fields: vec![Field::Text(text)],
                 });
-                if let Some(string_id) = string_id {
-                    self.namae_candidates.push(string_id);
-                }
                 self.pop_stack();
                 continue;
             }
             if op == c.cd_command {
-                let Some(_arg_list_id) = self.read_i32(i) else {
+                let Some(arg_list_id) = self.read_i32(i) else {
                     return false;
                 };
                 let Some((next, args)) = self.read_arg_layout(i + 4) else {
@@ -1134,7 +1109,9 @@ impl<'a> Scanner<'a> {
                 let Some(named_cnt) = self.read_i32(next) else {
                     return false;
                 };
-                let named_cnt = named_cnt.max(0) as usize;
+                let Some(named_cnt) = to_usize(named_cnt) else {
+                    return false;
+                };
                 let mut named_ids = Vec::new();
                 let mut p = next + 4;
                 for _ in 0..named_cnt {
@@ -1166,6 +1143,7 @@ impl<'a> Scanner<'a> {
                     line: self.cur_line,
                     fields: vec![
                         Field::ArgLayout(&args),
+                        Field::ArgListId(arg_list_id),
                         Field::NamedIds(&named_ids),
                         Field::RetForm(ret_form),
                         Field::ReadFlag(read_flag),
@@ -1185,7 +1163,7 @@ impl<'a> Scanner<'a> {
                 }
                 continue;
             }
-            if op != c.cd_eof {
+            if op != c.cd_eof || i != self.dat.scn.len() {
                 return false;
             }
             self.emit(Event {
@@ -1194,77 +1172,47 @@ impl<'a> Scanner<'a> {
                 fields: vec![],
             });
             if self.hasher.hashes {
-                self.emit_namae_metadata();
+                self.emit_string_metadata();
             }
             return true;
         }
         false
     }
 
-    fn emit_namae_metadata(&mut self) {
-        let mut expected = Vec::new();
-        let mut seen: Vec<Vec<u16>> = Vec::new();
-        let mut derivable = self.dat.string_order.len() == self.dat.strings.len();
-        for candidate in &self.namae_candidates {
-            let Some(candidate_index) = to_usize(*candidate) else {
-                derivable = false;
-                continue;
-            };
-            let Some(physical_index) = self.dat.string_order.get(candidate_index).copied() else {
-                derivable = false;
-                continue;
-            };
-            let Some(value) = self.dat.strings.get(physical_index) else {
-                derivable = false;
-                continue;
-            };
-            if !seen.iter().any(|existing| existing == value) {
-                seen.push(value.clone());
-                expected.push(*candidate);
-            }
-        }
-        let valid = derivable && expected == self.dat.namae;
-        let mut values: Vec<Option<Vec<u16>>> = Vec::new();
-        if valid {
-            for candidate in &self.namae_candidates {
-                let value = to_usize(*candidate)
-                    .and_then(|index| self.dat.strings.get(index))
-                    .cloned();
-                if let Some(value) = value
-                    && !values
-                        .iter()
-                        .any(|existing| existing.as_ref() == Some(&value))
-                {
-                    values.push(Some(value));
-                }
-            }
-        } else {
-            values.extend(self.dat.namae.iter().map(|value| {
-                to_usize(*value)
-                    .and_then(|index| self.dat.strings.get(index))
-                    .cloned()
-            }));
-        }
-        let mut text = vec![if valid { b'V' as u16 } else { b'R' as u16 }];
-        for (index, value) in values.iter().enumerate() {
-            if let Some(value) = value {
-                text.push(b'S' as u16);
-                text.extend(value.len().to_string().encode_utf16());
-                text.push(b':' as u16);
-                text.extend_from_slice(value);
-            } else {
-                text.push(b'I' as u16);
-                if let Some(value) = self.dat.namae.get(index) {
-                    text.extend(value.to_string().encode_utf16());
-                }
-                text.push(b';' as u16);
-            }
+    fn emit_string_metadata(&mut self) {
+        let mut strings = self.dat.strings.clone();
+        strings.sort();
+        let mut text = Vec::new();
+        for value in &strings {
+            text.push(b'S' as u16);
+            text.extend(value.len().to_string().encode_utf16());
+            text.push(b':' as u16);
+            text.extend_from_slice(value);
         }
         self.emit(Event {
-            op: Cow::Borrowed("meta_namae"),
+            op: Cow::Borrowed("meta_string_pool"),
             line: None,
-            fields: vec![Field::Text(Some(text))],
+            fields: vec![
+                Field::Size(Some(strings.len() as i32)),
+                Field::Text(Some(text)),
+            ],
         });
+        for (id, value) in self.dat.namae.clone().into_iter().enumerate() {
+            let text = to_usize(value)
+                .and_then(|index| self.dat.strings.get(index))
+                .cloned();
+            let mut fields = vec![Field::Id(id as i32)];
+            if let Some(text) = text {
+                fields.push(Field::Text(Some(text)));
+            } else {
+                fields.push(Field::Value(value));
+            }
+            self.emit(Event {
+                op: Cow::Borrowed("meta_namae"),
+                line: None,
+                fields,
+            });
+        }
     }
 
     fn emit_metadata(&mut self) {
@@ -1276,13 +1224,11 @@ impl<'a> Scanner<'a> {
             });
         }
         for (id, offset) in self.dat.z_label_offsets.clone().into_iter().enumerate() {
-            if offset > 0 {
-                self.emit(Event {
-                    op: Cow::Borrowed("meta_z_label"),
-                    line: None,
-                    fields: vec![Field::Id(id as i32), Field::Offset(offset)],
-                });
-            }
+            self.emit(Event {
+                op: Cow::Borrowed("meta_z_label"),
+                line: None,
+                fields: vec![Field::Id(id as i32), Field::Offset(offset)],
+            });
         }
         for (id, offset) in self.dat.command_labels.clone() {
             self.emit(Event {
@@ -1290,6 +1236,32 @@ impl<'a> Scanner<'a> {
                 line: None,
                 fields: vec![Field::Id(id), Field::Offset(offset)],
             });
+        }
+        for (op, indices) in [
+            (
+                "meta_scene_property_name_index",
+                self.dat.scn_property_name_indices.clone(),
+            ),
+            (
+                "meta_scene_command_name_index",
+                self.dat.scn_command_name_indices.clone(),
+            ),
+            (
+                "meta_call_property_name_index",
+                self.dat.call_prop_name_indices.clone(),
+            ),
+        ] {
+            for (id, (offset, size)) in indices.into_iter().enumerate() {
+                self.emit(Event {
+                    op: Cow::Borrowed(op),
+                    line: None,
+                    fields: vec![
+                        Field::Id(id as i32),
+                        Field::Offset(offset),
+                        Field::Size(Some(size)),
+                    ],
+                });
+            }
         }
 
         let property_count = self
@@ -1743,10 +1715,7 @@ impl<'a> Scanner<'a> {
                         ret: Some(*form),
                     }];
                 }
-            } else if owner == c.owner_user_cmd
-                && (self.pack.inc_command_ids.contains(&code_idx)
-                    || self.dat.scn_cmd_active.contains(&code_idx))
-            {
+            } else if owner == c.owner_user_cmd {
                 return vec![ElementInfo {
                     tp: c.et_command,
                     ret: None,
@@ -1785,7 +1754,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn read_arg_layout(&self, mut p: usize) -> Option<(usize, Vec<ArgInfo>)> {
-        let argc = self.read_i32(p)?.max(0) as usize;
+        let argc = to_usize(self.read_i32(p)?)?;
         p += 4;
         if argc > (self.dat.scn.len() - p) / 4 {
             return None;
@@ -1995,42 +1964,23 @@ fn decode_xor_strings(
     Some(out)
 }
 
-fn decode_plain_strings(
-    data: &[u8],
-    idx: &[(i32, i32)],
-    blob_ofs: usize,
-    blob_end: usize,
-) -> Vec<Vec<u16>> {
-    let mut out = Vec::new();
-    if idx.is_empty() || blob_ofs > data.len() || blob_end <= blob_ofs {
-        return out;
-    }
-    let blob_end = blob_end.min(data.len());
+fn decode_plain_strings(data: &[u8], idx: &[(i32, i32)], blob_ofs: usize) -> Option<Vec<Vec<u16>>> {
+    let mut out = Vec::with_capacity(idx.len());
     for &(ofs_u16, len_u16) in idx {
-        if ofs_u16 < 0 || len_u16 <= 0 {
-            continue;
+        if ofs_u16 < 0 || len_u16 < 0 {
+            return None;
         }
-        let Some(a) = blob_ofs.checked_add((ofs_u16 as usize).saturating_mul(2)) else {
-            continue;
-        };
-        let Some(b) = a.checked_add((len_u16 as usize).saturating_mul(2)) else {
-            continue;
-        };
-        if b > blob_end {
-            continue;
+        let a = blob_ofs.checked_add((ofs_u16 as usize).saturating_mul(2))?;
+        let b = a.checked_add((len_u16 as usize).saturating_mul(2))?;
+        if b > data.len() {
+            return None;
         }
         let units = (a..b)
             .step_by(2)
             .map(|p| u16::from_le_bytes([data[p], data[p + 1]]));
-        let s = char::decode_utf16(units)
-            .map(|unit| unit.unwrap_or(char::REPLACEMENT_CHARACTER))
-            .filter(|&ch| ch != '\0')
-            .collect::<String>()
-            .encode_utf16()
-            .collect();
-        out.push(s);
+        out.push(units.collect());
     }
-    out
+    Some(out)
 }
 
 fn encode_event(event: &Event<'_>, omit_text: bool) -> Vec<u8> {
@@ -2046,6 +1996,7 @@ fn encode_event(event: &Event<'_>, omit_text: bool) -> Vec<u8> {
     for field in &event.fields {
         match field {
             Field::ArgLayout(v) => pairs.push(("arg_layout", JsonValue::ArgLayout(v))),
+            Field::ArgListId(v) => pairs.push(("arg_list_id", JsonValue::Int(*v as i64))),
             Field::ElementCode(Some(v)) => pairs.push(("element_code", JsonValue::Int(*v as i64))),
             Field::ElementCode(None) => {}
             Field::Form(v) => pairs.push(("form", JsonValue::Int(*v as i64))),
