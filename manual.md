@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.5.0 (check the installed version with `siglus-ssu --version`)
+**Version:** 0.5.1 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 

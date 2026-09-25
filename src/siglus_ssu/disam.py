@@ -16,7 +16,6 @@ from .common import (
     named_command_value_map,
     quote_ss_text,
     split_element_code as _element_owner,
-    trim_stack_points,
     unary_result_form as _unary_result_form,
     normalize_stack_start,
 )
@@ -255,14 +254,17 @@ def new_expression_state(
         if stack_start is None:
             return
         del state.stack[stack_start:]
-        state.elm_points[:] = trim_stack_points(state.elm_points, stack_start)
+        while state.elm_points and state.elm_points[-1]["stack_len"] >= stack_start:
+            state.elm_points.pop()
         state.elm_point_pending_idx = None
 
     def _pop_stack_top():
         if not state.stack:
             return None
         it = state.stack.pop()
-        state.elm_points[:] = trim_stack_points(state.elm_points, len(state.stack))
+        stack_len = len(state.stack)
+        while state.elm_points and state.elm_points[-1]["stack_len"] >= stack_len:
+            state.elm_points.pop()
         state.elm_point_pending_idx = None
         return it
 

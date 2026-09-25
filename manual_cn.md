@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-**版本：** 0.5.0（使用 `siglus-ssu --version` 查看已安装版本）
+**版本：** 0.5.1（使用 `siglus-ssu --version` 查看已安装版本）
 
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 

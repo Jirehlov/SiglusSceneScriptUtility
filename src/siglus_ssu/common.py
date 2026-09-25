@@ -494,22 +494,6 @@ def latest_stack_start(elm_points, stack_len):
     return None
 
 
-def trim_stack_points(elm_points, stack_start):
-    out = []
-    try:
-        stack_start = int(stack_start)
-    except (TypeError, ValueError):
-        return out
-    for ep in elm_points or []:
-        try:
-            sl = int((ep or {}).get("stack_len", 0) or 0)
-        except (TypeError, ValueError):
-            continue
-        if sl < stack_start:
-            out.append(ep)
-    return out
-
-
 def normalize_stack_start(stack_start, stack_len):
     try:
         stack_start = int(stack_start)

@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.1] - 2026-09-25
+
+- Reviewed by Opus 5.5 Max.
+- Expanded `--payload` comparison to cover all bytecode operands, complete string pools, label and read-flag tables, and scene/package metadata. Identifier names preserve empty entries, NULs, and original UTF-16 code units; native scans fall back to Python when a package name contains an isolated surrogate.
+- Fixed payload false positives by ignoring debug-only `namae_list` differences and unused trailing zero entries in Z-label tables while preserving meaningful label numbers and offsets. Invalid branch labels or targets, negative argument counts, and bytecode after `CD_EOF` now report `INCOMPLETE`.
+- Standardized Shift-JIS aliases and resource text handling on fixed CP932, including DBS extension characters and GAN names. Documented how deterministic CP932 key derivation can differ from official Windows conversion and how to supply raw keys for compatibility.
+- Preserved `key.txt` in embedded original sources when an empty `暗号.dat` leaves it as the active key source. Scene builds that write encrypted `Gameexe.dat` now also write `EXE_ANGOU.h` in the temporary directory.
+
+
 ## [v0.5.0] - 2026-09-21
 - Bundled `const.py` in native wheels, pure-Python wheels, and source distributions. Constants now follow the installed package version and work offline without a separate download.
 - Removed `init` / `--init`, the const manager, GitHub download and version-ref discovery, and the external-file SHA-512 allowlist. Existing user-data copies are ignored and left untouched.
