@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 from . import const as C, package_version
@@ -4423,15 +4423,11 @@ class SSLanguageServer:
             )
         assert entry is not None
         current_path_keys = {_path_identity(path) for path in paths}
-        removed = False
-        for path in list(entry.file_signatures):
-            if _path_identity(path) in current_path_keys:
-                continue
-            entry.file_signatures.pop(path, None)
-            entry.file_commands.pop(path, None)
-            entry.file_has_diagnostics.pop(path, None)
-            entry.file_occurrences.pop(path, None)
-            removed = True
+        removed_paths = [
+            path
+            for path in entry.file_signatures
+            if _path_identity(path) not in current_path_keys
+        ]
         inc_changed = rebuild_all or any(
             entry.file_signatures.get(path) != self.path_source_signature(path)
             for path in inc_paths
@@ -4451,8 +4447,21 @@ class SSLanguageServer:
             if _path_identity(path) not in dirty_path_keys
             and path not in entry.file_signatures
         )
-        if not rebuild_all and not removed and not dirty_paths:
+        if not rebuild_all and not removed_paths and not dirty_paths:
             return entry
+        if not rebuild_all:
+            entry = replace(
+                entry,
+                file_signatures=entry.file_signatures.copy(),
+                file_commands=entry.file_commands.copy(),
+                file_has_diagnostics=entry.file_has_diagnostics.copy(),
+                file_occurrences=entry.file_occurrences.copy(),
+            )
+        for path in removed_paths:
+            entry.file_signatures.pop(path, None)
+            entry.file_commands.pop(path, None)
+            entry.file_has_diagnostics.pop(path, None)
+            entry.file_occurrences.pop(path, None)
         native_project, native_config = self.native_lsp_project_for_directory(
             directory, project_entry
         )
@@ -4508,8 +4517,7 @@ class SSLanguageServer:
         diagnostics: dict[str, list[SourceDiagnostic]] = {}
         global_names = _project_link_command_names(project_entry.project)
         if not global_names:
-            if rebuild_all or removed or dirty_paths:
-                entry.revision += 1
+            entry.revision += 1
             entry.diagnostics = diagnostics
             self.link_diagnostics_cache[directory] = entry
             self.save_persistent_link_diagnostics(directory, paths, entry)
@@ -4550,8 +4558,7 @@ class SSLanguageServer:
                             code="LINK",
                         )
                     )
-        if rebuild_all or removed or dirty_paths:
-            entry.revision += 1
+        entry.revision += 1
         entry.diagnostics = diagnostics
         self.link_diagnostics_cache[directory] = entry
         self.save_persistent_link_diagnostics(directory, paths, entry)

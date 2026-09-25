@@ -1421,7 +1421,10 @@ fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
             base,
             PathBuf::from(&config.context.angou_path),
         );
-    } else if !config.context.key_path.is_empty() {
+    }
+    if config.angou_content.as_deref().is_none_or(str::is_empty)
+        && !config.context.key_path.is_empty()
+    {
         append_path(
             &mut sources,
             &mut seen,

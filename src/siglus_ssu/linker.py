@@ -37,7 +37,7 @@ def _make_original_source_rel_list(ctx):
     p = find_named_path(scn_path, ANGOU_DAT_NAME)
     if p:
         out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
-    else:
+    if not ctx["exe_angou_str"]:
         kp = find_named_path(scn_path, KEY_TXT_NAME)
         if kp:
             out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
