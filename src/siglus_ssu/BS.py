@@ -1796,6 +1796,7 @@ def compile_one_pipeline(
         bsd,
         bsd["out_scn"],
     )
+    write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
     return {
         "nm": nm,
         "out_scn": bsd["out_scn"],
@@ -1806,7 +1807,7 @@ def compile_one_pipeline(
 
 
 def compile_one(ctx, ss_path):
-    res = compile_one_pipeline(
+    return compile_one_pipeline(
         ctx,
         ss_path,
         ia_data=None,
@@ -1815,41 +1816,12 @@ def compile_one(ctx, ss_path):
         log=True,
         record_time=True,
     )
-    tmp = ctx.get("tmp_path") or "."
-    write_bytes(os.path.join(tmp, "bs", res["nm"] + ".dat"), res["out_scn"])
-    return res
 
 
-def compile_all(ctx, only=None, max_workers=None, parallel=True):
+def compile_all(ctx, only, max_workers=None, parallel=True):
     if ctx.get("ia_data") is None:
         ctx["ia_data"] = build_ia_data(ctx)
-    if only:
-        ss_files = [
-            os.path.abspath(os.path.expanduser(path)) if path else path for path in only
-        ]
-    else:
-        ss_files = []
-        scn_path = ctx.get("scn_path")
-        if scn_path:
-            try:
-                _, entries = read_directory(scn_path)
-            except (FileNotFoundError, NotADirectoryError):
-                entries = []
-            ss_files = sorted(
-                (
-                    entry.path
-                    for entry in entries
-                    if entry.is_file() and ascii_lower(entry.name).endswith(".ss")
-                ),
-                key=lambda path: ascii_lower(os.path.basename(path)),
-            )
-    if not ss_files:
-        return {
-            "parallel": False,
-            "scene_macro_counts": empty_macro_stat_counts(),
-            "global_macro_usage_delta": {},
-            "source_stats": empty_source_stat_counts(),
-        }
+    ss_files = list(only)
     if parallel and len(ss_files) > 1:
         from .parallel import parallel_compile
 

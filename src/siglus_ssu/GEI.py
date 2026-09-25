@@ -2,17 +2,11 @@ import os
 import struct
 from . import const as C
 from .common import (
-    exe_angou_element,
+    compile_exe_el,
     read_bytes,
     read_compile_source,
-    read_angou_first_line,
-    angou_to_exe_el,
     write_text,
     write_bytes,
-    find_named_path,
-    ANGOU_DAT_NAME,
-    KEY_TXT_NAME,
-    read_exe_el_key,
     scan_text_comments,
 )
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
@@ -82,22 +76,19 @@ def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
     if lz:
         try:
             raw = lzss_unpack(lz)
-        except Exception:
+        except ValueError:
             raw = b""
     txt = ""
     if raw:
         try:
             txt = raw.decode("utf-16le", "strict")
-        except Exception:
+        except UnicodeDecodeError:
             txt = raw.decode("utf-16le", "ignore")
     ini_ok = False
     if txt:
-        try:
-            a = IniFileAnalizer()
-            ok, _ = a.analize(txt)
-            ini_ok = bool(ok)
-        except Exception:
-            ini_ok = False
+        a = IniFileAnalizer()
+        ok, _ = a.analize(txt)
+        ini_ok = bool(ok)
     info = {
         "mode": int(mode),
         "used_exe_el": bool(used_exe_el),
@@ -127,21 +118,11 @@ def restore_gameexe_ini(
     return out_path
 
 
-def _load_angou_first_line(ctx):
-    scn = ctx.get("scn_path") or ""
-    p = find_named_path(scn, ANGOU_DAT_NAME)
-    if not p:
-        return ""
-    return read_angou_first_line(p, force_charset=(ctx.get("charset_force") or ""))
-
-
 def write_gameexe_dat(ctx):
     scn = ctx.get("scn_path") or "."
     out = ctx.get("out_path") or "."
-    out_noangou = ctx.get("out_path_noangou") or ""
     tmp = ctx.get("tmp_path") or ""
     gameexe_ini = ctx.get("gameexe_ini") or "Gameexe.ini"
-    gameexe_dat = ctx.get("gameexe_dat") or "Gameexe.dat"
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
     gei_path = os.path.join(scn, gameexe_ini)
     source_texts = ctx.get("source_texts") or {}
@@ -157,48 +138,19 @@ def write_gameexe_dat(ctx):
                 f"GEI parse error line({a.get_error_line()}): {a.get_error_str()}"
             )
         ged = d
-    mode = 0
-    el = b""
-    if ctx.get("exe_angou_mode"):
-        s = ctx.get("exe_angou_str")
-        if s is None:
-            s = _load_angou_first_line(ctx)
-            if s:
-                el = angou_to_exe_el(s)
-                if el:
-                    mode = 1
-        elif s:
-            mb = str(s).encode("cp932", "ignore")
-            if len(mb) >= 8:
-                el = exe_angou_element(mb)
-                if el and len(el) == 16:
-                    mode = 1
-    if ctx.get("exe_angou_mode") and (not mode) and scn:
-        kp = find_named_path(scn, KEY_TXT_NAME)
-        if kp:
-            k = read_exe_el_key(kp)
-            if k and len(k) == 16:
-                mode = 1
-                el = k
+    el = compile_exe_el(ctx)
+    mode = int(bool(el))
     lz = None
     if ged:
         lz = bytearray(lzss_pack(ged.encode("utf-16le")))
         xor_cycle_inplace(lz, base)
-    dat_noangou = bytearray(struct.pack("<ii", 0, 0))
+    dat_out = bytearray(struct.pack("<ii", 0, mode))
     if lz:
-        dat_noangou.extend(lz)
-    dat_out = dat_noangou
-    if mode:
-        dat_angou = bytearray(struct.pack("<ii", 0, 1))
-        if lz:
-            lz2 = bytearray(lz)
-            xor_cycle_inplace(lz2, el)
-            dat_angou.extend(lz2)
-        dat_out = dat_angou
-    p = os.path.join(out, gameexe_dat)
+        if mode:
+            xor_cycle_inplace(lz, el)
+        dat_out.extend(lz)
+    p = os.path.join(out, "Gameexe.dat")
     write_bytes(p, bytes(dat_out))
-    if out_noangou:
-        write_bytes(os.path.join(out_noangou, gameexe_dat), bytes(dat_noangou))
     if mode and tmp and len(el) == 16:
         lines = [
             f"#define\tKN_EXE_ANGOU_DATA{i:02d}A\t0x{el[C.EXE_ANGOU_A_IDX[i]]:02X}"

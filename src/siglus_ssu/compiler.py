@@ -36,9 +36,12 @@ from .common import (
     content_digest,
     decode_text_auto,
     read_bytes,
+    read_scn_header,
     read_exe_el_key,
     read_text_auto,
     first_line_text,
+    angou_first_line,
+    write_bytes,
     write_text,
     parse_code,
     ANGOU_DAT_NAME,
@@ -54,7 +57,6 @@ from .common import (
 )
 from .path_policy import (
     FilenameCaseCollisionError,
-    open_read,
     read_directory,
     resolve_read_path,
     walk_read_directory,
@@ -177,58 +179,25 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     lim = int(sa.get("tile_limit", 0))
     out_mv = memoryview(out)
     lzb_mv = memoryview(lzb)
-    tile_copy(
-        out_mv[dp1 : dp1 + mapt],
-        lzb_mv[sp1 : sp1 + mapt],
-        mapw,
-        maph,
-        mask,
-        mw,
-        mh,
-        repx,
-        repy,
-        0,
-        lim,
-    )
-    tile_copy(
-        out_mv[dp1 : dp1 + mapt],
-        lzb_mv[sp2 : sp2 + mapt],
-        mapw,
-        maph,
-        mask,
-        mw,
-        mh,
-        repx,
-        repy,
-        1,
-        lim,
-    )
-    tile_copy(
-        out_mv[dp2 : dp2 + mapt],
-        lzb_mv[sp1 : sp1 + mapt],
-        mapw,
-        maph,
-        mask,
-        mw,
-        mh,
-        repx,
-        repy,
-        1,
-        lim,
-    )
-    tile_copy(
-        out_mv[dp2 : dp2 + mapt],
-        lzb_mv[sp2 : sp2 + mapt],
-        mapw,
-        maph,
-        mask,
-        mw,
-        mh,
-        repx,
-        repy,
-        0,
-        lim,
-    )
+    for dest, source, reverse in (
+        (dp1, sp1, 0),
+        (dp1, sp2, 1),
+        (dp2, sp1, 1),
+        (dp2, sp2, 0),
+    ):
+        tile_copy(
+            out_mv[dest : dest + mapt],
+            lzb_mv[source : source + mapt],
+            mapw,
+            maph,
+            mask,
+            mw,
+            mh,
+            repx,
+            repy,
+            reverse,
+            lim,
+        )
     xor_cycle_inplace(out, lg, int(sa.get("last_index", 0)))
     return bytes(out)
 
@@ -311,7 +280,7 @@ def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, increment
                 full_compile = True
             else:
                 old_inc = old.get("inc") or {}
-                for k in set(cur_inc.keys()) | set((old_inc or {}).keys()):
+                for k in cur_inc.keys() | old_inc.keys():
                     if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
                         full_compile = True
                         break
@@ -394,7 +363,7 @@ def _native_compile_cache_config(
         use_lzss=not args.no_angou and not args.no_lzss,
     )
     lzss_remove_paths = []
-    if args.tmp_dir and not args.no_angou:
+    if args.tmp_dir:
         bs_dir = os.path.join(tmp_dir, "bs")
         if full_compile:
             try:
@@ -455,13 +424,9 @@ def _tmp_incompatible_options(argv, test_shuffle=False):
 
 def _read_scn_dat(path):
     b = read_bytes(path)
-    if len(b) < C.SCN_HDR_SIZE:
-        raise ValueError("bad dat header")
-    fields = list(C.SCN_HDR_FIELDS or [])
-    if len(fields) * 4 != C.SCN_HDR_SIZE:
-        raise ValueError("bad const.SCN_HDR_FIELDS")
-    vals = struct.unpack_from("<" + "i" * len(fields), b, 0)
-    h = dict(zip(fields, vals))
+    h = read_scn_header(b)
+    if not h:
+        raise ValueError(f"{path}: bad dat header")
     ofs = h.get("str_index_list_ofs", 0)
     cnt = h.get("str_index_cnt", 0)
     if cnt < 0:
@@ -473,14 +438,9 @@ def _read_scn_dat(path):
 
 
 def _read_scn_dat_header(path):
-    b = read_bytes(path)
-    if len(b) < C.SCN_HDR_SIZE:
-        raise ValueError("bad dat header")
-    fields = list(C.SCN_HDR_FIELDS or [])
-    if len(fields) * 4 != C.SCN_HDR_SIZE:
-        raise ValueError("bad const.SCN_HDR_FIELDS")
-    vals = struct.unpack_from("<" + "i" * len(fields), b, 0)
-    h = {fields[i]: int(vals[i]) for i in range(len(fields))}
+    h = read_scn_header(read_bytes(path))
+    if not h:
+        raise ValueError(f"{path}: bad dat header")
     return h
 
 
@@ -499,13 +459,9 @@ def _read_scn_dat_str_pool(path):
         if p < 0 or q > len(b):
             raise ValueError("bad str_list range")
         k = scene_string_xor_key(orig)
-        ws = struct.unpack_from("<" + "H" * ln_u16, b, p)
-        bb = bytearray(ln_u16 * 2)
-        for i, w in enumerate(ws):
-            v = (w ^ k) & 0xFFFF
-            bb[i * 2] = v & 0xFF
-            bb[i * 2 + 1] = (v >> 8) & 0xFF
-        out.append(bytes(bb).decode("utf-16le", "surrogatepass"))
+        mask = k.to_bytes(2, "little") * ln_u16
+        value = int.from_bytes(b[p:q], "little") ^ int.from_bytes(mask, "little")
+        out.append(value.to_bytes(q - p, "little").decode("utf-16le", "surrogatepass"))
     return out
 
 
@@ -569,24 +525,11 @@ def _scan_dir(p):
     return fs, ini, inc, ss, scn_ssid_map
 
 
-def _guess_charset_from_files(base_dir, ini, inc, ss):
-    paths = []
-    for p in ss or []:
-        paths.append(p)
-    for f in inc or []:
-        paths.append(os.path.join(base_dir, f))
-    for f in ini or []:
-        paths.append(os.path.join(base_dir, f))
-    for p in paths:
-        if not p:
-            continue
-        try:
-            p = resolve_read_path(p, kind="file")
-            with open_read(p) as f:
-                b = f.read()
-        except FilenameCaseCollisionError:
-            raise
-        except Exception:
+def _guess_charset(source_bytes, ini, inc, ss):
+    names = [*(os.path.basename(path) for path in ss), *inc, *ini]
+    for name in names:
+        b = source_bytes.get(name)
+        if b is None:
             continue
         b = b.partition(b"\x1a")[0]
         if b.startswith(b"\xef\xbb\xbf"):
@@ -626,7 +569,7 @@ def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_file
                 kind = paths[name]
                 if kind is not None:
                     digests[kind][ascii_lower(name)] = content_digest(data)
-        except Exception as exc:
+        except UnicodeError as exc:
             raise ValueError(f"{path}: {exc}") from exc
     return texts, digests, source_bytes
 
@@ -1086,6 +1029,7 @@ def main(argv=None):
     test_shuffle = False
     test_seed0 = 0
     test_seed0_given = False
+    test_seed_index = None
     test_dir = ""
     if argv is None:
         argv = sys.argv[1:]
@@ -1096,19 +1040,8 @@ def main(argv=None):
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
-        remaining_count = len(argv) - i + len(positional_args or ())
-        if (
-            i < len(argv)
-            and _is_int_token(argv[i])
-            and (remaining_count == 1 or remaining_count >= 4)
-        ):
-            try:
-                test_seed0 = _parse_u32_token(argv[i], "--test-shuffle")
-            except ValueError as exc:
-                sys.stderr.write(f"{prog}: error: {exc}\n")
-                return 2
-            test_seed0_given = True
-            argv.pop(i)
+        if i < len(argv) and _is_int_token(argv[i]):
+            test_seed_index = i
     if test_shuffle and has_option(argv, "--gei"):
         sys.stderr.write(f"{prog}: error: --gei cannot be used with --test-shuffle\n")
         return 2
@@ -1164,7 +1097,7 @@ def main(argv=None):
     ap.add_argument(
         "--no-os",
         action="store_true",
-        help="Skip OS stage (do not pack source files into pck).",
+        help="Remove source chunks after compilation, preserving the package header.",
     )
     ap.add_argument(
         "--dat-repack",
@@ -1176,11 +1109,6 @@ def main(argv=None):
         "--no-lzss",
         action="store_true",
         help="Disable scene LZSS and omit source chunks (official easy link behavior).",
-    )
-    ap.add_argument(
-        "--legacy",
-        action="store_true",
-        help="Force Python compile backend while keeping native helpers such as LZSS.",
     )
     ap.add_argument(
         "--serial",
@@ -1208,14 +1136,22 @@ def main(argv=None):
     if positional_args is not None:
         parse_argv = [*argv, "--", *positional_args]
     try:
-        a = ap.parse_args(parse_argv)
+        try:
+            a = ap.parse_args(parse_argv)
+        except ValueError:
+            if test_seed_index is None:
+                raise
+            seeded_argv = list(parse_argv)
+            seed_token = seeded_argv.pop(test_seed_index)
+            a = ap.parse_args(seeded_argv)
+            test_seed0 = _parse_u32_token(seed_token, "--test-shuffle")
+            test_seed0_given = True
     except ValueError as exc:
         sys.stderr.write(f"{ap.prog}: error: {exc}\n")
         return 2
     if a.max_workers is not None and a.max_workers <= 0:
         sys.stderr.write(f"{prog}: error: --max-workers must be greater than zero\n")
         return 2
-    a.legacy = a.legacy or _runtime._LEGACY_COMPILE
     charset_arg = a.charset or ""
     charset = norm_charset(charset_arg)
     if charset_arg and not charset:
@@ -1252,7 +1188,7 @@ def main(argv=None):
     try:
         inp = resolve_read_path(a.input_dir)
     except (FileNotFoundError, NotADirectoryError):
-        sys.stderr.write("input_dir not found\n")
+        sys.stderr.write(f"{prog}: error: input_dir not found: {a.input_dir}\n")
         return 1
     gei_ini = ""
     if a.gei and os.path.isfile(inp):
@@ -1272,13 +1208,15 @@ def main(argv=None):
         out = os.path.abspath(out)
         scene_pck = os.path.basename(out_pck)
     if not os.path.isdir(inp):
-        sys.stderr.write("input_dir not found\n")
+        sys.stderr.write(
+            f"{prog}: error: input_dir is not a directory: {a.input_dir}\n"
+        )
         return 1
     if test_shuffle:
         try:
             test_dir = resolve_read_path(a.test_dir or "", kind="dir")
         except (FileNotFoundError, NotADirectoryError):
-            sys.stderr.write("test_dir not found\n")
+            sys.stderr.write(f"{prog}: error: test_dir not found: {a.test_dir}\n")
             return 1
     files, ini, inc, ss, scn_ssid_map = _scan_dir(inp)
     if not a.gei and not a.dat_repack and not ss:
@@ -1321,7 +1259,6 @@ def main(argv=None):
                 prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
                 dir=out,
             )
-    enc = charset if charset else _guess_charset_from_files(inp, ini, inc, ss)
     original_files = []
     if not a.gei and not a.no_angou and not a.no_lzss:
         original_files = [
@@ -1342,9 +1279,10 @@ def main(argv=None):
             charset,
             original_files,
         )
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
         return 1
+    enc = charset or _guess_charset(source_bytes, ini, inc, ss)
     for path in ss:
         name = os.path.basename(path)
         ssid = _scene_ssid_from_text(source_texts.get(name, ""))
@@ -1376,7 +1314,6 @@ def main(argv=None):
         "scn_path": inp,
         "tmp_path": tmp,
         "out_path": out,
-        "out_path_noangou": "",
         "scene_pck": scene_pck,
         "gameexe_ini": gei_ini,
         "angou_path": os.path.join(inp, angou_name) if angou_name else "",
@@ -1395,7 +1332,6 @@ def main(argv=None):
         "debug_outputs": bool(a.debug),
         "lzss_mode": (not a.no_angou),
         "exe_angou_mode": (not a.no_angou),
-        "exe_angou_str": None,
         "source_angou_mode": (not a.no_angou),
         "original_source_mode": (not a.no_os and not a.no_angou),
         "easy_link": bool(a.no_lzss),
@@ -1415,7 +1351,10 @@ def main(argv=None):
         except (OSError, UnicodeError) as exc:
             sys.stderr.write(f"{prog}: error: {angou_path}: {exc}\n")
             return 1
-    if angou_content and len(angou_content.encode("cp932", "ignore")) < 8:
+    if angou_content and not angou_first_line(angou_content):
+        sys.stderr.write(
+            f"{prog}: warning: ignoring {angou_path}: first line encodes to fewer than 8 CP932 bytes\n"
+        )
         angou_content = None
     ctx["exe_angou_str"] = angou_content or ""
     stats["angou_content"] = angou_content
@@ -1427,7 +1366,7 @@ def main(argv=None):
             sys.stderr.write(str(exc) + "\n")
             return 1
     native_rc = None
-    if is_native_available() and not a.legacy:
+    if is_native_available() and not _runtime._LEGACY_COMPILE:
         try:
             native_rc = _try_native_compile(
                 _native_compile_config(
@@ -1465,6 +1404,7 @@ def main(argv=None):
         "global_macro_usage_delta": {},
         "source_stats": empty_source_stat_counts(),
     }
+    stage = "GEI"
     try:
         t = time.time()
         if write_gameexe_dat(ctx) is None:
@@ -1474,6 +1414,7 @@ def main(argv=None):
             )
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
+            stage = "compile cache"
             compile_list, digest_path, pending_digests, full_compile = (
                 _compile_cache_state(
                     tmp_dir=tmp,
@@ -1484,7 +1425,7 @@ def main(argv=None):
                     incremental=bool(a.tmp_dir),
                 )
             )
-            if a.tmp_dir and not a.no_angou:
+            if a.tmp_dir:
                 try:
                     bs_dir = resolve_read_path(os.path.join(tmp, "bs"), kind="dir")
                 except (FileNotFoundError, NotADirectoryError):
@@ -1506,34 +1447,26 @@ def main(argv=None):
                             continue
                         os.remove(lp)
             if a.dat_repack:
+                stage = "dat-repack"
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
                 dats = []
                 _, entries = read_directory(inp)
-                for entry in entries:
+                for entry in sorted(entries, key=lambda item: ascii_lower(item.name)):
                     f = entry.name
                     if not str(f).lower().endswith(".dat"):
                         continue
                     fp = os.path.join(inp, f)
-                    if not os.path.isfile(fp):
+                    if not entry.is_file():
                         continue
-                    try:
-                        b = read_bytes(fp)
-                    except FilenameCaseCollisionError:
-                        raise
-                    except Exception:
-                        continue
+                    b = read_bytes(fp)
                     if looks_like_siglus_dat(b):
+                        write_bytes(os.path.join(bs_dir, f), b)
                         dats.append(fp)
-                dats.sort(key=lambda x: ascii_lower(os.path.basename(x)))
                 if not dats:
                     raise RuntimeError("--dat-repack: no scene .dat found")
                 ctx["scn_list"] = [os.path.basename(x) for x in dats]
-                for fp in dats:
-                    shutil.copyfile(fp, os.path.join(bs_dir, os.path.basename(fp)))
                 compile_list = []
-            if test_shuffle:
-                compile_list = ss
             full_compile_stats = (
                 (not a.dat_repack)
                 and not a.tmp_dir
@@ -1546,6 +1479,7 @@ def main(argv=None):
             stats["compiled_scene_files"] = len(compile_list)
             stats["full_compile_stats"] = full_compile_stats
             if compile_list:
+                stage = "compile"
                 if test_shuffle:
                     bs_dir = os.path.join(tmp, "bs")
                     os.makedirs(bs_dir, exist_ok=True)
@@ -1666,6 +1600,7 @@ def main(argv=None):
                         parallel=(not force_serial_compile),
                     )
             if full_compile_stats:
+                stage = "statistics"
                 stats["macro_counts"] = _collect_macro_stats(ctx, compile_stats)
                 stats["source_stats"] = _finalize_source_stats(ctx, compile_stats)
                 bs_dir = os.path.join(tmp, "bs")
@@ -1680,15 +1615,16 @@ def main(argv=None):
                 stats["read_flags"] = None
                 stats["read_flags_scenes"] = None
                 stats["top5_read_flags_scenes"] = None
+            stage = "link"
             link_pack(ctx)
             if pending_digests is not None:
+                stage = "compile cache"
                 _write_digest_cache(digest_path, pending_digests)
         ok = not test_shuffle_failed
-    except Exception as e:
-        msg = str(e)
-        if not msg:
-            msg = "UNK_ERROR at unknown:0"
-        sys.stderr.write(msg + "\n")
+    except Exception as exc:
+        sys.stderr.write(
+            f"{prog}: error: {stage} ({inp}): {type(exc).__name__}: {exc}\n"
+        )
         ok = False
     finally:
         _print_summary(ctx, ok=ok)

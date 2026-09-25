@@ -22811,6 +22811,7 @@ _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES = {
     9: (),
 }
 CONST_PROFILE_DEFAULT = 0
+CONST_PROFILE = None
 _FORM_SET_PROFILES = {
     profile: frozenset(
         name for name in form_map.keys() if name not in {"__args", "__argsref"}
@@ -22969,8 +22970,12 @@ def set_profile(profile=CONST_PROFILE_DEFAULT):
 
     if profile is None:
         profile = CONST_PROFILE_DEFAULT
-    if profile not in _FORM_CODE_PROFILES:
+    if profile not in _runtime.CONST_PROFILE_IDS:
         raise ValueError(f"unsupported const profile: {profile}")
+    if profile == CONST_PROFILE:
+        if not _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT:
+            _runtime._SCENE_STRING_XOR_MULTIPLIER = SCENE_STRING_XOR_MULTIPLIER
+        return
     CONST_PROFILE = profile
     _FORM_CODE = dict(_FORM_CODE_PROFILES[profile])
     SYSTEM_ELEMENT_DEFS = list(_SYSTEM_ELEMENT_DEFS_PROFILES[profile])

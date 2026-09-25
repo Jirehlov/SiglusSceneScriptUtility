@@ -17,6 +17,7 @@ from .common import (
     read_struct_list,
     max_pair_end,
     decode_utf16le_strings,
+    decode_text_auto,
     add_gap_sections,
     print_sections,
     diff_kv,
@@ -40,7 +41,11 @@ from .common import (
     iter_exe_el_sources,
     format_exe_el_source,
 )
-from .path_policy import FilenameCaseCollisionError, resolve_read_path
+from .path_policy import (
+    FilenameCaseCollisionError,
+    resolve_read_path,
+    windows_filename_key,
+)
 
 MAX_SCENE_LIST = 2000
 
@@ -276,6 +281,9 @@ def _pck_sections(blob, preview=False):
         "scene_script_ids": _scene_script_id_map(source_entries) if preview else {},
         "original_source_count": len(source_entries),
         "original_source_error": source_error,
+        "original_source_entries": source_entries
+        if preview and not source_error
+        else None,
     }
     return secs, meta
 
@@ -414,20 +422,27 @@ def _scene_script_id_map(source_entries):
         if sid is None:
             continue
         for key in keys:
-            out.setdefault(key, sid)
-            out.setdefault(key.casefold(), sid)
+            out.setdefault(("exact", key), sid)
+            folded = ("filename", windows_filename_key(key))
+            if folded in out and out[folded] != sid:
+                out[folded] = None
+            else:
+                out.setdefault(folded, sid)
     return out
 
 
 def _scene_script_id_get(mapping, name):
     if not isinstance(mapping, dict):
         return None
-    for key in _scene_script_id_keys(name):
-        if key in mapping:
-            return mapping.get(key)
-        folded = key.casefold()
+    keys = _scene_script_id_keys(name)
+    for key in keys:
+        exact = ("exact", key)
+        if exact in mapping:
+            return mapping[exact]
+    for key in keys:
+        folded = ("filename", windows_filename_key(key))
         if folded in mapping:
-            return mapping.get(folded)
+            return mapping[folded]
     return None
 
 
@@ -442,8 +457,6 @@ def _scene_script_id_pair(left, right):
 
 
 def _iter_pck_original_source_items(blob: bytes, hdr=None, only_name=""):
-    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        return
     if not looks_like_siglus_pck(blob):
         return
     if not hdr:
@@ -456,19 +469,28 @@ def _iter_pck_original_source_items(blob: bytes, hdr=None, only_name=""):
         yield {"name": name, "raw": raw}
 
 
-def iter_pck_angou_dat_items(blob: bytes, hdr=None):
-    try:
-        cands = list(
-            _iter_pck_original_source_items(blob, hdr=hdr, only_name=ANGOU_DAT_NAME)
-        )
-    except ValueError:
-        return
+def iter_pck_angou_dat_items(blob: bytes, hdr=None, source_entries=None):
+    if source_entries is None:
+        try:
+            cands = list(
+                _iter_pck_original_source_items(blob, hdr=hdr, only_name=ANGOU_DAT_NAME)
+            )
+        except ValueError:
+            return
+    else:
+        cands = [
+            {"name": name, "raw": raw}
+            for name, _a, _b, raw in source_entries
+            if is_named_filename(os.path.basename(name), ANGOU_DAT_NAME)
+        ]
     cands.sort(key=lambda item: (len(item["name"]), item["name"].casefold()))
     yield from cands
 
 
-def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
-    for item in iter_pck_angou_dat_items(blob, hdr=hdr):
+def _pck_angou_content(
+    blob: bytes, input_pck: str = "", hdr=None, source_entries=None
+) -> str:
+    for item in iter_pck_angou_dat_items(blob, hdr=hdr, source_entries=source_entries):
         line = decode_angou_first_line(item["raw"])
         if line:
             return line
@@ -488,8 +510,6 @@ def _pck_angou_content(blob: bytes, input_pck: str = "", hdr=None) -> str:
 
 
 def _read_pck_scene_lists(blob: bytes, hdr=None):
-    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        return ([], [])
     if not looks_like_siglus_pck(blob):
         return ([], [])
     if not hdr:
@@ -541,6 +561,7 @@ def _resolve_pck_scene_exe_el(
     scn_data=None,
     explicit_angou: str = "",
     trace_key: bool = False,
+    source_entries=None,
 ):
     try:
         if not hdr:
@@ -556,6 +577,7 @@ def _resolve_pck_scene_exe_el(
             input_path=input_pck,
             base_dir=base_dir,
             input_blob=blob,
+            input_source_entries=source_entries,
         )
     except Exception:
         return b""
@@ -604,6 +626,7 @@ def require_pck_scene_exe_el(
     hdr=None,
     scn_data=None,
     explicit_angou: str = "",
+    source_entries=None,
 ):
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
@@ -618,6 +641,7 @@ def require_pck_scene_exe_el(
         scn_data=scn_data,
         explicit_angou=explicit_angou,
         trace_key=True,
+        source_entries=source_entries,
     )
     if exe_el:
         return exe_el
@@ -635,16 +659,18 @@ def iter_pck_scene_dat_items(
     explicit_angou: str = "",
     trace_key: bool = False,
     scene_exe_el=None,
+    scene_lists=None,
+    source_entries=None,
 ):
-    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
-        return
     if not looks_like_siglus_pck(blob):
         return
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     if not hdr:
         return
-    scn_names, scn_data = _read_pck_scene_lists(blob, hdr=hdr)
+    scn_names, scn_data = (
+        _read_pck_scene_lists(blob, hdr=hdr) if scene_lists is None else scene_lists
+    )
     try:
         pack_context = _build_disam_pack_context(
             blob, hdr=hdr, meta={"scn_names": scn_names}
@@ -659,6 +685,7 @@ def iter_pck_scene_dat_items(
             scn_data=scn_data,
             explicit_angou=explicit_angou,
             trace_key=trace_key,
+            source_entries=source_entries,
         )
     else:
         exe_el = bytes(scene_exe_el)
@@ -677,7 +704,7 @@ def iter_pck_scene_dat_items(
             "scene_name": nm,
             "relpath": rel,
             "blob": out_dat,
-            "pack_context": dict(pack_context or {}),
+            "pack_context": pack_context,
         }
 
 
@@ -686,6 +713,7 @@ def _collect_pck_read_flag_stats(
     input_pck: str = "",
     hdr=None,
     explicit_angou: str = "",
+    source_entries=None,
 ):
     stats = {
         "read_flags": 0,
@@ -703,6 +731,7 @@ def _collect_pck_read_flag_stats(
             require_exe=True,
             explicit_angou=explicit_angou,
             trace_key=True,
+            source_entries=source_entries,
         )
         or []
     ):
@@ -774,6 +803,7 @@ def _pck_cd_word_rows(
     hdr=None,
     explicit_angou: str = "",
     scene_exe_el=None,
+    scene_lists=None,
 ) -> dict:
     from . import dat as _dat
 
@@ -792,6 +822,7 @@ def _pck_cd_word_rows(
             explicit_angou=explicit_angou,
             require_exe=True,
             scene_exe_el=scene_exe_el,
+            scene_lists=scene_lists,
         )
         or []
     ):
@@ -900,11 +931,11 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 key = (os.path.abspath(out_path), rel_display)
                 if key not in seen_ss_paths:
                     seen_ss_paths.add(key)
-                    ss_paths.append((out_path, rel_display))
+                    ss_paths.append((out_path, rel_display, raw))
         if not ss_paths:
             return stats
         iad_cache = {}
-        for ss_path, rel_display in sorted(
+        for ss_path, rel_display, raw in sorted(
             ss_paths, key=lambda p: str(p[1]).casefold()
         ):
             stats["ss_source_files"] += 1
@@ -916,7 +947,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 "count": 0,
             }
             try:
-                text, encoding = _textmap.read_text(ss_path)
+                text, encoding, _ = decode_text_auto(raw)
                 ctx = {
                     "scn_path": os.path.dirname(os.path.abspath(ss_path)),
                     "utf8": bool(str(encoding or "").startswith("utf-8")),
@@ -964,11 +995,13 @@ def pck_word_count(
         print("unsupported --word input: only Siglus .pck is supported")
         return 1
     hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    scene_lists = _read_pck_scene_lists(blob, hdr=hdr)
     try:
         scene_exe_el = require_pck_scene_exe_el(
             blob,
             input_pck=input_pck,
             hdr=hdr,
+            scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
         )
     except RuntimeError as exc:
@@ -980,6 +1013,7 @@ def pck_word_count(
         hdr=hdr,
         explicit_angou=explicit_angou,
         scene_exe_el=scene_exe_el,
+        scene_lists=scene_lists,
     )
     try:
         ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
@@ -1098,6 +1132,7 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
         input_pck=input_pck,
         hdr=h,
         explicit_angou=explicit_angou,
+        source_entries=meta["original_source_entries"],
     )
     read_flags = int((read_flag_stats or {}).get("read_flags", 0) or 0)
     read_flags_scenes = int((read_flag_stats or {}).get("read_flags_scenes", 0) or 0)
@@ -1137,7 +1172,12 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
         )
     print()
     print_sections(secs, len(blob), meta.get("scene_script_ids") or {})
-    angou = _pck_angou_content(blob, input_pck=input_pck, hdr=h)
+    angou = _pck_angou_content(
+        blob,
+        input_pck=input_pck,
+        hdr=h,
+        source_entries=meta["original_source_entries"],
+    )
     if angou:
         print()
         print(f"=== {ANGOU_DAT_NAME} ===")
@@ -1310,6 +1350,7 @@ def compare_pck(
                 hdr=h1,
                 scn_data=data1,
                 explicit_angou=explicit_angou,
+                source_entries=source_entries1 if not source_failed else None,
             )
             exe_el2 = require_pck_scene_exe_el(
                 b2,
@@ -1317,6 +1358,7 @@ def compare_pck(
                 hdr=h2,
                 scn_data=data2,
                 explicit_angou=explicit_angou,
+                source_entries=source_entries2 if not source_failed else None,
             )
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
@@ -1879,6 +1921,7 @@ def extract_pck(
         sys.stderr.write("Invalid pck\n")
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    scene_lists = _read_pck_scene_lists(dat, hdr=hdr)
     source_items = []
     source_failed = False
     try:
@@ -1891,6 +1934,7 @@ def extract_pck(
             dat,
             input_pck=input_pck,
             hdr=hdr,
+            scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
         )
     except RuntimeError as exc:
@@ -1932,6 +1976,7 @@ def extract_pck(
             require_exe=True,
             explicit_angou=explicit_angou,
             scene_exe_el=scene_exe_el,
+            scene_lists=scene_lists,
         )
         or []
     ):

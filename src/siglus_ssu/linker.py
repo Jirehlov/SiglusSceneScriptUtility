@@ -10,21 +10,18 @@ from .common import (
     record_stage_time,
     set_stage_time,
     pack_i32_pairs,
-    exe_angou_element,
-    read_angou_first_line,
-    angou_to_exe_el,
+    compile_exe_el,
     read_bytes,
     write_bytes,
     write_cached_bytes,
     find_named_path,
     ANGOU_DAT_NAME,
     KEY_TXT_NAME,
-    read_exe_el_key,
     parse_i32_header,
     read_scn_header,
 )
 from .BS import build_ia_data
-from .native_ops import xor_cycle_inplace
+from .native_ops import lzss_pack, xor_cycle_inplace
 from .path_policy import resolve_read_path
 
 
@@ -64,31 +61,14 @@ def _parse_cmd_labels(dat):
     return out
 
 
-def _resolve_exe_angou(ctx):
-    if (not ctx.get("exe_angou_mode")) or (not ctx.get("lzss_mode", True)):
-        return (False, b"")
-    scn_path = ctx.get("scn_path") or ""
-    angou_str = ctx.get("exe_angou_str")
-    if angou_str is None and scn_path:
-        p = find_named_path(scn_path, ANGOU_DAT_NAME)
-        if p:
-            angou_str = read_angou_first_line(p, ctx.get("charset_force") or "")
-    if (not angou_str) and scn_path:
-        kp = find_named_path(scn_path, KEY_TXT_NAME)
-        if kp:
-            el = read_exe_el_key(kp)
-            if el and len(el) == 16:
-                return (True, el)
-    if angou_str is None:
-        return (False, b"")
-    if ctx.get("exe_angou_str") is None:
-        el = angou_to_exe_el(angou_str)
-    else:
-        mb = str(angou_str).encode("cp932", "ignore")
-        el = exe_angou_element(mb) if len(mb) >= 8 else b""
-    if not el:
-        return (False, b"")
-    return (True, el)
+def compress_scene_dat(dat, lz_path, easy_code):
+    if not easy_code:
+        raise RuntimeError("ctx.easy_angou_code is not set")
+    packed = bytearray(lzss_pack(dat))
+    xor_cycle_inplace(packed, easy_code, 0)
+    result = bytes(packed)
+    write_bytes(lz_path, result)
+    return result
 
 
 def _load_scene_data(ctx, scn_names, lzss_mode):
@@ -101,8 +81,6 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
         dat_list, lzss_list = parallel_lzss_compress(ctx, scn_names, bs_dir)
         set_stage_time(ctx, "LZSS", time.time() - start)
         return dat_list, lzss_list
-    from . import compiler as _m
-
     dat_list = []
     lzss_list = []
     easy_code = ctx.get("easy_angou_code") or b""
@@ -119,13 +97,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
                 lz_path = resolve_read_path(lz_path, kind="file")
             except (FileNotFoundError, NotADirectoryError):
                 t = time.time()
-                if not easy_code:
-                    raise RuntimeError("ctx.easy_angou_code is not set")
-                lz = _m.lzss_pack(dat)
-                b = bytearray(lz)
-                xor_cycle_inplace(b, easy_code, 0)
-                lz = bytes(b)
-                write_bytes(lz_path, lz)
+                lz = compress_scene_dat(dat, lz_path, easy_code)
                 record_stage_time(ctx, "LZSS", time.time() - t)
                 log_stage("LZSS", nm + ".ss", ctx)
             else:
@@ -295,7 +267,8 @@ def _build_original_source_chunks(ctx, lzss_mode):
         enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
         write_cached_bytes(cache_path, enc_blob)
         sizes.append(len(enc_blob) & 0xFFFFFFFF)
-        (not skip) and chunks.append(enc_blob)
+        if not skip:
+            chunks.append(enc_blob)
         record_stage_time(ctx, "OS", time.time() - start)
     if not sizes:
         return (0, [])
@@ -307,7 +280,6 @@ def _build_original_source_chunks(ctx, lzss_mode):
 def link_pack(ctx):
     tmp_path = ctx.get("tmp_path") or ""
     out_path = ctx.get("out_path") or ""
-    out_path_noangou = ctx.get("out_path_noangou") or ""
     scene_pck = ctx.get("scene_pck") or "Scene.pck"
     if (not tmp_path) or (not out_path):
         raise RuntimeError("ctx.tmp_path and ctx.out_path are required")
@@ -350,41 +322,25 @@ def link_pack(ctx):
             if not inc_cmds[i]["is_defined"]:
                 raise RuntimeError(f"command {inc_cmds[i]['name']} is not defined")
     noangou_scene_data = lzss_list if lzss_mode else dat_list
-    exe_on, exe_el = _resolve_exe_angou(ctx)
+    exe_el = compile_exe_el(ctx)
     original_hsz, original_chunks = _build_original_source_chunks(ctx, lzss_mode)
-    if not exe_on or out_path_noangou:
-        p = os.path.join(out_path_noangou if exe_on else out_path, scene_pck)
-        write_bytes(
-            p,
-            _build_pack_bytes(
-                inc_props,
-                inc_cmd_name_list,
-                inc_prop_name_list,
-                inc_cmd_list,
-                scn_name_list,
-                noangou_scene_data,
-                0,
-                original_hsz,
-                original_chunks,
-            ),
-        )
-        if not exe_on:
-            return
-    ang = []
-    for blob in noangou_scene_data:
-        b = bytearray(blob)
-        xor_cycle_inplace(b, exe_el, 0)
-        ang.append(bytes(b))
-    pack_a = _build_pack_bytes(
+    scene_data = noangou_scene_data
+    if exe_el:
+        scene_data = []
+        for blob in noangou_scene_data:
+            b = bytearray(blob)
+            xor_cycle_inplace(b, exe_el, 0)
+            scene_data.append(bytes(b))
+    pack = _build_pack_bytes(
         inc_props,
         inc_cmd_name_list,
         inc_prop_name_list,
         inc_cmd_list,
         scn_name_list,
-        ang,
-        1,
+        scene_data,
+        int(bool(exe_el)),
         original_hsz,
         original_chunks,
     )
     p = os.path.join(out_path, scene_pck)
-    write_bytes(p, pack_a)
+    write_bytes(p, pack)

@@ -58,25 +58,29 @@ def _init_process(
         initializer(*initargs)
 
 
-@contextmanager
-def process_pool(max_workers: int, initializer=None, initargs=()):
+def _new_process_pool(max_workers, initializer, initargs):
     from concurrent.futures import ProcessPoolExecutor
 
+    return ProcessPoolExecutor(
+        max_workers=max_workers,
+        initializer=_init_process,
+        initargs=(
+            _runtime._LEGACY_COMPILE,
+            _runtime._LEGACY_FULL,
+            _runtime._SCENE_STRING_XOR_MULTIPLIER,
+            _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
+            C.CONST_PROFILE,
+            initializer,
+            initargs,
+        ),
+    )
+
+
+@contextmanager
+def process_pool(max_workers: int, initializer=None, initargs=()):
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
-        with ProcessPoolExecutor(
-            max_workers=max_workers,
-            initializer=_init_process,
-            initargs=(
-                _runtime._LEGACY_COMPILE,
-                _runtime._LEGACY_FULL,
-                _runtime._SCENE_STRING_XOR_MULTIPLIER,
-                _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
-                C.CONST_PROFILE,
-                initializer,
-                initargs,
-            ),
-        ) as executor:
+        with _new_process_pool(max_workers, initializer, initargs) as executor:
             yield executor
 
 
@@ -118,25 +122,11 @@ def parallel_process_completed_map(
             if on_result is not None:
                 on_result(item, result)
         return results
-    from concurrent.futures import ProcessPoolExecutor
-
     workers = min(get_max_workers(max_workers), len(item_list))
     results = [None] * len(item_list)
     _flush_stdio_before_process_pool()
     with _multiprocessing_main():
-        executor = ProcessPoolExecutor(
-            max_workers=workers,
-            initializer=_init_process,
-            initargs=(
-                _runtime._LEGACY_COMPILE,
-                _runtime._LEGACY_FULL,
-                _runtime._SCENE_STRING_XOR_MULTIPLIER,
-                _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
-                C.CONST_PROFILE,
-                initializer,
-                initargs,
-            ),
-        )
+        executor = _new_process_pool(workers, initializer, initargs)
         futures = {}
         pending = set()
         next_index = 0
@@ -192,12 +182,21 @@ def parallel_process_map(process_fn, items):
         return []
     if len(item_list) <= 1:
         return [process_fn(item) for item in item_list]
+    from concurrent.futures.process import BrokenProcessPool
+
+    results = []
     try:
         workers = min(get_max_workers(None), len(item_list))
         with process_pool(workers) as executor:
-            return list(executor.map(process_fn, item_list))
-    except Exception:
-        return [process_fn(item) for item in item_list]
+            for result in executor.map(process_fn, item_list):
+                results.append(result)
+    except (OSError, BrokenProcessPool) as exc:
+        remaining = item_list[len(results) :]
+        sys.stderr.write(
+            f"{_runtime.command_name()}: warning: process pool failed ({type(exc).__name__}: {exc}); retrying {len(remaining)} unfinished items serially\n"
+        )
+        results.extend(process_fn(item) for item in remaining)
+    return results
 
 
 _COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool] | None = None
@@ -220,12 +219,10 @@ def _compile_one_process(
     source_text: str | None,
 ) -> tuple[str, str | None, dict, dict, dict]:
     fname = os.path.basename(ss_path)
-    nm = os.path.splitext(fname)[0]
     try:
         if _COMPILE_WORKER_STATE is None:
             raise RuntimeError("compile worker is not initialized")
         tmp_path, ia_data, enc, utf8, debug_outputs = _COMPILE_WORKER_STATE
-        from .common import write_bytes
         from .BS import compile_one_pipeline
 
         worker_ctx = {
@@ -245,8 +242,6 @@ def _compile_one_process(
             log=False,
             record_time=False,
         )
-        out_path = os.path.join(tmp_path, "bs", nm + ".dat")
-        write_bytes(out_path, res["out_scn"])
         return (
             display_name,
             None,
@@ -340,17 +335,9 @@ def _lzss_compress_task(
 ) -> tuple[str, bytes, bytes, Exception | None]:
     nm, dat, lz_path, easy_code = args
     try:
-        from .common import write_bytes
-        from . import compiler as _m
-        from .native_ops import xor_cycle_inplace
+        from .linker import compress_scene_dat
 
-        if not easy_code:
-            raise RuntimeError("ctx.easy_angou_code is not set")
-        lz = _m.lzss_pack(dat)
-        b = bytearray(lz)
-        xor_cycle_inplace(b, easy_code, 0)
-        lz = bytes(b)
-        write_bytes(lz_path, lz)
+        lz = compress_scene_dat(dat, lz_path, easy_code)
         return (nm, dat, lz, None)
     except Exception as e:
         return (nm, b"", b"", e)
@@ -559,7 +546,6 @@ def _seed_chunk_worker(args):
 
 def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
     import concurrent.futures
-    import sys
     import time
     import math
 

@@ -3,7 +3,6 @@ import os
 import stat
 import struct
 import zlib
-from pathlib import Path
 
 
 class FilenameCaseCollisionError(OSError):
@@ -60,17 +59,24 @@ def _check_kind(path, original, kind):
 
 
 def _resolve_case_fallback(original, absolute, kind):
-    parts = Path(absolute).parts
-    if not parts:
-        raise FileNotFoundError(original)
-    current = parts[0]
-    for part in parts[1:]:
-        entries = list(os.scandir(current))
-        matches = [
-            entry
-            for entry in entries
-            if windows_filename_key(entry.name) == windows_filename_key(part)
-        ]
+    current = absolute
+    missing = []
+    while True:
+        try:
+            _check_kind(current, original, "dir")
+            break
+        except (FileNotFoundError, NotADirectoryError):
+            parent, name = os.path.split(current)
+            if parent == current:
+                raise FileNotFoundError(original)
+            missing.append(name)
+            current = parent
+    for part in reversed(missing):
+        key = windows_filename_key(part)
+        with os.scandir(current) as entries:
+            matches = [
+                entry for entry in entries if windows_filename_key(entry.name) == key
+            ]
         if len(matches) > 1:
             raise FilenameCaseCollisionError(
                 _collision_details(
@@ -146,18 +152,19 @@ def walk_read_directory(path):
     pending = [(root, entries)]
     while pending:
         directory, entries = pending.pop()
+        if entries is None:
+            entries = _read_entries(directory)
         dirs = []
         files = []
         for entry in entries:
             if entry.is_dir():
-                dirs.append(entry.name)
+                dirs.append(entry)
             else:
                 files.append(entry.name)
-        yield directory, dirs, files
+        yield directory, [entry.name for entry in dirs], files
         children = [
-            os.path.join(directory, name)
-            for name in dirs
-            if not os.path.islink(os.path.join(directory, name))
-            and not os.path.isjunction(os.path.join(directory, name))
+            entry.path
+            for entry in dirs
+            if not entry.is_symlink() and not entry.is_junction()
         ]
-        pending.extend((child, _read_entries(child)) for child in reversed(children))
+        pending.extend((child, None) for child in reversed(children))

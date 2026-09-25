@@ -16,6 +16,7 @@
    - [方式二：从源码安装](#方式二从源码安装)
 3. [基本用法](#基本用法)
    - [全局选项](#全局选项)
+   - [常量 profile](#常量-profile)
    - [场景字符串 XOR 乘数](#场景字符串-xor-乘数)
    - [命令别名](#命令别名)
    - [Python 模块 API](#python-模块-api)
@@ -105,7 +106,7 @@ pip install siglus-ssu
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
 ```
 
 ### 全局选项
@@ -270,7 +271,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<output_pck \| output_dir>` | 输出路径。若参数指向已存在目录，或以 `/`、`\` 结尾，则按需创建目录，并在其中写入 `Scene.pck`。否则按输出文件路径处理；不存在且末尾没有路径分隔符的路径，即使不以 `.pck` 结尾，也会按这个精确文件名写出。 |
 | `--debug` | 编译后保留中间临时文件（`.dat`、`.lzss` 等）。不能与 `--tmp` 同用。 |
 | `--charset ENC` | 用 Python 当前可用的任意 codec 强制指定整个项目的源文件编码。CP932/Shift-JIS 别名（`jis`、`sjis`、`shift_jis`、`shift-jis`、`cp932`、`ms932`、`windows-932`、`windows932`，以及 Python 识别的 `csshiftjis`、`s_jis` 等别名）有意统一为 Windows CP932。这是兼容规则：Python 的 `shift_jis` 和 `cp932` 在扩展字符及部分字符映射上并不等价；同时接受 UTF-8 别名。省略时，每个文件仅在 UTF-8 与 CP932 之间自动检测。 |
-| `--no-os` | 跳过 OS（原始 source）嵌入阶段。仍会正常生成并写出 `Scene.pck`，只是包内不再附带原始 source；不影响脚本本身的加密或压缩。 |
+| `--no-os` | 正常编译后，从写出的 `Scene.pck` 中去掉 OS（原始 source）区段，保留原包头。源码处理仍会执行；不影响脚本本身的加密或压缩。 |
 | `--dat-repack` | 不编译 `.ss` 脚本，而是扫描 `input_dir` 当前层现有的 Siglus 场景 `.dat` 文件，将它们复制后直接打包成一个 `.pck` 文件。同目录 `.inc` 会用于重建包级 include 命令元数据；没有 `.inc` 时继续打包，但会打印警告并省略该元数据。它只能与 `--no-os` 和/或 `--no-lzss` 组合使用。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 | `--no-angou` | 禁用 LZSS 压缩和外层 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。场景字符串 XOR 变换仍由 `--string-xor-multiplier` 控制。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。此模式不嵌入原始 source chunk，对应官方的“easy link”式输出。不能与 `--tmp` 同用。 |
@@ -278,9 +279,11 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--max-workers N` | 最大并行 worker 数，必须为正整数。仅在启用并行编译时生效；默认为自动。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制，范围为 `0` 至 `0xFFFFFFFF`。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 SHA-256 缓存（`_source_hashes.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
-| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。不能与 `--tmp` 或 `--gei` 同用。 |
+| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。只有取走紧随选项的数字参数后仍有全部三个必需路径，才会将其视为种子。不能与 `--tmp` 或 `--gei` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，写出 CSV，记录串行重建阶段每个场景对象的初态种子和终态种子。若路径是已存在目录或以路径分隔符结尾，则在其中写出 `test_shuffle_seeds.csv`。不能与 `--tmp` 同用。 |
 | `--gei` | 仅运行 `Gameexe.ini` → `Gameexe.dat` 编译阶段。输出参数始终按目录处理；如果目录不存在会自动创建。输入中存在 `Gameexe.ini` 时会在其中写入 `Gameexe.dat`；不存在时会打印警告并成功结束，不会创建空 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
+
+场景编译使用16字节引擎 key 写出 `Gameexe.dat` 时，临时目录还会生成 `EXE_ANGOU.h`，将该 key 排列为 `KN_EXE_ANGOU_DATA` 宏定义。此中间产物在使用 `--tmp` 或 `--debug` 时保留；其他情况下，自动创建的临时目录会在编译成功后清理。
 
 #### 编译统计
 
@@ -473,6 +476,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 比较 `.pck` 或 `.dat` 时，`text_only` 和 `real_diff` 这类差异属于报告结果，而不是命令错误；仅凭退出状态 `0` 不能判定输入相同。即使两份输入包含相同的不完整数据，`INCOMPLETE` 也会返回 `1`，不会被视为 payload 相同。`.pck` 的检查也覆盖字节相同及仅存在于一侧的场景。
 
 通过 `暗号.dat` 或 `angou=text` 推导 key 时，同样采用编译说明中的固定 CP932 规则，可能与官方 Windows 转换得到不同结果。需要精确匹配已有文件时，可直接提供原始 16 字节 `key=bytes` 或对应的 `SiglusEngine.exe`。
+
+`key.txt` 中的文本和 `key=bytes` 按以下优先级解析：`0xNN`、两位十六进制、最后是一至三位十进制。采用首个匹配到至少16个数值的格式，并取其前16个字节。因此，16个 `10` 表示16个 `0x10`，不是十进制10。建议显式写成 `0xNN`，避免歧义。恰好16字节的 `key.txt` 按原始二进制读取。
 
 尝试解密候选时会向 stderr 打印 key-source 诊断信息：每行包含来源、类型、适用时的路径或包内文件、具体 `exe_el` 值，以及该候选是 accepted 还是 rejected 并继续 fallback。
 

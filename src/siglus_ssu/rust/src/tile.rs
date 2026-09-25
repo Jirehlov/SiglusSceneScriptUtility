@@ -28,13 +28,18 @@ pub fn copy(
         (ty - ((repy as usize) % ty)) % ty
     };
 
+    let mut tyi = y0;
     for y in 0..by {
-        let tyi = (y0 + y) % ty;
         let ty_offset = tyi * tx;
         let y_offset = y * bx;
+        let mut txi = x0;
 
         for x in 0..bx {
-            let mask_idx = ty_offset + ((x0 + x) % tx);
+            let mask_idx = ty_offset + txi;
+            txi += 1;
+            if txi == tx {
+                txi = 0;
+            }
             if mask_idx >= mask.len() {
                 continue;
             }
@@ -47,6 +52,10 @@ pub fn copy(
             if condition && i + 4 <= dst.len() && i + 4 <= src.len() {
                 dst[i..i + 4].copy_from_slice(&src[i..i + 4]);
             }
+        }
+        tyi += 1;
+        if tyi == ty {
+            tyi = 0;
         }
     }
 }

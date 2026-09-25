@@ -105,7 +105,7 @@ Starting with v0.5.0, `init` and `--init` are removed. Delete initialization ste
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|init|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
 ```
 
 ### Global Options
@@ -270,7 +270,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `<output_pck \| output_dir>` | Output path. If the argument names an existing directory or ends with `/` or `\`, the directory is created if needed and `Scene.pck` is written inside it. Otherwise the argument is treated as the output file path; a non-existent path without a trailing separator is written as that exact file name even if it does not end in `.pck`. |
 | `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
 | `--charset ENC` | Force one source encoding using any codec available to Python. CP932/Shift-JIS aliases (`jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`, and aliases recognized by Python such as `csshiftjis` and `s_jis`) intentionally select Windows CP932. This is a compatibility rule: Python's `shift_jis` and `cp932` codecs differ in extension characters and some character mappings. UTF-8 aliases are also accepted. If omitted, each file is auto-detected as UTF-8 or CP932. |
-| `--no-os` | Skip the OS (Original Source) embedding stage. The `Scene.pck` is still generated and written out normally, but no original source files are embedded inside it. Does not affect encryption or compression of the scripts themselves. |
+| `--no-os` | Compile normally, then omit the OS (Original Source) chunks from the written `Scene.pck`, preserving the package header. Source processing still runs. Does not affect encryption or compression of the scripts themselves. |
 | `--dat-repack` | Instead of compiling `.ss` scripts, scan the immediate files in `input_dir` for existing Siglus scene `.dat` files, copy them, and pack them directly into a `.pck` file. Same-directory `.inc` files are used to rebuild package-level include command metadata. If no `.inc` files are present, packaging continues with a warning and omits that metadata. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 | `--no-angou` | Disable LZSS compression and outer XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. The scene-string XOR transform is still controlled by `--string-xor-multiplier`. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
@@ -278,9 +278,11 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--max-workers N` | Positive maximum number of parallel workers. Only effective while parallel compilation is enabled; defaults to auto. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex from `0` through `0xFFFFFFFF`. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
-| `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. Cannot be combined with `--tmp` or `--gei`. |
+| `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. A numeric argument immediately after the option is consumed as the seed only when all three required paths remain. Cannot be combined with `--tmp` or `--gei`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
 | `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is always treated as a directory. If it does not exist, it is created. When the input contains `Gameexe.ini`, `Gameexe.dat` is written inside it; when it does not, the command succeeds with a warning and does not create an empty `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
+
+When a scene build writes `Gameexe.dat` using a 16-byte executable key, its temporary directory also contains `EXE_ANGOU.h`, with the key arranged as `KN_EXE_ANGOU_DATA` definitions. This intermediate file is retained with `--tmp` or `--debug`; otherwise the automatically created temporary directory is removed after a successful build.
 
 #### Compiling Stats
 
@@ -473,6 +475,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 For `.pck` and `.dat` comparisons, differences such as `text_only` and `real_diff` are reported results, not command errors; exit status `0` alone does not mean the inputs are equal. `INCOMPLETE` returns `1` even if both inputs contain the same incomplete data, and is never treated as payload equality. The `.pck` check also covers byte-identical scenes and scenes present on only one side.
 
 Keys derived from `暗号.dat` or `angou=text` use the same fixed CP932 rules described in the compilation notes and can differ from official Windows conversion. To match existing files exactly, supply the raw 16-byte `key=bytes` or the matching `SiglusEngine.exe` directly.
+
+Text keys in `key.txt` and `key=bytes` are parsed in this order: `0xNN` tokens, two-digit hexadecimal tokens, then one-to-three-digit decimal tokens. The first format with at least 16 matching tokens supplies its first 16 bytes. Thus sixteen `10` tokens mean sixteen `0x10` bytes, not decimal 10. Use explicit `0xNN` tokens to avoid ambiguity. An exactly 16-byte `key.txt` is read as raw binary.
 
 Key-source diagnostics are printed to stderr whenever a decryption candidate is tried: each line includes the source, kind, path or inner file when applicable, the concrete `exe_el` value, and whether that candidate was accepted or rejected before falling back.
 

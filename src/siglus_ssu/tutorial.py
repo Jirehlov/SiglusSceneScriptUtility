@@ -700,10 +700,12 @@ class TutorialBuilder:
         if not pck.looks_like_siglus_pck(blob):
             raise RuntimeError("input is not a supported .pck file")
         hdr = pck.parse_i32_header(blob, pck.C.PACK_HDR_FIELDS, pck.C.PACK_HDR_SIZE)
+        scene_lists = pck._read_pck_scene_lists(blob, hdr=hdr)
         scene_exe_el = pck.require_pck_scene_exe_el(
             blob,
             input_pck=self.input_pck,
             hdr=hdr,
+            scn_data=scene_lists[1],
         )
         for index, item in enumerate(
             pck.iter_pck_scene_dat_items(
@@ -712,6 +714,7 @@ class TutorialBuilder:
                 hdr=hdr,
                 require_exe=True,
                 scene_exe_el=scene_exe_el,
+                scene_lists=scene_lists,
             )
             or (),
             1,

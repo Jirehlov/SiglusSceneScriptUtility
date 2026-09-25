@@ -8,6 +8,7 @@ import time
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 
+from . import CONST_PROFILE_IDS
 from .BS import set_shuffle_seed
 from . import compiler
 from . import pck
@@ -300,7 +301,7 @@ def _compile_payload_with_profile_fallback(
     serial=False,
 ):
     attempts = []
-    for profile in sorted(C._FORM_CODE_PROFILES):
+    for profile in CONST_PROFILE_IDS:
         C.set_profile(profile)
         if os.path.isfile(rebuilt_pck):
             os.remove(rebuilt_pck)

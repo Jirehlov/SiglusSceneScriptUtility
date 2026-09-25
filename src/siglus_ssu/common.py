@@ -5,7 +5,7 @@ import struct
 import hashlib
 import re
 import siglus_ssu as _runtime
-from . import const as C
+from . import command_name, const as C
 from .path_policy import (
     FilenameCaseCollisionError,
     open_read,
@@ -543,19 +543,16 @@ def find_siglus_engine_exe(base_dir: str) -> str:
         base_dir, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
         return ""
-    names = [entry.name for entry in entries]
     for entry in entries:
         if windows_filename_key(entry.name) == "siglusengine.exe" and entry.is_file():
             return _safe_abspath(entry.path)
     cands = []
-    for fn in names:
-        s = str(fn or "")
-        cf = s.casefold()
+    for entry in entries:
+        cf = entry.name.casefold()
         if (not cf.startswith("siglusengine")) or (not cf.endswith(".exe")):
             continue
-        p = os.path.join(base_dir, fn)
-        if os.path.isfile(p):
-            cands.append(_safe_abspath(p))
+        if entry.is_file():
+            cands.append(_safe_abspath(entry.path))
     if not cands:
         return ""
     cands.sort(key=lambda p: (len(os.path.basename(p)), os.path.basename(p).casefold()))
@@ -790,31 +787,11 @@ def list_named_paths(base_dir: str, target_name: str):
         base_dir, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
         return []
-    out = []
+    key = windows_filename_key(target_name)
     for entry in entries:
-        fn = entry.name
-        if not is_named_filename(fn, target_name):
-            continue
-        if entry.is_file():
-            out.append(entry.path)
-    seen = set()
-    uniq = []
-    for p in out:
-        ap = _safe_abspath(p)
-        if ap in seen:
-            continue
-        seen.add(ap)
-        uniq.append(ap)
-
-    def _k(p: str):
-        try:
-            rel = os.path.relpath(p, base_dir)
-        except Exception:
-            rel = p
-        return (rel.count(os.sep), len(rel), rel.casefold())
-
-    uniq.sort(key=_k)
-    return uniq
+        if windows_filename_key(entry.name) == key and entry.is_file():
+            return [entry.path]
+    return []
 
 
 def find_named_path(base_dir: str, target_name: str) -> str:
@@ -1003,9 +980,6 @@ def write_bytes(path: str, data: bytes) -> None:
 def write_cached_bytes(cache_path: str, data: bytes) -> None:
     if not cache_path:
         return
-    cache_dir = os.path.dirname(cache_path)
-    if cache_dir:
-        os.makedirs(cache_dir, exist_ok=True)
     write_bytes(cache_path, data)
 
 
@@ -1076,8 +1050,7 @@ def read_scn_header(blob):
     fields = list(C.SCN_HDR_FIELDS or [])
     if len(fields) * 4 != C.SCN_HDR_SIZE:
         return {}
-    vals = struct.unpack_from("<" + "i" * len(fields), blob, 0)
-    return {fields[i]: int(vals[i]) for i in range(len(fields))}
+    return parse_i32_header(blob, fields, C.SCN_HDR_SIZE)
 
 
 def parse_i32_header_checked(dat: bytes, fields, size: int) -> dict:
@@ -1158,6 +1131,16 @@ def angou_to_exe_el(text: str) -> bytes:
     return el if el and len(el) == 16 else b""
 
 
+def compile_exe_el(ctx) -> bytes:
+    if not ctx["exe_angou_mode"]:
+        return b""
+    el = angou_to_exe_el(ctx["exe_angou_str"])
+    if el:
+        return el
+    key_path = ctx["key_path"]
+    return read_exe_el_key(key_path) if key_path else b""
+
+
 def format_exe_el(el: bytes) -> str:
     b = bytes(el or b"")
     if len(b) != 16:
@@ -1217,6 +1200,7 @@ def iter_exe_el_sources(
     input_path: str = "",
     base_dir: str = "",
     input_blob: bytes = b"",
+    input_source_entries=None,
 ):
     seen = set()
 
@@ -1239,7 +1223,7 @@ def iter_exe_el_sources(
         s = angou_first_line(text)
         return add(angou_to_exe_el(s), kind, path=path, label=label, angou=s)
 
-    def add_pck(path, label, blob=b""):
+    def add_pck(path, label, blob=b"", source_entries=None):
         try:
             data = bytes(blob) if blob else read_bytes(path)
         except FilenameCaseCollisionError:
@@ -1254,7 +1238,9 @@ def iter_exe_el_sources(
         try:
             from . import pck as _pck
 
-            items = list(_pck.iter_pck_angou_dat_items(data) or [])
+            items = list(
+                _pck.iter_pck_angou_dat_items(data, source_entries=source_entries) or []
+            )
         except Exception:
             items = []
         out = []
@@ -1439,7 +1425,12 @@ def iter_exe_el_sources(
             pass
         else:
             if os.path.isfile(ip):
-                for src in add_pck(ip, "input_pck", blob=input_blob):
+                for src in add_pck(
+                    ip,
+                    "input_pck",
+                    blob=input_blob,
+                    source_entries=input_source_entries,
+                ):
                     yield src
     if base_dir:
         scan_base = os.path.abspath(base_dir)
@@ -1640,7 +1631,7 @@ def hx(x):
 
 def append_diff(diffs, k, x, y):
     if x != y:
-        diffs.append(f"{k}: {x!r} -> {y!r}")
+        diffs.append(diff_kv(k, x, y))
 
 
 def print_limited_diffs(diffs, title: str, identical_message: str):
@@ -1791,8 +1782,8 @@ def iter_files_by_ext(
     return sorted(out)
 
 
-I32_STRUCT = struct.Struct("<i")
-I32_PAIR_STRUCT = struct.Struct("<2i")
+I32_STRUCT = _I32_LE
+I32_PAIR_STRUCT = _I32_PAIR_LE
 
 
 def read_struct_list(dat, ofs, cnt, st: struct.Struct):
@@ -1866,11 +1857,7 @@ def decode_utf16le_strings(
         if b > blob_end:
             _handle_error()
             continue
-        try:
-            s = dat[a:b].decode("utf-16le", errors=errors)
-        except Exception:
-            out.append("")
-            continue
+        s = dat[a:b].decode("utf-16le", errors=errors)
         if strip_null and s:
             s = s.replace("\x00", "")
         out.append(s)
@@ -2009,10 +1996,10 @@ def print_sections(secs, total, section_ids=None):
 
     def _section_id(name):
         key = str(name)
-        sid = section_ids.get(key)
-        if sid is None:
-            sid = section_ids.get(key.casefold())
-        return sid
+        exact = ("exact", key)
+        if exact in section_ids:
+            return section_ids[exact]
+        return section_ids.get(("filename", windows_filename_key(key)))
 
     if section_ids:
 
@@ -2063,10 +2050,7 @@ def print_sections(secs, total, section_ids=None):
 
 
 def hint_help(out=None) -> None:
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
-    if not p or p in {"__main__.py", "__main__"}:
-        p = "siglus-ssu"
-    msg = f"hint: run '{p} --help' for command help"
+    msg = f"hint: run '{command_name()} --help' for command help"
     if out is None:
         eprint(msg)
         return

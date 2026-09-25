@@ -1,16 +1,8 @@
-import os
 import sys
 from importlib import import_module
 
 import siglus_ssu as _runtime
-from . import package_version
-
-
-def _prog():
-    p = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "siglus-ssu"
-    if not p or p in {"__main__.py", "__main__"}:
-        return "siglus-ssu"
-    return p
+from . import CONST_PROFILE_IDS, command_name as _prog, package_version
 
 
 def _print_version() -> None:
@@ -28,7 +20,7 @@ def _usage():
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
-        "  --const-profile Select const profile (0-9, default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; 9 supports Rewrite Harvest festa!; not with -c --tmp)\n"
+        f"  --const-profile Select const profile ({', '.join(map(str, CONST_PROFILE_IDS))}; default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; 9 supports Rewrite Harvest festa!; not with -c --tmp)\n"
         "  --string-xor-multiplier Override scene-string XOR multiplier (0..0xFFFF; default: 0 for profiles 3, 5, and 8, 0x7087 otherwise; 0 disables this XOR only)\n"
         "  --              After a mode, treat all remaining arguments as positional\n"
         "\n"
@@ -53,13 +45,13 @@ def _usage():
         "    --serial       Disable default parallel LSP workspace scanning\n"
         "\n"
         "Compile mode:\n"
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] [--test-shuffle [seed0] <test_dir>] [--csv <seed_csv>] <input_dir> <output_pck|output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
         f"  {p} -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck|output_dir> <test_dir>\n"
         f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
         "    --debug         Keep temp files for inspection (not with --tmp)\n"
         "    --charset ENC   Force source charset (Python codec name)\n"
-        "    --no-os         Skip OS stage (do not pack source files)\n"
-        "    --dat-repack    Repack existing .dat files in input_dir (not with --tmp/--test-shuffle)\n"
+        "    --no-os         Remove source chunks after compilation, preserving the package header\n"
+        "    --dat-repack    Repack existing .dat files in input_dir (mode options: only --no-os/--no-lzss; global options remain available)\n"
         "    --no-angou      Disable encryption/compression (not with --tmp)\n"
         "    --no-lzss       Disable scene LZSS and omit source chunks (official easy link; not with --tmp)\n"
         "    --serial        Disable parallel compilation\n"
@@ -167,7 +159,7 @@ def _usage():
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --serial       Disable parallel compilation during rebuild\n"
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
-        "    const-profile  Compile tries profiles 0, 1, 2, 3, 4, 5, 6, 7, 8, then 9 before reporting failure\n"
+        f"    const-profile  Compile tries profiles {', '.join(map(str, CONST_PROFILE_IDS))} before reporting failure\n"
     )
     sys.stdout.write(text)
 
@@ -252,9 +244,9 @@ def _consume_global_options(argv):
             profile = int(value, 0)
         except ValueError as exc:
             raise ValueError(f"invalid --const-profile value: {const_profile}") from exc
-        if profile not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9):
+        if profile not in CONST_PROFILE_IDS:
             raise ValueError(
-                f"invalid --const-profile value: {const_profile} (expected 0, 1, 2, 3, 4, 5, 6, 7, 8, or 9)"
+                f"invalid --const-profile value: {const_profile} (expected {', '.join(map(str, CONST_PROFILE_IDS))})"
             )
 
     multiplier = 0x7087
@@ -271,14 +263,9 @@ def _consume_global_options(argv):
 
 
 def _run_mode(module_name, args):
-    from .path_policy import FilenameCaseCollisionError
-
     module = import_module(f"siglus_ssu.{module_name}")
     try:
         rc = module.main(args)
-    except FilenameCaseCollisionError as exc:
-        sys.stderr.write(f"{_prog()}: error: {exc}\n")
-        return 1
     except OSError as exc:
         sys.stderr.write(f"{_prog()}: error: {exc}\n")
         return 1
