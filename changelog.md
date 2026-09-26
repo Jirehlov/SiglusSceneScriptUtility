@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Added compile option `--allow-invalid` to replace invalid source bytes with U+FFFD under the selected encoding while keeping `--charset` unchanged and strict decoding as the default. Both compiler backends share this behavior, preserve embedded source bytes, and invalidate incremental caches when the option changes.
+- Round-trip `test` now retries all const profiles with `--charset utf8 --allow-invalid` only after the default round fails, preserving the `EXACT`/`PAYLOAD_SAME` criteria and recording the retry options in logs.
+
+
 ## [v0.5.1] - 2026-09-25
 
 - Reviewed by Opus 5.5 Max.

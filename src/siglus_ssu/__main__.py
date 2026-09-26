@@ -45,11 +45,12 @@ def _usage():
         "    --serial       Disable default parallel LSP workspace scanning\n"
         "\n"
         "Compile mode:\n"
-        f"  {p} -c [--debug] [--charset ENC] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
+        f"  {p} -c [--debug] [--charset ENC] [--allow-invalid] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
         f"  {p} -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck|output_dir> <test_dir>\n"
         f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
         "    --debug         Keep temp files for inspection (not with --tmp)\n"
         "    --charset ENC   Force source charset (Python codec name)\n"
+        "    --allow-invalid Replace invalid source bytes with U+FFFD when decoding\n"
         "    --no-os         Remove source chunks after compilation, preserving the package header\n"
         "    --dat-repack    Repack existing .dat files in input_dir (mode options: only --no-os/--no-lzss; global options remain available)\n"
         "    --no-angou      Disable encryption/compression (not with --tmp)\n"
@@ -159,7 +160,7 @@ def _usage():
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --serial       Disable parallel compilation during rebuild\n"
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
-        f"    const-profile  Compile tries profiles {', '.join(map(str, CONST_PROFILE_IDS))} before reporting failure\n"
+        f"    const-profile  Compile tries profiles {', '.join(map(str, CONST_PROFILE_IDS))}; if all fail, retries with --charset utf8 --allow-invalid\n"
     )
     sys.stdout.write(text)
 

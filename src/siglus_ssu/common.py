@@ -812,7 +812,11 @@ def norm_charset(cs: str) -> str:
 
 
 def decode_text_auto(
-    data: bytes, force_charset: str = "", *, stop_at_dos_eof: bool = False
+    data: bytes,
+    force_charset: str = "",
+    *,
+    stop_at_dos_eof: bool = False,
+    allow_invalid: bool = False,
 ):
     if not isinstance(data, (bytes, bytearray)):
         raise TypeError("data must be bytes")
@@ -820,16 +824,17 @@ def decode_text_auto(
     cs = norm_charset(force_charset)
     if force_charset and not cs:
         raise ValueError(f"unsupported charset: {force_charset}")
+    errors = "replace" if allow_invalid else "strict"
     if stop_at_dos_eof and cs in ("", "cp932", "utf-8"):
         b = b.partition(b"\x1a")[0]
     had_bom = b.startswith(b"\xef\xbb\xbf")
 
     def _d8():
         e = "utf-8-sig" if had_bom else "utf-8"
-        return b.decode(e, "strict")
+        return b.decode(e, errors if cs else "strict")
 
     def _d9():
-        return b.decode("cp932", "strict")
+        return b.decode("cp932", errors if cs else "strict")
 
     def _fix(t: str) -> str:
         if stop_at_dos_eof:
@@ -842,11 +847,11 @@ def decode_text_auto(
         if cs == "utf-8":
             return _fix(_d8()), "utf-8", had_bom
         try:
-            text = b.decode(cs, "strict")
+            text = b.decode(cs, errors)
         except UnicodeDecodeError:
             if not stop_at_dos_eof:
                 raise
-            decoder = codecs.getincrementaldecoder(cs)("strict")
+            decoder = codecs.getincrementaldecoder(cs)(errors)
             parts = []
             for i in range(len(b)):
                 part, eof, _ = decoder.decode(b[i : i + 1]).partition("\x1a")
@@ -868,7 +873,7 @@ def decode_text_auto(
     except UnicodeDecodeError:
         pass
     if t8 is None and t9 is None:
-        return _fix(b.decode("utf-8", "strict")), "utf-8", had_bom
+        return _fix(b.decode("utf-8", errors)), "utf-8", had_bom
     if t8 is None:
         return _fix(t9), "cp932", had_bom
     if t9 is None:
@@ -899,9 +904,13 @@ def decode_text_auto(
     return _fix(t9), "cp932", had_bom
 
 
-def read_text_auto(path: str, force_charset: str = "") -> str:
+def read_text_auto(
+    path: str, force_charset: str = "", *, allow_invalid: bool = False
+) -> str:
     data = read_bytes(path)
-    return decode_text_auto(data, force_charset=force_charset)[0]
+    return decode_text_auto(
+        data, force_charset=force_charset, allow_invalid=allow_invalid
+    )[0]
 
 
 def read_compile_source(ctx: dict, path: str) -> str:

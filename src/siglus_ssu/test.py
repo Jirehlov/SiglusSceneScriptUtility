@@ -7,6 +7,7 @@ import tempfile
 import time
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
+from itertools import product
 
 from . import CONST_PROFILE_IDS
 from .BS import set_shuffle_seed
@@ -44,7 +45,7 @@ def _usage(out=None) -> None:
         out = sys.stderr
     out.write("usage: siglus-ssu test [--serial] <input_pck|input_dir>\n")
     out.write(
-        "Round-trip test .pck files with OS data, timings, and const-profile fallback.\n"
+        "Round-trip test .pck files with OS data, timings, and const-profile/charset fallback.\n"
     )
 
 
@@ -301,7 +302,7 @@ def _compile_payload_with_profile_fallback(
     serial=False,
 ):
     attempts = []
-    for profile in CONST_PROFILE_IDS:
+    for allow_invalid, profile in product((False, True), CONST_PROFILE_IDS):
         C.set_profile(profile)
         if os.path.isfile(rebuilt_pck):
             os.remove(rebuilt_pck)
@@ -310,6 +311,8 @@ def _compile_payload_with_profile_fallback(
         compile_args = []
         if serial:
             compile_args.append("--serial")
+        if allow_invalid:
+            compile_args.extend(["--charset", "utf8", "--allow-invalid"])
         compile_args.extend([extract_dir, rebuilt_pck])
         rc, out, err = _capture(compiler.main, compile_args)
         elapsed = max(0.0, time.perf_counter() - started)
@@ -323,6 +326,7 @@ def _compile_payload_with_profile_fallback(
         attempts.append(
             {
                 "profile": profile,
+                "allow_invalid": allow_invalid,
                 "rc": rc,
                 "ok": ok,
                 "stdout": out,
@@ -370,6 +374,8 @@ def _format_compile_attempts(attempts) -> str:
         profile = int((attempt or {}).get("profile", 0) or 0)
         rc = int((attempt or {}).get("rc", 0) or 0)
         text = f"profile={profile:d} rc={rc:d}"
+        if (attempt or {}).get("allow_invalid"):
+            text += " --charset utf8 --allow-invalid"
         if bool((attempt or {}).get("payload_compared")):
             result = str((attempt or {}).get("result") or "FAIL")
             detail = str((attempt or {}).get("payload_detail") or "")
@@ -383,8 +389,11 @@ def _format_compile_attempts(attempts) -> str:
 def _print_compile_errors(attempts) -> None:
     for attempt in attempts or ():
         profile = int((attempt or {}).get("profile", 0) or 0)
+        stage = f"compile profile={profile:d}"
+        if (attempt or {}).get("allow_invalid"):
+            stage += " --charset utf8 --allow-invalid"
         _print_tail(
-            f"compile profile={profile:d}",
+            stage,
             str((attempt or {}).get("stdout") or ""),
             str((attempt or {}).get("stderr") or ""),
         )
@@ -493,6 +502,10 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                     f"profile={int(selected_profile):d} attempts={attempt_text}"
                 )
                 detail_text = str(selected_attempt.get("payload_detail") or "")
+                if selected_attempt.get("allow_invalid"):
+                    detail_text = (
+                        f"--charset utf8 --allow-invalid {detail_text}".strip()
+                    )
                 if not payload_ok:
                     print(
                         f"  payload: failed profile={int(selected_profile):d} "

@@ -241,7 +241,9 @@ def _write_digest_cache(path, payload):
         raise
 
 
-def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, incremental):
+def _compile_cache_state(
+    *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid
+):
     compile_list = list(ss or [])
     digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
     cur_inc = source_digests["inc"]
@@ -252,6 +254,7 @@ def _compile_cache_state(*, tmp_dir, enc, charset, ss, source_digests, increment
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
+        "allow_invalid": bool(allow_invalid),
         "const_profile": C.CONST_PROFILE,
         "const_sha512": C.CONST_SHA512,
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
@@ -355,6 +358,7 @@ def _native_compile_cache_config(
         ss=ss,
         source_digests=source_digests,
         incremental=bool(args.tmp_dir),
+        allow_invalid=args.allow_invalid,
     )
     dat_paths, lzss_paths = _native_cache_read_paths(
         tmp_dir,
@@ -548,7 +552,9 @@ def _guess_charset(source_bytes, ini, inc, ss):
     return "cp932"
 
 
-def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_files):
+def _load_project_sources(
+    base_dir, gameexe_ini, inc, ss, charset, original_files, *, allow_invalid
+):
     paths = {}
     if gameexe_ini:
         paths[gameexe_ini] = None
@@ -564,7 +570,10 @@ def _load_project_sources(base_dir, gameexe_ini, inc, ss, charset, original_file
             source_bytes[name] = data
             if name in paths:
                 texts[name] = decode_text_auto(
-                    data, force_charset=charset, stop_at_dos_eof=True
+                    data,
+                    force_charset=charset,
+                    stop_at_dos_eof=True,
+                    allow_invalid=allow_invalid,
                 )[0]
                 kind = paths[name]
                 if kind is not None:
@@ -1090,6 +1099,11 @@ def main(argv=None):
         "--charset", default="", help="Force source charset (Python codec name)."
     )
     ap.add_argument(
+        "--allow-invalid",
+        action="store_true",
+        help="Replace invalid source bytes with U+FFFD when decoding.",
+    )
+    ap.add_argument(
         "--debug",
         action="store_true",
         help="Keep temporary files for debugging purposes.",
@@ -1278,6 +1292,7 @@ def main(argv=None):
             [] if a.dat_repack or a.gei else ss,
             charset,
             original_files,
+            allow_invalid=a.allow_invalid,
         )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1346,7 +1361,11 @@ def main(argv=None):
     if (not a.no_angou) and angou_path:
         try:
             angou_content = first_line_text(
-                read_text_auto(angou_path, force_charset=charset)
+                read_text_auto(
+                    angou_path,
+                    force_charset=charset,
+                    allow_invalid=a.allow_invalid,
+                )
             )
         except (OSError, UnicodeError) as exc:
             sys.stderr.write(f"{prog}: error: {angou_path}: {exc}\n")
@@ -1423,6 +1442,7 @@ def main(argv=None):
                     ss=ss,
                     source_digests=source_digests,
                     incremental=bool(a.tmp_dir),
+                    allow_invalid=a.allow_invalid,
                 )
             )
             if a.tmp_dir:
