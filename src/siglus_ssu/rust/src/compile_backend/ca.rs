@@ -3,7 +3,7 @@ use super::frontend_common::{
     next_elseif_ifdef_state, scan_text_comments,
 };
 use encoding_rs::SHIFT_JIS;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,7 +31,7 @@ pub struct Replacement {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplaceTree {
-    children: Arc<HashMap<char, ReplaceTree>>,
+    children: Arc<BTreeMap<char, ReplaceTree>>,
     replacement: Option<Replacement>,
 }
 

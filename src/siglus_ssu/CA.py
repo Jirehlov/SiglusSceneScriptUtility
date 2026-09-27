@@ -527,9 +527,7 @@ class CharacterAnalizer:
                 self.m_line += 1
                 p += 1
             else:
-                t, p, ok = self._std_replace(
-                    t, p, self.iad["replace_tree"], new_replace_tree()
-                )
+                t, p, ok = self._std_replace(t, p, self.iad["replace_tree"], None)
                 if not ok:
                     return None
             rest = len(t) - p
@@ -606,9 +604,7 @@ class CharacterAnalizer:
                     old_t = t
                     old_p = p
                     rep = search_replace_tree(self.iad["replace_tree"], t, p)
-                    t, p, ok = self._std_replace(
-                        t, p, self.iad["replace_tree"], new_replace_tree()
-                    )
+                    t, p, ok = self._std_replace(t, p, self.iad["replace_tree"], None)
                     if not ok:
                         return 0
                     if t != old_t:
@@ -652,9 +648,7 @@ class CharacterAnalizer:
                             replacement_map = [None] * inserted_len
                         source_map[old_p : old_p + removed_len] = replacement_map
                 else:
-                    t, p, ok = self._std_replace(
-                        t, p, self.iad["replace_tree"], new_replace_tree()
-                    )
+                    t, p, ok = self._std_replace(t, p, self.iad["replace_tree"], None)
                     if not ok:
                         return 0
             rest = len(t) - p

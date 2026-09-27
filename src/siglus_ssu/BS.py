@@ -499,10 +499,9 @@ def summarize_scene_macro_stats(iad, base, baseline_usage):
         bucket["total"] += 1
         if rep["used_count"] <= 0:
             bucket["unused"] += 1
-    for rep in base_defs:
+    for rep, used_before in zip(base_defs, baseline_usage):
         kind = rep["decl_type"]
         name = rep["name"]
-        used_before = baseline_usage[(kind, name)]
         used_after = rep["used_count"]
         if used_after > used_before:
             usage_delta[(kind, name)] = used_after - used_before
@@ -1722,12 +1721,7 @@ def compile_one_pipeline(
         ctx["ia_data"] = base
     full_compile_stats = ctx["stats"]["full_compile_stats"]
     baseline_usage = (
-        {
-            (rep["decl_type"], rep["name"]): rep["used_count"]
-            for rep in base["macro_defs"]
-        }
-        if full_compile_stats
-        else {}
+        [rep["used_count"] for rep in base["macro_defs"]] if full_compile_stats else []
     )
     iad = copy_ia_data(base)
     pcad = {"global_inc_command_cnt": base["inc_command_cnt"]}

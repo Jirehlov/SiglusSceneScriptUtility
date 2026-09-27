@@ -520,13 +520,28 @@ fn parse_command_labels(config: &CompileConfig, dat: &[u8]) -> Vec<(i32, i32)> {
     out
 }
 
-fn inc_counter(map: &mut BTreeMap<String, usize>, key: impl Into<String>, amount: usize) {
-    *map.entry(key.into()).or_default() += amount;
+fn inc_counter(
+    map: &mut BTreeMap<String, usize>,
+    key: impl Into<String> + AsRef<str>,
+    amount: usize,
+) {
+    if let Some(entry) = map.get_mut(key.as_ref()) {
+        *entry += amount;
+    } else {
+        map.insert(key.into(), amount);
+    }
 }
 
-fn max_counter(map: &mut BTreeMap<String, usize>, key: impl Into<String>, value: usize) {
-    let entry = map.entry(key.into()).or_default();
-    *entry = (*entry).max(value);
+fn max_counter(
+    map: &mut BTreeMap<String, usize>,
+    key: impl Into<String> + AsRef<str>,
+    value: usize,
+) {
+    if let Some(entry) = map.get_mut(key.as_ref()) {
+        *entry = (*entry).max(value);
+    } else {
+        map.insert(key.into(), value);
+    }
 }
 
 fn utf16_units_len(text: &str) -> usize {
@@ -569,7 +584,6 @@ fn merge_macro_stats(dst: &mut MacroStats, src: &MacroStats) {
 fn scene_macro_stats(
     ia_data: &IaData,
     base_ia: &IaData,
-    baseline_usage: &BTreeMap<(String, String), usize>,
 ) -> (MacroStats, BTreeMap<(String, String), usize>) {
     let mut counts = empty_macro_stats();
     let base_count = base_ia.macro_defs.len();
@@ -584,8 +598,7 @@ fn scene_macro_stats(
     let mut usage_delta = BTreeMap::new();
     for replacement in &base_ia.macro_defs {
         let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
-        let key = (kind.to_string(), replacement.name.clone());
-        let before = *baseline_usage.get(&key).unwrap_or(&0);
+        let before = replacement.used_count;
         let after = ia_data
             .macro_map
             .get(&replacement.name)
@@ -593,7 +606,7 @@ fn scene_macro_stats(
             .map(|value| value.used_count)
             .unwrap_or_default();
         if after > before {
-            usage_delta.insert(key, after - before);
+            usage_delta.insert((kind.to_string(), replacement.name.clone()), after - before);
         }
     }
     (counts, usage_delta)
@@ -1631,23 +1644,6 @@ fn prepare_scene(
     mut stage_times: Option<&mut Vec<(String, f64)>>,
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
-    let baseline_usage = if config.cache.full_compile_stats {
-        base_ia
-            .macro_defs
-            .iter()
-            .map(|replacement| {
-                (
-                    (
-                        macro_decl_kind(&replacement.decl_type, &replacement.kind).to_string(),
-                        replacement.name.clone(),
-                    ),
-                    replacement.used_count,
-                )
-            })
-            .collect::<BTreeMap<_, _>>()
-    } else {
-        BTreeMap::new()
-    };
     let mut ia_data = base_ia.clone();
     let mut ca = CharacterAnalyzer::new();
     if let Some(log) = log.as_mut() {
@@ -1778,7 +1774,7 @@ fn prepare_scene(
     let (scene_macro_counts, global_macro_usage_delta, source_stats) =
         if config.cache.full_compile_stats {
             let (scene_macro_counts, global_macro_usage_delta) =
-                scene_macro_stats(&ia_data, base_ia, &baseline_usage);
+                scene_macro_stats(&ia_data, base_ia);
             let source_stats = collect_scene_source_stats(SceneSourceInputs {
                 name: source_path
                     .file_stem()
