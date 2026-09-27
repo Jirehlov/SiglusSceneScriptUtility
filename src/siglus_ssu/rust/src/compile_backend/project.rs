@@ -1632,19 +1632,23 @@ fn prepare_scene(
     mut stage_times: Option<&mut Vec<(String, f64)>>,
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
-    let baseline_usage = base_ia
-        .macro_defs
-        .iter()
-        .map(|replacement| {
-            (
+    let baseline_usage = if config.cache.full_compile_stats {
+        base_ia
+            .macro_defs
+            .iter()
+            .map(|replacement| {
                 (
-                    macro_decl_kind(&replacement.decl_type, &replacement.kind).to_string(),
-                    replacement.name.clone(),
-                ),
-                replacement.used_count,
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
+                    (
+                        macro_decl_kind(&replacement.decl_type, &replacement.kind).to_string(),
+                        replacement.name.clone(),
+                    ),
+                    replacement.used_count,
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
     let mut ia_data = base_ia.clone();
     let mut ca = CharacterAnalyzer::new();
     if let Some(log) = log.as_mut() {
@@ -1772,23 +1776,33 @@ fn prepare_scene(
                 bytecode.last_error.line,
             )
         })?;
-    let (scene_macro_counts, global_macro_usage_delta) =
-        scene_macro_stats(&ia_data, base_ia, &baseline_usage);
-    let source_stats = collect_scene_source_stats(SceneSourceInputs {
-        name: source_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default(),
-        preprocess: &file2.stats,
-        root: &root,
-        strings: &lex.str_list,
-        source_label_count,
-        scene_inc_properties,
-        scene_inc_commands,
-        scene: &bs_output.scene,
-        default_arg_fills: bs_output.default_arg_fills,
-        ia_data: &ia_data,
-    });
+    let (scene_macro_counts, global_macro_usage_delta, source_stats) =
+        if config.cache.full_compile_stats {
+            let (scene_macro_counts, global_macro_usage_delta) =
+                scene_macro_stats(&ia_data, base_ia, &baseline_usage);
+            let source_stats = collect_scene_source_stats(SceneSourceInputs {
+                name: source_path
+                    .file_stem()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default(),
+                preprocess: &file2.stats,
+                root: &root,
+                strings: &lex.str_list,
+                source_label_count,
+                scene_inc_properties,
+                scene_inc_commands,
+                scene: &bs_output.scene,
+                default_arg_fills: bs_output.default_arg_fills,
+                ia_data: &ia_data,
+            });
+            (scene_macro_counts, global_macro_usage_delta, source_stats)
+        } else {
+            (
+                MacroStats::default(),
+                BTreeMap::new(),
+                SourceStats::default(),
+            )
+        };
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "BS", stage_start);
     }
@@ -2117,8 +2131,10 @@ fn compile_project_inner(
                 *aggregate_global_usage_delta.entry(key.clone()).or_default() += *value;
             }
             let dat_path = bs_dir.join(format!("{}.dat", scene.stem));
-            fs::write(&dat_path, &scene.dat)
-                .map_err(|error| format_path_error(&dat_path, error))?;
+            if !config.tmp_dir.is_empty() {
+                fs::write(&dat_path, &scene.dat)
+                    .map_err(|error| format_path_error(&dat_path, error))?;
+            }
             SceneData {
                 stem: scene.stem,
                 dat: scene.dat,
@@ -2255,7 +2271,10 @@ fn compile_project_inner(
                     }
                     let mut packed = crate::lzss::pack(dat, false);
                     crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
-                    fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
+                    if !config.tmp_dir.is_empty() {
+                        fs::write(&path, &packed)
+                            .map_err(|error| format_path_error(&path, error))?;
+                    }
                     Ok((stem, packed))
                 },
                 |_, result| {
@@ -2281,7 +2300,9 @@ fn compile_project_inner(
                 }
                 let mut packed = crate::lzss::pack(dat, false);
                 crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
-                fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
+                if !config.tmp_dir.is_empty() {
+                    fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
+                }
                 log_stage(
                     stdout,
                     "LZSS",

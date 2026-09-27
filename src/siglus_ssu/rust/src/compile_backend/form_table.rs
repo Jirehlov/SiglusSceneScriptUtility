@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::config::CompileConstants;
 
@@ -42,9 +43,9 @@ pub struct FormInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct FormTable {
-    pub form_map_by_name: HashMap<String, FormInfo>,
+    pub form_map_by_name: HashMap<String, Arc<FormInfo>>,
     pub form_map_by_code: HashMap<i32, String>,
-    pub call_base: Option<FormInfo>,
+    pub call_base: Option<Arc<FormInfo>>,
     pub form_code: HashMap<String, i32>,
     pub code_form: HashMap<i32, String>,
     pub call_form: String,
@@ -93,9 +94,10 @@ impl FormTable {
         }
         if !self.form_map_by_name.contains_key(form) {
             let info = self.new_form(form);
-            self.form_map_by_name.insert(form.to_string(), info);
+            self.form_map_by_name
+                .insert(form.to_string(), Arc::new(info));
         }
-        let info = self.form_map_by_name.get_mut(form)?;
+        let info = Arc::make_mut(self.form_map_by_name.get_mut(form)?);
         if let Some(code) = self.form_code.get(form).copied() {
             info.code = Some(code);
             self.form_map_by_code.insert(code, form.to_string());
@@ -147,7 +149,7 @@ impl FormTable {
         let base = self
             .call_base
             .clone()
-            .unwrap_or_else(|| self.new_form(&self.call_form));
+            .unwrap_or_else(|| Arc::new(self.new_form(&self.call_form)));
         if let Some(code) = base.code {
             self.form_map_by_code.insert(code, self.call_form.clone());
         }

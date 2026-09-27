@@ -116,8 +116,21 @@ def _to_int(v):
 
 
 def copy_ia_data(base):
+    form_table = copy.copy(base["form_table"])
+    form_table.form_map_by_name = {
+        name: {
+            **info,
+            "element_map_by_name": dict(info["element_map_by_name"]),
+            "element_map_by_code": dict(info["element_map_by_code"]),
+        }
+        for name, info in form_table.form_map_by_name.items()
+    }
+    form_table.form_map_by_code = {
+        code: form_table.form_map_by_name[info["name"]]
+        for code, info in form_table.form_map_by_code.items()
+    }
     return {
-        "form_table": copy.deepcopy(base["form_table"]),
+        "form_table": form_table,
         "replace_tree": copy_replace_tree(base["replace_tree"]),
         "name_set": set(base["name_set"]),
         "macro_defs": list(base["macro_defs"]),
@@ -1707,9 +1720,15 @@ def compile_one_pipeline(
     if base is None:
         base = build_ia_data(ctx)
         ctx["ia_data"] = base
-    baseline_usage = {
-        (rep["decl_type"], rep["name"]): rep["used_count"] for rep in base["macro_defs"]
-    }
+    full_compile_stats = ctx["stats"]["full_compile_stats"]
+    baseline_usage = (
+        {
+            (rep["decl_type"], rep["name"]): rep["used_count"]
+            for rep in base["macro_defs"]
+        }
+        if full_compile_stats
+        else {}
+    )
     iad = copy_ia_data(base)
     pcad = {"global_inc_command_cnt": base["inc_command_cnt"]}
     ca = CharacterAnalizer()
@@ -1785,17 +1804,22 @@ def compile_one_pipeline(
         raise RuntimeError(fmt_err(bs.get_error_code(), bs.get_error_line()))
     if record_time:
         record_stage_time(ctx, "BS", time.time() - t)
-    scene_macro_counts, global_macro_usage_delta = summarize_scene_macro_stats(
-        iad, base, baseline_usage
-    )
-    source_stats = collect_scene_source_stats(
-        nm,
-        pcad,
-        lad,
-        mad,
-        bsd,
-        bsd["out_scn"],
-    )
+    if full_compile_stats:
+        scene_macro_counts, global_macro_usage_delta = summarize_scene_macro_stats(
+            iad, base, baseline_usage
+        )
+        source_stats = collect_scene_source_stats(
+            nm,
+            pcad,
+            lad,
+            mad,
+            bsd,
+            bsd["out_scn"],
+        )
+    else:
+        scene_macro_counts = empty_macro_stat_counts()
+        global_macro_usage_delta = {}
+        source_stats = empty_source_stat_counts()
     write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
     return {
         "nm": nm,

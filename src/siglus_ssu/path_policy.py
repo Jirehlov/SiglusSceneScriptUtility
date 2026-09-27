@@ -3,6 +3,7 @@ import os
 import stat
 import struct
 import zlib
+from functools import lru_cache
 
 
 class FilenameCaseCollisionError(OSError):
@@ -17,6 +18,7 @@ _WINDOWS_LOWER_EXCEPTIONS = dict(
 )
 
 
+@lru_cache(maxsize=4096)
 def windows_filename_key(value):
     out = []
     for char in str(value or ""):

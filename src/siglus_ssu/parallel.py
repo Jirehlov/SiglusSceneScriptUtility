@@ -199,7 +199,7 @@ def parallel_process_map(process_fn, items):
     return results
 
 
-_COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool] | None = None
+_COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool, bool] | None = None
 
 
 def _init_compile_worker(
@@ -208,9 +208,17 @@ def _init_compile_worker(
     enc: str,
     utf8: bool,
     debug_outputs: bool,
+    full_compile_stats: bool,
 ) -> None:
     global _COMPILE_WORKER_STATE
-    _COMPILE_WORKER_STATE = (tmp_path, ia_data, enc, utf8, debug_outputs)
+    _COMPILE_WORKER_STATE = (
+        tmp_path,
+        ia_data,
+        enc,
+        utf8,
+        debug_outputs,
+        full_compile_stats,
+    )
 
 
 def _compile_one_process(
@@ -222,7 +230,9 @@ def _compile_one_process(
     try:
         if _COMPILE_WORKER_STATE is None:
             raise RuntimeError("compile worker is not initialized")
-        tmp_path, ia_data, enc, utf8, debug_outputs = _COMPILE_WORKER_STATE
+        tmp_path, ia_data, enc, utf8, debug_outputs, full_compile_stats = (
+            _COMPILE_WORKER_STATE
+        )
         from .BS import compile_one_pipeline
 
         worker_ctx = {
@@ -231,6 +241,7 @@ def _compile_one_process(
             "charset_force": enc,
             "debug_charset": "utf-8" if utf8 else "cp932",
             "debug_outputs": debug_outputs,
+            "stats": {"full_compile_stats": full_compile_stats},
             "source_texts": {fname: source_text} if source_text is not None else {},
         }
         res = compile_one_pipeline(
@@ -290,6 +301,7 @@ def parallel_compile(
             enc,
             utf8,
             debug_outputs,
+            ctx["stats"]["full_compile_stats"],
         ),
     ) as executor:
         futures = [

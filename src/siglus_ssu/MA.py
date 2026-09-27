@@ -193,7 +193,11 @@ class FormTable:
         s.call_base = copy.deepcopy(s.get_form_by_name(C.FM_CALL))
 
     def reset_call(s):
-        base = copy.deepcopy(s.call_base)
+        base = {
+            **s.call_base,
+            "element_map_by_name": dict(s.call_base["element_map_by_name"]),
+            "element_map_by_code": dict(s.call_base["element_map_by_code"]),
+        }
         s.form_map_by_name[C.FM_CALL] = base
         if isinstance(base.get("code"), int):
             s.form_map_by_code[int(base.get("code"))] = base

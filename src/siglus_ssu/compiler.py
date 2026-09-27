@@ -944,6 +944,8 @@ def _native_compile_config(
     force_serial_compile,
     angou_content,
 ):
+    if not args.tmp_dir and not args.debug:
+        tmp_dir = ""
     scene_display_names = {}
     for scn_name in list(ctx.get("scn_list") or []):
         scene_display_names[os.path.basename(str(scn_name))] = format_scene_name(

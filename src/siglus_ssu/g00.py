@@ -657,31 +657,24 @@ def _crop_bgra(bgra: bytes, full_w: int, x0: int, y0: int, w: int, h: int) -> by
 def _official_type2_tile_type_view(
     bgra: bytes, full_w: int, px: int, py: int, tw: int, th: int
 ) -> int:
-    saw_opaque = False
-    saw_zero = False
-    mv = memoryview(bgra)
-    row_stride = full_w * 4
-    for y in range(th):
-        base = (py + y) * row_stride + px * 4
-        for x in range(tw):
-            i = base + x * 4
-            b = mv[i]
-            g = mv[i + 1]
-            r = mv[i + 2]
-            a = mv[i + 3]
-            if a == 255:
-                saw_opaque = True
-                if saw_zero:
-                    return 1
-            else:
-                if a != 0:
-                    return 1
-                if b != 0 or g != 0 or r != 0 or saw_opaque:
-                    return 1
-                saw_zero = True
-    if not saw_opaque:
+    if tw <= 0 or th <= 0:
         return 2
-    return 0
+    start = (py * full_w + px) * 4
+    if bgra[start + 3] == 255:
+        opaque_row = b"\xff" * tw
+        for y in range(th):
+            start = ((py + y) * full_w + px) * 4
+            if bgra[start + 3 : start + tw * 4 : 4] != opaque_row:
+                return 1
+        return 0
+    if bgra[start : start + 4] != b"\0" * 4:
+        return 1
+    zero_row = b"\0" * (tw * 4)
+    for y in range(th):
+        start = ((py + y) * full_w + px) * 4
+        if bgra[start : start + tw * 4] != zero_row:
+            return 1
+    return 2
 
 
 def _official_type2_tiles(bgra: bytes, w: int, h: int):

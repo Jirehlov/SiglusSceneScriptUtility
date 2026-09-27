@@ -4,7 +4,7 @@ use super::frontend_common::{
 };
 use encoding_rs::SHIFT_JIS;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplaceKind {
@@ -31,7 +31,7 @@ pub struct Replacement {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplaceTree {
-    children: HashMap<char, ReplaceTree>,
+    children: Arc<HashMap<char, ReplaceTree>>,
     replacement: Option<Replacement>,
 }
 
@@ -43,7 +43,7 @@ impl ReplaceTree {
     pub fn add(&mut self, name: &str, replacement: Replacement) {
         let mut node = self;
         for ch in name.chars() {
-            node = node.children.entry(ch).or_default();
+            node = Arc::make_mut(&mut node.children).entry(ch).or_default();
         }
         node.replacement = Some(replacement);
     }
