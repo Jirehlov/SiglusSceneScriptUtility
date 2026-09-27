@@ -28,10 +28,6 @@ def _form_code(f):
 def parse_arg_spec(arg_spec):
     if not arg_spec:
         return {}
-    if isinstance(arg_spec, dict):
-        return {int(k): v for k, v in arg_spec.items()}
-    if not isinstance(arg_spec, str):
-        return {}
     arg_map = {}
     for seg in arg_spec.split(";"):
         if not seg.strip():
@@ -122,26 +118,11 @@ class FormTable:
             s._ensure_form(it)
 
     def _load_system_elements(s):
-        defs = C.SYSTEM_ELEMENT_DEFS
-        for it in defs:
-            if isinstance(it, dict):
-                tp = it.get("type")
-                parent = _form_name(it.get("parent") or it.get("parent_form"))
-                form = _form_name(it.get("form"))
-                name = it.get("name")
-                owner = it.get("owner", 0)
-                group = it.get("group", 0)
-                code = it.get("code", 0)
-                size = int(it.get("size", 0) or 0)
-                args = parse_arg_spec(it.get("args") or it.get("arg_map"))
-            elif isinstance(it, (list, tuple)) and len(it) >= 7:
-                tp, it_parent, it_form, name, owner, group, code, *rest = it
-                parent = _form_name(it_parent)
-                form = _form_name(it_form)
-                size = int(rest[1]) if len(rest) >= 2 else 0
-                args = parse_arg_spec(rest[0]) if rest else {}
-            else:
-                continue
+        for it in C.SYSTEM_ELEMENT_DEFS:
+            tp, it_parent, it_form, name, owner, group, code, spec = it
+            parent = _form_name(it_parent)
+            form = _form_name(it_form)
+            args = parse_arg_spec(spec)
             et = (
                 C.ET_PROPERTY
                 if str(tp).upper().endswith("PROPERTY") or tp == C.ET_PROPERTY
@@ -167,7 +148,7 @@ class FormTable:
                 "code": C.create_elm_code(owner, group, int(code)),
                 "name": name,
                 "form": form or C.FM_INT,
-                "size": size,
+                "size": 0,
                 "arg_map": args,
                 "origin": "sys",
             }

@@ -34,9 +34,8 @@ pub struct ElementInfo {
     pub origin: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FormInfo {
-    pub code: Option<i32>,
     pub element_map_by_name: HashMap<String, ElementInfo>,
     pub element_map_by_code: HashMap<i32, ElementInfo>,
 }
@@ -44,7 +43,6 @@ pub struct FormInfo {
 #[derive(Debug, Clone, Default)]
 pub struct FormTable {
     pub form_map_by_name: HashMap<String, Arc<FormInfo>>,
-    pub form_map_by_code: HashMap<i32, String>,
     pub call_base: Option<Arc<FormInfo>>,
     pub form_code: HashMap<String, i32>,
     pub code_form: HashMap<i32, String>,
@@ -80,29 +78,15 @@ impl FormTable {
         self.form_code.get(form).copied()
     }
 
-    fn new_form(&self, form: &str) -> FormInfo {
-        FormInfo {
-            code: self.form_code_of(form),
-            element_map_by_name: HashMap::new(),
-            element_map_by_code: HashMap::new(),
-        }
-    }
-
     pub fn ensure_form(&mut self, form: &str) -> Option<&mut FormInfo> {
         if form.is_empty() {
             return None;
         }
         if !self.form_map_by_name.contains_key(form) {
-            let info = self.new_form(form);
             self.form_map_by_name
-                .insert(form.to_string(), Arc::new(info));
+                .insert(form.to_string(), Arc::new(FormInfo::default()));
         }
-        let info = Arc::make_mut(self.form_map_by_name.get_mut(form)?);
-        if let Some(code) = self.form_code.get(form).copied() {
-            info.code = Some(code);
-            self.form_map_by_code.insert(code, form.to_string());
-        }
-        Some(info)
+        Some(Arc::make_mut(self.form_map_by_name.get_mut(form)?))
     }
 
     pub fn add(&mut self, form: &str, element: ElementInfo) {
@@ -146,13 +130,7 @@ impl FormTable {
     }
 
     pub fn reset_call(&mut self) {
-        let base = self
-            .call_base
-            .clone()
-            .unwrap_or_else(|| Arc::new(self.new_form(&self.call_form)));
-        if let Some(code) = base.code {
-            self.form_map_by_code.insert(code, self.call_form.clone());
-        }
+        let base = self.call_base.clone().unwrap_or_default();
         self.form_map_by_name.insert(self.call_form.clone(), base);
     }
 

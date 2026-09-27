@@ -17,7 +17,6 @@ pub struct TextCommentOptions {
     pub single_quote_mode: SingleQuoteMode,
     pub single_escape_chars: String,
     pub double_escape_chars: String,
-    pub block_comment_enter_advance: usize,
     pub newline_single_message: String,
     pub newline_double_message: String,
     pub single_empty_message: String,
@@ -36,7 +35,6 @@ impl Default for TextCommentOptions {
             single_quote_mode: SingleQuoteMode::None,
             single_escape_chars: String::new(),
             double_escape_chars: String::new(),
-            block_comment_enter_advance: 2,
             newline_single_message: String::new(),
             newline_double_message: String::new(),
             single_empty_message: String::new(),
@@ -235,8 +233,8 @@ pub fn scan_text_comments(
         } else if ch == '/' && chars.get(i + 1) == Some(&'*') {
             block_line = line;
             state = 7;
-            i += options.block_comment_enter_advance;
-            column += options.block_comment_enter_advance;
+            i += 1;
+            column += 1;
             continue;
         } else if options.case_mode == CaseMode::Lower {
             out_ch = lower_ascii(ch);

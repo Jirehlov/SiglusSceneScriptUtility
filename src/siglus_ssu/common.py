@@ -255,7 +255,6 @@ def scan_text_comments(
     single_quote_mode: str = "none",
     single_escape_chars: str = "",
     double_escape_chars: str = "",
-    block_comment_enter_advance: int = 2,
     newline_single_message: str = "",
     newline_double_message: str = "",
     single_empty_message: str = "",
@@ -376,8 +375,8 @@ def scan_text_comments(
             elif ch == "/" and text[i + 1] == "*":
                 block_line = line
                 state = 7
-                i += block_comment_enter_advance
-                column += block_comment_enter_advance
+                i += 1
+                column += 1
                 continue
             elif case_mode == "lower" and "A" <= ch <= "Z":
                 out_ch = chr(ord(ch) + 32)
@@ -942,9 +941,9 @@ def angou_first_line(text: str) -> str:
     return s
 
 
-def read_angou_first_line(path: str, force_charset: str = "") -> str:
+def read_angou_first_line(path: str) -> str:
     try:
-        return angou_first_line(read_text_auto(path, force_charset=force_charset))
+        return angou_first_line(read_text_auto(path))
     except FilenameCaseCollisionError:
         raise
     except Exception:

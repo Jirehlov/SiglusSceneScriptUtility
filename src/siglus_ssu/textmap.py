@@ -14,7 +14,6 @@ from .native_ops import lzss_pack, xor_cycle_inplace
 from .common import (
     eprint,
     hint_help as _hint_help,
-    decode_text_auto,
     max_pair_end,
     iter_files_by_ext,
     is_named_filename,
@@ -94,14 +93,6 @@ def _csv_unescape_text(s: str | None) -> str:
             out.append(nxt)
             i += 2
     return "".join(out)
-
-
-def read_text(path: str):
-    with open_read(path) as f:
-        data = f.read()
-    text, chosen, had_bom = decode_text_auto(data)
-    encoding = "utf-8-sig" if had_bom else chosen
-    return text, encoding
 
 
 def _encode_quoted(value: str) -> str:

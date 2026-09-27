@@ -102,26 +102,14 @@ def _terminate_process_pool(executor) -> None:
 def parallel_process_completed_map(
     process_fn,
     items,
-    max_workers: int | None = None,
+    max_workers: int,
     *,
-    initializer=None,
-    initargs=(),
-    on_result=None,
-    on_poll=None,
+    initializer,
+    initargs,
+    on_result,
+    on_poll,
 ):
     item_list = list(items)
-    if not item_list:
-        return []
-    if max_workers == 1 or len(item_list) <= 1:
-        results = []
-        for item in item_list:
-            if on_poll is not None:
-                on_poll()
-            result = process_fn(item)
-            results.append(result)
-            if on_result is not None:
-                on_result(item, result)
-        return results
     workers = min(get_max_workers(max_workers), len(item_list))
     results = [None] * len(item_list)
     _flush_stdio_before_process_pool()
@@ -145,26 +133,21 @@ def parallel_process_completed_map(
             for _ in range(workers):
                 submit_next()
             while pending:
-                if on_poll is not None:
-                    on_poll()
-                if on_poll is None:
-                    done = {next(as_completed(pending))}
-                else:
-                    done, pending = wait(
-                        pending,
-                        timeout=0.05,
-                        return_when=FIRST_COMPLETED,
-                    )
-                    if not done:
-                        continue
+                on_poll()
+                done, pending = wait(
+                    pending,
+                    timeout=0.05,
+                    return_when=FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
                 for future in done:
                     pending.discard(future)
                     index = futures.pop(future)
                     item = item_list[index]
                     result = future.result()
                     results[index] = result
-                    if on_result is not None:
-                        on_result(item, result)
+                    on_result(item, result)
                     submit_next()
         except BaseException:
             for future in pending:
@@ -199,13 +182,12 @@ def parallel_process_map(process_fn, items):
     return results
 
 
-_COMPILE_WORKER_STATE: tuple[str, dict, str, bool, bool, bool] | None = None
+_COMPILE_WORKER_STATE: tuple[str, dict, bool, bool, bool] | None = None
 
 
 def _init_compile_worker(
     tmp_path: str,
     ia_data: dict,
-    enc: str,
     utf8: bool,
     debug_outputs: bool,
     full_compile_stats: bool,
@@ -214,7 +196,6 @@ def _init_compile_worker(
     _COMPILE_WORKER_STATE = (
         tmp_path,
         ia_data,
-        enc,
         utf8,
         debug_outputs,
         full_compile_stats,
@@ -224,13 +205,13 @@ def _init_compile_worker(
 def _compile_one_process(
     ss_path: str,
     display_name: str,
-    source_text: str | None,
+    source_text: str,
 ) -> tuple[str, str | None, dict, dict, dict]:
     fname = os.path.basename(ss_path)
     try:
         if _COMPILE_WORKER_STATE is None:
             raise RuntimeError("compile worker is not initialized")
-        tmp_path, ia_data, enc, utf8, debug_outputs, full_compile_stats = (
+        tmp_path, ia_data, utf8, debug_outputs, full_compile_stats = (
             _COMPILE_WORKER_STATE
         )
         from .BS import compile_one_pipeline
@@ -238,11 +219,10 @@ def _compile_one_process(
         worker_ctx = {
             "tmp_path": tmp_path,
             "utf8": utf8,
-            "charset_force": enc,
             "debug_charset": "utf-8" if utf8 else "cp932",
             "debug_outputs": debug_outputs,
             "stats": {"full_compile_stats": full_compile_stats},
-            "source_texts": {fname: source_text} if source_text is not None else {},
+            "source_texts": {fname: source_text},
         }
         res = compile_one_pipeline(
             worker_ctx,
@@ -280,10 +260,9 @@ def parallel_compile(
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
     ia_data = ctx.get("ia_data")
-    enc = ctx.get("charset_force") or ""
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
-    source_texts = ctx.get("source_texts") or {}
+    source_texts = ctx["source_texts"]
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
     errors = []
     completed = 0
@@ -298,7 +277,6 @@ def parallel_compile(
         initargs=(
             tmp_path,
             ia_data,
-            enc,
             utf8,
             debug_outputs,
             ctx["stats"]["full_compile_stats"],
@@ -309,7 +287,7 @@ def parallel_compile(
                 _compile_one_process,
                 ss_path,
                 format_scene_name(ss_path, ctx),
-                source_texts.get(os.path.basename(ss_path)),
+                source_texts[os.path.basename(ss_path)],
             )
             for ss_path in ss_files
         ]

@@ -136,7 +136,6 @@ class CharacterAnalizer:
             single_quote_mode="char",
             single_escape_chars="\\'n",
             double_escape_chars='\\"n',
-            block_comment_enter_advance=1,
             newline_single_message="Newline is not allowed inside single quotes.",
             newline_double_message="Newline is not allowed inside double quotes.",
             single_empty_message="Single quotes must enclose exactly one character.",

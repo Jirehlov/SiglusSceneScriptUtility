@@ -195,7 +195,6 @@ impl CharacterAnalyzer {
             single_quote_mode: SingleQuoteMode::Char,
             single_escape_chars: "\\'n".to_string(),
             double_escape_chars: "\\\"n".to_string(),
-            block_comment_enter_advance: 1,
             newline_single_message: "Newline is not allowed inside single quotes.".to_string(),
             newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
             single_empty_message: "Single quotes must enclose exactly one character.".to_string(),

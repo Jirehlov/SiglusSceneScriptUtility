@@ -57,20 +57,16 @@ impl MsvcRand {
 #[derive(Debug, Clone, Default)]
 pub struct SceneDatInput {
     pub str_list: Vec<String>,
-    pub str_sort_index: Option<Vec<usize>>,
-    pub str_index_list: Option<Vec<(i32, i32)>>,
+    pub str_sort_index: Vec<usize>,
     pub scn_bytes: Vec<u8>,
     pub label_list: Vec<i32>,
     pub z_label_list: Vec<i32>,
     pub cmd_label_list: Vec<(i32, i32)>,
     pub scn_prop_list: Vec<(i32, i32)>,
     pub scn_prop_name_list: Vec<String>,
-    pub scn_prop_name_index_list: Option<Vec<(i32, i32)>>,
     pub scn_cmd_list: Vec<i32>,
     pub scn_cmd_name_list: Vec<String>,
-    pub scn_cmd_name_index_list: Option<Vec<(i32, i32)>>,
     pub call_prop_name_list: Vec<String>,
-    pub call_prop_name_index_list: Option<Vec<(i32, i32)>>,
     pub namae_list: Vec<i32>,
     pub read_flag_list: Vec<i32>,
 }
@@ -131,7 +127,6 @@ fn section(
 pub fn build_scn_dat(
     layout: &ScnHeaderLayout,
     input: &SceneDatInput,
-    rand: &mut MsvcRand,
     string_xor_multiplier: u16,
 ) -> Vec<u8> {
     let mut out = vec![0u8; layout.header_size];
@@ -140,40 +135,15 @@ pub fn build_scn_dat(
 
     let strings = &input.str_list;
     let n = strings.len();
-    let mut order = match &input.str_sort_index {
-        Some(indexes) if indexes.len() == n => indexes.clone(),
-        _ => {
-            let mut generated: Vec<usize> = (0..n).collect();
-            if n > 0 {
-                rand.shuffle(&mut generated);
-            }
-            generated
-        }
-    };
-    for value in &mut order {
-        if *value >= n {
-            *value = 0;
-        }
-    }
-
+    let order = &input.str_sort_index;
     let mut idx = vec![(0i32, 0i32); n];
     let mut units: Vec<Vec<u16>> = vec![Vec::new(); n];
-    match &input.str_index_list {
-        Some(indexes) if indexes.len() == n => {
-            idx.clone_from(indexes);
-            for &orig in &order {
-                units[orig] = utf16_units(&strings[orig]);
-            }
-        }
-        _ => {
-            let mut ofs = 0i32;
-            for &orig in &order {
-                let u = utf16_units(&strings[orig]);
-                idx[orig] = (ofs, u.len() as i32);
-                ofs = ofs.wrapping_add(u.len() as i32);
-                units[orig] = u;
-            }
-        }
+    let mut ofs = 0i32;
+    for &orig in order {
+        let u = utf16_units(&strings[orig]);
+        idx[orig] = (ofs, u.len() as i32);
+        ofs = ofs.wrapping_add(u.len() as i32);
+        units[orig] = u;
     }
 
     section(
@@ -185,7 +155,7 @@ pub fn build_scn_dat(
     );
     push_i32_pairs(&mut out, &idx);
     section(&mut header, "str_list_ofs", "str_cnt", out.len(), n);
-    for &orig in &order {
+    for &orig in order {
         let key = u32::from(string_xor_multiplier).wrapping_mul(orig as u32);
         for unit in &units[orig] {
             push_u16(&mut out, ((*unit as u32 ^ key) & 0xffff) as u16);
@@ -237,11 +207,7 @@ pub fn build_scn_dat(
     );
     push_i32_pairs(&mut out, &input.scn_prop_list);
 
-    let scn_prop_name_index_list = input
-        .scn_prop_name_index_list
-        .clone()
-        .filter(|values| values.len() == input.scn_prop_name_list.len())
-        .unwrap_or_else(|| make_index_list(&input.scn_prop_name_list));
+    let scn_prop_name_index_list = make_index_list(&input.scn_prop_name_list);
     section(
         &mut header,
         "scn_prop_name_index_list_ofs",
@@ -270,11 +236,7 @@ pub fn build_scn_dat(
     );
     push_i32_array(&mut out, &input.scn_cmd_list);
 
-    let scn_cmd_name_index_list = input
-        .scn_cmd_name_index_list
-        .clone()
-        .filter(|values| values.len() == input.scn_cmd_name_list.len())
-        .unwrap_or_else(|| make_index_list(&input.scn_cmd_name_list));
+    let scn_cmd_name_index_list = make_index_list(&input.scn_cmd_name_list);
     section(
         &mut header,
         "scn_cmd_name_index_list_ofs",
@@ -294,11 +256,7 @@ pub fn build_scn_dat(
         push_utf16_raw(&mut out, text);
     }
 
-    let call_prop_name_index_list = input
-        .call_prop_name_index_list
-        .clone()
-        .filter(|values| values.len() == input.call_prop_name_list.len())
-        .unwrap_or_else(|| make_index_list(&input.call_prop_name_list));
+    let call_prop_name_index_list = make_index_list(&input.call_prop_name_list);
     section(
         &mut header,
         "call_prop_name_index_list_ofs",
