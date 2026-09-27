@@ -419,7 +419,7 @@ fn scn_payload_hash_bundles_with_config(
     pack_context: Option<Bound<'_, PyAny>>,
     hashes: bool,
 ) -> PyResult<Option<Py<PyDict>>> {
-    let pack = PackContext::from_py(pack_context)?;
+    let pack = PackContext::from_py(pack_context, hashes)?;
     let Some(parsed) = ParsedDat::parse(blob, cfg) else {
         return Ok(None);
     };
@@ -442,7 +442,7 @@ struct PackContext {
 }
 
 impl PackContext {
-    fn from_py(obj: Option<Bound<'_, PyAny>>) -> PyResult<Self> {
+    fn from_py(obj: Option<Bound<'_, PyAny>>, hashes: bool) -> PyResult<Self> {
         let mut out = Self {
             inc_property_cnt: 0,
             inc_command_cnt: 0,
@@ -463,14 +463,6 @@ impl PackContext {
         if let Some(v) = dict.get_item("inc_property_cnt")? {
             out.inc_property_cnt = v.extract::<i32>().unwrap_or(0).max(0);
         }
-        if let Some(v) = dict.get_item("inc_command_cnt")? {
-            out.inc_command_cnt = v.extract::<i32>().unwrap_or(0).max(0);
-        }
-        out.current_scene = dict
-            .get_item("payload_scene_name")?
-            .map(|x| x.extract::<String>())
-            .transpose()?
-            .map(|x| x.encode_utf16().collect());
         if let Some(v) = dict.get_item("inc_property_defs")?
             && let Ok(list) = v.cast::<PyList>()
         {
@@ -486,6 +478,10 @@ impl PackContext {
                     Some(x) => x.extract::<i32>().unwrap_or(0),
                     None => continue,
                 };
+                out.inc_property_forms.insert(id, form);
+                if !hashes {
+                    continue;
+                }
                 let size = d
                     .get_item("size")?
                     .and_then(|x| x.extract::<i32>().ok())
@@ -497,7 +493,6 @@ impl PackContext {
                     .unwrap_or_default()
                     .encode_utf16()
                     .collect();
-                out.inc_property_forms.insert(id, form);
                 out.inc_properties.push(MetaProperty {
                     id,
                     form,
@@ -506,6 +501,17 @@ impl PackContext {
                 });
             }
         }
+        if !hashes {
+            return Ok(out);
+        }
+        if let Some(v) = dict.get_item("inc_command_cnt")? {
+            out.inc_command_cnt = v.extract::<i32>().unwrap_or(0).max(0);
+        }
+        out.current_scene = dict
+            .get_item("payload_scene_name")?
+            .map(|x| x.extract::<String>())
+            .transpose()?
+            .map(|x| x.encode_utf16().collect());
         if let Some(v) = dict.get_item("inc_command_defs")?
             && let Ok(list) = v.cast::<PyList>()
         {

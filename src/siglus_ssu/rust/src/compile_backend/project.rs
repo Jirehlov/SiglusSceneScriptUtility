@@ -2225,7 +2225,7 @@ fn compile_project_inner(
                 lzss_results.insert(record.stem.clone(), lz);
                 continue;
             }
-            lzss_tasks.push((record.stem.clone(), record.dat.clone(), path));
+            lzss_tasks.push((record.stem.clone(), record.dat.as_slice(), path));
         }
     }
     if use_lzss
@@ -2253,7 +2253,7 @@ fn compile_project_inner(
                     if config.constants.easy_angou_code.is_empty() {
                         return Err("ctx.easy_angou_code is not set".to_string());
                     }
-                    let mut packed = crate::lzss::pack(&dat, false);
+                    let mut packed = crate::lzss::pack(dat, false);
                     crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
                     fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
                     Ok((stem, packed))
@@ -2279,7 +2279,7 @@ fn compile_project_inner(
                 if config.constants.easy_angou_code.is_empty() {
                     return Err("ctx.easy_angou_code is not set".to_string());
                 }
-                let mut packed = crate::lzss::pack(&dat, false);
+                let mut packed = crate::lzss::pack(dat, false);
                 crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
                 fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
                 log_stage(

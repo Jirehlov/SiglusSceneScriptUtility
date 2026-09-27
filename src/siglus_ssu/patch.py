@@ -584,9 +584,12 @@ def _is_font_charset_loop(data: bytearray, i: int) -> bool:
 
 def _find_charset_candidates(data: bytearray):
     candidates = []
-    for i in range(max(0, len(data) - 4)):
+    end = max(0, len(data) - 4)
+    i = data.find(b"\x80", 0, end)
+    while i >= 0:
         if _is_font_charset_loop(data, i):
             candidates.append(i)
+        i = data.find(b"\x80", i + 1, end)
     return candidates
 
 
