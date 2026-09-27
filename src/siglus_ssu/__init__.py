@@ -7,7 +7,7 @@ _LEGACY_COMPILE = False
 _LEGACY_FULL = False
 _SCENE_STRING_XOR_MULTIPLIER = 0x7087
 _SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = False
-CONST_PROFILE_IDS = tuple(range(10))
+CONST_PROFILE_IDS = tuple(range(11))
 
 
 def command_name() -> str:

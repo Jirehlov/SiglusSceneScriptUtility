@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Added const profile 10 as an extensive reconstruction of FlixEngine (mobile SiglusEngine), with independent definitions shared by Python and Rust and automatic round-trip fallback. Six mobile PCK samples pass payload comparison across 1364 scenes; the manuals document the recovered API coverage and unresolved object type codes.
 - Added compile option `--allow-invalid` to replace invalid source bytes with U+FFFD under the selected encoding while keeping `--charset` unchanged and strict decoding as the default. Both compiler backends share this behavior, preserve embedded source bytes, and invalidate incremental caches when the option changes.
 - Round-trip `test` now retries all const profiles with `--charset utf8 --allow-invalid` only after the default round fails, preserving the `EXACT`/`PAYLOAD_SAME` criteria and recording the retry options in logs.
 

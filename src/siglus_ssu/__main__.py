@@ -20,7 +20,7 @@ def _usage():
         "  -V, --version   Show version and exit\n"
         "  --legacy        Force Python compile backend (native helpers remain enabled)\n"
         "  --legacy-full   Disable all Rust native acceleration\n"
-        f"  --const-profile Select const profile ({', '.join(map(str, CONST_PROFILE_IDS))}; default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; 9 supports Rewrite Harvest festa!; not with -c --tmp)\n"
+        f"  --const-profile Select const profile ({', '.join(map(str, CONST_PROFILE_IDS))}; default: 0; 3 supports TheGodofDeath HD; 4 supports Rewrite; 5 supports nanami/Kisaragi; 6 allows property outside command; 7 supports Rurumi/Yamiiro; 8 supports Rewrite trial; 9 supports Rewrite Harvest festa!; 10 reconstructs FlixEngine; not with -c --tmp)\n"
         "  --string-xor-multiplier Override scene-string XOR multiplier (0..0xFFFF; default: 0 for profiles 3, 5, and 8, 0x7087 otherwise; 0 disables this XOR only)\n"
         "  --              After a mode, treat all remaining arguments as positional\n"
         "\n"
