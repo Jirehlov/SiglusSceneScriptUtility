@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.3] - 2026-09-28
+
+- Speed up.
+
+
 ## [v0.5.2] - 2026-09-27
 
 - Added const profile 10 as an extensive reconstruction of FlixEngine (mobile SiglusEngine), with independent definitions shared by Python and Rust and automatic round-trip fallback. Six mobile PCK samples pass payload comparison across 1364 scenes; the manuals document the recovered API coverage and unresolved object type codes.
