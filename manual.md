@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.5.3 (check the installed version with `siglus-ssu --version`)
+**Version:** 0.5.4 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -579,9 +579,16 @@ The CSV uses:
 
 - `type` — `dat` or `ss`
 - `path` — per-file relative path inside the `.pck`
-- `status` — `ok` or `failed`
-- `dialogue_lines` — number of counted dialogue entries
-- `dialogue_count` — total counted dialogue units
+- `status` — `ok`, `failed`, or `unavailable`
+- `dialogue_lines` — number of counted dialogue entries; empty if counting failed or sources are unavailable
+- `dialogue_count` — total counted dialogue units; empty if counting failed or sources are unavailable
+- `error` — failure reason, including the parsing stage and line number when available; empty for successful rows
+
+Source counting stops at the first U+001A (DOS EOF), using the same decoding rule as compilation. Embedded original source bytes are not changed.
+
+If a file fails to parse, its row remains in the CSV, the reason is also printed to stderr, and the command returns exit code `1` after writing the available results. Totals include only successful rows; `dat_status` and `ss_status` identify `complete` or `partial` results.
+
+If the original-source section is declared but missing, truncated, or undecodable, the CSV retains the completed `.dat` rows and adds an `ss` row with an empty `path`, `status=unavailable`, empty counts, and the error. The command returns `1`, and source totals are shown as `N/A`. A PCK that does not declare embedded sources is valid: its CSV contains only `.dat` rows, `ss_status=not_embedded`, source dialogue totals are `N/A`, and the command returns `0` if all `.dat` files were counted successfully.
 
 ---
 

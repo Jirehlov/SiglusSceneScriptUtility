@@ -3,6 +3,14 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.4] - 2026-09-29
+
+- Fixed `-a --word` source counting to stop at DOS EOF (U+001A), matching compilation without modifying embedded source bytes.
+- Changed `-a --word` to return exit code `1` when individual files fail, retain successful results, and mark totals as complete or partial.
+- Added an `error` column to word-count CSVs and detailed failure messages on stderr. Failed or unavailable counts are now empty in CSV and shown as `N/A` in the terminal.
+- Preserved completed `.dat` counts when embedded sources are missing, truncated, or undecodable, with an `ss` diagnostic row marked `unavailable`. PCKs without embedded sources remain valid and report `ss_status=not_embedded`.
+
+
 ## [v0.5.3] - 2026-09-28
 
 - Speed up.

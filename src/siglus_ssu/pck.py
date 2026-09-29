@@ -805,15 +805,18 @@ def _write_pck_word_csv(csv_path: str, rows) -> None:
     os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, lineterminator="\r\n")
-        w.writerow(["type", "path", "status", "dialogue_lines", "dialogue_count"])
+        w.writerow(
+            ["type", "path", "status", "dialogue_lines", "dialogue_count", "error"]
+        )
         for row in rows or []:
             w.writerow(
                 [
                     str((row or {}).get("type") or ""),
                     str((row or {}).get("path") or ""),
                     str((row or {}).get("status") or ""),
-                    int((row or {}).get("lines", 0) or 0),
-                    int((row or {}).get("count", 0) or 0),
+                    (row or {}).get("lines"),
+                    (row or {}).get("count"),
+                    str((row or {}).get("error") or ""),
                 ]
             )
 
@@ -857,7 +860,12 @@ def _pck_cd_word_rows(
         }
         scn_blob = item.get("blob")
         if not scn_blob:
-            row["status"] = "failed"
+            row.update(
+                status="failed",
+                lines=None,
+                count=None,
+                error="scene data could not be decoded",
+            )
             stats["rows"].append(row)
             continue
         bundle = _dat.dat_disassembly_bundle(
@@ -868,7 +876,12 @@ def _pck_cd_word_rows(
             scene_name=item.get("scene_name"),
         )
         if not bundle:
-            row["status"] = "failed"
+            row.update(
+                status="failed",
+                lines=None,
+                count=None,
+                error="scene data could not be parsed",
+            )
             stats["rows"].append(row)
             continue
         stats["parsed_scene_files"] += 1
@@ -968,7 +981,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 "count": 0,
             }
             try:
-                text, encoding, _ = decode_text_auto(raw)
+                text, encoding, _ = decode_text_auto(raw, stop_at_dos_eof=True)
                 ctx = {
                     "scn_path": os.path.dirname(os.path.abspath(ss_path)),
                     "utf8": bool(str(encoding or "").startswith("utf-8")),
@@ -991,8 +1004,13 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                     row["count"] += count_text_units(txt)
             except FilenameCaseCollisionError:
                 raise
-            except Exception:
-                row["status"] = "failed"
+            except Exception as exc:
+                row.update(
+                    status="failed",
+                    lines=None,
+                    count=None,
+                    error=str(exc) or type(exc).__name__,
+                )
                 stats["ss_failed_files"] += 1
             stats["ss_dialogue_lines"] += int(row.get("lines", 0) or 0)
             stats["ss_dialogue_count"] += int(row.get("count", 0) or 0)
@@ -1036,37 +1054,68 @@ def pck_word_count(
         scene_exe_el=scene_exe_el,
         scene_lists=scene_lists,
     )
+    ss_error = ""
     try:
         ss_stats = _pck_ss_word_rows(blob, hdr=hdr)
     except ValueError as exc:
-        sys.stderr.write(f"analyze: {exc}\n")
-        return 1
+        ss_error = str(exc) or type(exc).__name__
+        ss_stats = {
+            "rows": [
+                {
+                    "type": "ss",
+                    "path": "",
+                    "status": "unavailable",
+                    "lines": None,
+                    "count": None,
+                    "error": ss_error,
+                }
+            ]
+        }
     rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
     csv_path = _pck_word_csv_path(input_pck, output_csv)
     _write_pck_word_csv(csv_path, rows)
+    failed_rows = [row for row in rows if row["status"] != "ok"]
+    for row in failed_rows:
+        label = row["path"] or "original sources"
+        sys.stderr.write(f"analyze: {row['type']} {label}: {row['error']}\n")
+    if failed_rows:
+        sys.stderr.write(
+            f"analyze: word count is incomplete; available results written to {csv_path}\n"
+        )
+    dat_status = (
+        "partial"
+        if dat_stats["parsed_scene_files"] != dat_stats["scene_files"]
+        else "complete"
+    )
+    if ss_error:
+        ss_status = "unavailable"
+    elif not hdr.get("original_source_header_size"):
+        ss_status = "not_embedded"
+    elif ss_stats["ss_failed_files"]:
+        ss_status = "partial"
+    else:
+        ss_status = "complete"
     print("==== Word Count ====")
     print(f"file: {input_pck}")
     print(f"csv: {csv_path}")
-    print()
-    print("dat:")
-    if dat_stats.get("rows"):
-        for row in dat_stats.get("rows") or []:
+    for kind, stats in (("dat", dat_stats), ("ss", ss_stats)):
+        print()
+        print(f"{kind}:")
+        if stats.get("rows"):
+            for row in stats["rows"]:
+                lines = row["lines"] if row["lines"] is not None else "N/A"
+                count = row["count"] if row["count"] is not None else "N/A"
+                label = row["path"] or "original sources"
+                print(f"  [{row['status']}] {label}  lines={lines} count={count}")
+        else:
             print(
-                f"  [{row.get('status')}] {row.get('path')}  lines={int(row.get('lines', 0) or 0):d} count={int(row.get('count', 0) or 0):d}"
+                "  (not embedded)"
+                if kind == "ss" and ss_status == "not_embedded"
+                else "  (none)"
             )
-    else:
-        print("  (none)")
-    print()
-    print("ss:")
-    if ss_stats.get("rows"):
-        for row in ss_stats.get("rows") or []:
-            print(
-                f"  [{row.get('status')}] {row.get('path')}  lines={int(row.get('lines', 0) or 0):d} count={int(row.get('count', 0) or 0):d}"
-            )
-    else:
-        print("  (none)")
     print()
     print("totals:")
+    print(f"  dat_status={dat_status}")
     print(f"  dat_files={int(dat_stats.get('scene_files', 0) or 0):d}")
     print(f"  parsed_dat_files={int(dat_stats.get('parsed_scene_files', 0) or 0):d}")
     print(
@@ -1075,11 +1124,21 @@ def pck_word_count(
     print(
         f"  dat_dialogue_count={int(dat_stats.get('cd_text_dialogue_count', 0) or 0):d}"
     )
-    print(f"  ss_files={int(ss_stats.get('ss_source_files', 0) or 0):d}")
-    print(f"  ss_failed_files={int(ss_stats.get('ss_failed_files', 0) or 0):d}")
-    print(f"  ss_dialogue_lines={int(ss_stats.get('ss_dialogue_lines', 0) or 0):d}")
-    print(f"  ss_dialogue_count={int(ss_stats.get('ss_dialogue_count', 0) or 0):d}")
-    return 0
+    print(f"  ss_status={ss_status}")
+    for label, key in (
+        ("ss_files", "ss_source_files"),
+        ("ss_failed_files", "ss_failed_files"),
+        ("ss_dialogue_lines", "ss_dialogue_lines"),
+        ("ss_dialogue_count", "ss_dialogue_count"),
+    ):
+        value = (
+            "N/A"
+            if ss_error
+            or (ss_status == "not_embedded" and key.startswith("ss_dialogue_"))
+            else int(ss_stats.get(key, 0) or 0)
+        )
+        print(f"  {label}={value}")
+    return 1 if failed_rows else 0
 
 
 def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:

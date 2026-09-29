@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility 使用手册
 
-**版本：** 0.5.3（使用 `siglus-ssu --version` 查看已安装版本）
+**版本：** 0.5.4（使用 `siglus-ssu --version` 查看已安装版本）
 
 **仓库：** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -580,9 +580,16 @@ CSV 列为：
 
 - `type` — `dat` 或 `ss`
 - `path` — `.pck` 内的逐文件相对路径
-- `status` — `ok` 或 `failed`
-- `dialogue_lines` — 计入统计的台词条目数
-- `dialogue_count` — 计入统计的台词总计数
+- `status` — `ok`、`failed` 或 `unavailable`
+- `dialogue_lines` — 计入统计的台词条目数；统计失败或源码不可用时留空
+- `dialogue_count` — 计入统计的台词总计数；统计失败或源码不可用时留空
+- `error` — 失败原因，解析器提供时包含解析阶段和行号；成功行留空
+
+源码统计在首个 U+001A（DOS EOF）处停止读取，与编译时采用相同的解码规则，不修改嵌入的原始源码字节。
+
+单个文件解析失败时，CSV 保留该行，同时向 stderr 输出原因，命令在写出可用结果后以退出码 `1` 结束。总数仅累加成功行；`dat_status` 和 `ss_status` 用 `complete` 或 `partial` 标明统计是否完整。
+
+如果源码段声明存在但实际缺失、截断或无法解码，CSV 保留已完成的 `.dat` 行，并增加一行 `ss` 记录：`path` 留空，`status=unavailable`，计数留空，`error` 记录原因。命令返回 `1`，源码汇总显示为 `N/A`。未声明嵌入源码的 PCK 是合法输入：CSV 仅包含 `.dat` 行，`ss_status=not_embedded`，源码台词汇总为 `N/A`；只要全部 `.dat` 统计成功，命令就返回 `0`。
 
 ---
 
