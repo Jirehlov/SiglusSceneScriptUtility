@@ -492,7 +492,8 @@ class CharacterAnalizer:
                         )
             rep["after"] = t[:-256]
             reps.append(rep)
-        reps.sort(key=lambda x: len(x["name"]), reverse=True)
+        reps.sort(key=lambda x: len(x["name"]))
+        reps.reverse()
         art = new_replace_tree()
         for r in reps:
             add_replace_tree(art, r["name"], r)

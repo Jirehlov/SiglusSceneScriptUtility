@@ -505,13 +505,20 @@ def _write_dat_map(csv_path: str, str_list, kind_map):
 
 def _apply_dat_map(str_list, rows, filename: str = ""):
     changes = 0
+    errors = 0
     for row in rows or []:
         try:
             idx = int(row.get("index", ""))
         except Exception:
+            eprint(
+                f"textmap: {filename}: invalid index {row.get('index', '')!r}",
+                errors="replace",
+            )
+            errors += 1
             continue
         if idx < 0 or idx >= len(str_list):
             eprint(f"textmap: {filename}: index {idx} out of range", errors="replace")
+            errors += 1
             continue
         original = _csv_unescape_text(row.get("original", str_list[idx]))
         replacement = row.get("replacement")
@@ -519,17 +526,18 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
             replacement = _csv_unescape_text(replacement)
         if replacement is None:
             replacement = original
-        if replacement == original:
+        if replacement == original or str_list[idx] == replacement:
             continue
         if str_list[idx] != original:
             eprint(
                 f"textmap: {filename}: skip index {idx:d} (text mismatch: '{str_list[idx]}' vs '{original}')",
                 errors="replace",
             )
+            errors += 1
             continue
         str_list[idx] = replacement
         changes += 1
-    return str_list, changes
+    return str_list, changes, errors
 
 
 def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
@@ -662,7 +670,13 @@ def _process_dat(
     except (OSError, UnicodeError, csv.Error) as exc:
         eprint(f"textmap: {fname}: map read failed: {exc}", errors="replace")
         return 1
-    updated_list, count = _apply_dat_map(list(str_list), rows, filename=fname)
+    updated_list, count, errors = _apply_dat_map(list(str_list), rows, filename=fname)
+    if errors:
+        eprint(
+            f"textmap: {fname}: {errors} mapping errors; .dat was not modified",
+            errors="replace",
+        )
+        return 1
     if count == 0:
         eprint(f"textmap: {fname}: no changes to apply", errors="replace")
         return 0

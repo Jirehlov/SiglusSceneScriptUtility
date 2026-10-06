@@ -1,6 +1,6 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.5.4 (check the installed version with `siglus-ssu --version`)
+**Version:** 0.5.5 (check the installed version with `siglus-ssu --version`)
 
 **Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
 
@@ -886,6 +886,8 @@ siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=
    ```
 
    The `.dat` file is rewritten in-place preserving its original encryption and LZSS state.
+
+If a CSV index is invalid or a row to be changed has an `original` value that does not match the current string, the command returns exit code `1` and leaves that `.dat` unchanged. Rows whose current string already equals `replacement` are accepted as already applied. Directory mode continues processing other files but returns `1` if any file fails.
 
 #### `.dat.csv` Format
 
@@ -1786,6 +1788,7 @@ Rules:
 3. if parentheses are present, the parameter list shall be non-empty; empty `()` is rejected;
 4. argument splitting is parenthesis-depth aware, and commas or parentheses inside string and character literals do not participate in outer-level splitting;
 5. the macro body is expanded with a temporary replacement tree for the macro parameters; after the final result is inserted, scanning advances past that inserted result, so it is not immediately rescanned at the same position.
+6. repeated parameter names use the actual argument or default bound to the first occurrence. Later occurrences still count toward the argument list and their values are expanded.
 
 **Expansion loops and warnings:** Avoid triggering self-referential or mutually recursive `#define` / `#define_s` expansion inside macro arguments, defaults, or bodies. Neither frontend stops macro expansion solely because of its replacement count, so a genuine infinite expansion can leave compilation or LSP analysis running indefinitely.
 

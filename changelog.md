@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.5] - 2026-10-06
+
+- Fixed duplicate macro parameter precedence in both compiler backends by sorting parameter replacements by name length before reversing their order.
+- Fixed `-m --apply` to return failure and leave the affected DAT unchanged when CSV mappings cannot be applied, while accepting rows whose translations are already present.
+
+
 ## [v0.5.4] - 2026-09-29
 
 - Fixed `-a --word` source counting to stop at DOS EOF (U+001A), matching compilation without modifying embedded source bytes.

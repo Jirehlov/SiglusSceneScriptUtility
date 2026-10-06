@@ -602,7 +602,8 @@ impl CharacterAnalyzer {
                 decl_type: "replace".to_string(),
             });
         }
-        arg_replacements.sort_by_key(|item| std::cmp::Reverse(item.name.len()));
+        arg_replacements.sort_by_key(|item| item.name.len());
+        arg_replacements.reverse();
         let mut arg_tree = ReplaceTree::new();
         for replacement in arg_replacements {
             arg_tree.add(&replacement.name.clone(), replacement);
