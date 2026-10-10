@@ -27,6 +27,33 @@ CD_TEXT = 49
 CD_NAME = 50
 CD_SEL_BLOCK_START = 51
 CD_SEL_BLOCK_END = 52
+SCN_OP_NAMES = (
+    "CD_NONE",
+    "CD_NL",
+    "CD_PUSH",
+    "CD_POP",
+    "CD_COPY",
+    "CD_PROPERTY",
+    "CD_COPY_ELM",
+    "CD_DEC_PROP",
+    "CD_ELM_POINT",
+    "CD_ARG",
+    "CD_GOTO",
+    "CD_GOTO_TRUE",
+    "CD_GOTO_FALSE",
+    "CD_GOSUB",
+    "CD_GOSUBSTR",
+    "CD_RETURN",
+    "CD_EOF",
+    "CD_ASSIGN",
+    "CD_OPERATE_1",
+    "CD_OPERATE_2",
+    "CD_COMMAND",
+    "CD_TEXT",
+    "CD_NAME",
+    "CD_SEL_BLOCK_START",
+    "CD_SEL_BLOCK_END",
+)
 ET_PROPERTY = 0
 ET_COMMAND = 1
 _FORM_CODE_PROFILES = {

@@ -692,12 +692,7 @@ def iter_pck_scene_dat_items(
     scn_names, scn_data = (
         _read_pck_scene_lists(blob, hdr=hdr) if scene_lists is None else scene_lists
     )
-    try:
-        pack_context = _build_disam_pack_context(
-            blob, hdr=hdr, meta={"scn_names": scn_names}
-        )
-    except Exception:
-        pack_context = {}
+    pack_context = _build_disam_pack_context(blob, hdr=hdr, scene_names=scn_names)
     if scene_exe_el is None:
         exe_el = _resolve_pck_scene_exe_el(
             blob,
@@ -1443,18 +1438,20 @@ def compare_pck(
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
             return 1
-        try:
-            pack_ctx1 = _build_disam_pack_context(
-                b1, hdr=h1, meta={"scn_names": names1}
-            )
-        except Exception:
-            pack_ctx1 = None
-        try:
-            pack_ctx2 = _build_disam_pack_context(
-                b2, hdr=h2, meta={"scn_names": names2}
-            )
-        except Exception:
-            pack_ctx2 = None
+        pack_ctx1 = _build_disam_pack_context(b1, hdr=h1, scene_names=names1)
+        pack_ctx2 = _build_disam_pack_context(b2, hdr=h2, scene_names=names2)
+
+    def _iter_scene_pairs(left, right, scene_keys):
+        for key in scene_keys:
+            left_items = left.get(key, [])
+            right_items = right.get(key, [])
+            for idx in range(max(len(left_items), len(right_items))):
+                yield (
+                    key,
+                    idx,
+                    left_items[idx] if idx < len(left_items) else None,
+                    right_items[idx] if idx < len(right_items) else None,
+                )
 
     keys = sorted(set(sm1.keys()) | set(sm2.keys()), key=_id_sort_key)
     same_pack_context = pack_ctx1 == pack_ctx2
@@ -1468,52 +1465,46 @@ def compare_pck(
     }
     payload_jobs = []
     identical_rows = set()
-    for k in keys:
-        l1 = sm1.get(k, [])
-        l2 = sm2.get(k, [])
-        m = max(len(l1), len(l2))
-        for i in range(m):
-            r1 = l1[i] if i < len(l1) else None
-            r2 = l2[i] if i < len(l2) else None
-            row_sid1 = _scene_script_id_get(sid1, k)
-            row_sid2 = _scene_script_id_get(sid2, k)
-            same_data = bool(
-                r1
-                and r2
-                and (r1[1] - r1[0]) == (r2[1] - r2[0])
-                and b1[r1[0] : r1[1]] == b2[r2[0] : r2[1]]
-            )
-            identical = same_data and row_sid1 == row_sid2 and same_pack_context
-            if identical and not compare_payload:
-                continue
-            s1z = (r1[1] - r1[0]) if r1 else 0
-            s2z = (r2[1] - r2[0]) if r2 else 0
-            st1 = hx(r1[0]) if r1 else "-"
-            st2 = hx(r2[0]) if r2 else "-"
-            l1x = hx(r1[1] - 1) if r1 else "-"
-            l2x = hx(r2[1] - 1) if r2 else "-"
-            nm = k if i == 0 else f"{k}#{i:d}"
-            sid_text = _scene_script_id_pair(row_sid1, row_sid2)
-            if compare_payload:
-                if identical:
-                    identical_rows.add(len(rows))
-                payload_jobs.append(
-                    (
-                        len(rows),
-                        b1[int(r1[0]) : int(r1[1])] if r1 else None,
-                        b2[int(r2[0]) : int(r2[1])] if r2 else None,
-                        h1,
-                        h2,
-                        exe_el1,
-                        exe_el2,
-                        pack_ctx1,
-                        pack_ctx2,
-                        k,
-                    )
+    for k, i, r1, r2 in _iter_scene_pairs(sm1, sm2, keys):
+        row_sid1 = _scene_script_id_get(sid1, k)
+        row_sid2 = _scene_script_id_get(sid2, k)
+        same_data = bool(
+            r1
+            and r2
+            and (r1[1] - r1[0]) == (r2[1] - r2[0])
+            and b1[r1[0] : r1[1]] == b2[r2[0] : r2[1]]
+        )
+        identical = same_data and row_sid1 == row_sid2 and same_pack_context
+        if identical and not compare_payload:
+            continue
+        s1z = (r1[1] - r1[0]) if r1 else 0
+        s2z = (r2[1] - r2[0]) if r2 else 0
+        st1 = hx(r1[0]) if r1 else "-"
+        st2 = hx(r2[0]) if r2 else "-"
+        l1x = hx(r1[1] - 1) if r1 else "-"
+        l2x = hx(r2[1] - 1) if r2 else "-"
+        nm = k if i == 0 else f"{k}#{i:d}"
+        sid_text = _scene_script_id_pair(row_sid1, row_sid2)
+        if compare_payload:
+            if identical:
+                identical_rows.add(len(rows))
+            payload_jobs.append(
+                (
+                    len(rows),
+                    b1[int(r1[0]) : int(r1[1])] if r1 else None,
+                    b2[int(r2[0]) : int(r2[1])] if r2 else None,
+                    h1,
+                    h2,
+                    exe_el1,
+                    exe_el2,
+                    pack_ctx1,
+                    pack_ctx2,
+                    k,
                 )
-                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text, "-"))
-            else:
-                rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text))
+            )
+            rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text, "-"))
+        else:
+            rows.append((nm, st1, l1x, s1z, st2, l2x, s2z, sid_text))
     if compare_payload and payload_jobs:
         from .parallel import parallel_process_map
 
@@ -1542,29 +1533,23 @@ def compare_pck(
     om2 = _os_map(os2)
     okeys = sorted(set(om1.keys()) | set(om2.keys()), key=_id_sort_key)
     orows = []
-    for k in okeys:
-        l1 = om1.get(k, [])
-        l2 = om2.get(k, [])
-        m = max(len(l1), len(l2))
-        for i in range(m):
-            r1 = l1[i] if i < len(l1) else None
-            r2 = l2[i] if i < len(l2) else None
-            row_sid1 = _scene_script_id_get(sid1, k)
-            row_sid2 = _scene_script_id_get(sid2, k)
-            if r1 and r2 and r1[2] == r2[2] and r1[3] == r2[3] and row_sid1 == row_sid2:
-                continue
-            s1z = r1[2] if r1 else 0
-            s2z = r2[2] if r2 else 0
-            a1 = hx(r1[0]) if r1 else "-"
-            l1x = hx(r1[1] - 1) if r1 else "-"
-            a2 = hx(r2[0]) if r2 else "-"
-            l2x = hx(r2[1] - 1) if r2 else "-"
-            nm = k if i == 0 else f"{k}#{i:d}"
-            sid_text = _scene_script_id_pair(row_sid1, row_sid2)
-            if compare_payload:
-                orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, sid_text, "-"))
-            else:
-                orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, sid_text))
+    for k, i, r1, r2 in _iter_scene_pairs(om1, om2, okeys):
+        row_sid1 = _scene_script_id_get(sid1, k)
+        row_sid2 = _scene_script_id_get(sid2, k)
+        if r1 and r2 and r1[2] == r2[2] and r1[3] == r2[3] and row_sid1 == row_sid2:
+            continue
+        s1z = r1[2] if r1 else 0
+        s2z = r2[2] if r2 else 0
+        a1 = hx(r1[0]) if r1 else "-"
+        l1x = hx(r1[1] - 1) if r1 else "-"
+        a2 = hx(r2[0]) if r2 else "-"
+        l2x = hx(r2[1] - 1) if r2 else "-"
+        nm = k if i == 0 else f"{k}#{i:d}"
+        sid_text = _scene_script_id_pair(row_sid1, row_sid2)
+        if compare_payload:
+            orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, sid_text, "-"))
+        else:
+            orows.append((nm, a1, l1x, s1z, a2, l2x, s2z, sid_text))
 
     def _row_sort_key(row):
         parts = []
@@ -1898,71 +1883,38 @@ def iter_exe_el_candidates(
         yield src if with_sources else src["exe_el"]
 
 
-def _build_disam_pack_context(blob: bytes, hdr=None, meta=None):
+def _build_disam_pack_context(blob: bytes, *, hdr, scene_names):
     try:
-        if not isinstance(blob, (bytes, bytearray, memoryview)):
-            return {}
-        if not hdr:
-            hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        if not hdr:
-            return {}
-        if not isinstance(meta, dict) or any(
-            key not in meta for key in ("inc_prop_names", "inc_cmd_names", "scn_names")
-        ):
-            _, auto_meta = _pck_sections(blob, preview=False)
-            if isinstance(meta, dict):
-                merged = dict(auto_meta or {})
-                merged.update(meta)
-                meta = merged
-            else:
-                meta = auto_meta
+        _, meta = _pck_sections(blob, preview=False)
         inc_prop_list = read_struct_list(
-            blob,
-            hdr.get("inc_prop_list_ofs", 0),
-            hdr.get("inc_prop_cnt", 0),
-            I32_PAIR_STRUCT,
+            blob, hdr["inc_prop_list_ofs"], hdr["inc_prop_cnt"], I32_PAIR_STRUCT
         )
         inc_cmd_list = read_struct_list(
-            blob,
-            hdr.get("inc_cmd_list_ofs", 0),
-            hdr.get("inc_cmd_cnt", 0),
-            I32_PAIR_STRUCT,
+            blob, hdr["inc_cmd_list_ofs"], hdr["inc_cmd_cnt"], I32_PAIR_STRUCT
         )
-        inc_prop_names = list((meta or {}).get("inc_prop_names") or [])
-        inc_cmd_names = list((meta or {}).get("inc_cmd_names") or [])
-        scn_names = list((meta or {}).get("scn_names") or [])
+        inc_prop_names = meta["inc_prop_names"]
+        inc_cmd_names = meta["inc_cmd_names"]
         return {
-            "scene_names": scn_names,
-            "inc_property_cnt": int(hdr.get("inc_prop_cnt", 0) or 0),
+            "scene_names": list(scene_names),
+            "inc_property_cnt": hdr["inc_prop_cnt"],
             "inc_property_defs": [
                 {
-                    "id": int(i),
-                    "form": int(it[0]),
-                    "size": int(it[1]),
-                    "name": (
-                        str(inc_prop_names[i])
-                        if 0 <= i < len(inc_prop_names)
-                        and inc_prop_names[i] is not None
-                        else ""
-                    ),
+                    "id": i,
+                    "form": it[0],
+                    "size": it[1],
+                    "name": inc_prop_names[i] if i < len(inc_prop_names) else "",
                 }
-                for i, it in enumerate(inc_prop_list or [])
-                if isinstance(it, (list, tuple)) and len(it) >= 2
+                for i, it in enumerate(inc_prop_list)
             ],
-            "inc_command_cnt": int(hdr.get("inc_cmd_cnt", 0) or 0),
+            "inc_command_cnt": hdr["inc_cmd_cnt"],
             "inc_command_defs": [
                 {
-                    "id": int(i),
-                    "name": (
-                        str(inc_cmd_names[i])
-                        if 0 <= i < len(inc_cmd_names) and inc_cmd_names[i] is not None
-                        else ""
-                    ),
-                    "scn_no": int(it[0]),
-                    "offset": int(it[1]),
+                    "id": i,
+                    "name": inc_cmd_names[i] if i < len(inc_cmd_names) else "",
+                    "scn_no": it[0],
+                    "offset": it[1],
                 }
-                for i, it in enumerate(inc_cmd_list or [])
-                if isinstance(it, (list, tuple)) and len(it) >= 2
+                for i, it in enumerate(inc_cmd_list)
             ],
         }
     except Exception:
@@ -1983,6 +1935,10 @@ def extract_pck(
     dat = read_bytes(input_pck)
     flix_info = _parse_flix_pck(dat)
     if flix_info and (not looks_like_siglus_pck(dat)):
+        if dat_txt:
+            option = "--decompile" if decompile else "--disam"
+            sys.stderr.write(f"{option} is not supported for Flix .pck containers\n")
+            return 2
         names = flix_info["names"]
         entries = flix_info["entries"]
         out_dir = _create_extract_dir(output_dir)
@@ -2004,11 +1960,12 @@ def extract_pck(
     scene_lists = _read_pck_scene_lists(dat, hdr=hdr)
     source_items = []
     source_failed = False
-    try:
-        source_items = list(_iter_pck_original_source_items(dat, hdr=hdr))
-    except ValueError as exc:
-        source_failed = True
-        sys.stderr.write(f"Failed to extract original sources: {exc}\n")
+    if not decompile:
+        try:
+            source_items = list(_iter_pck_original_source_items(dat, hdr=hdr))
+        except ValueError as exc:
+            source_failed = True
+            sys.stderr.write(f"Failed to extract original sources: {exc}\n")
     try:
         scene_exe_el = require_pck_scene_exe_el(
             dat,
@@ -2016,6 +1973,7 @@ def extract_pck(
             hdr=hdr,
             scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
+            source_entries=[] if decompile else None,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")
@@ -2024,7 +1982,11 @@ def extract_pck(
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")
-    if not source_failed and int(hdr.get("original_source_header_size", 0) or 0) != 0:
+    if (
+        not decompile
+        and not source_failed
+        and int(hdr.get("original_source_header_size", 0) or 0) != 0
+    ):
         try:
             for item in source_items:
                 raw = bytes(item.get("raw") or b"")
@@ -2038,18 +2000,19 @@ def extract_pck(
         except Exception as e:
             source_failed = True
             sys.stderr.write(f"Failed to extract original sources: {e}\n")
-    elif not source_failed:
+    elif not decompile and not source_failed:
         sys.stdout.write("Original sources: not embedded\n")
     D = None
     disam_stats = None
-    dat_items = []
     disam_fail_cnt = 0
     if dat_txt:
         from . import dat as D
 
         disam_stats = new_disam_stats()
-    for item in (
-        iter_pck_scene_dat_items(
+
+    def extract_dat_items():
+        nonlocal ok_cnt, fail_cnt
+        for item in iter_pck_scene_dat_items(
             dat,
             input_pck=input_pck,
             hdr=hdr,
@@ -2057,49 +2020,51 @@ def extract_pck(
             explicit_angou=explicit_angou,
             scene_exe_el=scene_exe_el,
             scene_lists=scene_lists,
-        )
-        or []
-    ):
-        nm = str(item.get("scene_name") or "")
-        rel = str(item.get("relpath") or (_safe_relpath(nm + ".dat") or (nm + ".dat")))
-        out_name = os.path.basename(rel) or rel
-        blob = item.get("blob")
-        if not blob:
-            sys.stderr.write(f"Failed: {out_name} (scene decode failed)\n")
-            fail_cnt += 1
-            continue
-        out_dat = bytes(blob)
-        out_path = _unique_outpath(bs_dir, out_name)
-        write_bytes(out_path, out_dat)
-        if D and (not D.is_decompiler_excluded_dat(out_path, nm)):
-            dat_items.append((out_path, out_dat, item))
-        ok_cnt += 1
-    if D and dat_items:
-        result = D.process_dat_output_items(
-            [
-                {
-                    "dat_path": dat_path,
-                    "blob": blob,
-                    "out_dir": os.path.dirname(dat_path) or bs_dir,
+        ):
+            nm = str(item.get("scene_name") or "")
+            rel = str(
+                item.get("relpath") or (_safe_relpath(nm + ".dat") or (nm + ".dat"))
+            )
+            out_name = os.path.basename(rel) or rel
+            blob = item.get("blob")
+            if not blob:
+                sys.stderr.write(f"Failed: {out_name} (scene decode failed)\n")
+                fail_cnt += 1
+                continue
+            out_dat = bytes(blob)
+            out_path = _unique_outpath(bs_dir, out_name)
+            write_bytes(out_path, out_dat)
+            ok_cnt += 1
+            if D and not D.is_decompiler_excluded_dat(out_path, nm):
+                yield {
+                    "dat_path": out_path,
+                    "blob": out_dat,
+                    "out_dir": os.path.dirname(out_path) or bs_dir,
                     "pack_context": item.get("pack_context"),
                     "scene_no": item.get("scene_no"),
                     "scene_name": item.get("scene_name"),
                 }
-                for dat_path, blob, item in dat_items
-            ],
+
+    dat_items = extract_dat_items()
+    if D:
+        result = D.process_dat_output_items(
+            dat_items,
             stats=disam_stats,
             decompile=decompile,
         )
-        failed_paths = list((result or {}).get("failed_paths") or [])
+        failed_paths = result["failed_paths"]
         disam_fail_cnt = len(failed_paths)
         for dat_path in failed_paths:
             sys.stderr.write(f"Failed: {os.path.basename(str(dat_path or ''))}\n")
+    else:
+        for _ in dat_items:
+            pass
     sys.stdout.write(f"Extracted scenes: {ok_cnt:d}\n")
     if fail_cnt:
         sys.stderr.write(f"Failed scenes: {fail_cnt:d}\n")
     if disam_fail_cnt:
         sys.stderr.write(f"Failed scene outputs: {disam_fail_cnt:d}\n")
-    if dat_txt and isinstance(disam_stats, dict):
+    if dat_txt:
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
         )

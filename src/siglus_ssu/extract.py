@@ -67,12 +67,12 @@ def _disassemble_dat_dir(
             continue
         items.append({"dat_path": dat_path, "blob": blob, "out_dir": output_dir})
     result = D.process_dat_output_items(items, stats=disam_stats)
-    written = list((result or {}).get("written") or [])
-    failed_paths = list((result or {}).get("failed_paths") or [])
+    written = result["written"]
+    failed_paths = result["failed_paths"]
     ok_cnt = len(written)
     fail_cnt = len(failed_paths)
-    for item in written:
-        sys.stdout.write(f"Wrote: {item.get('txt_path')}\n")
+    for path in written:
+        sys.stdout.write(f"Wrote: {path}\n")
     for dat_path in failed_paths:
         sys.stderr.write(f"Failed: {os.path.basename(str(dat_path or ''))}\n")
     if ok_cnt:

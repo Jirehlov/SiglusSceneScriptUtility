@@ -8,7 +8,11 @@ from .path_policy import read_file_stat, resolve_read_path
 from . import const as C
 from . import disam
 from . import pck
-from .decompiler import build_decompile_hints, write_decompiled_ss
+from .decompiler import (
+    _write_support_inc_lines,
+    build_decompile_hints,
+    write_decompiled_ss,
+)
 from .common import (
     hx,
     fmt_ts,
@@ -41,21 +45,10 @@ from .common import (
 
 def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
     out = []
-    try:
-        blob_ofs = int(blob_ofs)
-        blob_end = int(blob_end)
-    except (TypeError, ValueError):
-        return out
     if blob_ofs < 0 or blob_end < blob_ofs or blob_ofs > len(dat):
         return out
     blob_end = max(0, min(blob_end, len(dat)))
-    for si, (ofs_u16, ln_u16) in enumerate(idx_pairs or []):
-        try:
-            o = int(ofs_u16)
-            ln = int(ln_u16)
-        except (TypeError, ValueError):
-            out.append("")
-            continue
+    for si, (o, ln) in enumerate(idx_pairs):
         if o < 0 or ln < 0:
             out.append("")
             continue
@@ -65,14 +58,11 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
             out.append("")
             continue
         key = scene_string_xor_key(si)
-        u16 = []
         try:
-            for j in range(ln):
-                w = struct.unpack_from("<H", dat, a + j * 2)[0]
-                u16.append(w ^ key)
-            raw = b"".join(struct.pack("<H", w & 0xFFFF) for w in u16)
+            mask = int.from_bytes(key.to_bytes(2, "little") * ln, "little")
+            raw = (int.from_bytes(dat[a:b], "little") ^ mask).to_bytes(ln * 2, "little")
             out.append(raw.decode("utf-16le", "surrogatepass"))
-        except (struct.error, UnicodeDecodeError, ValueError):
+        except (UnicodeDecodeError, ValueError):
             out.append("")
     return out
 
@@ -85,16 +75,10 @@ def _build_decompile_hints(bundles):
         write_status(f"Building hints {name} ...")
 
     try:
-        return build_decompile_hints(
-            [
-                x
-                for x in list(bundles or [])
-                if isinstance(x, dict) and not bool(x.get("decompiler_excluded"))
-            ],
-            status=_hint_status,
-        )
-    except Exception:
-        return {}
+        return build_decompile_hints(bundles, status=_hint_status)
+    except Exception as exc:
+        sys.stderr.write(f"decompile: failed to build hints: {exc}\n")
+        return None
 
 
 def is_decompiler_excluded_dat(dat_path=None, scene_name=None):
@@ -112,30 +96,6 @@ def is_decompiler_excluded_dat(dat_path=None, scene_name=None):
         if is_named_filename(name, ANGOU_DAT_NAME):
             return True
     return False
-
-
-def _build_namae_defs(namae_list, str_list):
-    out = []
-    for idx, raw in enumerate(namae_list or []):
-        try:
-            sid = int(raw)
-        except (TypeError, ValueError):
-            continue
-        text = None
-        if 0 <= sid < len(str_list or []):
-            text = str(str_list[sid])
-        out.append({"id": int(idx), "str_id": sid, "text": text})
-    return out
-
-
-def _build_read_flag_defs(read_flag_list):
-    out = []
-    for idx, raw in enumerate(read_flag_list or []):
-        try:
-            out.append({"id": int(idx), "line": int(raw)})
-        except (TypeError, ValueError):
-            continue
-    return out
 
 
 def _payload_metadata_trace(meta, pack_context):
@@ -197,14 +157,12 @@ def _payload_metadata_trace(meta, pack_context):
         value=int(context.get("inc_property_cnt", 0) or 0),
     )
     for item in context.get("inc_property_defs") or []:
-        if not isinstance(item, dict):
-            continue
         emit(
             "meta_pack_property",
-            id=int(item.get("id", 0) or 0),
-            form=int(item.get("form", 0) or 0),
-            size=int(item.get("size", 0) or 0),
-            name=str(item.get("name", "") or ""),
+            id=item["id"],
+            form=item["form"],
+            size=item["size"],
+            name=item["name"],
         )
 
     scene_names = list(context.get("scene_names") or [])
@@ -214,19 +172,17 @@ def _payload_metadata_trace(meta, pack_context):
         value=int(context.get("inc_command_cnt", 0) or 0),
     )
     for item in context.get("inc_command_defs") or []:
-        if not isinstance(item, dict):
-            continue
-        scene_no = int(item.get("scn_no", -1))
+        scene_no = item["scn_no"]
         scene = str(scene_names[scene_no]) if 0 <= scene_no < len(scene_names) else None
         if current_scene is not None and scene is not None and scene != current_scene:
             continue
         emit(
             "meta_pack_command",
-            id=int(item.get("id", 0) or 0),
-            name=str(item.get("name", "") or ""),
+            id=item["id"],
+            name=item["name"],
             scene=scene,
             scene_no=scene_no if scene is None else None,
-            offset=int(item.get("offset", 0) or 0),
+            offset=item["offset"],
         )
     return out
 
@@ -263,13 +219,8 @@ def dat_disassembly_bundle(
         h = meta.get("header") or {}
         so, ss = bounds
         scn = blob[so : so + ss]
-        str_idx = read_struct_list(
-            blob,
-            h.get("str_index_list_ofs", 0),
-            h.get("str_index_cnt", 0),
-            I32_PAIR_STRUCT,
-        )
-        str_blob_end = h.get("str_list_ofs", 0) + max_pair_end(str_idx) * 2
+        str_idx = meta["str_index_list"]
+        str_blob_end = meta["str_blob_end"]
         str_list = (
             decode_xor_utf16le_strings(
                 blob, str_idx, h.get("str_list_ofs", 0), str_blob_end
@@ -277,18 +228,8 @@ def dat_disassembly_bundle(
             if str_idx
             else []
         )
-        label_list = read_struct_list(
-            blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), I32_STRUCT
-        )
-        z_label_list = read_struct_list(
-            blob, h.get("z_label_list_ofs", 0), h.get("z_label_cnt", 0), I32_STRUCT
-        )
-        namae_defs = (
-            [] if payload_trace else _build_namae_defs(meta.get("namae_list"), str_list)
-        )
-        read_flag_defs = (
-            [] if payload_trace else _build_read_flag_defs(meta.get("read_flag_list"))
-        )
+        label_list = meta["label_list"]
+        z_label_list = meta["z_label_list"]
         parse_status = {}
         result = disam.disassemble_scn_bytes(
             scn,
@@ -321,7 +262,7 @@ def dat_disassembly_bundle(
             "header": h,
             "sections": sections,
             "meta": meta,
-            "scn": scn,
+            "command_ranges": parse_status["command_ranges"],
             "str_list": str_list,
             "label_list": label_list,
             "z_label_list": z_label_list,
@@ -330,8 +271,6 @@ def dat_disassembly_bundle(
             "scene_name": scene_name,
             "dat_path": dat_path,
             "decompiler_excluded": decompiler_excluded,
-            "namae_defs": namae_defs,
-            "read_flag_defs": read_flag_defs,
             "trace": trace,
             "dis": dis,
             "complete": parse_status["complete"] and scn_structure_valid(blob),
@@ -340,43 +279,18 @@ def dat_disassembly_bundle(
         return None
 
 
-def _resolve_dat_output(dat_path, blob=None, out_dir=None, bundle=None):
-    try:
-        if not out_dir:
-            return None, None
-        if not dat_path:
-            return None, None
-        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None, None
-        if not isinstance(bundle, dict):
-            if not isinstance(blob, (bytes, bytearray)):
-                return None, None
-            bundle = dat_disassembly_bundle(blob, dat_path, with_trace=False)
-        if not isinstance(bundle, dict):
-            return None, None
-        return out_dir, bundle
-    except Exception:
-        return None, None
-
-
 def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     h = bundle.get("header") or {}
     str_list = bundle.get("str_list") or []
     label_list = bundle.get("label_list") or []
     z_label_list = bundle.get("z_label_list") or []
-    namae_defs = bundle.get("namae_defs") or []
-    read_flag_defs = bundle.get("read_flag_defs") or []
     dis = bundle.get("dis") or []
     so = int(h.get("scn_ofs", 0) or 0)
     ss = int(h.get("scn_size", 0) or 0)
     ended_unexpectedly = not bundle.get("complete")
-    if isinstance(stats, dict):
-        stats["disassembled"] = int(stats.get("disassembled", 0) or 0) + 1
-        if ended_unexpectedly:
-            stats["ended_unexpectedly"] = (
-                int(stats.get("ended_unexpectedly", 0) or 0) + 1
-            )
+    stats["disassembled"] += 1
     if ended_unexpectedly:
+        stats["ended_unexpectedly"] += 1
         print(f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly.")
     out_name = os.path.basename(str(dat_path)) + ".txt"
     out_path = os.path.join(str(out_dir), out_name)
@@ -397,11 +311,8 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     lines.append(f"scn_cmd_cnt: {int(h.get('scn_cmd_cnt', 0) or 0):d}")
     lines.append(f"namae_cnt: {int(h.get('namae_cnt', 0) or 0):d}")
     lines.append(f"read_flag_cnt: {int(h.get('read_flag_cnt', 0) or 0):d}")
-    if bundle.get("scene_no") is not None:
-        try:
-            lines.append(f"scene_no: {int(bundle.get('scene_no')):d}")
-        except Exception:
-            lines.append(f"scene_no: {bundle.get('scene_no')!r}")
+    if bundle["scene_no"] is not None:
+        lines.append(f"scene_no: {bundle['scene_no']:d}")
     if bundle.get("scene_name") not in (None, ""):
         lines.append(f"scene_name: {bundle.get('scene_name')}")
     lines.append("")
@@ -437,36 +348,23 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
         lines.append(f"[{i:d}] {s!r}")
     lines.append("")
     lines.append("---- namae_list ----")
-    for it in namae_defs:
-        if not isinstance(it, dict):
-            continue
-        sid = it.get("str_id")
-        text = it.get("text")
+    for idx, sid in enumerate(meta["namae_list"]):
+        text = str_list[sid] if 0 <= sid < len(str_list) else None
         lines.append(
-            f"[{int(it.get('id', 0) or 0):d}] str[{int(sid):d}] {repr(text) if text is not None else ''}".rstrip()
+            f"[{idx:d}] str[{sid:d}] {repr(text) if text is not None else ''}".rstrip()
         )
     lines.append("")
     lines.append("---- read_flag_list ----")
-    for it in read_flag_defs:
-        if not isinstance(it, dict):
-            continue
-        lines.append(
-            f"[{int(it.get('id', 0) or 0):d}] line {int(it.get('line', 0) or 0):d}"
-        )
+    for idx, line in enumerate(meta["read_flag_list"]):
+        lines.append(f"[{idx:d}] line {line:d}")
     lines.append("")
     lines.append("---- label_list ----")
-    for i, ofs in enumerate(label_list or []):
-        try:
-            lines.append(f"L{i:d} = {int(ofs):08X}")
-        except Exception:
-            lines.append(f"L{i:d} = {ofs!r}")
+    for i, ofs in enumerate(label_list):
+        lines.append(f"L{i:d} = {ofs:08X}")
     lines.append("")
     lines.append("---- z_label_list ----")
-    for i, ofs in enumerate(z_label_list or []):
-        try:
-            lines.append(f"Z{i:d} = {int(ofs):08X}")
-        except Exception:
-            lines.append(f"Z{i:d} = {ofs!r}")
+    for i, ofs in enumerate(z_label_list):
+        lines.append(f"Z{i:d} = {ofs:08X}")
     used = [(0, min(C.SCN_HDR_SIZE, len(blob)))]
     used.extend(
         (start, end)
@@ -498,29 +396,20 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     return out_path
 
 
-def _write_dat_txt(dat_path, blob, out_dir=None, stats=None, bundle=None):
+def _write_dat_txt(dat_path, blob, out_dir, stats, bundle):
     try:
-        out_dir, bundle = _resolve_dat_output(
-            dat_path, blob=blob, out_dir=out_dir, bundle=bundle
-        )
-        if not out_dir or not isinstance(bundle, dict):
+        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None
-        if bool(bundle.get("decompiler_excluded")):
+        if bundle["decompiler_excluded"]:
             return None
         return _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
     except Exception:
         return None
 
 
-def _write_dat_decompiled(
-    dat_path, out_dir=None, bundle=None, decompile_hints=None, stats=None
-):
+def _write_dat_decompiled(dat_path, out_dir, bundle, decompile_hints, stats):
     try:
-        if not out_dir or not isinstance(bundle, dict):
-            return None
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
-        if bool(bundle.get("decompiler_excluded")):
             return None
         name = os.path.basename(str(dat_path))
         write_status(f"Decompiling {name} ...")
@@ -532,81 +421,142 @@ def _write_dat_decompiled(
         return None
 
 
-def process_dat_output_items(items, stats=None, decompile=False):
-    bundle_list = []
+def process_dat_output_items(items, stats, decompile=False):
     ready_items = []
+    written_paths = []
     failed_paths = []
-    for item in list(items or []):
-        if not isinstance(item, dict):
-            continue
-        dat_path = item.get("dat_path")
-        blob = item.get("blob")
-        out_dir = item.get("out_dir")
-        name = os.path.basename(str(dat_path or ""))
-        write_status(f"Disassembling {name} ...")
+
+    def iter_bundles():
+        for item in items:
+            dat_path = item["dat_path"]
+            blob = item["blob"]
+            out_dir = item["out_dir"]
+            name = os.path.basename(str(dat_path or ""))
+            write_status(f"Disassembling {name} ...")
+            started = time.perf_counter()
+            bundle = dat_disassembly_bundle(
+                blob,
+                dat_path,
+                pack_context=item.get("pack_context"),
+                scene_no=item.get("scene_no"),
+                scene_name=item.get("scene_name"),
+                with_trace=decompile,
+                trace_profile="decompile" if decompile else None,
+            )
+            add_elapsed_seconds(
+                stats, "disassembly_seconds", time.perf_counter() - started
+            )
+            if bundle is None:
+                failed_paths.append(dat_path)
+                continue
+            started = time.perf_counter()
+            out_path = _write_dat_txt(
+                dat_path,
+                blob,
+                out_dir,
+                stats,
+                bundle=bundle,
+            )
+            add_elapsed_seconds(
+                stats, "disassembly_seconds", time.perf_counter() - started
+            )
+            bundle.pop("dis")
+            if not out_path:
+                failed_paths.append(dat_path)
+                continue
+            if decompile and not bundle["complete"]:
+                sys.stderr.write(f"decompile: incomplete disassembly: {dat_path}\n")
+                failed_paths.append(dat_path)
+                continue
+            written_paths.append(out_path)
+            if decompile:
+                ready_items.append(
+                    {
+                        "dat_path": dat_path,
+                        "out_dir": out_dir,
+                        "pack_context": item.get("pack_context"),
+                        "scene_no": item.get("scene_no"),
+                        "scene_name": item.get("scene_name"),
+                    }
+                )
+            yield bundle
+            del bundle
+
+    bundles = iter_bundles()
+    if decompile:
         started = time.perf_counter()
-        bundle = dat_disassembly_bundle(
-            blob,
-            dat_path,
-            pack_context=item.get("pack_context"),
-            scene_no=item.get("scene_no"),
-            scene_name=item.get("scene_name"),
-            with_trace=decompile,
-        )
-        add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
-        if not isinstance(bundle, dict):
-            failed_paths.append(dat_path)
-            continue
-        out_path = _write_dat_txt(
-            dat_path,
-            blob,
-            out_dir,
-            stats,
-            bundle=bundle,
-        )
-        if not out_path:
-            failed_paths.append(dat_path)
-            continue
-        if decompile:
-            bundle_list.append(bundle)
-        ready_items.append(
-            {
-                "dat_path": dat_path,
-                "out_dir": out_dir,
-                "bundle": bundle if decompile else None,
-                "txt_path": out_path,
-            }
-        )
-    if decompile and bundle_list:
-        started = time.perf_counter()
-        decompile_hints = _build_decompile_hints(bundle_list)
+        disassembly_before = stats["disassembly_seconds"]
+        decompile_hints = _build_decompile_hints(bundles)
+        if decompile_hints is not None:
+            try:
+                out_root = os.path.join(ready_items[0]["out_dir"], "decompiled")
+                os.makedirs(out_root, exist_ok=True)
+                _write_support_inc_lines(out_root, decompile_hints["inc_lines"])
+            except Exception as exc:
+                sys.stderr.write(
+                    f"decompile: failed to write shared declarations: {exc}\n"
+                )
+                decompile_hints = None
         add_elapsed_seconds(
-            stats, "decompile_hints_seconds", time.perf_counter() - started
+            stats,
+            "decompile_hints_seconds",
+            time.perf_counter()
+            - started
+            - (stats["disassembly_seconds"] - disassembly_before),
         )
+        if decompile_hints is None:
+            failed_paths.extend(item["dat_path"] for item in ready_items)
+            return {"written": written_paths, "failed_paths": failed_paths}
         for item in ready_items:
+            started = time.perf_counter()
+            try:
+                bundle = dat_disassembly_bundle(
+                    read_bytes(item["dat_path"]),
+                    item["dat_path"],
+                    pack_context=item["pack_context"],
+                    scene_no=item["scene_no"],
+                    scene_name=item["scene_name"],
+                    emit_text=False,
+                    trace_profile="decompile",
+                )
+            except OSError:
+                bundle = None
+            add_elapsed_seconds(
+                stats, "disassembly_seconds", time.perf_counter() - started
+            )
+            if bundle is None or not bundle["complete"]:
+                failed_paths.append(item["dat_path"])
+                del bundle
+                continue
             out_path = _write_dat_decompiled(
-                item.get("dat_path"),
-                out_dir=item.get("out_dir"),
-                bundle=item.get("bundle"),
+                item["dat_path"],
+                out_dir=item["out_dir"],
+                bundle=bundle,
                 decompile_hints=decompile_hints,
                 stats=stats,
             )
+            del bundle
             if not out_path:
-                failed_paths.append(item.get("dat_path"))
-    return {"written": ready_items, "failed_paths": failed_paths}
+                failed_paths.append(item["dat_path"])
+    else:
+        for bundle in bundles:
+            del bundle
+    return {"written": written_paths, "failed_paths": failed_paths}
 
 
-def _write_dat_disassembly(dat_path, blob, out_dir=None, stats=None):
+def _write_dat_disassembly(dat_path, blob, out_dir, stats):
     try:
         name = os.path.basename(str(dat_path))
         write_status(f"Disassembling {name} ...")
         started = time.perf_counter()
-        out_dir, bundle = _resolve_dat_output(dat_path, blob=blob, out_dir=out_dir)
-        if not out_dir or not isinstance(bundle, dict):
+        if not out_dir:
             return None
-        if bool(bundle.get("decompiler_excluded")):
+        bundle = dat_disassembly_bundle(blob, dat_path, with_trace=False)
+        if bundle is None:
             return None
-        out_path = _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
+        out_path = _write_dat_txt(dat_path, blob, out_dir, stats, bundle)
+        if not out_path:
+            return None
         add_elapsed_seconds(stats, "disassembly_seconds", time.perf_counter() - started)
         return out_path
     except Exception:
@@ -723,20 +673,17 @@ def _payload_trace_hash_bundles(trace):
         size += len(data)
         return size, True
 
-    for ev in trace or []:
-        if not isinstance(ev, dict):
-            continue
+    for ev in trace:
         full_norm = {}
         no_text_norm = {}
         for key in sorted(ev):
-            skey = str(key)
-            if skey.startswith("_"):
+            if key.startswith("_"):
                 continue
-            val = _payload_trace_normalize_value(ev, key, ev.get(key))
+            val = _payload_trace_normalize_value(ev, key, ev[key])
             if val is not None:
-                full_norm[skey] = val
-                if skey != "text":
-                    no_text_norm[skey] = val
+                full_norm[key] = val
+                if key != "text":
+                    no_text_norm[key] = val
         full_size, full_wrote_line = _update(
             full_h, full_size, full_wrote_line, full_norm
         )
@@ -770,13 +717,13 @@ def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes
         trace_profile="payload",
         with_trace=hashes,
     )
-    if not isinstance(bundle, dict):
+    if bundle is None:
         return None
-    if not bundle.get("complete"):
+    if not bundle["complete"]:
         return {"status": "INCOMPLETE"}
     if not hashes:
         return {"status": "COMPLETE"}
-    return _payload_trace_hash_bundles(bundle.get("trace") or [])
+    return _payload_trace_hash_bundles(bundle["trace"])
 
 
 def dat_sections(blob):

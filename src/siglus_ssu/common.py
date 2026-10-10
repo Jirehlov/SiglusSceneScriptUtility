@@ -4,6 +4,8 @@ import sys
 import struct
 import hashlib
 import re
+from functools import lru_cache, partial
+from types import SimpleNamespace
 import siglus_ssu as _runtime
 from . import command_name, const as C
 from .path_policy import (
@@ -61,47 +63,6 @@ def quote_ss_text(text):
     s = s.replace("\\", "\\\\").replace('"', '\\"')
     s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
     return f'"{s}"'
-
-
-def normalize_ss_quoted_literal_source(text):
-    s = str(text or "")
-    if len(s) < 2 or s[0] != '"' or s[-1] != '"':
-        return s
-    inner = s[1:-1]
-    out = []
-    i = 0
-    while i < len(inner):
-        ch = inner[i]
-        if ch == "\\":
-            if i + 1 >= len(inner):
-                out.append("\\\\")
-                i += 1
-                continue
-            nxt = inner[i + 1]
-            if nxt in '\\"n':
-                out.append("\\" + nxt)
-                i += 2
-                continue
-            out.append("\\\\")
-            i += 1
-            continue
-        if ch == '"':
-            out.append('\\"')
-            i += 1
-            continue
-        if ch == "\r":
-            if i + 1 < len(inner) and inner[i + 1] == "\n":
-                i += 1
-            out.append("\\n")
-            i += 1
-            continue
-        if ch == "\n":
-            out.append("\\n")
-            i += 1
-            continue
-        out.append(ch)
-        i += 1
-    return '"' + "".join(out) + '"'
 
 
 def unique_out_path(path):
@@ -207,14 +168,6 @@ def mark_named_usage(iad, name):
     rep = macro_map.get(str(name or ""))
     if isinstance(rep, dict) and "used_count" in rep:
         rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
-
-
-def array_element_info(elm_array_exact, parent_form):
-    try:
-        info = elm_array_exact.get(int(parent_form))
-    except Exception:
-        return None
-    return info if isinstance(info, dict) else None
 
 
 def is_trace_command_base(ev, base_name: str) -> bool:
@@ -406,10 +359,6 @@ def scan_text_comments(
 
 
 def split_element_code(code):
-    try:
-        code = int(code)
-    except (TypeError, ValueError):
-        return (None, None)
     return ((code >> 24) & 0xFF, code & 0xFFFF)
 
 
@@ -453,21 +402,10 @@ def build_operator_render_tables():
 
 
 def unary_result_form(form, opr, fm_int, unary_int_ops):
-    try:
-        if int(form) == int(fm_int) and int(opr) in unary_int_ops:
-            return fm_int
-    except (TypeError, ValueError):
-        return None
-    return None
+    return fm_int if form == fm_int and opr in unary_int_ops else None
 
 
 def binary_result_form(form_l, form_r, opr, fm_int, fm_str, string_cmp_ops):
-    try:
-        form_l = int(form_l)
-        form_r = int(form_r)
-        opr = int(opr)
-    except (TypeError, ValueError):
-        return None
     if form_l == int(fm_int) and form_r == int(fm_int):
         return fm_int
     if form_l == int(fm_str) and form_r == int(fm_int):
@@ -482,43 +420,944 @@ def binary_result_form(form_l, form_r, opr, fm_int, fm_str, string_cmp_ops):
     return None
 
 
-def latest_stack_start(elm_points, stack_len):
-    for ep in reversed(elm_points or []):
-        try:
-            sl = int((ep or {}).get("stack_len", 0) or 0)
-        except (TypeError, ValueError):
+def latest_stack_start(elm_points):
+    return elm_points[-1]["stack_len"] if elm_points else None
+
+
+def _build_system_element_index():
+    from collections import defaultdict
+    from .MA import parse_arg_spec
+
+    fm = C._FORM_CODE
+
+    def _to_code(form):
+        form = form.strip()
+        return fm.get(form, form) if form else None
+
+    def _pick_name(names):
+        uniq = list(dict.fromkeys(name for name in names if name))
+        plain = [name for name in uniq if not name.startswith("_")]
+        return (plain or uniq or [""])[0]
+
+    def _decorate_entry(info):
+        one = dict(info)
+        del one["spec"]
+        one["q"] = f"{one['parent']}.{one['name']}" if one["parent"] else one["name"]
+        return one
+
+    bucket = defaultdict(list)
+    for tp, parent, ret, name, owner, group, code, spec in C.SYSTEM_ELEMENT_DEFS:
+        parent_code = fm[parent]
+        ec = C.create_elm_code(owner, group, code)
+        bucket[(parent_code, ec)].append(
+            {
+                "type": tp,
+                "parent": parent,
+                "parent_code": parent_code,
+                "name": name,
+                "ret": _to_code(ret),
+                "spec": spec,
+                "arg_map": parse_arg_spec(spec),
+            }
+        )
+    out = {}
+    for key, items in bucket.items():
+        if len(items) == 1:
+            out[key] = _decorate_entry(items[0])
             continue
-        if 0 <= sl <= int(stack_len):
-            return sl
-    return None
+        types = {item["type"] for item in items}
+        rets = {item["ret"] for item in items}
+        specs = {item["spec"] for item in items}
+        if len(types) == 1 and len(rets) == 1 and len(specs) == 1:
+            one = dict(items[0])
+            one["name"] = _pick_name(item["name"] for item in items)
+            out[key] = _decorate_entry(one)
+            continue
+        variants = [_decorate_entry(item) for item in items]
+        one = dict(variants[0])
+        one["alts"] = variants
+        out[key] = one
+    return out
 
 
-def normalize_stack_start(stack_start, stack_len):
-    try:
-        stack_start = int(stack_start)
-    except (TypeError, ValueError):
+def _build_array_return_form_index():
+    fm = C._FORM_CODE
+    return {
+        fm[parent]: fm[ret]
+        for tp, parent, ret, name, _, _, _, _ in C.SYSTEM_ELEMENT_DEFS
+        if tp == C.ET_PROPERTY and name == "array"
+    }
+
+
+@lru_cache(maxsize=4)
+def scn_expression_tables(_profile):
+    elements = _build_system_element_index()
+    array_return_forms = _build_array_return_form_index()
+    receiver_forms = {int(key[0]) for key in elements}
+    receiver_forms.update(array_return_forms)
+    unary_int_ops, string_cmp_ops, unary_text, binary_text = (
+        build_operator_render_tables()
+    )
+    return SimpleNamespace(
+        form_names=invert_form_code_map(),
+        elements=elements,
+        array_return_forms=array_return_forms,
+        receiver_forms=frozenset(augment_receiver_form_codes(receiver_forms)),
+        unary_int_ops=unary_int_ops,
+        string_cmp_ops=string_cmp_ops,
+        unary_text=unary_text,
+        binary_text=binary_text,
+    )
+
+
+def format_integer_literal(value):
+    value = int(value)
+    return f"0x{value & 0xFFFFFFFF:08x}" if value < 0 else str(value)
+
+
+def new_call_scope(ranges):
+    state = SimpleNamespace(slots={}, decl_forms=[], version=0)
+    frames = []
+
+    def advance(ofs):
+        while frames and ofs >= frames[-1][0]:
+            _, state.slots, state.decl_forms = frames.pop()
+            state.version += 1
+        if ofs in ranges:
+            frames.append((ranges[ofs], state.slots, state.decl_forms))
+            state.slots, state.decl_forms = {}, []
+            state.version += 1
+
+    def declare(form, name):
+        slot = len(state.decl_forms)
+        state.slots[slot] = {
+            "type": C.ET_PROPERTY,
+            "parent": C.FM_CALL,
+            "parent_code": C._FORM_CODE[C.FM_CALL],
+            "name": name,
+            "ret": int(form),
+            "q": name or f"$slot_{slot:d}",
+        }
+        state.decl_forms.append({"form": int(form)})
+        state.version += 1
+
+    state.advance = advance
+    state.declare = declare
+    return state
+
+
+def _element_member_name(info):
+    name = info["name"].strip()
+    if name:
+        return name
+    return info["q"].strip().rsplit(".", 1)[-1]
+
+
+def append_element_member(base, info, *, qualified_root):
+    name = _element_member_name(info)
+    if base:
+        return f"{base}.{name}" if name else base
+    return name if name and not qualified_root else info["q"]
+
+
+def new_scene_element_resolver(
+    *,
+    call_scope,
+    global_property_defs,
+    global_property_count,
+    scene_property_defs,
+    global_command_defs,
+    global_command_count,
+    scene_command_names,
+):
+    tables = scn_expression_tables(C.CONST_PROFILE)
+    fm_global = C.resolve_form_code(C.FM_GLOBAL)
+    fm_call = C.resolve_form_code(C.FM_CALL)
+
+    def _properties(definitions, field, offset):
+        out = {}
+        entries = (
+            definitions.items()
+            if isinstance(definitions, dict)
+            else enumerate(definitions or [])
+        )
+        for idx, info in entries:
+            code = offset + info.get(field, idx)
+            form = info["form"]
+            name = info["name"]
+            out[code] = {
+                "type": C.ET_PROPERTY,
+                "parent": "",
+                "parent_code": fm_global,
+                "name": name,
+                "ret": form,
+                "q": name or f"$prop_{code:d}",
+            }
+        return out
+
+    properties = _properties(global_property_defs, "id", 0)
+    properties.update(
+        _properties(scene_property_defs, "code", int(global_property_count))
+    )
+    entries = (
+        global_command_defs.items()
+        if isinstance(global_command_defs, dict)
+        else enumerate(global_command_defs or [])
+    )
+    command_names = {}
+    for idx, info in entries:
+        command_names[info.get("id", idx)] = info["name"]
+    local_names = (
+        scene_command_names.items()
+        if isinstance(scene_command_names, dict)
+        else (
+            (int(global_command_count) + idx, name)
+            for idx, name in enumerate(scene_command_names or [])
+        )
+    )
+    for code, name in local_names:
+        if not command_names.get(code):
+            command_names[code] = str(name or "")
+
+    def _element_info(parent_form, code):
+        info = tables.elements.get((parent_form, code))
+        if info is not None:
+            return info
+        owner, idx = split_element_code(code)
+        if parent_form == fm_call and owner == C.ELM_OWNER_CALL_PROP:
+            return call_scope.slots.get(idx)
+        if parent_form == fm_global and owner == C.ELM_OWNER_USER_PROP:
+            return properties.get(idx)
+        if parent_form == fm_global and owner == C.ELM_OWNER_USER_CMD:
+            name = command_names.get(idx, "")
+            return {
+                "type": C.ET_COMMAND,
+                "parent": "",
+                "parent_code": fm_global,
+                "name": name,
+                "ret": None,
+                "q": name or f"__cmd_{idx:d}",
+            }
         return None
-    if stack_start < 0:
-        return 0
-    if stack_start > int(stack_len):
-        return int(stack_len)
-    return stack_start
+
+    return _element_info
 
 
-def clone_stack_segment(stack, stack_start, int_getter):
-    stack_start = normalize_stack_start(stack_start, len(stack or []))
-    if stack_start is None or stack_start >= len(stack or []):
+def new_expression_item_formatter(*, str_list, string_literal, format_form):
+    fm_int = C.resolve_form_code(C.FM_INT)
+    fm_str = C.resolve_form_code(C.FM_STR)
+    fm_label = C.resolve_form_code(C.FM_LABEL)
+
+    def _format_item(item, expect_form=None):
+        expression = item["expr"]
+        if expression:
+            return expression
+        form = item["form"]
+        value = item["val"]
+        if expect_form == fm_label:
+            return f"L{value:d}" if value is not None else "label(?)"
+        if form == fm_str:
+            if value is not None and 0 <= value < len(str_list):
+                return string_literal(str_list[value])
+            return f"$str[{value:d}]" if value is not None else '""'
+        if form in (fm_int, fm_label):
+            return format_integer_literal(value) if value is not None else "0"
+        return format_form(form) if form is not None else "<?>"
+
+    return _format_item
+
+
+def format_arg_layout(layout, format_form):
+    fm_list = C._FORM_CODE[C.FM_LIST]
+    out = []
+    for arg in layout:
+        form = arg["form"]
+        if form == fm_list:
+            sub = format_arg_layout(arg.get("sub") or [], format_form)
+            out.append("list[" + ", ".join(sub) + "]")
+        else:
+            out.append(format_form(form))
+    return out
+
+
+def new_expression_state(
+    *,
+    element_info,
+    item_expr,
+    append_member_expr=None,
+    gosub_expression=None,
+    command_expression=None,
+    render_expressions=True,
+    result_receivers=True,
+):
+    tables = scn_expression_tables(C.CONST_PROFILE)
+    fm_global = C.resolve_form_code(C.FM_GLOBAL)
+    fm_void = C.resolve_form_code(C.FM_VOID)
+    fm_int = C.resolve_form_code(C.FM_INT)
+    fm_str = C.resolve_form_code(C.FM_STR)
+    fm_label = C.resolve_form_code(C.FM_LABEL)
+    fm_list = C.resolve_form_code(C.FM_LIST)
+    list_forms = {C.resolve_form_code(C.FM_INTLIST), C.resolve_form_code(C.FM_STRLIST)}
+    scalar_forms = {fm_int, fm_str, fm_label}
+    receiver_forms = tables.receiver_forms
+    ref_to_val = {
+        C.resolve_form_code(C.FM_INTREF): fm_int,
+        C.resolve_form_code(C.FM_STRREF): fm_str,
+        C.resolve_form_code(C.FM_INTLISTREF): C.resolve_form_code(C.FM_INTLIST),
+        C.resolve_form_code(C.FM_STRLISTREF): C.resolve_form_code(C.FM_STRLIST),
+    }
+    unary_text = tables.unary_text
+    binary_text = tables.binary_text
+    array_result_form = tables.array_return_forms.get
+
+    def _info_variants(info):
+        if info is None:
+            return []
+        return info.get("alts") or [info]
+
+    state = SimpleNamespace(stack=[], elm_points=[], scalar_forms=scalar_forms)
+    stack = state.stack
+    elm_points = state.elm_points
+    command_cache = {}
+    command_not_cached = object()
+    command_cache_version = None
+
+    def _append_member_expr(base, parent_form, info, idx, items):
+        if append_member_expr is None:
+            return append_element_member(base, info, qualified_root=True)
+        return append_member_expr(base, parent_form, info, idx, items)
+
+    def _stack_int_value(it):
+        return it["val"] if it["form"] == fm_int else None
+
+    def _receiver_value_form(form):
+        return ref_to_val.get(form, form if form in scalar_forms else None)
+
+    def _drop_stack_tail(stack_start):
+        del stack[stack_start:]
+        while elm_points and elm_points[-1]["stack_len"] >= stack_start:
+            elm_points.pop()
+
+    def _pop_stack_top():
+        if not stack:
+            return None
+        it = stack.pop()
+        stack_start = len(stack)
+        while elm_points and elm_points[-1]["stack_len"] >= stack_start:
+            elm_points.pop()
+        return it
+
+    def _push_stack_value(
+        form,
+        val=None,
+        receiver=None,
+        expr=None,
+    ):
+        if receiver is None:
+            receiver = form in receiver_forms
+        one = {
+            "form": form,
+            "val": val,
+            "receiver": receiver,
+            "expr": expr,
+        }
+        stack.append(one)
+        if receiver:
+            elm_points.append({"stack_len": len(stack) - 1})
+
+    def _collapse_value_expr(stack_start, out_form, expr):
+        _drop_stack_tail(stack_start)
+        if out_form is None:
+            _push_stack_value(None, receiver=False, expr=expr)
+            return
+        out_form = int_or_none(out_form)
+        if out_form is None or out_form == fm_void:
+            return
+        _push_stack_value(out_form, expr=expr)
+
+    def _copy_scalar(form):
+        if not stack:
+            return
+        top = stack[-1]
+        have = top["form"]
+        if (form == fm_str and have == fm_str) or (
+            form in (fm_int, fm_label) and have in (fm_int, fm_label)
+        ):
+            stack.append(top.copy())
+
+    def _copy_element():
+        stack_start = latest_stack_start(elm_points)
+        if stack_start is None or stack_start >= len(stack):
+            return
+        new_start = len(stack)
+        stack.extend(it.copy() for it in stack[stack_start:])
+        elm_points.append({"stack_len": new_start})
+
+    def _consume_element():
+        stack_start = latest_stack_start(elm_points)
+        if stack_start is None:
+            _pop_stack_top()
+            return
+        _drop_stack_tail(stack_start)
+
+    def _consume_arg_value(arg_info):
+        form = arg_info["form"]
+        if form == fm_list:
+            for sub in reversed(arg_info.get("sub") or []):
+                _consume_arg_value(sub)
+            return
+        if form in scalar_forms:
+            _pop_stack_top()
+            return
+        _consume_element()
+
+    def _pop_scalar_expr(expect_form=None):
+        if not stack:
+            return "<?>"
+        return item_expr(_pop_stack_top(), expect_form)
+
+    def _format_unary_expr(opr, rhs):
+        op_txt = unary_text.get(opr)
+        if not op_txt:
+            return None
+        return f"({op_txt}{rhs})"
+
+    def _format_binary_expr(opr, lhs, rhs):
+        op_txt = binary_text.get(opr)
+        if not op_txt:
+            return None
+        return f"({lhs} {op_txt} {rhs})"
+
+    def _render_element_path(items, resolved, *, command=False):
+        if resolved is None:
+            return None
+        parent_form = fm_global
+        idx = 0
+        base = ""
+        while idx < len(items):
+            it = items[idx]
+            code = _stack_int_value(it)
+            if code is None:
+                parent_form = it["form"]
+                base = item_expr(it)
+                idx += 1
+            elif code == C.ELM_ARRAY:
+                parent_form = array_result_form(parent_form)
+                base = f"{base}[{item_expr(items[idx + 1])}]"
+                idx += 2
+            else:
+                info = resolved["path"][idx]
+                base = _append_member_expr(base, parent_form, info, idx, items)
+                parent_form = info.get("ret")
+                idx += 1
+        if command:
+            return {"info": resolved["info"], "call_name": base or "<?command>"}
+        return {"expr": base or "<?property>"}
+
+    def _render_property_expr_items(items):
+        return _render_element_path(items, _scan_element_path(items))
+
+    def _pop_element_expr():
+        stack_start = latest_stack_start(elm_points)
+        if stack_start is None:
+            if stack:
+                rendered = _render_property_expr_items([stack[-1]])
+                expr = rendered["expr"] if rendered is not None else None
+                if expr:
+                    _pop_stack_top()
+                    return expr
+            return _pop_scalar_expr()
+        items = stack[stack_start:]
+        rendered = _render_property_expr_items(items)
+        expr = rendered["expr"] if rendered is not None else None
+        if not expr:
+            expr = item_expr(items[-1]) if items else "<?>"
+        _drop_stack_tail(stack_start)
+        return expr
+
+    def _pop_arg_expr(arg_info):
+        form = arg_info["form"]
+        if form == fm_list:
+            vals = _pop_arg_list(arg_info.get("sub") or [], _pop_arg_expr)
+            return "[" + ", ".join(vals) + "]"
+        if form == fm_label:
+            return _pop_scalar_expr(fm_label)
+        if form in scalar_forms:
+            return _pop_scalar_expr(form)
+        return _pop_element_expr()
+
+    def _pop_arg_list(arg_forms, pop_arg):
+        vals = []
+        for arg_info in reversed(arg_forms):
+            vals.append(pop_arg(arg_info))
+        vals.reverse()
+        return vals
+
+    def _snapshot_state():
+        return stack.copy(), elm_points.copy()
+
+    def _restore_state(saved):
+        saved_stack, saved_points = saved
+        stack[:] = saved_stack
+        elm_points[:] = saved_points
+
+    def _peek_arg_list(arg_forms, pop_arg):
+        if pop_arg is _pop_arg_expr and all(
+            arg["form"] in scalar_forms for arg in arg_forms
+        ):
+            start = len(stack) - len(arg_forms)
+            return [
+                item_expr(stack[start + idx], arg["form"])
+                if start + idx >= 0
+                else "<?>"
+                for idx, arg in enumerate(arg_forms)
+            ]
+        saved = _snapshot_state()
+        try:
+            return _pop_arg_list(arg_forms, pop_arg)
+        finally:
+            _restore_state(saved)
+
+    def _peek_arg_expr(form):
+        if form in scalar_forms:
+            return item_expr(stack[-1], form) if stack else "<?>"
+        return _peek_arg_list([{"form": form}], _pop_arg_expr)[0]
+
+    def _peek_branch_expr():
+        if not stack:
+            return None
+        return _peek_arg_expr(fm_int)
+
+    def _scan_element_path(
+        items, idx=0, parent_form=None, *, command_matches=None, expected_ret=None
+    ):
+        parent_form = fm_global if parent_form is None else parent_form
+        while idx < len(items):
+            it = items[idx]
+            code = _stack_int_value(it)
+            if code is None:
+                if not bool(it.get("receiver")):
+                    return None
+                parent_form = int(it["form"])
+                if command_matches is None and idx == len(items) - 1:
+                    return {"ret_form": _receiver_value_form(parent_form), "path": {}}
+                idx += 1
+                continue
+            if int(code) == C.ELM_ARRAY:
+                ret_form = array_result_form(parent_form)
+                if ret_form is None or idx + 1 >= len(items):
+                    return None
+                if int(items[idx + 1].get("form", -1)) != int(fm_int):
+                    return None
+                if command_matches is None and idx + 1 == len(items) - 1:
+                    return {"ret_form": ret_form, "path": {}}
+                parent_form = ret_form
+                idx += 2
+                continue
+            for info in _info_variants(element_info(parent_form, code)):
+                tp = int(info.get("type", -1))
+                ret_form = info.get("ret")
+                if tp == C.ET_PROPERTY:
+                    if command_matches is None and idx == len(items) - 1:
+                        return {"ret_form": ret_form, "path": {idx: info}}
+                    if isinstance(ret_form, int):
+                        sub = _scan_element_path(
+                            items,
+                            idx + 1,
+                            int(ret_form),
+                            command_matches=command_matches,
+                            expected_ret=expected_ret,
+                        )
+                        if sub is not None:
+                            sub["path"][idx] = info
+                            return sub
+                elif (
+                    command_matches is not None
+                    and tp == C.ET_COMMAND
+                    and idx == len(items) - 1
+                ):
+                    if (
+                        expected_ret is not None
+                        and isinstance(ret_form, int)
+                        and ret_form != int(expected_ret)
+                    ):
+                        continue
+                    if command_matches(info):
+                        return {
+                            "element_code": int(code),
+                            "info": info,
+                            "path": {idx: info},
+                        }
+            return None
         return None
-    seg = [dict(it) for it in (stack or [])[stack_start:]]
-    if not seg:
+
+    def _resolve_element_path(
+        *, command_matches=None, expected_ret=None, stack_end=None
+    ):
+        if stack_end is None:
+            stack_end = len(stack)
+        for ep in reversed(elm_points):
+            stack_start = ep["stack_len"]
+            if stack_start >= stack_end:
+                continue
+            res = _scan_element_path(
+                stack[stack_start:stack_end],
+                command_matches=command_matches,
+                expected_ret=expected_ret,
+            )
+            if res is None:
+                continue
+            res["stack_start"] = stack_start
+            if command_matches is not None:
+                res["stack_end"] = stack_end
+            return res
         return None
-    first_int = None
-    for it in seg:
-        v = int_getter(it)
-        if v is not None:
-            first_int = int(v)
-            break
-    return seg, first_int
+
+    def _command_signature_matches(info, arg_layout, arg_list_id, named_ids):
+        arg_map = info.get("arg_map")
+        if not arg_map:
+            return True
+        named_ids = list(reversed(named_ids))
+        positional_count = len(arg_layout) - len(named_ids)
+        if positional_count < 0:
+            return False
+        entry = arg_map.get(arg_list_id)
+        if arg_list_id == -1 or entry is None:
+            return False
+
+        def _form_matches(spec, actual):
+            expected = C._FORM_CODE.get(spec.get("form"))
+            actual_form = int(actual.get("form", -1))
+            if expected is None or actual_form == int(expected):
+                return True
+            return (
+                expected == C._FORM_CODE.get(C.FM_INT)
+                and actual_form == C._FORM_CODE.get(C.FM_INTREF)
+                and (info.get("parent"), info.get("name"), spec.get("name"))
+                in C.NAMED_INT_REFERENCE_ARGUMENTS
+            )
+
+        args = entry["arg_list"]
+        fixed = next(
+            (
+                i
+                for i, arg in enumerate(args)
+                if arg.get("form") in (C.FM___ARGS, C.FM___ARGSREF)
+            ),
+            len(args),
+        )
+        if positional_count < fixed or (
+            fixed == len(args) and positional_count != fixed
+        ):
+            return False
+        if any(
+            not _form_matches(spec, actual)
+            for spec, actual in zip(args[:fixed], arg_layout[:fixed])
+        ):
+            return False
+        named_specs = {
+            int(arg.get("id", 0)): arg
+            for arg in (arg_map.get(-1) or {}).get("arg_list") or []
+        }
+        if any(int(idx) not in named_specs for idx in named_ids):
+            return False
+        if any(
+            not _form_matches(named_specs[int(idx)], arg_layout[positional_count + i])
+            for i, idx in enumerate(named_ids)
+        ):
+            return False
+        return True
+
+    def _resolve_command_path(
+        expected_ret, arg_layout, arg_list_id, named_ids, call_scope, stack_end
+    ):
+        nonlocal command_cache_version
+        cache_key = None
+        if (
+            stack_end <= 16
+            and len(elm_points) <= 16
+            and len(arg_layout) <= 16
+            and len(named_ids) <= 16
+        ):
+            if command_cache_version != call_scope.version:
+                command_cache.clear()
+                command_cache_version = call_scope.version
+            cache_key = (
+                expected_ret,
+                arg_list_id,
+                tuple(arg["form"] for arg in arg_layout),
+                tuple(named_ids),
+                tuple(
+                    (item["form"], _stack_int_value(item), item.get("receiver"))
+                    for item in stack[:stack_end]
+                ),
+                tuple(
+                    point["stack_len"]
+                    for point in elm_points
+                    if point["stack_len"] < stack_end
+                ),
+            )
+            cached = command_cache.get(cache_key, command_not_cached)
+            if cached is not command_not_cached:
+                return cached
+        resolved = _resolve_element_path(
+            command_matches=partial(
+                _command_signature_matches,
+                arg_layout=arg_layout,
+                arg_list_id=arg_list_id,
+                named_ids=named_ids,
+            ),
+            expected_ret=expected_ret,
+            stack_end=stack_end,
+        )
+        if cache_key is not None:
+            if len(command_cache) >= 256:
+                command_cache.clear()
+            command_cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_command_expr(
+        expected_ret, *, arg_layout, arg_list_id, named_ids, call_scope
+    ):
+        if all(arg["form"] in scalar_forms for arg in arg_layout):
+            return _resolve_command_path(
+                expected_ret,
+                arg_layout,
+                arg_list_id,
+                named_ids,
+                call_scope,
+                max(0, len(stack) - len(arg_layout)),
+            )
+        saved = _snapshot_state()
+        try:
+            for arg_info in reversed(arg_layout):
+                _consume_arg_value(arg_info)
+            return _resolve_command_path(
+                expected_ret, arg_layout, arg_list_id, named_ids, call_scope, len(stack)
+            )
+        finally:
+            _restore_state(saved)
+
+    def _clear():
+        stack[:] = []
+        elm_points[:] = []
+
+    def _peek_assign_expr(right_form):
+        saved = _snapshot_state()
+        try:
+            right = _pop_arg_expr({"form": right_form})
+            left = _pop_element_expr()
+            return f"{left} = {right}"
+        finally:
+            _restore_state(saved)
+
+    def _prepare_command(event, call_scope):
+        arg_layout = event["arg_layout"]
+        resolved = _resolve_command_expr(
+            event["ret_form"],
+            arg_layout=arg_layout,
+            arg_list_id=event["arg_list_id"],
+            named_ids=event["named_ids"],
+            call_scope=call_scope,
+        )
+        stack_start = latest_stack_start(elm_points)
+        info = {}
+        if resolved is not None:
+            stack_start = resolved["stack_start"]
+            info = resolved["info"]
+        return {
+            "resolved": resolved,
+            "stack_start": stack_start,
+            "info": info,
+            "element_code": resolved["element_code"] if resolved is not None else None,
+        }
+
+    def _apply_event(event, call_scope, command=None):
+        op = event["op"]
+        result = {}
+        if op == "CD_PUSH":
+            _push_stack_value(event["form"], val=event["value"], receiver=False)
+        elif op == "CD_POP":
+            form = event["form"]
+            if form in scalar_forms:
+                if render_expressions:
+                    result["_expr"] = _peek_arg_expr(form)
+                _pop_stack_top()
+        elif op == "CD_COPY":
+            _copy_scalar(event["form"])
+        elif op == "CD_PROPERTY":
+            resolved = _resolve_element_path()
+            stack_start = (
+                resolved["stack_start"]
+                if resolved is not None
+                else latest_stack_start(elm_points)
+            )
+            if stack_start is not None:
+                rendered = (
+                    _render_element_path(stack[stack_start:], resolved)
+                    if render_expressions
+                    else None
+                )
+                expression = rendered["expr"] if rendered is not None else None
+                out_form = resolved["ret_form"] if resolved is not None else None
+                if out_form is None and stack_start < len(stack):
+                    out_form = _receiver_value_form(stack[stack_start].get("form"))
+                if expression:
+                    result["_expr"] = expression
+                _collapse_value_expr(stack_start, out_form, expr=expression)
+            else:
+                _pop_stack_top()
+        elif op == "CD_COPY_ELM":
+            _copy_element()
+        elif op == "CD_ARG":
+            for form in reversed(call_scope.decl_forms):
+                _consume_arg_value(form)
+        elif op == "CD_ELM_POINT":
+            elm_points.append({"stack_len": len(stack)})
+        elif op == "CD_DEC_PROP":
+            form = event["form"]
+            if form in list_forms:
+                result["size"] = _stack_int_value(stack[-1]) if stack else None
+                if render_expressions:
+                    result["_size_expr"] = _peek_arg_expr(fm_int)
+                _pop_stack_top()
+            call_scope.declare(form, event["name"])
+        elif op in ("CD_GOTO_TRUE", "CD_GOTO_FALSE"):
+            if render_expressions:
+                condition = _peek_branch_expr()
+                if condition:
+                    result["_cond"] = condition
+            _pop_stack_top()
+        elif op in ("CD_GOSUB", "CD_GOSUBSTR", "CD_RETURN"):
+            arg_layout = event["arg_layout"]
+            args = (
+                _peek_arg_list(arg_layout, _pop_arg_expr) if render_expressions else []
+            )
+            result["_arg_exprs"] = args
+            expression = None
+            if op == "CD_RETURN":
+                if args:
+                    result["_expr"] = args[0]
+            else:
+                expression = (
+                    gosub_expression(event, args)
+                    if render_expressions and gosub_expression is not None
+                    else None
+                )
+                if expression:
+                    result["_expr"] = expression
+            for arg in reversed(arg_layout):
+                _consume_arg_value(arg)
+            if op == "CD_RETURN":
+                _clear()
+            else:
+                _push_stack_value(
+                    fm_int if op == "CD_GOSUB" else fm_str,
+                    expr=expression,
+                    receiver=None if result_receivers else False,
+                )
+        elif op == "CD_ASSIGN":
+            expression = (
+                _peek_assign_expr(event["right_form"]) if render_expressions else None
+            )
+            if expression:
+                result["_expr"] = expression
+            stack_start = latest_stack_start(elm_points)
+            if stack_start is not None:
+                _drop_stack_tail(stack_start)
+            else:
+                _pop_stack_top()
+        elif op == "CD_OPERATE_1":
+            form = event["form"]
+            opr = event["opr"]
+            rhs = _peek_arg_expr(form) if render_expressions else None
+            if rhs:
+                result["_expr"] = rhs
+            _pop_stack_top()
+            out_form = unary_result_form(form, opr, fm_int, tables.unary_int_ops)
+            if out_form is not None:
+                _push_stack_value(
+                    out_form,
+                    expr=_format_unary_expr(opr, rhs) if rhs else None,
+                    receiver=None if result_receivers else False,
+                )
+        elif op == "CD_OPERATE_2":
+            left_form = event["left_form"]
+            right_form = event["right_form"]
+            if render_expressions:
+                lhs, rhs = _peek_arg_list(
+                    [{"form": left_form}, {"form": right_form}], _pop_arg_expr
+                )
+            else:
+                lhs = rhs = None
+            expression = (
+                _format_binary_expr(event["opr"], lhs, rhs) if lhs and rhs else None
+            )
+            if expression:
+                result["_expr"] = expression
+            _pop_stack_top()
+            _pop_stack_top()
+            out_form = binary_result_form(
+                left_form,
+                right_form,
+                event["opr"],
+                fm_int,
+                fm_str,
+                tables.string_cmp_ops,
+            )
+            if out_form is not None:
+                _push_stack_value(
+                    out_form,
+                    expr=expression,
+                    receiver=None if result_receivers else False,
+                )
+        elif op in ("CD_TEXT", "CD_NAME"):
+            _pop_stack_top()
+        elif op == "CD_COMMAND":
+            command = (
+                _prepare_command(event, call_scope) if command is None else command
+            )
+            arg_layout = event["arg_layout"]
+            expression = None
+            if render_expressions:
+                args = _peek_arg_list(arg_layout, _pop_arg_expr)
+                resolved = command["resolved"]
+                rendered = (
+                    _render_element_path(
+                        stack[command["stack_start"] : resolved["stack_end"]],
+                        resolved,
+                        command=True,
+                    )
+                    if resolved is not None
+                    else None
+                )
+                name = rendered["call_name"] if rendered is not None else ""
+                info = rendered["info"] if rendered is not None else None
+                if command_expression is not None:
+                    name, info = command_expression(event, name, info)
+                if name:
+                    result["_call_name"] = name
+                    expression = f"{name}({', '.join(format_named_command_args(info, args, event['named_ids']))})"
+                    result["_expr"] = expression
+            stack_start = command["stack_start"]
+            if stack_start is not None:
+                _collapse_value_expr(stack_start, event["ret_form"], expr=expression)
+            else:
+                for arg in reversed(arg_layout):
+                    _consume_arg_value(arg)
+                _consume_element()
+                ret_form = event["ret_form"]
+                if ret_form != fm_void:
+                    _push_stack_value(ret_form, expr=expression)
+        return result
+
+    state.pop_stack_top = _pop_stack_top
+    state.consume_element = _consume_element
+    state.pop_arg_list = _pop_arg_list
+    state.peek_arg_list = _peek_arg_list
+    state.prepare_command = _prepare_command
+    state.apply_event = _apply_event
+    return state
 
 
 def find_siglus_engine_exe(base_dir: str) -> str:
@@ -1001,9 +1840,7 @@ def new_disam_stats() -> dict:
 
 
 def add_elapsed_seconds(stats, key: str, seconds) -> None:
-    if stats is None:
-        return
-    stats[key] = float(stats.get(key, 0.0) or 0.0) + max(0.0, float(seconds))
+    stats[key] += max(0.0, seconds)
 
 
 def write_disam_totals(out, stats) -> None:
@@ -1857,7 +2694,7 @@ def decode_utf16le_strings(
 
 
 def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
-    h = header if isinstance(header, dict) else {}
+    h = header
     out = {
         "label_list": read_struct_list(
             blob, h.get("label_list_ofs", 0), h.get("label_cnt", 0), I32_STRUCT
@@ -1890,66 +2727,28 @@ def read_scn_metadata(blob, header, *, allow_empty_name_blob: bool = False):
             I32_STRUCT,
         ),
     }
-    spn_idx = read_struct_list(
-        blob,
-        h.get("scn_prop_name_index_list_ofs", 0),
-        h.get("scn_prop_name_index_cnt", 0),
-        I32_PAIR_STRUCT,
-    )
-    spn_end = int(h.get("scn_prop_name_list_ofs", 0) or 0) + max_pair_end(spn_idx) * 2
-    out["scn_prop_name_index_list"] = spn_idx
-    out["scn_prop_name_blob_end"] = spn_end
-    out["scn_prop_name_list"] = (
-        decode_utf16le_strings(
+    for name in ("scn_prop_name", "scn_cmd_name", "call_prop_name"):
+        indices = read_struct_list(
             blob,
-            spn_idx,
-            h.get("scn_prop_name_list_ofs", 0),
-            spn_end,
-            allow_empty_blob=allow_empty_name_blob,
+            h.get(f"{name}_index_list_ofs", 0),
+            h.get(f"{name}_index_cnt", 0),
+            I32_PAIR_STRUCT,
         )
-        if spn_idx
-        else []
-    )
-    scn_idx = read_struct_list(
-        blob,
-        h.get("scn_cmd_name_index_list_ofs", 0),
-        h.get("scn_cmd_name_index_cnt", 0),
-        I32_PAIR_STRUCT,
-    )
-    scn_end = int(h.get("scn_cmd_name_list_ofs", 0) or 0) + max_pair_end(scn_idx) * 2
-    out["scn_cmd_name_index_list"] = scn_idx
-    out["scn_cmd_name_blob_end"] = scn_end
-    out["scn_cmd_name_list"] = (
-        decode_utf16le_strings(
-            blob,
-            scn_idx,
-            h.get("scn_cmd_name_list_ofs", 0),
-            scn_end,
-            allow_empty_blob=allow_empty_name_blob,
+        blob_ofs = h.get(f"{name}_list_ofs", 0)
+        blob_end = int(blob_ofs or 0) + max_pair_end(indices) * 2
+        out[f"{name}_index_list"] = indices
+        out[f"{name}_blob_end"] = blob_end
+        out[f"{name}_list"] = (
+            decode_utf16le_strings(
+                blob,
+                indices,
+                blob_ofs,
+                blob_end,
+                allow_empty_blob=allow_empty_name_blob,
+            )
+            if indices
+            else []
         )
-        if scn_idx
-        else []
-    )
-    cpn_idx = read_struct_list(
-        blob,
-        h.get("call_prop_name_index_list_ofs", 0),
-        h.get("call_prop_name_index_cnt", 0),
-        I32_PAIR_STRUCT,
-    )
-    cpn_end = int(h.get("call_prop_name_list_ofs", 0) or 0) + max_pair_end(cpn_idx) * 2
-    out["call_prop_name_index_list"] = cpn_idx
-    out["call_prop_name_blob_end"] = cpn_end
-    out["call_prop_name_list"] = (
-        decode_utf16le_strings(
-            blob,
-            cpn_idx,
-            h.get("call_prop_name_list_ofs", 0),
-            cpn_end,
-            allow_empty_blob=allow_empty_name_blob,
-        )
-        if cpn_idx
-        else []
-    )
     return out
 
 
@@ -2105,78 +2904,27 @@ def build_source_angou_layout(smd5_code, sa, mask_code, lzsz):
     return mw, mh, mask, mapw, maph, mapw * maph * 4, bh
 
 
-def named_command_arg_names(info):
-    if not isinstance(info, dict):
-        return {}
-    arg_map = info.get("arg_map")
-    if not isinstance(arg_map, dict):
-        return {}
-    named_spec = arg_map.get(-1)
-    if isinstance(named_spec, dict):
-        named_list = named_spec.get("arg_list")
-    else:
-        named_list = named_spec
-    if not isinstance(named_list, list):
-        return {}
-    out = {}
-    for item in named_list:
-        if not isinstance(item, dict):
-            continue
-        try:
-            nid = int(item.get("id", -1))
-        except Exception:
-            continue
-        name = item.get("name")
-        if name is None:
-            continue
-        name = str(name)
-        if name:
-            out[nid] = name
-    return out
-
-
-def named_command_value_map(info, arg_values, named_ids):
-    args = list(arg_values or [])
-    ids = list(named_ids or [])
-    if not ids:
-        return {}
-    pos_cnt = len(args) - len(ids)
-    if pos_cnt < 0:
-        return {}
-    name_by_id = named_command_arg_names(info)
+def iter_named_command_args(info, args, named_ids):
+    pos_cnt = len(args) - len(named_ids)
+    if not named_ids or pos_cnt < 0:
+        return
+    arg_map = info.get("arg_map") or {}
+    named_list = (arg_map.get(-1) or {}).get("arg_list") or []
+    name_by_id = {item["id"]: item["name"] for item in named_list if item.get("name")}
     if not name_by_id:
-        return {}
-    out = {}
-    for value, nid in zip(args[pos_cnt:], reversed(ids)):
-        try:
-            key = int(nid)
-        except Exception:
-            continue
-        name = name_by_id.get(key)
-        if name:
-            out[name] = value
-    return out
+        return
+    for value, nid in zip(args[pos_cnt:], reversed(named_ids)):
+        yield name_by_id.get(nid), value
 
 
 def format_named_command_args(info, arg_exprs, named_ids):
-    args = list(arg_exprs or [])
-    ids = list(named_ids or [])
-    if not ids or not isinstance(info, dict):
-        return args
-    pos_cnt = len(args) - len(ids)
-    if pos_cnt < 0:
-        return args
-    name_by_id = named_command_arg_names(info)
-    if not name_by_id:
-        return args
-    out = list(args[:pos_cnt])
-    for expr, nid in zip(args[pos_cnt:], reversed(ids)):
-        try:
-            nm = name_by_id.get(int(nid))
-        except Exception:
-            nm = None
-        out.append(f"{nm}={expr}" if nm else expr)
-    return out
+    args = list(arg_exprs)
+    for idx, (name, expr) in enumerate(
+        iter_named_command_args(info, args, named_ids), len(args) - len(named_ids)
+    ):
+        if name:
+            args[idx] = f"{name}={expr}"
+    return args
 
 
 def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
