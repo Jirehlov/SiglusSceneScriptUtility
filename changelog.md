@@ -3,8 +3,9 @@
 All notable changes to this project will be documented in this file.
 
 
-## [Unreleased]
+## [v0.5.6] - 2026-10-11
 
+- Reworked `-x --decompile` to reconstruct `.ss` / `.inc` from disassembly traces and package metadata without consulting embedded original sources, including scene PCKs without an OS section.
 - Removed `-t` / `--tutorial`, the static graph generator, and its HTML viewer.
 
 

@@ -149,7 +149,7 @@ wheels = [
 
 [[package]]
 name = "siglus-ssu"
-version = "0.5.5"
+version = "0.5.6"
 source = { editable = "." }
 
 [package.dev-dependencies]
