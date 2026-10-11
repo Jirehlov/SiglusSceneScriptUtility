@@ -1597,9 +1597,7 @@ def _extract_one(
     raise RuntimeError("unsupported file type (expected .owp, .nwa, or .ovk)")
 
 
-def main(argv=None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv) -> int:
     try:
         argv, explicit_angou = consume_angou_option(argv)
     except ValueError as exc:

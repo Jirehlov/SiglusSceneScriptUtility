@@ -19,7 +19,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[pyfunction]
-#[pyo3(signature = (data, suppress_empty_tail_group=false))]
 fn lzss_pack(
     py: Python<'_>,
     data: &[u8],
@@ -497,7 +496,6 @@ fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<Py
 }
 
 #[pyfunction]
-#[pyo3(signature = (project, path, path_identity, text, run_bs=false))]
 fn lsp_scan_document(
     py: Python<'_>,
     project: Bound<'_, PyAny>,
@@ -512,7 +510,7 @@ fn lsp_scan_document(
 }
 
 #[pyfunction]
-#[pyo3(signature = (blob, config, pack_context, *, hashes=true))]
+#[pyo3(signature = (blob, config, pack_context, *, hashes))]
 fn scn_payload_hash_bundles(
     py: Python<'_>,
     blob: &[u8],

@@ -341,11 +341,9 @@ def compare_files(
     return 0
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     args = list(argv)
-    if (not args) or args[0] in ("-h", "--help", "help"):
+    if not args:
         return 2
     try:
         args, explicit_angou = consume_angou_option(args)

@@ -1376,9 +1376,7 @@ def _summarize_changes(changes):
     return reasons
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     ap = argparse.ArgumentParser(
         prog="siglus-ssu -p",
         description="Patch SiglusEngine.exe.",

@@ -2927,7 +2927,7 @@ def format_named_command_args(info, arg_exprs, named_ids):
     return args
 
 
-def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
+def parse_mode_flag(argv, flags):
     option_args, positional_args = split_end_of_options(argv)
     found = [f for f in flags if f in option_args]
     if len(found) != 1:
@@ -2935,12 +2935,7 @@ def parse_mode_flag(argv, flags=("--x", "--a", "--c")):
         hint_help()
         return None, argv
     flag = found[0]
-    if flag.startswith("--"):
-        mode = flag[2:]
-    elif flag.startswith("-"):
-        mode = flag[1:]
-    else:
-        mode = flag
+    mode = flag[2:]
     args = [a for a in option_args if a not in flags]
     if positional_args is not None:
         args.extend(("--", *positional_args))
@@ -2957,13 +2952,10 @@ def missing_input_file(path: str) -> bool:
 
 
 def parse_main_argv(argv, help_fn, flags=("--x", "--a", "--c")):
-    args = list(sys.argv[1:] if argv is None else argv)
+    args = list(argv)
     if not args:
         help_fn()
         return None, args, 2
-    if args[0] in ("-h", "--help", "help"):
-        help_fn()
-        return None, args, 0
     mode, args = parse_mode_flag(args, flags=flags)
     if mode is None:
         return None, args, 2

@@ -1,7 +1,6 @@
 import csv
 import os
 import re
-import sys
 from . import const as C
 from . import dat
 from . import pck
@@ -662,9 +661,7 @@ def _write_master_csv(csv_path, entries, missing_rows, duration_by_koe):
     return len(csv_rows)
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     try:
         args, explicit_angou = consume_angou_option(argv)
     except ValueError as e:

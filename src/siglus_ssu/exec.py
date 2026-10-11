@@ -15,9 +15,7 @@ def _strip_outer_quotes(value):
     return text
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     args = list(argv)
     args, positional_args = split_end_of_options(args)
     unknown_option = first_option_token(args)

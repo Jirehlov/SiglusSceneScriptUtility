@@ -97,7 +97,7 @@ def _extract_padding_pattern_from_dbs(blob: bytes):
     return m_type, expanded[info["data_size"] + 1 :]
 
 
-def main(argv=None):
+def main(argv):
     mode, argv, rc = parse_main_argv(argv, hint_help)
     if rc is not None:
         return rc

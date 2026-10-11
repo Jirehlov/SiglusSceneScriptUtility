@@ -5661,20 +5661,11 @@ class SSLanguageServer:
         return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv: list[str]) -> int:
     argv = list(argv)
     argv, positional_args = split_end_of_options(argv)
     serial = False
     for arg in argv:
-        if arg in {"-h", "--help"}:
-            sys.stdout.write("siglus-ssu -lsp [--serial]\n")
-            sys.stdout.write("Run the SiglusSceneScript Language Server over stdio.\n")
-            sys.stdout.write(
-                "  --serial  Disable default parallel workspace scanning.\n"
-            )
-            return 0
         if arg == "--serial":
             serial = True
             continue

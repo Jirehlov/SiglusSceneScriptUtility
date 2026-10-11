@@ -46,7 +46,7 @@
 
 - 提取和重新编译 `.pck` 场景文件
 - 分析二进制格式（`.dat`、`.dbs`、`.gan`、`.sav`、`.cgm`、`.tcr`）
-- 反汇编 `.dat` 编译脚本
+- 反汇编 `.dat` 编译脚本，并将场景 `.pck` 反编译为 `.ss` / `.inc`
 - 为翻译工作导出和应用文本映射
 - 从 `.ovk` 文件按角色收集语音音频
 - 提取和重新编译 `.g00` 图片文件
@@ -105,7 +105,7 @@ pip install siglus-ssu
 ## 基本用法
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [参数]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [参数]
 ```
 
 ### 全局选项
@@ -116,14 +116,14 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
-| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`10`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`10`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。即使传入此选项，`test` 模式仍会搜索所有 profile。 |
 | `--string-xor-multiplier N` | 覆盖编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（profile `3`、`5` 和 `8` 默认 `0`，其他 profile 默认 `0x7087`）。显式传入的值优先于 profile 默认值。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
 
 ### 常量 profile
 
 | Profile | 类型 | 适用引擎 |
 |---|---|---|
-| `0` | 重构式 profile | 目前最新引擎，默认选项。 |
+| `0` | 重构式 profile | 现代 SiglusEngine 场景格式，默认选项。 |
 | `1` | 官方 profile | 版本 `1.1.140.4`。 |
 | `2` | 官方 profile | 版本 `1.1.137.0`。 |
 | `3` | 重构式 profile | 较老的引擎，采用明文场景字符串且 `global.koe` 不带已读标记。 |
@@ -227,9 +227,9 @@ siglus-ssu -lsp [--serial]
 
 #### 说明
 
-- 工作区级别的符号扫描与链接扫描默认并行执行，默认 worker 数为可用 CPU 数的一半。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
+- 工作区级别的符号扫描与链接扫描默认并行执行，默认 worker 数为可用 CPU 数的一半，至少为 1，在 Windows 上最多为 61。`.inc` 改动会重建目录索引；改动过的 `.ss` 会复用当前 `.inc` 上下文并单独重新扫描。
 - 当 Rust 原生扫描器可用时，LSP 工作区扫描与文档符号会自动优先使用 Rust；若原生扫描不可用或不能处理该文档，则回退到 Python 流程。
-- 工作区索引会持久化到磁盘并跨会话复用。索引格式版本不兼容时会自动重建。缓存兼容条件包括目录、`.inc` SHA-256 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 SHA-256 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`，在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
+- 工作区索引会持久化到磁盘并跨会话复用。索引格式版本不兼容时会自动重建。缓存兼容条件包括目录、`.inc` SHA-256 表、`.ss` 文件集合、程序版本，以及当前 `const.py` 内容/profile。单个 `.ss` 缓存条目只有在该文件 SHA-256 仍匹配时才会复用；未保存的编辑器缓冲区不使用持久索引。默认缓存目录在 Windows 上是 `%LOCALAPPDATA%\siglus_ssu\lsp-index`（缺少 `LOCALAPPDATA` 时回退到 `%APPDATA%\siglus_ssu\lsp-index`），在类 Unix 系统上是 `$XDG_CACHE_HOME/siglus_ssu/lsp-index`，否则回退到 `~/.cache/siglus_ssu/lsp-index`；可用 `SIGLUS_SSU_LSP_CACHE_DIR` 覆盖。
 - 支持语义 token、push/pull 诊断、自动补全、悬停说明、跳转到定义、查找引用、改名、客户端支持时的准备改名、文档符号，以及同目录未保存 `.inc` 缓冲区对 `.ss` 分析结果的联动刷新。只有客户端支持 `textDocument/diagnostic` 时才声明 pull 诊断。语义 token 分类包括台词文本、system element（系统指令）、角色名，以及已使用/未使用的宏声明。
 - 跳转到定义与查找引用支持 `goto`、`gosub`、`gosubstr` 的普通标签和数字 `#z` 标签目标，包括它们的表达式形式。数字标签的前导零不影响查找。
 - 服务会协商 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并校验文档 URI 与请求结构。
@@ -281,7 +281,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | 禁用 LZSS 压缩和外层 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。场景字符串 XOR 变换仍由 `--string-xor-multiplier` 控制。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。此模式不嵌入原始 source chunk，对应官方的“easy link”式输出。不能与 `--tmp` 同用。 |
 | `--serial` | 强制编译阶段按串行方式运行。默认启用并行编译：Rust 后端使用线程，Python 后端使用进程。 |
-| `--max-workers N` | 最大并行 worker 数，必须为正整数。仅在启用并行编译时生效；默认为自动。 |
+| `--max-workers N` | 最大并行编译 worker 数，必须为正整数。仅在启用并行编译时生效。两个后端默认使用可用 CPU 数的一半，限制在 1 至 16 个 worker 之间。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制，范围为 `0` 至 `0xFFFFFFFF`。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 SHA-256 缓存（`_source_hashes.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。只有取走紧随选项的数字参数后仍有全部三个必需路径，才会将其视为种子。不能与 `--tmp` 或 `--gei` 同用。 |
@@ -364,7 +364,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 ### `-x` / `--extract` — 提取文件
 
-将 `.pck` 场景文件提取为一个带时间戳的目录，目录内包含已解码的场景 `.dat` 文件以及包内嵌入的原始 source 文件；或者从二进制 `Gameexe.dat` 还原 `Gameexe.ini` 明文。
+将 `.pck` 场景文件提取为一个带时间戳的目录，目录内包含已解码的场景 `.dat` 文件。普通提取和 `--disam` 还会还原包内嵌入的原始 source 文件；`--decompile` 则从已编译场景数据和包级元数据重建 `.ss` / `.inc`。使用 `--gei` 时，从二进制 `Gameexe.dat` 还原 `Gameexe.ini` 明文。
 
 #### 语法
 
@@ -387,15 +387,19 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | 启用 `--disam` 时，用来扫描 `.dat` 的目录路径。只处理该目录当前层的 `.dat` 文件。 |
 | `<output_dir>` | 输出基目录。提取 `.pck` 时，会在此目录下创建带时间戳的子目录。对所有 `-x` 模式都可省略；省略时以输入文件所在目录为基目录，若输入本身是目录，则以该目录为基目录。 |
 | `--disam` | 对 `.pck` 输入时，额外写出 `<scene>.dat.txt` 反汇编。对目录输入时，只扫描该目录当前层的 `.dat`，并将 `.dat.txt` 写入 `<output_dir>`。不能与 `--gei` 同用。非场景 `.dat` 会自动跳过。 |
-| `--decompile` | 对完整 `.pck` 输入执行与 `--disam` 相同的反汇编流程，并额外写出重建后的 `decompiled/<scene>.ss` 以及 `decompiled/__decompiled.inc`。单个 `.dat` 文件和 `.dat` 目录不支持该选项。不能与 `--gei` 同用。 |
+| `--decompile` | 对完整的 Siglus 场景 `.pck` 输入复用反汇编流程，写出 `<scene>.dat.txt`、重建后的 `decompiled/<scene>.ss` 以及 `decompiled/__decompiled.inc`。需要包级元数据，但不需要内嵌原始源码。单个 `.dat` 文件和 `.dat` 目录不支持该选项。不能与 `--gei` 同用。 |
 | `--angou <path\|angou=text\|key=bytes>` | 覆盖或补充场景/Gameexe 解密 key 来源。使用 [`-a` / `--analyze`](#-a----analyze--分析和比较文件) 中说明的公共 key-source 规则。 |
 | `--gei` | 不提取 `.pck`，而是将 `Gameexe.dat` 二进制文件解码还原为 `Gameexe.ini` 明文文件。输入参数可以是 `.dat` 文件本身或其父目录。key 候选会按公共 key-source 规则尝试。 |
 
-对 `.pck` 输入时，每次提取都会写入独立的 `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` 目录。末尾九位表示纳秒，遇到重名时递增避让。若包内存在原始 source，会与解码后的场景 `.dat` 一起还原出来。反汇编包含命名参数原始编号，以及未被已解析头字段或表项覆盖的原始字节（带文件偏移的十六进制，包括空隙和尾部）。启用 `--disam` 时，命令结束前会打印反汇编总耗时；启用 `--decompile` 时，还会打印 hints 和反编译两个阶段的总耗时。
+对 `.pck` 输入时，每次提取都会写入独立的 `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` 目录。末尾九位表示纳秒，遇到重名时递增避让。除 `--decompile` 外，包内嵌入的原始 source 会与解码后的场景 `.dat` 一起还原出来。反汇编包含命名参数原始编号，以及未被已解析头字段或表项覆盖的原始字节（带文件偏移的十六进制，包括空隙和尾部）。启用 `--disam` 时，命令结束前会打印反汇编总耗时；启用 `--decompile` 时，还会打印 hints 和反编译两个阶段的总耗时。
 
 实际提取目录会打印在 `Output:` 后。若已还原出原始源码，请在该目录内编辑，并将该目录直接传给 `-c`；编译器不会递归扫描子目录。
 
-当前 decompiler 属于实验性质。`--decompile` 输出的 `decompiled/*.ss` 更适合拿来阅读和排查，不应视为对原始 source 的可靠还原，也不应默认当作稳定可回编的发布输入。
+`--decompile` 根据反汇编 trace 和包级声明重建源码，不参考内嵌的 `.ss` / `.inc` 源码。没有 OS（Original Source）区段的 `.pck` 也支持反编译。加密场景仍需要可用的 key 来源，必要时通过 `--angou` 指定对应的引擎可执行文件或原始 key。反汇编不完整时返回失败。
+
+重建目标是通过 `-c` 回编后，规范化的场景 payload 一致。请将 `decompiled/` 目录传给编译器，使用与原文件相同的 `--const-profile` 和场景字符串乘数，再用 `-a --payload` 验证结果。反汇编和反编译通过所选 profile 解释 form 和内置元素，不会自动探测 profile。已存储的命令名和属性名会尽可能复用；缺失的名字使用生成名。已编译数据无法还原原始宏、注释和源码排版，回编后的完整 `.pck` 也不要求字节完全一致。
+
+FlixEngine 场景 `.pck` 使用 profile `10`。Flix 资源 `.pck` 容器仅支持普通提取，对这类容器使用 `--disam` 或 `--decompile` 会被拒绝。
 
 #### 示例
 
@@ -421,6 +425,15 @@ siglus-ssu -x --disam /path/to/scene_dir/
 # 从 Gameexe.dat 还原 Gameexe.ini
 siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 ```
+
+对于 profile `0` 的作品，将下面的 `output_...` 替换为 `Output:` 后打印的实际目录。其他作品应在提取、编译和比较时一致使用其 profile，以及适用时显式覆盖的字符串乘数：
+
+```bash
+siglus-ssu --const-profile 0 -c /path/to/translation_work/output_.../decompiled /path/to/rebuilt.pck
+siglus-ssu --const-profile 0 -a --payload /path/to/Scene.pck /path/to/rebuilt.pck
+```
+
+payload 一致要求没有新增或缺失的场景，也没有 `text_only`、`real_diff`、无法解析或 `INCOMPLETE` 结果。仅凭退出状态 `0` 不能判定一致。
 
 ---
 
@@ -474,7 +487,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--readall` | 只允许用于 `read.sav` 和 `global.sav`。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，自动创建不覆盖旧文件的 `.bak` 备份，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。可以与 `--angou` 同用。加密场景数据没有有效 key 时，会在写出 CSV 前失败。 |
-| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 额外比较解码/解压后的场景 payload，覆盖全部字节码操作数、标签表、场景属性布局、完整字符串池（包括未引用的字符串）、已读标志表，以及包级属性和命令路由元数据。`same` 忽略场景字符串池存放顺序、相应字符串索引的洗牌，Z 标签表末尾未使用的零项，以及仅供调试使用的 `namae_list`；`text_only` 表示非字符串结构相同、只有解析后的字符串内容不同，用于识别翻译修改；其余差异为 `real_diff`。Z 标签编号、内部空项与非零跳转偏移仍参与比较。内部标签重编号、参数表编号、其他表项的数量和顺序变化均保留；场景内标识符名称表保留索引偏移和长度、空项、NUL 和原始 UTF-16 码元，这些表的变化归为 `real_diff`。包级名称也保留空项、NUL 和原始 UTF-16 码元。姓名表原始内容仍写入反汇编并检查索引越界，但不参与 payload 哈希：官方引擎将该表用于调试器的姓名数据库。字符串也可能是资源名或场景名，因此 `text_only` 不保证运行行为不变。`.pck` 的 payload 栏报告有字节差异的场景，结果为 `same`、`text_only`、`real_diff` 或无法解析时的 `-`；`.dat` 对应使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。字节码截断、缺少末尾 `CD_EOF`、`CD_EOF` 后仍有字节码、负参数数量、字符串索引越界、跳转引用不存在的标签或跳转目标不在指令起点均报告 `INCOMPLETE` 并返回失败。加密场景无法用可用 key 解码时，payload 比较失败。Rust 原生 payload scanner 可用时自动使用 Rust，否则回退到 Python。 |
+| `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 额外比较解码/解压后的场景 payload，覆盖全部字节码操作数、标签表、场景属性布局、完整字符串池（包括未引用的字符串）、已读标志表，以及包级属性和命令路由元数据。`same` 忽略场景字符串池存放顺序、相应字符串索引的洗牌，Z 标签表末尾未使用的零项，以及仅供调试使用的 `namae_list`；`text_only` 表示非字符串结构相同、只有解析后的字符串内容不同，用于识别翻译修改；其余差异为 `real_diff`。Z 标签编号、内部空项与非零跳转偏移仍参与比较。内部标签重编号、参数表编号、其他表项的数量和顺序变化均保留；场景内标识符名称表保留索引偏移和长度、空项、NUL 和原始 UTF-16 码元，这些表的变化归为 `real_diff`。包级名称也保留空项、NUL 和原始 UTF-16 码元。`namae_list` 原始内容仍写入反汇编并检查索引越界，但不参与 payload 哈希：官方引擎将该表用于调试器的姓名数据库。字符串也可能是资源名或场景名，因此 `text_only` 不保证运行行为不变。`.pck` 的 payload 栏报告有字节差异的场景，结果为 `same`、`text_only`、`real_diff` 或无法解析时的 `-`；`.dat` 对应使用 `identical`、`text_only`、`real_diff` 或 `unavailable`。字节码截断、缺少末尾 `CD_EOF`、`CD_EOF` 后仍有字节码、负参数数量、字符串索引越界、跳转引用不存在的标签或跳转目标不在指令起点均报告 `INCOMPLETE` 并返回失败。加密场景无法用可用 key 解码时，payload 比较失败。Rust 原生 payload scanner 可用时自动使用 Rust，否则回退到 Python。 |
 | `--angou <path\|angou=text\|key=bytes>` | `.pck`/`.dat` 分析、`.pck` 台词统计、`Gameexe.dat` 分析或单独推导 key 时使用的显式 key 来源。`--angou` 必须是命令中的最后一个选项，必须使用 `--angou VALUE` 的分离写法，且值不能为空。裸值一律视为文件或目录路径；`暗号.dat` 字面量请写成 `angou=text`，16 字节 `exe_el` key 字面量请写成 `key=bytes`，例如 `key=0xA9,0x86,...`。解密时会按顺序尝试候选：显式 `--angou`；输入 `.pck` 内嵌 `暗号.dat`；当前目录；父目录。只有高优先级来源已经解析出 key、但该 key 未通过解密校验时，才会回落到低优先级候选；缺失、格式错误或无法产出 key 的显式来源会作为输入错误报告。若 `--angou` 使用裸路径，则本次请求禁用父目录探测，回落到当前目录后停止。目录探测不递归。每个被探测目录内部顺序为 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt`、`SiglusEngine*.exe`。 |
 | `--gei` | 分析或比较 `Gameexe.dat` 文件，而非通用二进制文件。该模式可以使用 `--angou`，但会拒绝其他 analyze 修饰选项，例如 `--disam`、`--readall`、`--apply`、`--payload` 和 `--word`。 |
 
@@ -819,17 +832,17 @@ siglus-ssu -e <path_to_engine> <scene_name> <label>
 |---|---|
 | `<path_to_engine>` | `SiglusEngine.exe` 的绝对或相对路径。引号会自动去除。 |
 | `<scene_name>` | 不含目录的脚本名（如 `opening` 或 `opening.ss`）。必须是不含路径分量的纯文件名。 |
-| `<label>` | 要跳转到的 `#z` 标签编号。`#z` 前缀可省略——`10`、`z10`、`#z10` 均可接受。 |
+| `<label>` | 要跳转到的非负十进制 `#z` 标签编号。`#z` 前缀可省略——`10`、`z10`、`#z10` 均可接受。 |
 
 #### 工作原理
 
-工具在引擎可执行文件旁边创建一个日期命名的工作目录 `work_YYYYMMDD`，并以如下参数启动它：
+工具在引擎可执行文件旁边创建或复用日期命名的工作目录 `work_YYYYMMDD`，并以如下参数启动它：
 
 ```
 SiglusEngine.exe /work_dir=<work_dir> /start=<scene_name> /z_no=<label> /end_start
 ```
 
-引擎作为独立子进程启动，工具在启动后立即返回。
+引擎作为独立子进程启动，工具在启动后立即返回。工作目录会保留。
 
 #### 示例
 
@@ -915,7 +928,7 @@ siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=
 | type2 | 多 cut 拼合图像（sprite sheet），包含多个按编号索引的 cut。 |
 | type3 | XOR 混淆的 JPEG 图片。 |
 
-> **注意：** `--a` 一定不需要 Pillow。提取 type3 JPEG payload 可以不依赖 Pillow；但 PNG 解码、合并模式、创建模式（包括需要读取 JPEG 尺寸的 type3 创建），以及 type0/type1/type2/type3 的更新路径都需要 [Pillow](https://pillow.readthedocs.io/)（`pip install pillow`）。
+> **注意：** `--a` 一定不需要 Pillow。不带 `--trim` 提取 type3 JPEG payload 可以不依赖 Pillow；但 JPEG 裁剪、PNG 解码、合并模式、创建模式（包括需要读取 JPEG 尺寸的 type3 创建），以及 type0/type1/type2/type3 的更新路径都需要 [Pillow](https://pillow.readthedocs.io/)（`pip install pillow`）。
 
 #### 语法
 
@@ -1214,8 +1227,8 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | `--a` | **分析**模式。打印详细头部信息，包括外层头字段、TableA 和 TableB 帧元数据；若可解析，还会输出 Theora 流信息，如 FPS、keyframe granule shift、pixel format 和画面尺寸。 |
 | `--c` | **创建**模式。用 SiglusEngine `.omv` 头包装纯 `.ogv`。 |
 | `--refer <ref.omv>` | 从现有的 `.omv` 参考文件复制头部 `mode` 和 TableB `flags_hi24`。若同时指定了 `--mode`/`--flags` 则会被覆盖。 |
-| `--mode N` | 覆盖 `mode` 字段（头部偏移 `0x28`）。接受十进制或 `0x...` 十六进制。 |
-| `--flags 0xXXXXXX` | 覆盖 TableB `flags` 的高 24 位。接受单个值或逗号分隔的范围规格，如 `0-9:0x1A2B3C00,10-:0x00000000`。 |
+| `--mode N` | 覆盖 `mode` 字段（头部偏移 `0x28`）。接受十进制或 `0x...` 十六进制。不带 `--refer` 时默认为 `2`。 |
+| `--flags 0xXXXXXX` | 覆盖 TableB `flags` 的高 24 位。接受单个值或逗号分隔的范围规格，如 `0-9:0x1A2B3C00,10-:0x00000000`。不带 `--refer` 时默认为 `0`。 |
 
 目录输入的 `-v --x` 会递归扫描 `.omv`，并在输出端保留相对目录结构。`-v --c` 在判断第二个参数时遵循这样的规则：若参数是已存在目录、以路径分隔符结尾，或没有扩展名，则按“输出目录”处理；若想明确写到单个文件，请给出带 `.omv` 扩展名的文件路径。
 
@@ -1276,7 +1289,7 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--lang cjk` | 修改字体 charset、locale 与 `system.get_language`，用于 CJK 显示；不修改 `Gameexe.dat`、`Scene.pck`、`savedata` 路径。 |
 | `--lang cjk-path` | 在 `cjk` 的基础上，把活动路径引用改向 `GameexeZH.dat`、`SceneZH.pck` 与 `savedata_zh`。 |
 | `--lang config.json` | 从 JSON 文件应用完整的六字段语言配置，也可把 JSON 对象作为单个带引号的参数直接传入。 |
-| `--revert` | 使用语言补丁内嵌的配置和撤回数据，逐字节恢复原始 EXE。 |
+| `--revert` | 仅与 `--lang` 同用，使用语言补丁内嵌的配置和撤回数据，逐字节恢复原始 EXE。不能与 `--allow-partial` 同用。 |
 | `--info` | 只打印可修改的 `ALTKEY`、`LANG`、`LOC` 信息，不写文件。 |
 | `--loc 0` | 将匹配到的顶层地域检测例程改成恒通过 stub。 |
 | `--loc 1` | 仅对本工具曾经用函数 stub 关闭地域检测的 exe 恢复原检测。 |
@@ -1364,6 +1377,8 @@ LOC   : enabled (original function, func=0x22BF20)
 
 本模式面向带有内嵌原始源码数据的 `.pck`。如果某个 `.pck` 没有 OS 区段，就会跳过，因为没有可用于回编的原始 `.ss` 源码。
 
+本模式测试内嵌原始源码的编译。反编译测试请按前述 `--decompile` 提取、回编和 payload 比较流程执行。
+
 #### 语法
 
 ```bash
@@ -1371,6 +1386,8 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 ```
 
 `--serial` 会在回编阶段禁用并行编译；默认使用并行编译。
+
+目录输入中的 `.pck` 按顺序逐个处理。全局 `--const-profile` 不会限制本模式尝试的 profile，搜索始终从 `0` 开始。
 
 #### 流程
 
@@ -1461,7 +1478,7 @@ siglus-ssu test /path/to/pck_dir/
 由此可知，下列事实都是规范性的：
 
 - scene 级 `#ifdef` / `#elseifdef` / `#else` / `#endif` 发生在 scene 内嵌 inc 被分析**之前**；因此，scene 级条件编译看不到同一 `.ss` 文件稍后由 `#inc_start ... #inc_end` 声明出来的新名字；
-- 目录级 `-c` compile 的语言定义，严格大于“单个 `.ss` 文件局部通过前端检查”。
+- 每个 `.ss` 文件通过前端检查是必要条件，但不足以判定整个目录有效；目录级 linker 约束也必须通过。
 
 ### 字符级处理
 
@@ -1527,7 +1544,7 @@ kept
 
 #### 源元数据注释
 
-若源文件第一行以这个字节前缀开头：
+若源码解码后的第一行以这个完全匹配的文本前缀开头：
 
 ```text
 // #SCENE_SCRIPT_ID = dddd
@@ -1579,8 +1596,8 @@ z-label-token ::= "#z" digit [digit [digit]]
 规范含义如下：
 
 1. 普通 label 在词法上**可以为空名**；因此单独的 `#` 也会被词法化为普通 label；
-2. 仅当拼写恰为 `#z` 后跟 1 至 3 个十进制数字时，才是 z-label；
-3. `#z0`、`#z00`、`#z000` 都属于 z-label；`#z1234` 不是；
+2. z-label 必须恰为 `#z` 后跟 1 至 3 个十进制数字，且数值小于当前 `TNM_Z_LABEL_CNT`：profile `7` 和 `8` 为 `100`，其他 profile 为 `1000`；
+3. `#z0`、`#z00`、`#z000` 都属于 z-label；`#z1234` 不是；在 profile `7` 和 `8` 中，`#z100` 至 `#z999` 都是普通 label；
 4. label 与 z-label 的重定义、未定义引用，以及 `#z0` 缺失，都由后续阶段判错。
 
 #### 整数字面量
@@ -2012,13 +2029,15 @@ scene 中的 `command` 定义有两种来源：
 
 ### 编译时的意外 token
 
-如果本应作为一个参数的文本中含有逗号或括号等实参分隔符，请将它写成双引号字符串：
+如果本应作为一个参数的文本中含有逗号或括号等实参分隔符，请将它写成双引号字符串。下面的无引号写法会被逗号拆成两个实参：
 
-```
-# 逗号会把这段文本拆成更多实参
+```ss
 set_namae(Hello, world)
+```
 
-# 加上双引号
+加上双引号后，只传入一个字符串实参：
+
+```ss
 set_namae("Hello, world")
 ```
 

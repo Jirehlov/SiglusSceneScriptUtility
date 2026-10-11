@@ -1033,7 +1033,7 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
     return 0 if ok else 1
 
 
-def main(argv=None):
+def main(argv):
     import argparse
 
     prog = "siglus-ssu -c"
@@ -1042,10 +1042,7 @@ def main(argv=None):
     test_seed0_given = False
     test_seed_index = None
     test_dir = ""
-    if argv is None:
-        argv = sys.argv[1:]
-    else:
-        argv = list(argv)
+    argv = list(argv)
     argv, positional_args = split_end_of_options(argv)
     if "--test-shuffle" in argv:
         i = argv.index("--test-shuffle")

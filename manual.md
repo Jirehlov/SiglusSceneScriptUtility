@@ -16,6 +16,7 @@
    - [Option 2: Install from Source](#option-2-install-from-source)
 3. [General Usage](#general-usage)
    - [Global Options](#global-options)
+   - [Const Profiles](#const-profiles)
    - [Scene String XOR Multiplier](#scene-string-xor-multiplier)
    - [Command Aliases](#command-aliases)
    - [Python Module API](#python-module-api)
@@ -45,7 +46,7 @@
 
 - Extracting and recompiling `.pck` scene files
 - Analyzing binary formats (`.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`)
-- Disassembling `.dat` compiled scripts
+- Disassembling `.dat` compiled scripts and decompiling scene `.pck` files into `.ss` / `.inc`
 - Exporting and applying text maps for translation work
 - Collecting and organizing character voice audio from `.ovk` files
 - Extracting and recompiling `.g00` image files
@@ -104,7 +105,7 @@ Starting with v0.5.0, `init` and `--init` are removed. Delete initialization ste
 ## General Usage
 
 ```
-siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]
+siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [args]
 ```
 
 ### Global Options
@@ -115,14 +116,14 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. The `test` mode searches all profiles even when this option is supplied. |
 | `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profiles `3`, `5`, and `8`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
 
 ### Const Profiles
 
 | Profile | Type | Target engine |
 |---|---|---|
-| `0` | Reconstructed profile | The current latest engine; the default option. |
+| `0` | Reconstructed profile | Modern SiglusEngine scene formats; the default option. |
 | `1` | Official profile | Version `1.1.140.4`. |
 | `2` | Official profile | Version `1.1.137.0`. |
 | `3` | Reconstructed profile | Older engines with plain scene strings and no read-flag field on `global.koe`. |
@@ -142,11 +143,11 @@ Profile `5` has the same form/element codes, read table, selection-block rules, 
 
 Profile `6` has the same form/element tables, message-block, read-flag and selection-block rules, and default string XOR multiplier of `0x7087` as profile `2`. Each profile explicitly configures `ALLOW_PROPERTY_OUT_OF_COMMAND`: profiles `0`-`5`, `9`, and `10` disable it and profiles `6`-`8` enable it. These declarations retain local call property semantics and do not become scene or global `#property` declarations. Python and Rust use the same setting.
 
-Profile `7` independently defines the same form/element codes, message-block rules, read table, empty selection-command table, and default string XOR multiplier as profile `4`, but changes `counter.wait_key` to return `void` and allows local properties outside commands. It treats `&&` and `||` as equal-precedence, left-associative operators. Its z-label limit is `100`; names such as `#z100` are ordinary labels. Each profile explicitly defines `LOGICAL_AND_PRECEDENCE` and `TNM_Z_LABEL_CNT`: profiles `0`-`6`, `9`, and `10` retain higher precedence for `&&` and a limit of `1000`. Python and Rust share these settings.
+Profile `7` independently defines the same form/element codes, message-block rules, read table, empty selection-command table, and default string XOR multiplier as profile `4`, but changes `counter.wait_key` to return `void` and allows local properties outside commands. It treats `&&` and `||` as equal-precedence, left-associative operators. Its z-label limit is `100`; names such as `#z100` are ordinary labels. Each profile explicitly defines `LOGICAL_AND_PRECEDENCE` and `TNM_Z_LABEL_CNT`: profiles `0`-`6`, `9`, and `10` retain higher precedence for `&&` than `||` and a limit of `1000`. Python and Rust share these settings.
 
 Profile `8` defines its tables independently. It uses profile `5`'s command return types, message-block, read-flag and selection-block rules, and plain scene strings, with `frameaction = 1212` and `intlistref = 11`. It allows local properties outside commands, has a `100`-entry z-label table, and retains higher precedence for `&&` than `||`. Its `NAMED_INT_REFERENCE_ARGUMENTS` table preserves integer variable references only for `global.wipe(key_skip=...)` and `global.mask_wipe(key_skip=...)`; constants and other integer value expressions remain values. Profiles `0`-`7`, `9`, and `10` explicitly use empty tables. The same parameter metadata drives Python and Rust compilation.
 
-Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
+Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence than `||`, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
 
 Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions, and `test` automatically tries it after profile `9`. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
 
@@ -226,9 +227,9 @@ siglus-ssu -lsp [--serial]
 
 #### Notes
 
-- Workspace-wide symbol and link scans run in parallel by default, using half of the available CPU count as the default worker count. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
+- Workspace-wide symbol and link scans run in parallel by default, using half of the available CPU count as the default worker count, with a minimum of 1 and a maximum of 61 on Windows. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
 - When the Rust native scanner is available, LSP workspace scans and document symbols use it automatically and fall back to the Python pipeline if native scanning is unavailable or cannot handle the document.
-- Workspace indexes persist across sessions. Indexes with an incompatible format version are rebuilt automatically. Cache compatibility includes the directory, `.inc` SHA-256 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's SHA-256 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows, `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
+- Workspace indexes persist across sessions. Indexes with an incompatible format version are rebuilt automatically. Cache compatibility includes the directory, `.inc` SHA-256 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's SHA-256 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows (falling back to `%APPDATA%\siglus_ssu\lsp-index` when `LOCALAPPDATA` is unavailable), `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
 - Capabilities include semantic tokens, publish/pull diagnostics, completion, hover, go to definition, references, rename and conditional prepare-rename support, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis. Pull diagnostics are advertised only when the client supports `textDocument/diagnostic`. Semantic token categories include dialogue text, system elements, speaker names, and used/unused macro declarations.
 - Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
@@ -280,7 +281,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | Disable LZSS compression and outer XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. The scene-string XOR transform is still controlled by `--string-xor-multiplier`. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
 | `--serial` | Force the compile stage to run serially. Parallel compilation is enabled by default, using threads in the Rust backend and processes in the Python backend. |
-| `--max-workers N` | Positive maximum number of parallel workers. Only effective while parallel compilation is enabled; defaults to auto. |
+| `--max-workers N` | Positive maximum number of parallel compile workers. Only effective while parallel compilation is enabled. By default, both backends use half of the available CPU count, limited to 1 through 16 workers. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex from `0` through `0xFFFFFFFF`. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. A numeric argument immediately after the option is consumed as the seed only when all three required paths remain. Cannot be combined with `--tmp` or `--gei`. |
@@ -354,7 +355,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 - **Source decoding:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. Other Python codecs must be selected explicitly. Decoding is strict by default; invalid byte sequences before DOS EOF fail the compile. `--allow-invalid` enables replacement with U+FFFD. To reproduce historical output built by reading CP932 bytes as UTF-8, use `--charset utf8 --allow-invalid`; this intentionally preserves the resulting garbled strings instead of detecting CP932. Decoding removes one leading Unicode BOM and normalizes CRLF or lone CR to LF, but performs no Unicode normalization. Both compiler backends receive the same decoded text snapshot.
 - **DOS EOF:** Compilation stops reading each source at the first U+001A character in its encoding and ignores the remaining bytes, even if they are malformed. A `0x1A` byte inside another UTF-16/UTF-32 character is not EOF. Embedded original sources and source hashes retain the complete file bytes; ordinary non-compile text reads are unchanged.
 - **Encoding-independent compilation:** Source encoding does not select a different lexer. After decoding, CP932, UTF-8, and other encodings use the fixed CP932 double-byte character classification of the official Japanese compiler. Therefore equivalent CP932 and UTF-8 sources compile identically. Characters outside that fixed set are valid inside quoted strings but are not treated as unquoted full-width text.
-- **Key strings and cross-platform consistency:** When deriving a key from `暗号.dat` or `angou=text`, both backends use Python CP932 encoding on every platform and ignore unencodable characters. These rules do not depend on the Windows version or system code page. The official compiler uses Windows `WideCharToMultiByte(CP_ACP, 0, ...)`, so the same string does not always produce the same key. For example, under Japanese CP932, SSU encodes `髙` as `EE E0`, while Windows uses `FB FC`; SSU ignores `¥`, while Windows converts it to `5C`. These differences can prevent correct decryption of `Scene.pck` or `Gameexe.dat` and can also change whether the encoded string meets the 8-byte minimum for enabling encryption. To interoperate with official output, use the raw 16-byte key from the matching engine: for compilation, supply `key.txt` and ensure the input directory has no higher-priority `暗号.dat`; for analysis, extraction, and other operations supporting `--angou`, supply `key=bytes` or the matching `SiglusEngine.exe` directly.
+- **Key strings and cross-platform consistency:** When deriving a key from `暗号.dat` or `angou=text`, both backends use Python's `cp932` codec on every platform and ignore unencodable characters. These rules do not depend on the Windows version or system code page. The official compiler uses Windows `WideCharToMultiByte(CP_ACP, 0, ...)`, so the same string does not always produce the same key. For example, under Japanese CP932, SSU encodes `髙` as `EE E0`, while Windows uses `FB FC`; SSU ignores `¥`, while Windows converts it to `5C`. These differences can prevent correct decryption of `Scene.pck` or `Gameexe.dat` and can also change whether the encoded string meets the 8-byte minimum for enabling encryption. To interoperate with official output, use the raw 16-byte key from the matching engine: for compilation, supply `key.txt` and ensure the input directory has no higher-priority `暗号.dat`; for analysis, extraction, and other operations supporting `--angou`, supply `key=bytes` or the matching `SiglusEngine.exe` directly.
 - **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Each hash is calculated from the same raw bytes used to decode that file for compilation; a file saved after its snapshot was read is detected as changed on the next run. Cache compatibility includes the `siglus-ssu` version, source charset, the `--allow-invalid` setting, active `const.py` content/profile, and scene string XOR multiplier. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. Case-only source renames also remove conflicting old `.dat` files when recompilation is needed and invalidate the matching `.lzss` regardless of its filename case. If any `.inc` file is added, changed, or removed, or cache metadata is incompatible, a full recompile is triggered.
 - **Cache failure recovery:** Before updating an incremental cache, the previous `_source_hashes.json` validity marker is removed. A new marker is written only after linking and writing the final `.pck` succeeds. If compilation, linking, or cache-marker writing fails, or the process is interrupted during cache updates, the next run rebuilds all scenes rather than trusting partial output. Failure to delete stale `.lzss` files stops the build; release the file lock or correct the permissions before retrying. This protects cache reuse, not atomic replacement of all output files.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene and rebuilds every scene serially. A later mismatch still generates the requested output but returns a failure status; use `--set-shuffle` to rebuild with a known seed.
@@ -363,7 +364,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 
 ### `-x` / `--extract` — Extract Files
 
-Extracts a `.pck` scene file into a timestamped directory containing decoded scene `.dat` files and any embedded original source files, or restores the `Gameexe.ini` plaintext from a binary `Gameexe.dat`.
+Extracts a `.pck` scene file into a timestamped directory containing decoded scene `.dat` files. Plain extraction and `--disam` also restore any embedded original source files; `--decompile` reconstructs `.ss` / `.inc` from the compiled scene data and package metadata. With `--gei`, it restores the `Gameexe.ini` plaintext from a binary `Gameexe.dat`.
 
 #### Syntax
 
@@ -386,15 +387,19 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
 | `<output_dir>` | Base output directory. A `.pck` extraction creates a timestamped subdirectory here. Optional for all `-x` modes. If omitted, the base directory defaults to the input file directory, or to the input directory itself when the input is a directory. |
 | `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
-| `--decompile` | With a complete `.pck` input, run the same disassembly pass as `--disam`, and additionally emit reconstructed `decompiled/<scene>.ss` files plus `decompiled/__decompiled.inc`. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
+| `--decompile` | With a complete Siglus scene `.pck` input, reuse the disassembly pipeline and emit `<scene>.dat.txt`, reconstructed `decompiled/<scene>.ss` files, and `decompiled/__decompiled.inc`. Package metadata is required; embedded original sources are not. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
 | `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
 
-With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` directory for each extraction. The nine-digit suffix represents nanoseconds and is incremented on a name collision. When embedded original sources are present, they are restored there alongside the decoded scene `.dat` files. Disassembly includes raw named-argument IDs and a hex dump with file offsets for bytes not covered by decoded header fields or table entries, including gaps and trailing bytes. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
+With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` directory for each extraction. The nine-digit suffix represents nanoseconds and is incremented on a name collision. Unless `--decompile` is selected, embedded original sources are restored there alongside the decoded scene `.dat` files. Disassembly includes raw named-argument IDs and a hex dump with file offsets for bytes not covered by decoded header fields or table entries, including gaps and trailing bytes. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
 
 The actual extraction directory is printed after `Output:`. If original sources were restored, edit them in that directory and pass that directory to `-c`; the compiler does not scan subdirectories.
 
-The current decompiler is experimental. Treat `--decompile` output in `decompiled/*.ss` as inspection output, not as a reliable reconstruction of the original source or a guaranteed round-trip input for release work.
+`--decompile` reconstructs source from disassembly traces and package declarations without consulting embedded `.ss` / `.inc` sources. A `.pck` without an OS (Original Source) section is supported. Encrypted scenes still require a usable key source; use `--angou` with the matching engine executable or a raw key when necessary. Incomplete disassembly returns failure.
+
+The reconstruction target is equality of normalized scene payloads after recompiling with `-c`. Compile the `decompiled/` directory using the same `--const-profile` and scene-string multiplier as the original, then verify the result with `-a --payload`. Disassembly and decompilation use the selected profile to interpret forms and built-in elements; they do not automatically detect the profile. Stored command and property names are reused where available; absent names receive generated names. Original macros, comments, and source formatting cannot be recovered from compiled data, and the rebuilt whole `.pck` need not be byte-identical.
+
+FlixEngine scene `.pck` files use profile `10`. Flix resource `.pck` containers support plain extraction only; `--disam` and `--decompile` are rejected for those containers.
 
 #### Examples
 
@@ -420,6 +425,15 @@ siglus-ssu -x --disam /path/to/scene_dir/
 # Restore Gameexe.ini from Gameexe.dat
 siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 ```
+
+For a profile `0` title, replace `output_...` below with the directory printed after `Output:`. For other titles, use their profile and any explicit string-multiplier override consistently in extraction, compilation, and comparison:
+
+```bash
+siglus-ssu --const-profile 0 -c /path/to/translation_work/output_.../decompiled /path/to/rebuilt.pck
+siglus-ssu --const-profile 0 -a --payload /path/to/Scene.pck /path/to/rebuilt.pck
+```
+
+Payload equality requires no added or removed scenes and no `text_only`, `real_diff`, unavailable, or `INCOMPLETE` results. Exit status `0` alone does not establish equality.
 
 ---
 
@@ -587,7 +601,7 @@ Source counting stops at the first U+001A (DOS EOF), using the same decoding rul
 
 If a file fails to parse, its row remains in the CSV, the reason is also printed to stderr, and the command returns exit code `1` after writing the available results. Totals include only successful rows; `dat_status` and `ss_status` identify `complete` or `partial` results.
 
-If the original-source section is declared but missing, truncated, or undecodable, the CSV retains the completed `.dat` rows and adds an `ss` row with an empty `path`, `status=unavailable`, empty counts, and the error. The command returns `1`, and source totals are shown as `N/A`. A PCK that does not declare embedded sources is valid: its CSV contains only `.dat` rows, `ss_status=not_embedded`, source dialogue totals are `N/A`, and the command returns `0` if all `.dat` files were counted successfully.
+If the original-source section is declared but missing, truncated, or undecodable, the CSV retains the completed `.dat` rows and adds an `ss` row with an empty `path`, `status=unavailable`, empty counts, and the `error` value. The command returns `1`, and source totals are shown as `N/A`. A PCK that does not declare embedded sources is valid: its CSV contains only `.dat` rows, `ss_status=not_embedded`, source dialogue totals are `N/A`, and the command returns `0` if all `.dat` files were counted successfully.
 
 ---
 
@@ -818,17 +832,17 @@ siglus-ssu -e <path_to_engine> <scene_name> <label>
 |---|---|
 | `<path_to_engine>` | Absolute or relative path to `SiglusEngine.exe`. Quotes are stripped automatically. |
 | `<scene_name>` | The script name without directory (e.g., `opening` or `opening.ss`). Must be a bare filename without path components. |
-| `<label>` | The `#z` label number to jump to. The `#z` prefix is optional — `10`, `z10`, and `#z10` are all accepted. |
+| `<label>` | Non-negative decimal `#z` label number to jump to. The `#z` prefix is optional — `10`, `z10`, and `#z10` are all accepted. |
 
 #### How It Works
 
-The utility creates a temporary `work_YYYYMMDD` directory next to the engine executable and launches it with the following command-line arguments:
+The utility creates or reuses the date-named `work_YYYYMMDD` directory next to the engine executable and launches it with the following command-line arguments:
 
 ```
 SiglusEngine.exe /work_dir=<work_dir> /start=<scene_name> /z_no=<label> /end_start
 ```
 
-The engine is launched as a detached subprocess; the utility returns immediately after launch.
+The engine is launched as a separate subprocess; the utility returns immediately after launch. The work directory is retained.
 
 #### Examples
 
@@ -914,7 +928,7 @@ Provides tools for analyzing, extracting, merging, creating, and updating `.g00`
 | type2 | Multi-cut composite image (sprite sheet) containing multiple indexed cuts. |
 | type3 | XOR-obfuscated JPEG image. |
 
-> **Note:** `--a` never requires Pillow. Extracting type3 JPEG payloads can run without Pillow, but PNG decoding, merge mode, create mode (including type3 create, which reads JPEG dimensions), and type0/type1/type2/type3 update paths require [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`).
+> **Note:** `--a` never requires Pillow. Extracting type3 JPEG payloads without `--trim` can run without Pillow, but JPEG trimming, PNG decoding, merge mode, create mode (including type3 create, which reads JPEG dimensions), and type0/type1/type2/type3 update paths require [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`).
 
 #### Syntax
 
@@ -1213,8 +1227,8 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 | `--a` | **Analyze** mode. Prints detailed header information including outer header fields, TableA, and TableB frame metadata, plus parsed Theora stream info such as FPS, keyframe granule shift, pixel format, and frame size when available. |
 | `--c` | **Create** mode. Wraps a plain `.ogv` with the SiglusEngine `.omv` header. |
 | `--refer <ref.omv>` | Copy the header `mode` and TableB `flags_hi24` from an existing `.omv` reference. Useful for matching the exact header of the original. Overridden by `--mode` / `--flags` if both are specified. |
-| `--mode N` | Override the `mode` field (header offset `0x28`). Accepts decimal or `0x...` hex. |
-| `--flags 0xXXXXXX` | Override the TableB `flags` high 24 bits. Accepts a single value or a comma-separated range spec like `0-9:0x1A2B3C00,10-:0x00000000`. |
+| `--mode N` | Override the `mode` field (header offset `0x28`). Accepts decimal or `0x...` hex. Default without `--refer`: `2`. |
+| `--flags 0xXXXXXX` | Override the TableB `flags` high 24 bits. Accepts a single value or a comma-separated range spec like `0-9:0x1A2B3C00,10-:0x00000000`. Default without `--refer`: `0`. |
 
 Directory input for `-v --x` recursively scans for `.omv` files and preserves the relative directory structure in the output. For `-v --c`, the second argument is interpreted as a directory if it already exists as a directory, ends with a path separator, or has no extension; to write to a specific file, give an explicit path ending in `.omv`.
 
@@ -1275,7 +1289,7 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
 | `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
 | `--lang config.json` | Apply a complete six-field language configuration from a JSON file, or pass the JSON object directly as one quoted argument. |
-| `--revert` | Restore the byte-identical original executable using the configuration and undo data embedded by a language patch. |
+| `--revert` | With `--lang` only, restore the byte-identical original executable using the configuration and undo data embedded by a language patch. Cannot be combined with `--allow-partial`. |
 | `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
 | `--loc 0` | Disable region detection by replacing the matched top-level check routine with an always-pass stub. |
 | `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. |
@@ -1363,6 +1377,8 @@ Tests whether one `.pck` file, or all `.pck` files directly under a directory, c
 
 This mode is intended for `.pck` archives that contain embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
 
+This mode tests compilation of embedded original sources. To test decompilation, follow the `--decompile` extraction, compilation, and payload-comparison workflow above.
+
 #### Syntax
 
 ```bash
@@ -1370,6 +1386,8 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 ```
 
 `--serial` disables parallel compilation during the rebuild step. Rebuilds are parallel by default.
+
+Directory inputs are processed one `.pck` at a time. Global `--const-profile` does not restrict the profiles tried by this mode; profile search always starts at `0`.
 
 #### Workflow
 
@@ -1460,7 +1478,7 @@ For a single `.ss` translation unit, the current compiler can be normalized as f
 Two consequences are normative:
 
 - scene-level `#ifdef` / `#elseifdef` / `#else` / `#endif` run **before** scene-local inc declarations are analyzed; therefore scene-level conditional compilation cannot see names that are only declared later inside `#inc_start ... #inc_end` in the same `.ss` file;
-- the language defined by whole-directory `-c` compilation is strictly larger than “a single `.ss` file passes the front-end”.
+- passing the front-end for each `.ss` file is necessary but does not establish whole-directory validity; directory-level linker constraints must also pass.
 
 ### Character-level processing
 
@@ -1526,7 +1544,7 @@ These directives exist only during scene-file character processing. Their rules 
 
 #### Source metadata comment
 
-If the first line of the file begins with this byte prefix:
+If the first line after source decoding begins with this exact text prefix:
 
 ```text
 // #SCENE_SCRIPT_ID = dddd
@@ -1578,8 +1596,8 @@ z-label-token ::= "#z" digit [digit [digit]]
 Normatively:
 
 1. an ordinary label may be empty at the lexical level, so a lone `#` still tokenizes as an ordinary label;
-2. only a spelling of exactly `#z` followed by 1 to 3 decimal digits is a z-label;
-3. `#z0`, `#z00`, and `#z000` are all z-labels; `#z1234` is not;
+2. a z-label shall be spelled exactly `#z` followed by 1 to 3 decimal digits, and its numeric value shall be below the active `TNM_Z_LABEL_CNT`: `100` for profiles `7` and `8`, `1000` for all other profiles;
+3. `#z0`, `#z00`, and `#z000` are all z-labels; `#z1234` is not; in profiles `7` and `8`, `#z100` through `#z999` are ordinary labels;
 4. redefinition, missing definitions, and the mandatory presence of `#z0` are enforced later.
 
 #### Integer literals
@@ -2011,13 +2029,15 @@ Therefore, an implementation that reproduces only the single-file front-end but 
 
 ### Unexpected Tokens During Compilation
 
-If text intended as one argument contains argument delimiters such as commas or parentheses, write it as a double-quoted string:
+If text intended as one argument contains argument delimiters such as commas or parentheses, write it as a double-quoted string. In the following unquoted form, the comma splits the text into two arguments:
 
-```
-# The comma splits this into additional arguments
+```ss
 set_namae(Hello, world)
+```
 
-# Quoted form
+The quoted form passes one string argument:
+
+```ss
 set_namae("Hello, world")
 ```
 

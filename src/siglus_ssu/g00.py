@@ -1662,11 +1662,9 @@ def _parse_merge_args(args):
     return (layers, output_dir, trim) if len(layers) >= 2 else None
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     args = list(argv)
-    if not args or args[0] in ("-h", "--help", "help"):
+    if not args:
         return 2
     if args[0] == "--a":
         option_args, positional_args = split_end_of_options(args[1:])

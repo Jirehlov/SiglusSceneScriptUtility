@@ -696,15 +696,10 @@ def _process_dat(
     return 0
 
 
-def main(argv=None):
-    if argv is None:
-        argv = sys.argv[1:]
+def main(argv):
     if not argv:
         _hint_help(sys.stdout)
         return 2
-    if argv[0] in ("-h", "--help", "help"):
-        _hint_help(sys.stdout)
-        return 0
     try:
         argv, explicit_angou = consume_angou_option(argv)
     except ValueError as exc:

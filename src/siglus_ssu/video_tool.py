@@ -139,7 +139,7 @@ def _analyze_one(path):
     return 0
 
 
-def main(argv=None):
+def main(argv):
     mode, argv, rc = parse_main_argv(argv, hint_help)
     if rc is not None:
         return rc
