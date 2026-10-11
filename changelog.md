@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Removed `-t` / `--tutorial`, the static graph generator, and its HTML viewer.
+
+
 ## [v0.5.5] - 2026-10-06
 
 - Fixed duplicate macro parameter precedence in both compiler backends by sorting parameter replacements by name length before reversing their order.

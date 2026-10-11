@@ -52,8 +52,6 @@ pyproject = (
     Issues = "https://github.com/Jirehlov/SiglusSceneScriptUtility/issues"
     [tool.setuptools]
     include-package-data = false
-    [tool.setuptools.package-data]
-    siglus_ssu = ["tutorial_viewer.html"]
     [tool.setuptools.packages.find]
     where = ["src"]
     """

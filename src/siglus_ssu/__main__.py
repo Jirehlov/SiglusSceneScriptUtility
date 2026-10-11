@@ -14,7 +14,7 @@ def _usage():
     p = _prog()
     text = (
         f"{p} {package_version() or 'unknown'}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [args]\n"
         "\n"
         "Options:\n"
         "  -V, --version   Show version and exit\n"
@@ -37,7 +37,6 @@ def _usage():
         "  -s, --sound     Decode/extract/play .ovk/.owp/.nwa sounds\n"
         "  -v, --video     Extract/analyze .omv videos\n"
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
-        "  -t, --tutorial  Generate static tutorial graph JSON from a .pck\n"
         "  test            Round-trip compile-test .pck files with embedded original sources; reports EXACT or PAYLOAD_SAME\n"
         "\n"
         "LSP mode:\n"
@@ -151,10 +150,6 @@ def _usage():
         "    --revert          Restore the byte-identical original executable using the embedded overlay\n"
         "    --allow-partial   Write a language patch even when part of the selected preset is unavailable\n"
         "\n"
-        "Tutorial mode:\n"
-        f"  {p} -t <input_pck> [output_json]\n"
-        "    output_json    Defaults to <input_name>.tutorial.json next to input_pck\n"
-        "\n"
         "Test mode:\n"
         f"  {p} test [--serial] <input_pck|input_dir>\n"
         "    input_dir      Tests .pck files directly under the directory\n"
@@ -169,7 +164,7 @@ def _usage_short():
     p = _prog()
     text = (
         f"{p} {package_version() or 'unknown'}\n"
-        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|-t|test) [args]\n"
+        f"usage: {p} [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [args]\n"
         f"Try '{p} --help' for more information.\n"
     )
     sys.stderr.write(text)
@@ -299,8 +294,6 @@ MODE_MODULES = {
     "--video": "video_tool",
     "-p": "patch",
     "--patch": "patch",
-    "-t": "tutorial",
-    "--tutorial": "tutorial",
     "test": "test",
 }
 
@@ -318,7 +311,7 @@ def _uses_string_xor_multiplier(mode, args):
             return bool(options & {"--disam", "--payload", "--word"})
         case "koe_collector":
             return "--single" not in options
-        case "textmap" | "tutorial" | "test":
+        case "textmap" | "test":
             return True
         case _:
             return False
