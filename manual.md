@@ -1761,6 +1761,7 @@ Rules:
 
 - Each text expansion, macro argument (including a default), or macro body reports an expansion-limit error after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. The counter resets at each new minimum; this is not a limit on the total number of replacements in a file. Reaching this threshold suggests possible cyclic expansion; it does not prove an infinite loop.
 - Macro expansion may nest at most **128 levels**.
+- Include parsing applies the same progress rule to reinserted `#expand` text: more than **10000 consecutive declarations** without a new minimum remaining-text length stops analysis. This is not a limit on the total number of declarations or expanded characters.
 
 These limits apply to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and to LSP analysis. Exceeding a limit returns a compile error or LSP diagnostic. Correct the definitions or reduce the expansion before retrying.
 

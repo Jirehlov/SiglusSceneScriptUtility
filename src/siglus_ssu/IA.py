@@ -30,7 +30,6 @@ class IncAnalyzer:
         self.input_source_map = (
             source_map if self.sidecar and isinstance(source_map, list) else []
         )
-        self.source_map_from_input = bool(self.input_source_map)
         if self.sidecar:
             self.iad2.setdefault("decls", [])
             self.ca.replace_uses = self.iad2.setdefault("replace_uses", [])
@@ -348,13 +347,14 @@ class IncAnalyzer:
             ]
             if points:
                 lines = {int(point[0]) for point in points}
-                if len(lines) == 1:
+                sources = {int(point[3]) for point in points}
+                if len(lines) == 1 and len(sources) == 1:
                     chars = [int(point[1]) for point in points]
                     return (
                         next(iter(lines)),
                         min(chars),
                         max(chars) + 1,
-                        self.source_map_from_input,
+                        next(iter(sources)),
                     )
         text = self.t[: max(0, start)]
         line_start = text.rfind("\n") + 1
@@ -362,13 +362,13 @@ class IncAnalyzer:
             int(line or 1),
             max(0, start - line_start),
             max(0, end - line_start),
-            False,
+            -1,
         )
 
     def _record_decl(self, kind, name, line, start, end):
         if not self.sidecar:
             return
-        line, start_char, end_char, source_mapped = self._span_from_offsets(
+        line, start_char, end_char, source_id = self._span_from_offsets(
             start, end, line
         )
         self.iad2["decls"].append(
@@ -378,7 +378,7 @@ class IncAnalyzer:
                 "line": int(line or 1),
                 "start_char": int(start_char),
                 "end_char": int(end_char),
-                "source_mapped": bool(source_mapped),
+                "source_id": source_id,
             }
         )
 
@@ -574,7 +574,7 @@ class IncAnalyzer:
                     "line": line,
                     "start_char": 0,
                     "end_char": 0,
-                    "source_mapped": False,
+                    "source_id": -1,
                 },
             )
         name_line = line2
@@ -585,11 +585,11 @@ class IncAnalyzer:
         while name_end < n and t[name_end] not in name_stopset:
             name_end += 1
         if self.sidecar:
-            span_line, start_char, end_char, source_mapped = self._span_from_offsets(
+            span_line, start_char, end_char, source_id = self._span_from_offsets(
                 st, name_end, name_line
             )
         else:
-            span_line, start_char, end_char, source_mapped = name_line, 0, 0, False
+            span_line, start_char, end_char, source_id = name_line, 0, 0, -1
         j = i2
         while j < n and t[j] != "#":
             if t[j] == "\n":
@@ -606,7 +606,7 @@ class IncAnalyzer:
                 "line": span_line,
                 "start_char": start_char,
                 "end_char": end_char,
-                "source_mapped": bool(source_mapped),
+                "source_id": source_id,
             },
         )
 
@@ -748,6 +748,8 @@ class IncAnalyzer:
             return 0
         i = 0
         line = 1
+        loop = 0
+        rest_min = len(self.t)
         while 1:
             i, line, ok = self._skip(i, line)
             if not ok:
@@ -755,6 +757,20 @@ class IncAnalyzer:
             i, line, ok2 = self._declare(i, line)
             if not ok2:
                 return 0
+            rest = len(self.t) - i
+            if rest >= rest_min:
+                loop += 1
+                if loop > 10000:
+                    self.err(
+                        line,
+                        "Include expansion exceeded 10000 consecutive declarations "
+                        "without a new minimum remaining-text length; "
+                        "check for cyclic #expand directives.",
+                    )
+                    return 0
+            else:
+                rest_min = rest
+                loop = 0
         return 1
 
     def step2(self):
@@ -814,7 +830,7 @@ class IncAnalyzer:
                         "line": int(span.get("line", ln) or ln),
                         "start_char": int(span.get("start_char", 0) or 0),
                         "end_char": int(span.get("end_char", 0) or 0),
-                        "source_mapped": bool(span.get("source_mapped")),
+                        "source_id": int(span.get("source_id", -1)),
                     }
                 )
         for idx, (txt, ln) in enumerate(zip(self.iad2["ct"], self.iad2["cl"])):
@@ -895,7 +911,7 @@ class IncAnalyzer:
                         "line": int(span.get("line", org_line) or org_line),
                         "start_char": int(span.get("start_char", 0) or 0),
                         "end_char": int(span.get("end_char", 0) or 0),
-                        "source_mapped": bool(span.get("source_mapped")),
+                        "source_id": int(span.get("source_id", -1)),
                     }
                 )
         return 1

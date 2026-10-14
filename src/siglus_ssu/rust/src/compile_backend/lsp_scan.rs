@@ -654,10 +654,13 @@ fn add_inline_inc_definitions(
     defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
     sidecar: &IncSidecar,
-    path: &str,
+    source_files: &[(String, Vec<Vec<char>>)],
     path_identity: &str,
 ) {
     for decl in &sidecar.decls {
+        let Some((path, _)) = source_files.get(decl.source_id as usize) else {
+            continue;
+        };
         if decl.name.is_empty() {
             continue;
         }
@@ -819,13 +822,6 @@ pub fn lsp_scan_document(
         &mut local_defs,
         &mut document_symbols,
     );
-    add_inline_inc_definitions(
-        &mut local_defs,
-        &mut document_symbols,
-        &scene_sidecar,
-        &path,
-        &path_identity,
-    );
     let mut source_files = vec![(
         path.clone(),
         source_text
@@ -841,6 +837,13 @@ pub fn lsp_scan_document(
                 .collect::<Vec<_>>(),
         )
     }));
+    add_inline_inc_definitions(
+        &mut local_defs,
+        &mut document_symbols,
+        &scene_sidecar,
+        &source_files,
+        &path_identity,
+    );
     for record in &mut document_symbols {
         if let Some(atom) = lex.atom_list.get(record.atom_id as usize) {
             let name = if atom.atom_type == ia_data.codes.la.z_label {

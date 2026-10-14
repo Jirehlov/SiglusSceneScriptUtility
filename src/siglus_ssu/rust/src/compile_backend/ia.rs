@@ -69,6 +69,7 @@ pub struct IaScratch {
 
 #[derive(Debug, Clone, Default)]
 pub struct NameSpan {
+    pub source_id: isize,
     pub line: usize,
     pub start_char: usize,
     pub end_char: usize,
@@ -76,6 +77,7 @@ pub struct NameSpan {
 
 #[derive(Debug, Clone)]
 pub struct IncDeclaration {
+    pub source_id: isize,
     pub kind: String,
     pub name: String,
     pub line: usize,
@@ -576,8 +578,12 @@ impl IncAnalyzer {
                 .collect();
             if !points.is_empty() {
                 let first_line = points[0].line;
-                if points.iter().all(|point| point.line == first_line) {
+                if points
+                    .iter()
+                    .all(|point| point.line == first_line && point.source_id == points[0].source_id)
+                {
                     return NameSpan {
+                        source_id: points[0].source_id as isize,
                         line: first_line,
                         start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
                         end_char: points.iter().map(|point| point.column).max().unwrap_or(0) + 1,
@@ -592,6 +598,7 @@ impl IncAnalyzer {
             }
         }
         NameSpan {
+            source_id: -1,
             line,
             start_char: start.saturating_sub(line_start),
             end_char: end.saturating_sub(line_start),
@@ -604,6 +611,7 @@ impl IncAnalyzer {
         }
         let span = self.span_from_offsets(start, end, line);
         self.sidecar_data.decls.push(IncDeclaration {
+            source_id: span.source_id,
             kind: kind.to_string(),
             name: name.to_string(),
             line: span.line,
@@ -1031,6 +1039,8 @@ impl IncAnalyzer {
         self.strip_comments()?;
         let mut pos = 0usize;
         let mut line = 1usize;
+        let mut loop_count = 0usize;
+        let mut rest_min = self.text.len();
         loop {
             let (i, line2, ok) = self.skip(pos, line);
             if !ok {
@@ -1039,6 +1049,19 @@ impl IncAnalyzer {
             let (next, next_line) = self.declare(i, line2, iad, scratch)?;
             pos = next;
             line = next_line;
+            let rest = self.text.len().saturating_sub(pos);
+            if rest >= rest_min {
+                loop_count += 1;
+                if loop_count > 10_000 {
+                    return self.err(
+                        line,
+                        "Include expansion exceeded 10000 consecutive declarations without a new minimum remaining-text length; check for cyclic #expand directives.",
+                    );
+                }
+            } else {
+                rest_min = rest;
+                loop_count = 0;
+            }
         }
         Ok(())
     }
@@ -1091,6 +1114,7 @@ impl IncAnalyzer {
                     .cloned()
                     .unwrap_or_default();
                 self.sidecar_data.decls.push(IncDeclaration {
+                    source_id: span.source_id,
                     kind: "property".to_string(),
                     name: name.clone(),
                     line: if span.line == 0 {
@@ -1167,6 +1191,7 @@ impl IncAnalyzer {
                     .cloned()
                     .unwrap_or_default();
                 self.sidecar_data.decls.push(IncDeclaration {
+                    source_id: span.source_id,
                     kind: "command".to_string(),
                     name: name.clone(),
                     line: if span.line == 0 {

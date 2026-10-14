@@ -186,7 +186,6 @@ class CharacterAnalizer:
         out_source_map = []
         inc_source_map = []
         source_map = self.source_map_1
-        inc_line_map = []
         stats = {
             "ifdef": 0,
             "elseifdef": 0,
@@ -210,7 +209,6 @@ class CharacterAnalizer:
 
         while t[i] != "\0":
             c = t[i]
-            source_line = self.m_line
             if c == "\n":
                 if excluded_line:
                     stats["excluded_lines"] += 1
@@ -342,19 +340,14 @@ class CharacterAnalizer:
                         )
             if c == "\n":
                 if incs:
-                    if not inc_line_map:
-                        inc_line_map.append(source_line)
                     inc.append(c)
                     if self.sidecar:
                         inc_source_map.append(source_at(i))
-                    inc_line_map.append(source_line + 1)
                 out.append(c)
                 if self.sidecar:
                     out_source_map.append(source_at(i))
             elif ifs[d] in (0, 1):
                 if incs:
-                    if not inc_line_map:
-                        inc_line_map.append(source_line)
                     inc.append(c)
                     if self.sidecar:
                         inc_source_map.append(source_at(i))
@@ -379,12 +372,11 @@ class CharacterAnalizer:
             return (
                 "".join(out),
                 "".join(inc),
-                inc_line_map,
                 stats,
                 out_source_map,
                 inc_source_map,
             )
-        return "".join(out), "".join(inc), inc_line_map, stats
+        return "".join(out), "".join(inc), stats
 
     def _std_replace(self, text, pos, default_rt, added_rt, source_map=None):
         r1 = search_replace_tree(default_rt, text, pos) if default_rt else None
@@ -725,10 +717,9 @@ class CharacterAnalizer:
         r = self.analize_file_2(t1)
         if not isinstance(r, tuple):
             return 0
-        scn, inc, inc_line_map, preprocess_stats = r[:4]
-        scn_source_map = r[4] if self.sidecar else []
-        inc_source_map = r[5] if self.sidecar else []
-        pcad["inc_line_map"] = inc_line_map
+        scn, inc, preprocess_stats = r[:3]
+        scn_source_map = r[3] if self.sidecar else []
+        inc_source_map = r[4] if self.sidecar else []
         if self.sidecar:
             pcad["sidecar"] = True
         if inc:

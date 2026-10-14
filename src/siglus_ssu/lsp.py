@@ -387,7 +387,7 @@ def _sorted_dir_paths(
             suffix
         ):
             out[_path_identity(norm)] = norm
-    return sorted(out.values(), key=lambda p: os.path.basename(p).casefold())
+    return sorted(out.values(), key=lambda p: ascii_lower(os.path.basename(p)))
 
 
 def _project_input_signature(
@@ -461,26 +461,10 @@ def _render_arg_list(arg_list: list[dict[str, Any]] | None) -> str:
     return "(" + ", ".join(parts) + ")"
 
 
-def _mapped_inc_line(
-    line: int,
-    source_text: str,
-    line_map: list[int] | None = None,
-) -> int:
-    line_count = len(_split_lines_cached(_normalize_source_text(source_text)))
-    mapped_line = min(max(1, int(line or 1)), line_count)
-    if isinstance(line_map, list) and 0 <= (mapped_line - 1) < len(line_map):
-        try:
-            mapped_line = int(line_map[mapped_line - 1] or mapped_line)
-        except (TypeError, ValueError):
-            mapped_line = min(max(1, int(line or 1)), line_count)
-    return max(1, min(mapped_line, line_count))
-
-
 def _extract_iad2_definition_records(
     path: str,
-    source_text: str,
     iad2: dict[str, Any],
-    line_map: list[int] | None = None,
+    source_files: dict[int, tuple[str, str]],
 ) -> list[DefinitionRecord]:
     out: list[DefinitionRecord] = []
     decls = iad2.get("decls") if isinstance(iad2, dict) else None
@@ -499,14 +483,17 @@ def _extract_iad2_definition_records(
             end_char = int(decl.get("end_char", -1))
         except (TypeError, ValueError):
             end_char = -1
+        source_id = int(decl.get("source_id", -1))
+        source = source_files.get(source_id)
+        if source_id != 0 and source is None:
+            continue
         if name:
             raw_line = int(decl.get("line", 1) or 1)
-            line_map_arg = None if bool(decl.get("source_mapped")) else line_map
             out.append(
                 DefinitionRecord(
                     name=name,
-                    path=path,
-                    line=_mapped_inc_line(raw_line, source_text, line_map_arg),
+                    path=path if source_id == 0 else source[0],
+                    line=max(1, raw_line),
                     kind=kind,
                     start_char=start_char,
                     end_char=end_char,
@@ -553,7 +540,7 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
     iad = build_empty_ia_data(new_replace_tree())
     defs: dict[str, list[DefinitionRecord]] = {}
     inc_paths = _sorted_dir_paths(root, overlays, ".inc")
-    passes: list[tuple[str, str, dict[str, Any]]] = []
+    passes: list[tuple[str, dict[str, Any]]] = []
     inc_iad2_by_path: dict[str, dict[str, Any]] = {}
     source_files = {}
     for source_id, inc_path in enumerate(inc_paths, 1):
@@ -573,12 +560,12 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
                     code="INC_STEP1",
                 ),
             )
-        for record in _extract_iad2_definition_records(inc_path, text, iad2):
+        for record in _extract_iad2_definition_records(inc_path, iad2, source_files):
             if record.kind not in ("macro", "define", "replace"):
                 continue
             _append_definition(defs, record)
-        passes.append((inc_path, text, iad2))
-    for source_id, (inc_path, text, iad2) in enumerate(passes, 1):
+        passes.append((inc_path, iad2))
+    for source_id, (inc_path, iad2) in enumerate(passes, 1):
         ia = IncAnalyzer("", C.FM_GLOBAL, iad, iad2, sidecar=True)
         ia.source_id = source_id
         if not ia.step2():
@@ -592,7 +579,7 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
                     code="INC_STEP2",
                 ),
             )
-        for record in _extract_iad2_definition_records(inc_path, text, iad2):
+        for record in _extract_iad2_definition_records(inc_path, iad2, source_files):
             if record.kind not in ("property", "command"):
                 continue
             _append_definition(defs, record)
@@ -1204,11 +1191,11 @@ def _analyze_ss_document(
     )
     for item in _extract_iad2_definition_records(
         abs_path,
-        text,
         pcad.get("inc_iad2", {}),
-        pcad.get("inc_line_map"),
+        project.source_files,
     ):
         item.scope = "scene-local"
+        item.symbol_id = _definition_symbol_id(replace(item, path=abs_path))
         _append_definition(local_defs, item)
         doc_symbols.append(item)
     for bucket in local_defs.values():
@@ -2392,7 +2379,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 25
+LSP_INDEX_CACHE_VERSION = 26
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
