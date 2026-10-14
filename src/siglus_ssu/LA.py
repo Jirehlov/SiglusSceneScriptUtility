@@ -48,6 +48,26 @@ _LA_SYMBOLS = (
 )
 
 
+KEYWORDS = {
+    "command": "COMMAND",
+    "property": "PROPERTY",
+    "goto": "GOTO",
+    "gosub": "GOSUB",
+    "gosubstr": "GOSUBSTR",
+    "return": "RETURN",
+    "if": "IF",
+    "elseif": "ELSEIF",
+    "else": "ELSE",
+    "for": "FOR",
+    "while": "WHILE",
+    "continue": "CONTINUE",
+    "break": "BREAK",
+    "switch": "SWITCH",
+    "case": "CASE",
+    "default": "DEFAULT",
+}
+
+
 def la_analize(pcad):
     s = pcad["scn_text"] + ("\0" * 256)
     sidecar = bool(pcad.get("sidecar")) or isinstance(pcad.get("scn_source_map"), list)
@@ -99,6 +119,7 @@ def la_analize(pcad):
             "start_char": max(0, start - line_start),
             "end_char": max(0, end - line_start),
             "text": s[start:end],
+            "source_id": -1 if source_map else 0,
         }
 
     def token_span(start, end, line):
@@ -110,34 +131,18 @@ def la_analize(pcad):
             ]
             if points:
                 lines = {int(point[0]) for point in points}
-                if len(lines) == 1:
+                sources = {int(point[3]) if len(point) > 3 else 0 for point in points}
+                if len(lines) == 1 and len(sources) == 1:
                     chars = [int(point[1]) for point in points]
                     return {
                         "line": next(iter(lines)),
                         "start_char": min(chars),
                         "end_char": max(chars) + 1,
                         "text": s[start:end],
+                        "source_id": next(iter(sources)),
                     }
         return fallback_span(start, end, line)
 
-    keywords = {
-        "command": "COMMAND",
-        "property": "PROPERTY",
-        "goto": "GOTO",
-        "gosub": "GOSUB",
-        "gosubstr": "GOSUBSTR",
-        "return": "RETURN",
-        "if": "IF",
-        "elseif": "ELSEIF",
-        "else": "ELSE",
-        "for": "FOR",
-        "while": "WHILE",
-        "continue": "CONTINUE",
-        "break": "BREAK",
-        "switch": "SWITCH",
-        "case": "CASE",
-        "default": "DEFAULT",
-    }
     i = 0
     while s[i] != "\0":
         i, ok = skip(i)
@@ -171,7 +176,7 @@ def la_analize(pcad):
             while ("a" <= s[i] <= "z") or ("0" <= s[i] <= "9") or s[i] in "_$@":
                 i += 1
             w = s[st:i]
-            kw = keywords.get(w)
+            kw = KEYWORDS.get(w)
             if kw:
                 a["type"] = C.LA_T[kw]
             else:
@@ -284,3 +289,24 @@ def la_analize(pcad):
     if sidecar:
         lad["atom_span_list"] = atom_span_list
     return lad, None
+
+
+def source_tokens(text, inc=False):
+    if inc:
+        from .IA import IncAnalyzer
+
+        analyzer = IncAnalyzer(text, C.FM_GLOBAL, {}, {}, sidecar=True)
+        if not analyzer.cc():
+            return None
+        text = analyzer.t.rstrip("\0")
+        source_map = analyzer.source_map
+    else:
+        from .CA import CharacterAnalizer
+
+        analyzer = CharacterAnalizer(sidecar=True)
+        text = analyzer.analize_file_1(text)
+        if not isinstance(text, str):
+            return None
+        source_map = analyzer.source_map_1
+    lad, error = la_analize({"scn_text": text, "scn_source_map": source_map})
+    return None if error else lad

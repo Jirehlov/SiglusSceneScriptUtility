@@ -234,7 +234,7 @@ siglus-ssu -lsp [--serial]
 - 跳转到定义与查找引用支持 `goto`、`gosub`、`gosubstr` 的普通标签和数字 `#z` 标签目标，包括它们的表达式形式。数字标签的前导零不影响查找。
 - 服务会协商 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并校验文档 URI 与请求结构。
 - 分析过程会复用适用的 `-c` 阶段（`CA`、`LA`、`SA`、`MA`、`BS`）。项目模型按目录组织，与 `.inc` / `.ss` 联合分析及全局 `.inc #command` 链接一致。
-- 宏参数、默认参数或宏体中的循环 `#define` / `#define_s` 可能使分析一直运行，无法返回诊断或处理后续请求。两个前端的 10000 次提醒都仅写入 `stderr`，不会终止展开；需要修正文档并重启语言服务器，详见[宏展开说明](#macro)。
+- 宏参数、默认参数与宏体展开共用编译器的扫描步数、宏嵌套及累计替换文本量限制。超限时会停止当前分析并返回诊断，详见[宏展开说明](#macro)。
 
 ---
 
@@ -1202,49 +1202,63 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 
 ### `-v` / `--video` — 处理 `.omv` 视频文件
 
-提供分析、提取和重新编译 `.omv` 视频文件的工具。`.omv` 格式是带有专有 SiglusEngine 包装头的 Ogg 容器（`.ogv`）。
+提供分析 `.omv` 结构、提取内嵌 Ogg 负载（`.ogv`），以及为 Theora 流生成 SiglusEngine 包装头和页面/帧索引的工具。这些操作不重新编码视频，也不重建颜色或透明度。
 
-`-v --c` 只保留输入 Ogg 文件中的第一条 Theora 视频流。若输入还包含 Vorbis、Opus、字幕或其他 stream，这些 stream 会被忽略，不会写入生成的 `.omv`。
+`-v --x` 原样复制整个 Ogg 负载，包括已有的内嵌音轨。`-v --c` 只保留输入中的第一条 Theora 视频流；Vorbis、Opus、字幕及其他流不会写入生成的 `.omv`。
 
 #### 语法
 
 ```
-# 将 .omv 提取为 .ogv（原始 Ogg 视频）
+# 将 .omv 提取为 .ogv（原始压缩码流）
 siglus-ssu -v --x <input_dir | input_file.omv> <output_dir>
 
 # 分析 .omv 文件（结构信息）
 siglus-ssu -v --a <input_file.omv>
 
 # 将 .ogv 包装为 .omv
-siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mode N] [--flags 0x...]
+siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mode N] [--flags N]
 ```
 
 #### 参数
 
 | 参数 | 说明 |
 |---|---|
-| `--x` | **提取**模式。去除 SiglusEngine 包装层并写入纯 `.ogv` 文件。 |
+| `--x` | **提取**模式。去除包装头和索引，保留原始 Ogg 负载，不重新编码或重建像素布局。 |
 | `--a` | **分析**模式。打印详细头部信息，包括外层头字段、TableA 和 TableB 帧元数据；若可解析，还会输出 Theora 流信息，如 FPS、keyframe granule shift、pixel format 和画面尺寸。 |
-| `--c` | **创建**模式。用 SiglusEngine `.omv` 头包装纯 `.ogv`。 |
-| `--refer <ref.omv>` | 从现有的 `.omv` 参考文件复制头部 `mode` 和 TableB `flags_hi24`。若同时指定了 `--mode`/`--flags` 则会被覆盖。 |
-| `--mode N` | 覆盖 `mode` 字段（头部偏移 `0x28`）。接受十进制或 `0x...` 十六进制。不带 `--refer` 时默认为 `2`。 |
-| `--flags 0xXXXXXX` | 覆盖 TableB `flags` 的高 24 位。接受单个值或逗号分隔的范围规格，如 `0-9:0x1A2B3C00,10-:0x00000000`。不带 `--refer` 时默认为 `0`。 |
+| `--c` | **创建**模式。为已有的 Theora 流生成 `.omv` 包装头和索引；输入中已编码的平面必须符合所选模式。 |
+| `--refer <ref.omv>` | 仅从参考文件复制 `mode` 和 TableB `flags_hi24`，不复制整个头部或参考文件中的码流。显式指定的 `--mode`、`--flags` 分别覆盖对应的参考值。 |
+| `--mode N` | 设置头部偏移 `0x28` 处的像素解释模式，不转换已编码的平面。接受十进制或 `0x...` 十六进制。不带 `--refer` 时默认为 `2`。各模式的布局见下文。 |
+| `--flags N` | 覆盖 TableB 中按 `flags` 读取值的高 24 位；此参数的低 8 位会被忽略，并由关键帧标记生成。参数使用原始位位置，如 `0x1A2B3C00`；也接受逗号分隔的帧范围，如 `0-9:0x1A2B3C00,10-:0x00000000`。不带 `--refer` 时默认为 `0`。 |
+
+在官方结构体中，这高 24 位是关键帧布尔值之后的对齐填充，通常应保持为 `0`。此选项用于保留原始字节以兼容已有文件，不用于选择颜色或透明度处理方式。
 
 目录输入的 `-v --x` 会递归扫描 `.omv`，并在输出端保留相对目录结构。`-v --c` 在判断第二个参数时遵循这样的规则：若参数是已存在目录、以路径分隔符结尾，或没有扩展名，则按“输出目录”处理；若想明确写到单个文件，请给出带 `.omv` 扩展名的文件路径。
 
 `-v --x` 和 `-v --c` 在覆盖已存在的输出前都会询问 `Overwrite? [y/N]`。只有 `y` 或 `yes`（不区分大小写）会确认写入；空回答、无法读取标准输入或取消提示均视为拒绝。创建模式此时返回失败；批量提取则保留该目标不变，继续处理其余文件，并在有任何目标被拒绝时返回失败。如果输入与输出指向同一个物理文件，会先缓冲转换结果，待读取与转换结束后才写回，避免打开输出时提前截断输入。
 
-#### 准备 `.ogv` 输入
+#### 像素布局与 `.ogv` 输入
 
-提供给 `-v --c` 的 `.ogv` 应是只含视频的 Theora stream。若目标引擎要求 `yuv444p`，请显式设置 pixel format；FFmpeg 默认设置可能选择其他格式，例如 `yuv420p`。
+先对原始 `.omv` 使用 `-v --a`，检查其模式、Theora pixel format 和尺寸。SiglusEngine 的标准模式按以下方式使用三个 Theora 4:4:4 平面：
 
-请使用包含 `libtheora` 的 FFmpeg build。
+| 模式 | 平面内容 | 解释方式 |
+|---|---|---|
+| `0` | B、G、R | 重排为 RGB，画面不透明。 |
+| `1` | B、G、R，每个平面后附一段 alpha | 重排颜色平面，并依次拼接三段 alpha。 |
+| `2` | Y、U、V | 使用 BT.601 系数将全范围 YUV 转换为 RGB。 |
+
+模式 `1` 的可见高度为 `H` 时，Theora 画面高度（picture height）须为 `H + ceil(H / 3)`。每个平面的前 `H` 行保存颜色，末尾一段保存最多 `ceil(H / 3)` 行 alpha；按平面顺序拼接三段后，取前 `H` 行作为透明通道。例如，1080 行画面对应的 Theora picture height 为 1440。
+
+提取会保留这些平面内容，但 Ogg 负载不保留外层 OMV 的模式字段，因此应保留原始 `.omv` 或记录其模式。普通播放器按 YUV 解释平面，模式 `0`/`1` 需要先重建颜色和 alpha，才能正常观看或转码。
+
+提供给 `-v --c` 的输入应是只含视频的 Theora 流，且平面已经符合所选模式。`--mode` 和 `--refer` 不会构造 BGR 或带 alpha 的打包平面。普通 YUV `.ogv` 搭配模式 `0`/`1` 的参考文件会产生错误画面；模式 `1` 还会将 Theora picture height 的四分之三向下取整，作为外层高度。CLI 接受其他模式编号作为元数据覆盖值，但上述标准模式没有定义这些编号。
+
+对于普通的不透明 SDR 视频，可使用包含 `libtheora` 的 FFmpeg，将其制作为全范围 BT.601 YUV444 的模式 `2` 输入：
 
 ```bash
-ffmpeg -i input_video -map 0:v:0 -an -vf "format=yuv444p" -c:v libtheora -q:v 8 output.ogv
+ffmpeg -i input_video -map 0:v:0 -an -vf "scale=out_range=full:out_color_matrix=bt601,format=yuv444p" -c:v libtheora -q:v 8 -color_range pc output.ogv
 ```
 
-`-q:v 8` 只是示例质量设置，可按需要调整。
+滤镜会实际转换采样值，`-color_range pc` 则让编码器输入保持全范围。输入范围和矩阵由源视频推断；若源信息缺失或错误，可按实际情况设置 scale 滤镜的 `in_range` / `in_color_matrix`。`-q:v 8` 是示例质量设置。此命令不保留音频或透明度，也不生成模式 `0`/`1` 的布局。
 
 #### 示例
 
@@ -1255,11 +1269,11 @@ siglus-ssu -v --x /path/to/movie/ /path/to/ogv_out/
 # 分析单个 .omv
 siglus-ssu -v --a /path/to/op.omv
 
-# 使用原始头部元数据将 .ogv 重新打包为 .omv
+# 将像素布局已符合参考模式的 .ogv 重新打包为 .omv
 siglus-ssu -v --c /path/to/op_translated.ogv /path/to/op_translated.omv --refer /path/to/op_original.omv
 
-# 手动指定 mode 和 flags
-siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
+# 包装上文制作的模式 2 Theora 流
+siglus-ssu -v --c /path/to/output.ogv /path/to/output.omv --mode 2
 ```
 
 ---
@@ -1724,7 +1738,7 @@ define-s-decl  ::= "#define_s" name-s replacement-text
 1. 在单个替换树内部，匹配选择采用**最长前缀命中**；
 2. 当默认替换树与临时附加替换树在同一位置都命中时，当前实现用候选项 `name` 字段的**词典序较大者**作为胜者，而不是按声明先后或“跨树全局最长匹配”择优；一致实现应复现这一规则。
 
-普通文本展开路径保留“剩余文本长度连续超过 10000 步未降到新低则报错”的保护。两个后端在宏内部都会警告后继续展开，见下节；不能依赖该外层保护中止宏内部的循环。
+普通文本、宏实参（含默认值）及宏体展开共用展开限制，超限时会报错并停止当前展开，具体限制见下节。
 
 #### `#macro`
 
@@ -1743,9 +1757,13 @@ macro-param ::= param-name ["(" default-text ")"]
 5. 宏体会带着一棵用于宏参数的临时替换树展开；最终结果插入后，扫描位置会推进到该插入结果末尾，因此不会在同一位置立刻重扫这段结果。
 6. 形参重名时，使用第一个同名形参绑定的实参或默认值；后面的同名形参仍计入参数数量，其参数值仍会展开。
 
-**循环展开与警告：** 避免在宏实参、默认文本或宏体中触发 `#define` / `#define_s` 的自引用或相互引用循环。两个前端都不会因为宏内部的替换次数多而强制停止，因此真正的无限展开仍可能使编译或 LSP 分析一直运行。
+**展开限制：** 两个前端在超过以下任一限制时，都会报错并停止当前分析：
 
-每段宏实参（含默认值）或宏体展开的替换计数达到 **10000** 时，两个前端都会向 `stderr` 输出一次警告，随后继续展开，不截断结果。文本发生改变或扫描位置不前进的步骤计入该计数，单纯字符扫描不计入。该提醒不是无限循环判定：有限的长展开仍可完成。它适用于两个编译后端（包括 `--legacy`、`--legacy-full` 和纯 Python 安装）及两种 LSP 分析路径；普通展开既有的超限报错行为不变。若确认存在循环，请中止编译进程（终端可用 `Ctrl+C`）并修改定义；LSP 卡住时应修正文档并重启服务。
+- 每段普通文本、宏实参（含默认值）或宏体展开的“剩余文本长度”连续超过 **10000 个扫描步骤**未降到新低时，报告展开超限错误。每次降到新低都会重置计数；这不是整份文件的替换次数上限。达到此阈值表示可能存在循环展开，并不能据此确认死循环。
+- 宏展开最多嵌套 **128 层**。
+- 每个字符分析器最多累计 **1,048,576 个替换文本字符**。每次命中替换项时累加其替换文本的字符数，包括宏体文本及已展开的形参替换文本；这不是最终输出大小。
+
+这些限制适用于两个编译后端（包括 `--legacy`、`--legacy-full` 和纯 Python 安装）及 LSP 分析。超限时会返回编译错误或 LSP 诊断，应修正定义或减少展开量后重试。
 
 #### `#property`
 

@@ -69,6 +69,7 @@ pub struct AtomSpan {
     pub line: usize,
     pub start_char: usize,
     pub end_char: usize,
+    pub source_id: isize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -83,7 +84,6 @@ pub struct LexResult {
 #[derive(Debug, Clone)]
 pub struct LexError {
     pub line: usize,
-    pub message: String,
 }
 
 fn to_i32(value: i64) -> i32 {
@@ -138,6 +138,7 @@ fn fallback_span(starts: &[usize], start: usize, end: usize, line: usize) -> Ato
         line: line_index + 1,
         start_char: start.saturating_sub(line_start),
         end_char: end.saturating_sub(line_start),
+        source_id: 0,
     }
 }
 
@@ -157,16 +158,24 @@ fn token_span(
             .collect();
         if !points.is_empty() {
             let first_line = points[0].line;
-            if points.iter().all(|point| point.line == first_line) {
+            if points
+                .iter()
+                .all(|point| point.line == first_line && point.source_id == points[0].source_id)
+            {
                 return AtomSpan {
                     line: first_line,
                     start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
                     end_char: points.iter().map(|point| point.column).max().unwrap_or(0) + 1,
+                    source_id: points[0].source_id as isize,
                 };
             }
         }
     }
-    fallback_span(starts, start, end, line)
+    let mut span = fallback_span(starts, start, end, line);
+    if source_map.is_some_and(|map| !map.is_empty()) {
+        span.source_id = -1;
+    }
+    span
 }
 
 pub fn lex_scene_text(text: &str, codes: &LexCodes) -> Result<LexResult, LexError> {
@@ -358,10 +367,7 @@ pub fn lex_scene_text_with_source_map(
                 }
             }
             let Some(kind) = symbol_type else {
-                return Err(LexError {
-                    line: cur_line,
-                    message: format!("Invalid character: '{ch}'"),
-                });
+                return Err(LexError { line: cur_line });
             };
             atom.atom_type = kind;
         }

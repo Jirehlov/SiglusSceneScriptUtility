@@ -27,12 +27,37 @@ pub struct Replacement {
     pub args: Vec<MacroArg>,
     pub used_count: usize,
     pub decl_type: String,
+    pub source: Option<Arc<ReplacementSource>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplacementSource {
+    pub map: Vec<Option<SourcePoint>>,
+    pub defaults: Vec<Vec<Option<SourcePoint>>>,
+    pub declaration: Option<(String, usize)>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplaceTree {
     children: Arc<BTreeMap<char, ReplaceTree>>,
     replacement: Option<Replacement>,
+}
+
+impl Drop for ReplaceTree {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.children) != 1 {
+            return;
+        }
+        let empty = Arc::default();
+        let mut pending = vec![std::mem::replace(&mut self.children, Arc::clone(&empty))];
+        while let Some(children) = pending.pop() {
+            if let Some(children) = Arc::into_inner(children) {
+                for mut node in children.into_values() {
+                    pending.push(std::mem::replace(&mut node.children, Arc::clone(&empty)));
+                }
+            }
+        }
+    }
 }
 
 impl ReplaceTree {
@@ -104,6 +129,8 @@ pub struct ReplaceUse {
     pub line: usize,
     pub start_char: usize,
     pub end_char: usize,
+    pub source_id: isize,
+    pub declaration: (String, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -114,10 +141,13 @@ pub struct SceneExpansion {
 }
 
 struct ReplacementEdit {
-    replacement: Replacement,
     removed_len: usize,
-    inserted_len: usize,
-    changed: bool,
+    map: Option<Vec<Option<SourcePoint>>>,
+}
+
+struct MappedText {
+    text: String,
+    map: Option<Vec<Option<SourcePoint>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +157,9 @@ pub struct CharacterAnalyzer {
     pub current_line: usize,
     pub used_replacements: Vec<String>,
     pub sidecar: bool,
+    macro_depth: usize,
+    expansion_chars: usize,
+    replace_uses: Vec<ReplaceUse>,
 }
 
 impl CharacterAnalyzer {
@@ -141,6 +174,9 @@ impl CharacterAnalyzer {
             current_line: 1,
             used_replacements: Vec::new(),
             sidecar,
+            macro_depth: 0,
+            expansion_chars: 0,
+            replace_uses: Vec::new(),
         }
     }
 
@@ -190,6 +226,7 @@ impl CharacterAnalyzer {
     }
 
     pub fn analyze_file_1(&mut self, input: &str) -> Result<File1Result, ()> {
+        self.expansion_chars = 0;
         let options = TextCommentOptions {
             case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::Char,
@@ -459,19 +496,6 @@ impl CharacterAnalyzer {
         length
     }
 
-    fn range_equals(text: &[char], start: usize, end: usize, replacement: &str) -> bool {
-        if end > text.len() {
-            return false;
-        }
-        let mut chars = replacement.chars();
-        for ch in &text[start..end] {
-            if chars.next() != Some(*ch) {
-                return false;
-            }
-        }
-        chars.next().is_none()
-    }
-
     fn expand_macro(
         &mut self,
         text: &[char],
@@ -479,7 +503,8 @@ impl CharacterAnalyzer {
         macro_def: &Replacement,
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
-    ) -> Result<(usize, String), ()> {
+        source_map: Option<&[Option<SourcePoint>]>,
+    ) -> Result<(usize, MappedText), ()> {
         let mut actual = Vec::new();
         if text.get(pos) == Some(&'(') {
             pos += 1;
@@ -536,7 +561,10 @@ impl CharacterAnalyzer {
                                 format!("The {}-th macro argument is empty.", actual.len()),
                             );
                         }
-                        actual.push(text[start..pos].iter().collect::<String>());
+                        actual.push(MappedText {
+                            text: text[start..pos].iter().collect(),
+                            map: source_map.map(|map| map[start..pos].to_vec()),
+                        });
                         pos += 1;
                         start = pos;
                     }
@@ -549,7 +577,10 @@ impl CharacterAnalyzer {
                                 format!("The {}-th macro argument is empty.", actual.len()),
                             );
                         } else {
-                            actual.push(text[start..pos].iter().collect::<String>());
+                            actual.push(MappedText {
+                                text: text[start..pos].iter().collect(),
+                                map: source_map.map(|map| map[start..pos].to_vec()),
+                            });
                             pos += 1;
                         }
                         break;
@@ -571,35 +602,64 @@ impl CharacterAnalyzer {
         if macro_def.args.len() < actual.len() {
             return self.error(self.current_line, "Too many macro arguments.");
         }
-        let expanded = self.expand_macro_body(macro_def, &actual, default_tree, added_tree)?;
+        let expanded = self.expand_macro_body(
+            macro_def,
+            &actual,
+            default_tree,
+            added_tree,
+            source_map.is_some(),
+        )?;
         Ok((pos, expanded))
     }
 
     fn expand_macro_body(
         &mut self,
         macro_def: &Replacement,
-        actual: &[String],
+        actual: &[MappedText],
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
-    ) -> Result<String, ()> {
+        mapped: bool,
+    ) -> Result<MappedText, ()> {
         let mut arg_replacements = Vec::with_capacity(macro_def.args.len());
         for (index, arg) in macro_def.args.iter().enumerate() {
-            let Some(source) = actual
+            let source = actual
                 .get(index)
-                .cloned()
-                .or_else(|| arg.default_value.clone())
-                .filter(|value| !value.is_empty())
-            else {
+                .map(|value| value.text.as_str())
+                .or(arg.default_value.as_deref())
+                .filter(|value| !value.is_empty());
+            let Some(source) = source else {
                 return self.error(self.current_line, "Not enough macro arguments.");
             };
-            let expanded = self.expand_macro_text(&source, default_tree, added_tree, "argument")?;
+            let points = if mapped {
+                actual
+                    .get(index)
+                    .and_then(|value| value.map.as_deref())
+                    .or_else(|| {
+                        macro_def
+                            .source
+                            .as_ref()
+                            .and_then(|source| source.defaults.get(index).map(Vec::as_slice))
+                    })
+                    .or(Some(&[]))
+            } else {
+                None
+            };
+            let expanded =
+                self.expand_macro_text(source, default_tree, added_tree, "argument", points)?;
             arg_replacements.push(Replacement {
                 kind: ReplaceKind::Replace,
                 name: arg.name.clone(),
-                after: expanded,
+                after: expanded.text,
                 args: Vec::new(),
                 used_count: 0,
-                decl_type: "replace".to_string(),
+                decl_type: "parameter".to_string(),
+                source: expanded.map.map(|map| {
+                    Arc::new(ReplacementSource {
+                        map,
+                        defaults: Vec::new(),
+                        declaration: None,
+                    })
+                }),
             });
         }
         arg_replacements.sort_by_key(|item| item.name.len());
@@ -608,7 +668,16 @@ impl CharacterAnalyzer {
         for replacement in arg_replacements {
             arg_tree.add(&replacement.name.clone(), replacement);
         }
-        self.expand_macro_text(&macro_def.after, default_tree, &arg_tree, "body")
+        let points = if mapped {
+            macro_def
+                .source
+                .as_ref()
+                .map(|source| source.map.as_slice())
+                .or(Some(&[]))
+        } else {
+            None
+        };
+        self.expand_macro_text(&macro_def.after, default_tree, &arg_tree, "body", points)
     }
 
     fn expand_macro_text(
@@ -617,26 +686,47 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
         context: &str,
-    ) -> Result<String, ()> {
+        source_map: Option<&[Option<SourcePoint>]>,
+    ) -> Result<MappedText, ()> {
         let mut text: Vec<char> = input.chars().chain(std::iter::once('\0')).collect();
+        let mut map = source_map.map(|points| {
+            let mut map = points.to_vec();
+            map.resize(text.len(), None);
+            map
+        });
         let mut pos = 0usize;
-        let mut replacements = 0usize;
+        let mut loop_count = 0usize;
+        let mut rest_min = text.len();
         while text.get(pos) != Some(&'\0') {
             let old_pos = pos;
             let edit;
-            (text, pos, edit) = self.replace_one_detail(text, pos, default_tree, added_tree)?;
-            if replacements < 10_000 && (pos == old_pos || edit.is_some_and(|edit| edit.changed)) {
-                replacements += 1;
-                if replacements == 10_000 {
-                    eprintln!(
-                        "warning: macro {context} expansion reached 10000 replacements at line {}; check for cyclic #define references; continuing without truncation.",
-                        self.current_line
+            (text, pos, edit) =
+                self.replace_one_detail(text, pos, default_tree, added_tree, map.as_deref())?;
+            if let (Some(map), Some(edit)) = (map.as_mut(), edit) {
+                map.splice(old_pos..old_pos + edit.removed_len, edit.map.unwrap());
+            }
+            let rest = text.len().saturating_sub(pos);
+            if rest >= rest_min {
+                loop_count += 1;
+                if loop_count > 10_000 {
+                    return self.error(
+                        self.current_line,
+                        format!("Macro {context} expansion exceeded 10000 consecutive steps without a new minimum remaining-text length; check for cyclic #define references."),
                     );
                 }
+            } else {
+                rest_min = rest;
+                loop_count = 0;
             }
         }
         text.truncate(pos);
-        Ok(text.into_iter().collect())
+        if let Some(map) = map.as_mut() {
+            map.truncate(pos);
+        }
+        Ok(MappedText {
+            text: text.into_iter().collect(),
+            map,
+        })
     }
 
     fn replace_one_detail(
@@ -645,65 +735,101 @@ impl CharacterAnalyzer {
         pos: usize,
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
+        source_map: Option<&[Option<SourcePoint>]>,
     ) -> Result<(Vec<char>, usize, Option<ReplacementEdit>), ()> {
         let Some(replacement) = Self::replacement_at(default_tree, added_tree, &text, pos) else {
             return Ok((text, pos + 1, None));
         };
+        self.expansion_chars += replacement.after.chars().count();
+        if self.expansion_chars > 1_048_576 {
+            return self.error(
+                self.current_line,
+                "Replacement expansion size limit reached.",
+            );
+        }
         self.used_replacements.push(replacement.name.clone());
         let name_len = replacement.name.chars().count();
-        match replacement.kind {
-            ReplaceKind::Replace => {
-                let changed = !Self::range_equals(&text, pos, pos + name_len, &replacement.after);
-                let after_len =
-                    Self::replace_range(&mut text, pos, pos + name_len, &replacement.after);
-                Ok((
-                    text,
-                    pos + after_len,
-                    Some(ReplacementEdit {
-                        replacement,
-                        removed_len: name_len,
-                        inserted_len: after_len,
-                        changed,
-                    }),
-                ))
-            }
-            ReplaceKind::Define => {
-                let changed = !Self::range_equals(&text, pos, pos + name_len, &replacement.after);
-                let after_len =
-                    Self::replace_range(&mut text, pos, pos + name_len, &replacement.after);
-                Ok((
-                    text,
-                    pos,
-                    Some(ReplacementEdit {
-                        replacement,
-                        removed_len: name_len,
-                        inserted_len: after_len,
-                        changed,
-                    }),
-                ))
+        if let (Some(map), Some(declaration)) = (
+            source_map,
+            replacement
+                .source
+                .as_ref()
+                .and_then(|source| source.declaration.as_ref()),
+        ) {
+            let points: Vec<_> = map
+                .iter()
+                .skip(pos)
+                .take(name_len)
+                .flatten()
+                .copied()
+                .collect();
+            let mapped = points.first().is_some_and(|first| {
+                points
+                    .iter()
+                    .all(|point| point.line == first.line && point.source_id == first.source_id)
+            });
+            self.replace_uses.push(ReplaceUse {
+                name: replacement.name.clone(),
+                line: points.first().map_or(self.current_line, |point| point.line),
+                start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
+                end_char: points
+                    .iter()
+                    .map(|point| point.column + 1)
+                    .max()
+                    .unwrap_or(name_len),
+                source_id: if mapped {
+                    points[0].source_id as isize
+                } else {
+                    -1
+                },
+                declaration: declaration.clone(),
+            });
+        }
+        let (end, after, map, next) = match replacement.kind {
+            ReplaceKind::Replace | ReplaceKind::Define => {
+                let map = source_map.map(|_| {
+                    replacement
+                        .source
+                        .as_ref()
+                        .map(|source| source.map.clone())
+                        .unwrap_or_else(|| vec![None; replacement.after.chars().count()])
+                });
+                let end = pos + name_len;
+                let next = if replacement.kind == ReplaceKind::Replace {
+                    pos + replacement.after.chars().count()
+                } else {
+                    pos
+                };
+                (end, replacement.after, map, next)
             }
             ReplaceKind::Macro => {
-                let (end, expanded) = self.expand_macro(
+                if self.macro_depth >= 128 {
+                    return self.error(self.current_line, "Macro expansion nesting limit reached.");
+                }
+                self.macro_depth += 1;
+                let expanded = self.expand_macro(
                     &text,
                     pos + name_len,
                     &replacement,
                     default_tree,
                     added_tree,
-                )?;
-                let changed = !Self::range_equals(&text, pos, end, &expanded);
-                let expanded_len = Self::replace_range(&mut text, pos, end, &expanded);
-                Ok((
-                    text,
-                    pos + expanded_len,
-                    Some(ReplacementEdit {
-                        replacement,
-                        removed_len: end.saturating_sub(pos),
-                        inserted_len: expanded_len,
-                        changed,
-                    }),
-                ))
+                    source_map,
+                );
+                self.macro_depth -= 1;
+                let (end, expanded) = expanded?;
+                let next = pos + expanded.text.chars().count();
+                (end, expanded.text, expanded.map, next)
             }
-        }
+        };
+        Self::replace_range(&mut text, pos, end, &after);
+        Ok((
+            text,
+            next,
+            Some(ReplacementEdit {
+                removed_len: end - pos,
+                map,
+            }),
+        ))
     }
 
     fn replace_one(
@@ -713,7 +839,8 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
     ) -> Result<(Vec<char>, usize), ()> {
-        let (text, pos, _detail) = self.replace_one_detail(text, pos, default_tree, added_tree)?;
+        let (text, pos, _detail) =
+            self.replace_one_detail(text, pos, default_tree, added_tree, None)?;
         Ok((text, pos))
     }
 
@@ -740,7 +867,7 @@ impl CharacterAnalyzer {
                 if loop_count > 10_000 {
                     return self.error(
                         self.current_line,
-                        "Infinite loop detected during inc file replacement.",
+                        "Text replacement exceeded 10000 consecutive steps without a new minimum remaining-text length; check for cyclic #define references.",
                     );
                 }
             } else {
@@ -767,7 +894,7 @@ impl CharacterAnalyzer {
         let mut text: Vec<char> = input.chars().chain(std::iter::once('\0')).collect();
         let mut source_map = input_source_map.to_vec();
         source_map.extend(std::iter::repeat_n(None, 256));
-        let mut replace_uses = Vec::new();
+        self.replace_uses.clear();
         self.current_line = 1;
         let mut pos = 0usize;
         let mut loop_count = 0usize;
@@ -779,49 +906,17 @@ impl CharacterAnalyzer {
                 pos += 1;
             } else {
                 let old_pos = pos;
-                let (new_text, next_pos, detail) =
-                    self.replace_one_detail(text, pos, replace_tree, &empty_tree)?;
+                let (new_text, next_pos, detail) = self.replace_one_detail(
+                    text,
+                    pos,
+                    replace_tree,
+                    &empty_tree,
+                    Some(&source_map),
+                )?;
                 text = new_text;
                 pos = next_pos;
-                if let Some(edit) = detail
-                    && edit.changed
-                {
-                    let name_len = edit.replacement.name.chars().count();
-                    let points: Vec<SourcePoint> = source_map
-                        .iter()
-                        .skip(old_pos)
-                        .take(name_len)
-                        .filter_map(|point| *point)
-                        .collect();
-                    if !points.is_empty() {
-                        let first_line = points[0].line;
-                        if points.iter().all(|point| point.line == first_line) {
-                            let start_char =
-                                points.iter().map(|point| point.column).min().unwrap_or(0);
-                            let end_char =
-                                points.iter().map(|point| point.column).max().unwrap_or(0) + 1;
-                            replace_uses.push(ReplaceUse {
-                                name: edit.replacement.name.clone(),
-                                line: first_line,
-                                start_char,
-                                end_char,
-                            });
-                        }
-                    }
-                    let removed_map: Vec<Option<SourcePoint>> = source_map
-                        .iter()
-                        .skip(old_pos)
-                        .take(edit.removed_len)
-                        .copied()
-                        .collect();
-                    let replacement_map = if removed_map.is_empty() {
-                        vec![None; edit.inserted_len]
-                    } else {
-                        (0..edit.inserted_len)
-                            .map(|index| removed_map[index.min(removed_map.len() - 1)])
-                            .collect()
-                    };
-                    source_map.splice(old_pos..old_pos + edit.removed_len, replacement_map);
+                if let Some(edit) = detail {
+                    source_map.splice(old_pos..old_pos + edit.removed_len, edit.map.unwrap());
                 }
             }
             let rest = text.len().saturating_sub(pos);
@@ -830,7 +925,7 @@ impl CharacterAnalyzer {
                 if loop_count > 10_000 {
                     return self.error(
                         self.current_line,
-                        "Infinite loop detected during inc file replacement.",
+                        "Text replacement exceeded 10000 consecutive steps without a new minimum remaining-text length; check for cyclic #define references.",
                     );
                 }
             } else {
@@ -845,7 +940,7 @@ impl CharacterAnalyzer {
         Ok(SceneExpansion {
             text: output,
             source_map,
-            replace_uses,
+            replace_uses: std::mem::take(&mut self.replace_uses),
         })
     }
 }

@@ -288,7 +288,6 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     so = int(h.get("scn_ofs", 0) or 0)
     ss = int(h.get("scn_size", 0) or 0)
     ended_unexpectedly = not bundle.get("complete")
-    stats["disassembled"] += 1
     if ended_unexpectedly:
         stats["ended_unexpectedly"] += 1
         print(f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly.")

@@ -53,6 +53,7 @@ pub struct SourcePoint {
     pub line: usize,
     pub column: usize,
     pub index: usize,
+    pub source_id: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -246,6 +247,7 @@ pub fn scan_text_comments(
                 line: source_line,
                 column: source_column,
                 index: i,
+                source_id: 0,
             }));
         }
         out.push(out_ch);

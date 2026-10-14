@@ -234,7 +234,7 @@ siglus-ssu -lsp [--serial]
 - Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
 - Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
-- Cyclic `#define` / `#define_s` expansion in macro arguments, defaults, or bodies can leave analysis running indefinitely, preventing diagnostics and subsequent requests from completing. Both frontends write their 10000-step warning only to `stderr` and do not stop expansion. Correct the document and restart the language server if it hangs; see [macro expansion](#macro).
+- Expansion in macro arguments, defaults, and bodies shares the compiler's scanning-step, macro nesting, and cumulative replacement-text limits. Exceeding a limit stops the current analysis and returns a diagnostic; see [macro expansion](#macro).
 
 ---
 
@@ -1202,49 +1202,63 @@ Directory input for `-s --x` also recursively scans subdirectories and preserves
 
 ### `-v` / `--video` — Work with `.omv` Video Files
 
-Provides tools for analyzing, extracting, and recompiling `.omv` video files. The `.omv` format is an Ogg container (`.ogv`) with a proprietary SiglusEngine wrapper header.
+Provides tools for analyzing `.omv` structure, extracting the embedded Ogg payload (`.ogv`), and wrapping a Theora stream with a SiglusEngine header and page/frame indexes. These operations do not re-encode video or reconstruct colors and transparency.
 
-`-v --c` keeps only the first Theora video stream from the input Ogg file. If the input also contains Vorbis, Opus, subtitles, or other streams, those streams are ignored and are not preserved in the generated `.omv`.
+`-v --x` copies the entire Ogg payload, including any embedded audio streams. `-v --c` keeps only the first Theora video stream from its input; Vorbis, Opus, subtitles, and other streams are omitted from the generated `.omv`.
 
 #### Syntax
 
 ```
-# Extract .omv to .ogv (raw Ogg video)
+# Extract .omv to .ogv (original compressed streams)
 siglus-ssu -v --x <input_dir | input_file.omv> <output_dir>
 
 # Analyze an .omv file (structural info)
 siglus-ssu -v --a <input_file.omv>
 
 # Wrap an .ogv into an .omv
-siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mode N] [--flags 0x...]
+siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mode N] [--flags N]
 ```
 
 #### Parameters
 
 | Parameter | Description |
 |---|---|
-| `--x` | **Extract** mode. Strips the SiglusEngine wrapper and writes a plain `.ogv` file. |
+| `--x` | **Extract** mode. Removes the wrapper and indexes, preserving the original Ogg payload without re-encoding or reconstructing its pixel layout. |
 | `--a` | **Analyze** mode. Prints detailed header information including outer header fields, TableA, and TableB frame metadata, plus parsed Theora stream info such as FPS, keyframe granule shift, pixel format, and frame size when available. |
-| `--c` | **Create** mode. Wraps a plain `.ogv` with the SiglusEngine `.omv` header. |
-| `--refer <ref.omv>` | Copy the header `mode` and TableB `flags_hi24` from an existing `.omv` reference. Useful for matching the exact header of the original. Overridden by `--mode` / `--flags` if both are specified. |
-| `--mode N` | Override the `mode` field (header offset `0x28`). Accepts decimal or `0x...` hex. Default without `--refer`: `2`. |
-| `--flags 0xXXXXXX` | Override the TableB `flags` high 24 bits. Accepts a single value or a comma-separated range spec like `0-9:0x1A2B3C00,10-:0x00000000`. Default without `--refer`: `0`. |
+| `--c` | **Create** mode. Builds the `.omv` wrapper and indexes around an existing Theora stream. Its encoded planes must already match the selected mode. |
+| `--refer <ref.omv>` | Copies only `mode` and TableB `flags_hi24` from the reference. It does not copy the entire header or any reference streams. Explicit `--mode` and `--flags` override the corresponding reference values. |
+| `--mode N` | Sets the pixel interpretation mode at header offset `0x28`, without converting the encoded planes. Accepts decimal or `0x...` hex. Default without `--refer`: `2`. See the layouts below. |
+| `--flags N` | Overrides the high 24 bits of the TableB value read as `flags`; its low 8 bits are ignored by this option and generated from the keyframe marker. Use the original bit positions, such as `0x1A2B3C00`, or comma-separated frame ranges such as `0-9:0x1A2B3C00,10-:0x00000000`. Default without `--refer`: `0`. |
+
+In the official structure, those high 24 bits are alignment padding after the keyframe boolean. Normally leave them at `0`; this option preserves raw bytes for compatibility, rather than selecting color or transparency behavior.
 
 Directory input for `-v --x` recursively scans for `.omv` files and preserves the relative directory structure in the output. For `-v --c`, the second argument is interpreted as a directory if it already exists as a directory, ends with a path separator, or has no extension; to write to a specific file, give an explicit path ending in `.omv`.
 
 Both `-v --x` and `-v --c` ask `Overwrite? [y/N]` before replacing an existing output. Only `y` or `yes` confirms the write, case-insensitively; an empty answer, unavailable standard input, or a cancelled prompt declines it. Creation then exits with failure. Batch extraction leaves that target unchanged, continues with the remaining files, and returns failure if any target was declined. If input and output refer to the same physical file, conversion is buffered until reading and conversion finish, so opening the output cannot prematurely truncate the input.
 
-#### Preparing `.ogv` Inputs
+#### Pixel Layouts and `.ogv` Inputs
 
-Prepare `.ogv` inputs for `-v --c` as video-only Theora streams. For engines that require `yuv444p`, set the pixel format explicitly; FFmpeg defaults may choose another format such as `yuv420p`.
+Use `-v --a` on the original `.omv` to inspect its mode, Theora pixel format, and dimensions. The standard SiglusEngine modes use three Theora 4:4:4 planes as follows:
 
-Use an FFmpeg build that includes `libtheora`.
+| Mode | Plane contents | Required interpretation |
+|---|---|---|
+| `0` | B, G, R | Reorder as RGB; the image is opaque. |
+| `1` | B, G, R, each followed by an alpha segment | Reorder the color planes and concatenate the three alpha segments. |
+| `2` | Y, U, V | Convert full-range YUV to RGB using BT.601 coefficients. |
+
+For mode `1`, a visible height of `H` requires a Theora picture height of `H + ceil(H / 3)`. In each plane, the first `H` rows hold color and the remaining segment holds up to `ceil(H / 3)` alpha rows. Concatenate the segments in plane order and take the first `H` rows as alpha. For example, a 1080-row image needs a Theora picture height of 1440.
+
+Extraction preserves these plane contents, while the Ogg payload does not retain the outer OMV mode field. Keep the original `.omv` or record its mode. Ordinary players interpret the planes as YUV, so mode `0`/`1` needs color/alpha reconstruction before normal viewing or transcoding.
+
+Inputs for `-v --c` should contain a video-only Theora stream whose planes already match the selected mode. `--mode` and `--refer` do not build BGR or packed-alpha planes. A normal YUV `.ogv` combined with a mode `0`/`1` reference will therefore produce an incorrect picture; mode `1` also derives the outer height as three quarters of the Theora picture height, rounded down. The CLI accepts other mode numbers as metadata overrides, but these are not defined by the standard modes above.
+
+For an ordinary opaque SDR video, use an FFmpeg build with `libtheora` to prepare a mode `2` input with full-range BT.601 YUV444:
 
 ```bash
-ffmpeg -i input_video -map 0:v:0 -an -vf "format=yuv444p" -c:v libtheora -q:v 8 output.ogv
+ffmpeg -i input_video -map 0:v:0 -an -vf "scale=out_range=full:out_color_matrix=bt601,format=yuv444p" -c:v libtheora -q:v 8 -color_range pc output.ogv
 ```
 
-`-q:v 8` is only a sample quality setting; adjust it as needed.
+The filter converts the samples; `-color_range pc` keeps the encoder input at full range. Input range and matrix are inferred from the source, so correct missing or inaccurate source metadata with the scale filter's `in_range` / `in_color_matrix` options as needed. `-q:v 8` is an example quality setting. This command does not preserve audio or transparency and does not prepare a mode `0`/`1` layout.
 
 #### Examples
 
@@ -1255,11 +1269,11 @@ siglus-ssu -v --x /path/to/movie/ /path/to/ogv_out/
 # Analyze a single .omv
 siglus-ssu -v --a /path/to/op.omv
 
-# Repackage an .ogv back to .omv using original header metadata
+# Repackage an .ogv whose pixel layout already matches the reference mode
 siglus-ssu -v --c /path/to/op_translated.ogv /path/to/op_translated.omv --refer /path/to/op_original.omv
 
-# Repackage with manual mode and flags
-siglus-ssu -v --c /path/to/op.ogv /path/to/op.omv --mode 10 --flags 0x19DC00
+# Wrap the mode 2 Theora stream prepared above
+siglus-ssu -v --c /path/to/output.ogv /path/to/output.omv --mode 2
 ```
 
 ---
@@ -1724,7 +1738,7 @@ The replacement system also has two normative details:
 1. within a single replacement tree, matching uses **longest-prefix search**;
 2. when the default replacement tree and a temporary added tree both match at the same position, the current implementation chooses the candidate whose `name` field is lexicographically larger, not by declaration order or by a global cross-tree longest-match rule; a conforming implementation shall reproduce this behavior.
 
-Ordinary text expansion retains a guard that reports an error after more than 10000 consecutive steps without a new minimum remaining-text length. Both backends warn and continue inside macros, as described below; the outer guard cannot be relied on to stop a loop inside a macro.
+Ordinary text, macro arguments (including defaults), and macro bodies share expansion limits that stop the current expansion with an error. The limits are described below.
 
 #### `#macro`
 
@@ -1743,9 +1757,13 @@ Rules:
 5. the macro body is expanded with a temporary replacement tree for the macro parameters; after the final result is inserted, scanning advances past that inserted result, so it is not immediately rescanned at the same position.
 6. repeated parameter names use the actual argument or default bound to the first occurrence. Later occurrences still count toward the argument list and their values are expanded.
 
-**Expansion loops and warnings:** Avoid triggering self-referential or mutually recursive `#define` / `#define_s` expansion inside macro arguments, defaults, or bodies. Neither frontend stops macro expansion solely because of its replacement count, so a genuine infinite expansion can leave compilation or LSP analysis running indefinitely.
+**Expansion limits:** Both frontends stop the current analysis with an error when any of these limits is exceeded:
 
-For each macro argument (including a default) or body expansion, both frontends write one warning to `stderr` when the replacement counter reaches **10000**, then continue without truncating the result. Steps that change the text or leave the scan position unchanged count toward this threshold; ordinary character scanning does not. This is not proof of an infinite loop: a long but finite expansion can still complete. The warning applies to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and both LSP analysis paths. Existing threshold errors in ordinary expansion are unchanged. If a cycle is confirmed, stop compilation (`Ctrl+C` in a terminal) and fix the definitions; if LSP hangs, correct the document and restart the server.
+- Each text expansion, macro argument (including a default), or macro body reports an expansion-limit error after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. The counter resets at each new minimum; this is not a limit on the total number of replacements in a file. Reaching this threshold suggests possible cyclic expansion; it does not prove an infinite loop.
+- Macro expansion may nest at most **128 levels**.
+- Each character analyzer allows at most **1,048,576 cumulative replacement-text characters**. Each replacement match adds its replacement text's character count, including macro body text and expanded parameter replacements; this is not the final output size.
+
+These limits apply to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and to LSP analysis. Exceeding a limit returns a compile error or LSP diagnostic. Correct the definitions or reduce the expansion before retrying.
 
 #### `#property`
 

@@ -1,4 +1,8 @@
-use super::ca::{MacroArg, ReplaceKind, ReplaceTree, Replacement};
+use std::sync::Arc;
+
+use super::ca::{
+    MacroArg, ReplaceKind, ReplaceTree, ReplaceUse, Replacement, ReplacementSource, SceneExpansion,
+};
 use super::codes::RuntimeCodes;
 use super::form_table::{ArgInfo, ArgList, ElementInfo, FormTable, create_elm_code};
 use super::frontend_common::{
@@ -56,9 +60,11 @@ pub struct IaScratch {
     pub property_text: Vec<String>,
     pub property_lines: Vec<usize>,
     pub property_spans: Vec<NameSpan>,
+    pub property_source_maps: Vec<Vec<Option<SourcePoint>>>,
     pub command_text: Vec<String>,
     pub command_lines: Vec<usize>,
     pub command_spans: Vec<NameSpan>,
+    pub command_source_maps: Vec<Vec<Option<SourcePoint>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -75,20 +81,12 @@ pub struct IncDeclaration {
     pub line: usize,
     pub start_char: usize,
     pub end_char: usize,
-    pub directive: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct IncBody {
-    pub text: String,
-    pub source_map: Vec<Option<SourcePoint>>,
-    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct IncSidecar {
     pub decls: Vec<IncDeclaration>,
-    pub bodies: Vec<IncBody>,
+    pub replace_uses: Vec<ReplaceUse>,
 }
 
 #[derive(Debug, Clone)]
@@ -97,11 +95,13 @@ pub struct IncAnalyzer {
     pub parent_form: String,
     pub error_line: usize,
     pub error_str: String,
+    ca: super::ca::CharacterAnalyzer,
     sidecar: bool,
+    pub source_id: usize,
+    default_maps: Vec<Vec<Option<SourcePoint>>>,
     input_source_map: Vec<Option<SourcePoint>>,
     source_map: Vec<Option<SourcePoint>>,
     pub sidecar_data: IncSidecar,
-    last_after_text: String,
     last_after_source_map: Vec<Option<SourcePoint>>,
 }
 
@@ -160,11 +160,13 @@ impl IncAnalyzer {
             parent_form: parent_form.into(),
             error_line: 0,
             error_str: String::new(),
+            ca: super::ca::CharacterAnalyzer::new(),
             sidecar: false,
+            source_id: 0,
+            default_maps: Vec::new(),
             input_source_map: Vec::new(),
             source_map: Vec::new(),
             sidecar_data: IncSidecar::default(),
-            last_after_text: String::new(),
             last_after_source_map: Vec::new(),
         }
     }
@@ -218,6 +220,11 @@ impl IncAnalyzer {
                                 })
                             })
                             .collect();
+                    }
+                    if self.input_source_map.is_empty() {
+                        for point in source_map.iter_mut().flatten() {
+                            point.source_id = self.source_id;
+                        }
                     }
                     self.source_map = source_map;
                 } else {
@@ -591,15 +598,7 @@ impl IncAnalyzer {
         }
     }
 
-    fn record_decl(
-        &mut self,
-        kind: &str,
-        name: &str,
-        line: usize,
-        directive: &str,
-        start: usize,
-        end: usize,
-    ) {
+    fn record_decl(&mut self, kind: &str, name: &str, line: usize, start: usize, end: usize) {
         if !self.sidecar {
             return;
         }
@@ -610,19 +609,22 @@ impl IncAnalyzer {
             line: span.line,
             start_char: span.start_char,
             end_char: span.end_char,
-            directive: directive.to_string(),
         });
     }
 
-    fn record_body(&mut self, args: &[MacroArg]) {
-        if !self.sidecar || self.last_after_text.is_empty() {
-            return;
+    fn replacement_source(&self, kind: &str) -> Option<Arc<ReplacementSource>> {
+        if !self.sidecar {
+            return None;
         }
-        self.sidecar_data.bodies.push(IncBody {
-            text: self.last_after_text.clone(),
-            source_map: self.last_after_source_map.clone(),
-            args: args.iter().map(|arg| arg.name.clone()).collect(),
-        });
+        Some(Arc::new(ReplacementSource {
+            map: self.last_after_source_map.clone(),
+            defaults: if kind == "macro" {
+                self.default_maps.clone()
+            } else {
+                Vec::new()
+            },
+            declaration: Some((kind.to_string(), self.source_id)),
+        }))
     }
 
     fn decl_type(&mut self, pos: usize, line: usize) -> Result<(&'static str, usize, usize), ()> {
@@ -662,7 +664,6 @@ impl IncAnalyzer {
         let mut out_source_map = Vec::new();
         let mut ifs = [0i32; 16];
         let mut depth = 0usize;
-        self.last_after_text.clear();
         self.last_after_source_map.clear();
         let source_at =
             |source_map: &[Option<SourcePoint>], pos: usize| source_map.get(pos).copied().flatten();
@@ -759,17 +760,17 @@ impl IncAnalyzer {
                 out_source_map.pop();
             }
         }
-        self.last_after_text = out.clone();
         self.last_after_source_map = out_source_map;
         Ok((out, pos, line))
     }
 
     fn prop_cmd_text(
-        &self,
+        &mut self,
         pos: usize,
         line: usize,
         stopset: &[char],
     ) -> (String, usize, usize, usize, NameSpan) {
+        self.last_after_source_map.clear();
         let (i, mut line2, ok) = self.skip(pos, line);
         if !ok {
             return (String::new(), i, line2, line, NameSpan::default());
@@ -786,6 +787,9 @@ impl IncAnalyzer {
         while _name_end < self.text.len() && !stopset.contains(&self.text[_name_end]) {
             _name_end += 1;
         }
+        if self.sidecar {
+            self.last_after_source_map = self.source_map[i..j].to_vec();
+        }
         (
             self.text[i..j].iter().collect(),
             j,
@@ -801,6 +805,7 @@ impl IncAnalyzer {
         mut line: usize,
     ) -> Result<(Vec<MacroArg>, usize, usize), ()> {
         let mut args = Vec::new();
+        self.default_maps.clear();
         let (i, line2, ok) = self.skip(pos, line);
         pos = i;
         line = line2;
@@ -833,6 +838,7 @@ impl IncAnalyzer {
                 return self.err(line, "Could not find closing ')' for argument list.");
             }
             let mut default_value = None;
+            let mut default_map = Vec::new();
             if self.text.get(pos) == Some(&'(') {
                 pos += 1;
                 let default_start = pos;
@@ -845,11 +851,17 @@ impl IncAnalyzer {
                     }
                     if self.text[pos] == ')' {
                         default_value = Some(self.text[default_start..pos].iter().collect());
+                        if self.sidecar {
+                            default_map = self.source_map[default_start..pos].to_vec();
+                        }
                         pos += 1;
                         break;
                     }
                     pos += 1;
                 }
+            }
+            if self.sidecar {
+                self.default_maps.push(default_map);
             }
             args.push(MacroArg {
                 name,
@@ -914,16 +926,9 @@ impl IncAnalyzer {
                 args: Vec::new(),
                 used_count: 0,
                 decl_type: kind.to_string(),
+                source: self.replacement_source(record_kind),
             });
-            self.record_decl(
-                record_kind,
-                &name,
-                line,
-                &format!("#{kind}"),
-                name_start,
-                name_end,
-            );
-            self.record_body(&[]);
+            self.record_decl(record_kind, &name, line, name_start, name_end);
             return Ok((next, line2));
         }
         if kind == "macro" {
@@ -949,9 +954,9 @@ impl IncAnalyzer {
                 args: args.clone(),
                 used_count: 0,
                 decl_type: "macro".to_string(),
+                source: self.replacement_source("macro"),
             });
-            self.record_decl("macro", &name, line, "#macro", name_start, name_end);
-            self.record_body(&args);
+            self.record_decl("macro", &name, line, name_start, name_end);
             return Ok((next, line2));
         }
         if kind == "property" {
@@ -960,6 +965,11 @@ impl IncAnalyzer {
             scratch.property_text.push(text);
             scratch.property_lines.push(name_line);
             scratch.property_spans.push(span);
+            if self.sidecar {
+                scratch
+                    .property_source_maps
+                    .push(std::mem::take(&mut self.last_after_source_map));
+            }
             return Ok((next, line2));
         }
         if kind == "command" {
@@ -968,17 +978,53 @@ impl IncAnalyzer {
             scratch.command_text.push(text);
             scratch.command_lines.push(name_line);
             scratch.command_spans.push(span);
+            if self.sidecar {
+                scratch
+                    .command_source_maps
+                    .push(std::mem::take(&mut self.last_after_source_map));
+            }
             return Ok((next, line2));
         }
         let (after, next, line2) = self.after(i, line, iad)?;
-        let mut ca = super::ca::CharacterAnalyzer::new();
-        let expanded = ca.analyze_line(&after, &iad.replace_tree).map_err(|_| {
-            self.error_line = line2;
-            self.error_str = ca.error_str;
+        let source_map = std::mem::take(&mut self.last_after_source_map);
+        let expanded = self.expand(&after, iad, &source_map, line2)?;
+        self.text
+            .splice(declaration_start..next, expanded.text.chars());
+        if self.sidecar {
+            self.source_map
+                .splice(declaration_start..next, expanded.source_map);
+        }
+        Ok((declaration_start, line2))
+    }
+
+    fn expand(
+        &mut self,
+        text: &str,
+        iad: &mut IaData,
+        source_map: &[Option<SourcePoint>],
+        line: usize,
+    ) -> Result<SceneExpansion, ()> {
+        let ca = &mut self.ca;
+        ca.used_replacements.clear();
+        let mut expanded = if self.sidecar {
+            ca.analyze_scene_line_with_map(text, source_map, &iad.replace_tree)
+        } else {
+            ca.analyze_line(text, &iad.replace_tree)
+                .map(|text| SceneExpansion {
+                    text,
+                    source_map: Vec::new(),
+                    replace_uses: Vec::new(),
+                })
+        }
+        .map_err(|_| {
+            self.error_line = line;
+            self.error_str = ca.error_str.clone();
         })?;
         iad.record_replacement_usage(&ca.used_replacements);
-        self.text.splice(declaration_start..next, expanded.chars());
-        Ok((declaration_start, line2))
+        self.sidecar_data
+            .replace_uses
+            .append(&mut expanded.replace_uses);
+        Ok(expanded)
     }
 
     pub fn step1(&mut self, iad: &mut IaData, scratch: &mut IaScratch) -> Result<(), ()> {
@@ -1005,13 +1051,13 @@ impl IncAnalyzer {
             .zip(scratch.property_lines.iter().copied())
             .enumerate()
         {
-            let mut ca = super::ca::CharacterAnalyzer::new();
-            let expanded = ca.analyze_line(&raw, &iad.replace_tree).map_err(|_| {
-                self.error_line = source_line;
-                self.error_str = ca.error_str;
-            })?;
-            iad.record_replacement_usage(&ca.used_replacements);
-            self.text = expanded.chars().collect();
+            let source_map = scratch
+                .property_source_maps
+                .get(index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let expanded = self.expand(&raw, iad, source_map, source_line)?;
+            self.text = expanded.text.chars().collect();
             let (name, pos, line) = self.property_name(0, source_line)?;
             let (form, size, _pos, line) = self.property_form(pos, line, iad)?;
             if iad.name_set.contains(&name) {
@@ -1054,7 +1100,6 @@ impl IncAnalyzer {
                     },
                     start_char: span.start_char,
                     end_char: span.end_char,
-                    directive: "#property".to_string(),
                 });
             }
         }
@@ -1065,13 +1110,13 @@ impl IncAnalyzer {
             .zip(scratch.command_lines.iter().copied())
             .enumerate()
         {
-            let mut ca = super::ca::CharacterAnalyzer::new();
-            let expanded = ca.analyze_line(&raw, &iad.replace_tree).map_err(|_| {
-                self.error_line = source_line;
-                self.error_str = ca.error_str;
-            })?;
-            iad.record_replacement_usage(&ca.used_replacements);
-            self.text = expanded.chars().collect();
+            let source_map = scratch
+                .command_source_maps
+                .get(index)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let expanded = self.expand(&raw, iad, source_map, source_line)?;
+            self.text = expanded.text.chars().collect();
             let (name, pos, line) = self.command_name(0, source_line)?;
             let (args, pos, line) = self.command_arg_list(pos, line, iad)?;
             let (form, _pos, _line) = self.declaration_form(pos, line, iad)?;
@@ -1131,7 +1176,6 @@ impl IncAnalyzer {
                     },
                     start_char: span.start_char,
                     end_char: span.end_char,
-                    directive: "#command".to_string(),
                 });
             }
         }

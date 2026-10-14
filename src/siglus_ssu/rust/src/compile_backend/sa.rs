@@ -31,6 +31,8 @@ pub struct SyntaxAnalyzer {
     labels: Vec<LabelState>,
     z_labels: Vec<LabelState>,
     pub last: Option<SyntaxErrorInfo>,
+    nesting: usize,
+    expression_heights: Vec<usize>,
 }
 
 impl SyntaxAnalyzer {
@@ -57,6 +59,8 @@ impl SyntaxAnalyzer {
                 z_label_count
             ],
             last: None,
+            nesting: 0,
+            expression_heights: Vec::new(),
         }
     }
 
@@ -99,6 +103,20 @@ impl SyntaxAnalyzer {
     fn fail<T>(&mut self, kind: impl Into<String>, index: usize) -> Result<T, ()> {
         self.set_error(kind, self.atom(index));
         Err(())
+    }
+
+    fn parse_nested<T>(
+        &mut self,
+        index: usize,
+        parse: impl FnOnce(&mut Self) -> ParseResult<T>,
+    ) -> ParseResult<T> {
+        if self.nesting >= 64 {
+            return self.fail("TNMSERR_SA_NESTING_LIMIT", index);
+        }
+        self.nesting += 1;
+        let result = parse(self);
+        self.nesting -= 1;
+        result
     }
 
     fn accept(&self, index: usize, atom_type: i32) -> Option<(usize, Atom)> {
@@ -202,6 +220,10 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_sentence(&mut self, index: usize, iad: &mut IaData) -> ParseResult<AstNode> {
+        self.parse_nested(index, |this| this.parse_sentence_inner(index, iad))
+    }
+
+    fn parse_sentence_inner(&mut self, index: usize, iad: &mut IaData) -> ParseResult<AstNode> {
         let atom_type = self.atom_type(index);
         let result = if atom_type == self.codes.la.label {
             self.parse_label(index)
@@ -931,6 +953,28 @@ impl SyntaxAnalyzer {
         minimum_precedence: i32,
         iad: &mut IaData,
     ) -> ParseResult<AstNode> {
+        self.expression_heights.push(0);
+        let result = self.parse_nested(index, |this| {
+            this.parse_expression_inner(index, minimum_precedence, iad)
+        });
+        let height = self.expression_heights.pop().unwrap();
+        if matches!(&result, Ok(Some(_))) && height > 128 {
+            return self.fail("TNMSERR_SA_NESTING_LIMIT", index);
+        }
+        if matches!(&result, Ok(Some(_)))
+            && let Some(parent) = self.expression_heights.last_mut()
+        {
+            *parent = (*parent).max(height + 1);
+        }
+        result
+    }
+
+    fn parse_expression_inner(
+        &mut self,
+        index: usize,
+        minimum_precedence: i32,
+        iad: &mut IaData,
+    ) -> ParseResult<AstNode> {
         let (mut pos, mut expression) = if let Some((next, operator)) = self.unary_operator(index) {
             let Some((after_value, value)) = self.parse_expression(next, 999, iad)? else {
                 return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
@@ -955,9 +999,15 @@ impl SyntaxAnalyzer {
             if precedence <= minimum_precedence {
                 break;
             }
+            let height = self.expression_heights.last().unwrap() + 1;
             let Some((after_right, right)) = self.parse_expression(next, precedence, iad)? else {
                 return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
             };
+            let height = height.max(*self.expression_heights.last().unwrap());
+            if height > 128 {
+                return self.fail("TNMSERR_SA_NESTING_LIMIT", pos);
+            }
+            *self.expression_heights.last_mut().unwrap() = height;
             expression = self.node(
                 index,
                 AstPayload::Binary {

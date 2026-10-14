@@ -253,6 +253,25 @@ class MA:
             "atom": {"id": 0, "line": 0, "type": C.LA_T["NONE"], "opt": 0, "subopt": 0},
         }
         s.ft = s.piad["form_table"]
+        s.bindings = {} if "atom_span_list" in plad else None
+
+    def record_binding(s, atom, parent, info):
+        if s.bindings is None:
+            return
+        origin = info.get("origin")
+        if origin == "sys":
+            kind = "element"
+            identity = f"{parent}:{info['code']}"
+        elif info["type"] == C.ET_COMMAND:
+            kind = "command" if parent == C.FM_GLOBAL else "local_command"
+            identity = info["name"]
+        elif parent == C.FM_CALL:
+            kind = "call_property"
+            identity = str(info["binding_id"])
+        else:
+            kind = "property" if parent == C.FM_GLOBAL else "local_property"
+            identity = info["name"]
+        s.bindings[atom["id"]] = (kind, identity, False, False)
 
     def error(s, t, a=None, **kw):
         s.last = {
@@ -296,6 +315,8 @@ class MA:
         s.psad["command_in"] = 0
         if not s.ma_ss((s.psad or {}).get("root")):
             return 0, s.psad
+        if s.bindings is not None:
+            s.psad["bindings"] = s.bindings
         return 1, s.psad
 
     def ma_ss(s, ss):
@@ -369,7 +390,7 @@ class MA:
             n["node_form"] = C.FM_VOID
         return 1
 
-    def ma_def_prop(s, n):
+    def ma_def_prop(s, n, parameter=False):
         if s.psad.get("command_in", 0) == 0 and not C.ALLOW_PROPERTY_OUT_OF_COMMAND:
             return s.error(
                 "TNMSERR_MA_PROPERTY_OUT_OF_COMMAND",
@@ -393,8 +414,17 @@ class MA:
             "arg_map": {},
             "origin": C.FM_CALL,
         }
+        if s.bindings is not None:
+            e["binding_id"] = int(s.psad.get("total_call_prop_cnt", 0))
         s.ft.add(C.FM_CALL, e)
         n["prop_id"] = int(s.psad.get("total_call_prop_cnt", 0))
+        if s.bindings is not None:
+            s.bindings[n["name"]["atom"]["id"]] = (
+                "call_property",
+                str(n["prop_id"]),
+                True,
+                parameter,
+            )
         s.psad["call_prop_name_list"].append(name)
         s.psad["cur_call_prop_cnt"] = int(s.psad.get("cur_call_prop_cnt", 0)) + 1
         s.psad["total_call_prop_cnt"] = int(s.psad.get("total_call_prop_cnt", 0)) + 1
@@ -402,8 +432,14 @@ class MA:
 
     def ma_def_cmd(s, n):
         s.psad["command_in"] = 1
+        if s.bindings is not None:
+            cid = int(n["cmd_id"])
+            atom = n["name"]["atom"]
+            name = s.plad["unknown_list"][atom["opt"]]
+            kind = "command" if cid < s.piad["inc_command_cnt"] else "local_command"
+            s.bindings[atom["id"]] = (kind, name, True, False)
         for p in (n or {}).get("prop_list", []):
-            if not s.ma_def_prop(p):
+            if not s.ma_def_prop(p, True):
                 return 0
         if not s.ma_block((n or {}).get("block")):
             return 0
@@ -873,6 +909,7 @@ class MA:
             n["element_code"] = info.get("code", 0)
             n["element_type"] = info.get("type", 0)
             n["element_parent_form"] = parent
+            s.record_binding(n["name"]["atom"], parent, info)
             if n["element_type"] == C.ET_COMMAND:
                 isel = [False]
                 if not s.ma_arg_list(n.get("arg_list"), isel):

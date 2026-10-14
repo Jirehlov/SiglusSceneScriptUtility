@@ -1816,8 +1816,6 @@ def compile_one_pipeline(
         source_stats = empty_source_stat_counts()
     write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
     return {
-        "nm": nm,
-        "out_scn": bsd["out_scn"],
         "scene_macro_counts": scene_macro_counts,
         "global_macro_usage_delta": global_macro_usage_delta,
         "source_stats": source_stats,

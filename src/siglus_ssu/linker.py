@@ -277,6 +277,23 @@ def _build_original_source_chunks(ctx, lzss_mode):
     return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
 
 
+def command_link_errors(names, command_ids):
+    counts = [0] * len(names)
+    duplicates = []
+    for command_id in command_ids:
+        if 0 <= command_id < len(counts):
+            counts[command_id] += 1
+            if counts[command_id] == 2:
+                duplicates.append(
+                    (command_id, f"command {names[command_id]} defined more than once")
+                )
+    return duplicates + [
+        (command_id, f"command {name} is not defined")
+        for command_id, name in enumerate(names)
+        if counts[command_id] == 0
+    ]
+
+
 def link_pack(ctx):
     tmp_path = ctx.get("tmp_path") or ""
     out_path = ctx.get("out_path") or ""
@@ -305,22 +322,18 @@ def link_pack(ctx):
     inc_prop_name_list = [p["name"] for p in inc_props]
     inc_cmd_name_list = [c["name"] for c in inc_cmds]
     inc_cmd_list = [(0, 0) for _ in range(len(inc_cmds))]
-    for c in inc_cmds:
-        c["is_defined"] = False
     if inc_command_cnt > 0:
-        for scn_no, dat in enumerate(dat_list):
-            labels = _parse_cmd_labels(dat)
+        labels_by_scene = [_parse_cmd_labels(dat) for dat in dat_list]
+        errors = command_link_errors(
+            inc_cmd_name_list[:inc_command_cnt],
+            [command_id for labels in labels_by_scene for command_id, _ in labels],
+        )
+        if errors:
+            raise RuntimeError(errors[0][1])
+        for scn_no, labels in enumerate(labels_by_scene):
             for cmd_id, off in labels:
-                if cmd_id < inc_command_cnt and 0 <= cmd_id < len(inc_cmds):
-                    if inc_cmds[cmd_id]["is_defined"]:
-                        raise RuntimeError(
-                            f"command {inc_cmds[cmd_id]['name']} defined more than once"
-                        )
+                if 0 <= cmd_id < inc_command_cnt and cmd_id < len(inc_cmd_list):
                     inc_cmd_list[cmd_id] = (scn_no, off)
-                    inc_cmds[cmd_id]["is_defined"] = True
-        for i in range(min(inc_command_cnt, len(inc_cmds))):
-            if not inc_cmds[i]["is_defined"]:
-                raise RuntimeError(f"command {inc_cmds[i]['name']} is not defined")
     noangou_scene_data = lzss_list if lzss_mode else dat_list
     exe_el = compile_exe_el(ctx)
     original_hsz, original_chunks = _build_original_source_chunks(ctx, lzss_mode)

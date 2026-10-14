@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::ast::{ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, Parameter};
 use super::codes::RuntimeCodes;
 use super::form_table::{ArgInfo, ElementInfo, ElementKind, create_elm_code};
@@ -11,6 +13,18 @@ pub struct SemanticErrorInfo {
     pub qname: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceBindingKind {
+    Command,
+    LocalCommand,
+    Property,
+    LocalProperty,
+    CallProperty,
+    Element,
+}
+
+pub type SourceBinding = (SourceBindingKind, String, bool, bool);
+
 #[derive(Debug)]
 pub struct SemanticAnalyzer<'a> {
     pub ia_data: &'a mut IaData,
@@ -21,6 +35,8 @@ pub struct SemanticAnalyzer<'a> {
     pub current_call_property_count: i32,
     pub total_call_property_count: i32,
     command_in: bool,
+    pub bindings: Option<HashMap<i32, SourceBinding>>,
+    call_bindings: HashMap<String, i32>,
 }
 
 impl<'a> SemanticAnalyzer<'a> {
@@ -35,7 +51,45 @@ impl<'a> SemanticAnalyzer<'a> {
             current_call_property_count: 0,
             total_call_property_count: 0,
             command_in: false,
+            bindings: None,
+            call_bindings: HashMap::new(),
         }
+    }
+
+    fn record_binding(&mut self, atom_id: i32, parent: &str, info: &ElementInfo) {
+        let Some(bindings) = self.bindings.as_mut() else {
+            return;
+        };
+        let (kind, identity) = if info.origin == "sys" {
+            (
+                SourceBindingKind::Element,
+                format!("{parent}:{}", info.code),
+            )
+        } else if info.kind == ElementKind::Command {
+            (
+                if parent == self.codes.forms.global.name {
+                    SourceBindingKind::Command
+                } else {
+                    SourceBindingKind::LocalCommand
+                },
+                info.name.clone(),
+            )
+        } else if parent == self.codes.forms.call.name {
+            (
+                SourceBindingKind::CallProperty,
+                self.call_bindings[&info.name].to_string(),
+            )
+        } else {
+            (
+                if parent == self.codes.forms.global.name {
+                    SourceBindingKind::Property
+                } else {
+                    SourceBindingKind::LocalProperty
+                },
+                info.name.clone(),
+            )
+        };
+        bindings.insert(atom_id, (kind, identity, false, false));
     }
 
     fn fail<T>(
@@ -137,6 +191,16 @@ impl<'a> SemanticAnalyzer<'a> {
             0,
             self.current_call_property_count,
         );
+        if self.bindings.is_some()
+            && self
+                .ia_data
+                .form_table
+                .get(&self.codes.forms.call.name, name)
+                .is_none()
+        {
+            self.call_bindings
+                .insert(name.to_string(), self.total_call_property_count);
+        }
         self.ia_data.form_table.add(
             self.codes.forms.call.name.as_str(),
             ElementInfo {
@@ -161,7 +225,19 @@ impl<'a> SemanticAnalyzer<'a> {
             &parameter.name,
             &mut parameter.form,
             &mut parameter.property_id,
-        )
+        )?;
+        if let Some(bindings) = self.bindings.as_mut() {
+            bindings.insert(
+                parameter.name_atom.id,
+                (
+                    SourceBindingKind::CallProperty,
+                    parameter.property_id.to_string(),
+                    true,
+                    true,
+                ),
+            );
+        }
+        Ok(())
     }
 
     fn analyze_node(&mut self, node: &mut AstNode, selection: &mut bool) -> Result<i32, ()> {
@@ -179,17 +255,42 @@ impl<'a> SemanticAnalyzer<'a> {
             | AstPayload::Eof => self.codes.forms.void.code,
             AstPayload::DefProperty {
                 name,
+                name_atom,
                 form,
                 property_id,
                 ..
             } => {
                 self.add_call_property(node.line, name, form, property_id)?;
+                if let Some(bindings) = self.bindings.as_mut() {
+                    bindings.insert(
+                        name_atom.id,
+                        (
+                            SourceBindingKind::CallProperty,
+                            property_id.to_string(),
+                            true,
+                            false,
+                        ),
+                    );
+                }
                 self.codes.forms.void.code
             }
             AstPayload::DefCommand {
-                parameters, body, ..
+                name,
+                name_atom,
+                command_id,
+                parameters,
+                body,
+                ..
             } => {
                 self.command_in = true;
+                if let Some(bindings) = self.bindings.as_mut() {
+                    let kind = if *command_id < self.ia_data.inc_command_cnt {
+                        SourceBindingKind::Command
+                    } else {
+                        SourceBindingKind::LocalCommand
+                    };
+                    bindings.insert(name_atom.id, (kind, name.clone(), true, false));
+                }
                 for parameter in parameters {
                     self.analyze_parameter(parameter)?;
                 }
@@ -197,6 +298,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 self.command_in = false;
                 self.ia_data.form_table.reset_call();
                 self.current_call_property_count = 0;
+                self.call_bindings.clear();
                 self.codes.forms.void.code
             }
             AstPayload::Goto { kind, args, .. } => {
@@ -530,6 +632,9 @@ impl<'a> SemanticAnalyzer<'a> {
             };
             element.parent_form = self.form_code(parent);
             element.form = form;
+            if let Some(atom) = element.name_atom.as_ref() {
+                self.record_binding(atom.id, parent, &info);
+            }
             if info.kind == ElementKind::Command {
                 let mut argument_selection = false;
                 self.analyze_arguments(&mut element.args, &mut argument_selection)?;

@@ -9,6 +9,10 @@ def N(ln, **k):
     return d
 
 
+class _NestingLimit(Exception):
+    pass
+
+
 class SA:
     def __init__(s, piad, plad):
         s.piad = piad
@@ -25,6 +29,17 @@ class SA:
             "type": "TNMSERR_SA_NONE",
             "atom": normalize_atom(s.atom_list[0]),
         }
+        s.nesting = 0
+        s.expression_heights = []
+
+    def _parse(s, parse, i, *args):
+        if s.nesting >= 64:
+            raise _NestingLimit(s._a(i))
+        s.nesting += 1
+        try:
+            return parse(i, *args)
+        finally:
+            s.nesting -= 1
 
     def _a(s, i):
         return (
@@ -87,6 +102,9 @@ class SA:
         return 1, p, b
 
     def sa_sentence(s, i):
+        return s._parse(s._sa_sentence, i)
+
+    def _sa_sentence(s, i):
         p = i
         err = s.last
         sen = N(
@@ -821,6 +839,18 @@ class SA:
         return 1, p, n
 
     def sa_exp(s, i, pri):
+        s.expression_heights.append(0)
+        try:
+            result = s._parse(s._sa_exp, i, pri)
+        finally:
+            height = s.expression_heights.pop()
+        if result[0] and height > 128:
+            raise _NestingLimit(s._a(i))
+        if result[0] and s.expression_heights:
+            s.expression_heights[-1] = max(s.expression_heights[-1], height + 1)
+        return result
+
+    def _sa_exp(s, i, pri):
         p = i
         err = s.last
         ok, p, op = s.sa_operator_1(p)
@@ -854,9 +884,14 @@ class SA:
             ok, p2, op, npri = s.sa_operator_2(p, pri)
             if not ok:
                 break
+            height = s.expression_heights[-1] + 1
             ok, p3, rhs = s.sa_exp(p2, npri)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p2)), i, None
+            height = max(height, s.expression_heights[-1])
+            if height > 128:
+                raise _NestingLimit(s._a(p))
+            s.expression_heights[-1] = height
             exp = N(
                 s._a(i).get("line", 0),
                 smp_exp=None,
@@ -1277,7 +1312,11 @@ class SA:
                 }
             )
         s.clear()
-        ok, root = s.sa_ss()[::2]
+        try:
+            ok, root = s.sa_ss()[::2]
+        except _NestingLimit as exc:
+            s.error("TNMSERR_SA_NESTING_LIMIT", exc.args[0])
+            return 0, None
         if not ok:
             return 0, None
         s.clear()
