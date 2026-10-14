@@ -158,7 +158,6 @@ pub struct CharacterAnalyzer {
     pub used_replacements: Vec<String>,
     pub sidecar: bool,
     macro_depth: usize,
-    expansion_chars: usize,
     replace_uses: Vec<ReplaceUse>,
 }
 
@@ -175,7 +174,6 @@ impl CharacterAnalyzer {
             used_replacements: Vec::new(),
             sidecar,
             macro_depth: 0,
-            expansion_chars: 0,
             replace_uses: Vec::new(),
         }
     }
@@ -226,7 +224,6 @@ impl CharacterAnalyzer {
     }
 
     pub fn analyze_file_1(&mut self, input: &str) -> Result<File1Result, ()> {
-        self.expansion_chars = 0;
         let options = TextCommentOptions {
             case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::Char,
@@ -740,13 +737,6 @@ impl CharacterAnalyzer {
         let Some(replacement) = Self::replacement_at(default_tree, added_tree, &text, pos) else {
             return Ok((text, pos + 1, None));
         };
-        self.expansion_chars += replacement.after.chars().count();
-        if self.expansion_chars > 1_048_576 {
-            return self.error(
-                self.current_line,
-                "Replacement expansion size limit reached.",
-            );
-        }
         self.used_replacements.push(replacement.name.clone());
         let name_len = replacement.name.chars().count();
         if let (Some(map), Some(declaration)) = (

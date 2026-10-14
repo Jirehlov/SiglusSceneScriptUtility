@@ -95,7 +95,6 @@ class CharacterAnalizer:
         self.error_str = ""
         self.sidecar = bool(sidecar)
         self.macro_depth = 0
-        self.expansion_chars = 0
         self.replace_uses = []
         self.condition_names = []
         self.directive_tokens = []
@@ -157,7 +156,6 @@ class CharacterAnalizer:
         return i, "", 0
 
     def analize_file_1(self, in_text):
-        self.expansion_chars = 0
         result = scan_text_comments(
             in_text,
             case_mode="lower",
@@ -401,10 +399,6 @@ class CharacterAnalizer:
         if "used_count" in rep:
             rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
         tp, nm, after = rep["type"], rep["name"], rep.get("after", "")
-        self.expansion_chars += len(after)
-        if self.expansion_chars > 1_048_576:
-            self.error(self.m_line, "Replacement expansion size limit reached.")
-            return text, pos, 0, source_map
         nl = len(nm)
         source = rep.get("source") or {}
         if source_map is not None and source.get("declaration") is not None:

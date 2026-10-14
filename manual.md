@@ -234,7 +234,7 @@ siglus-ssu -lsp [--serial]
 - Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
 - Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
-- Expansion in macro arguments, defaults, and bodies shares the compiler's scanning-step, macro nesting, and cumulative replacement-text limits. Exceeding a limit stops the current analysis and returns a diagnostic; see [macro expansion](#macro).
+- Expansion in macro arguments, defaults, and bodies shares the compiler's scanning-step and macro nesting limits. Exceeding a limit stops the current analysis and returns a diagnostic; see [macro expansion](#macro).
 
 ---
 
@@ -1761,7 +1761,6 @@ Rules:
 
 - Each text expansion, macro argument (including a default), or macro body reports an expansion-limit error after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. The counter resets at each new minimum; this is not a limit on the total number of replacements in a file. Reaching this threshold suggests possible cyclic expansion; it does not prove an infinite loop.
 - Macro expansion may nest at most **128 levels**.
-- Each character analyzer allows at most **1,048,576 cumulative replacement-text characters**. Each replacement match adds its replacement text's character count, including macro body text and expanded parameter replacements; this is not the final output size.
 
 These limits apply to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and to LSP analysis. Exceeding a limit returns a compile error or LSP diagnostic. Correct the definitions or reduce the expansion before retrying.
 
