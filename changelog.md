@@ -3,6 +3,11 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.7] - 2026-10-14
+
+- Improved LSP.
+
+
 ## [v0.5.6] - 2026-10-11
 
 - Reworked `-x --decompile` to reconstruct `.ss` / `.inc` from disassembly traces and package metadata without consulting embedded original sources, including scene PCKs without an OS section.
