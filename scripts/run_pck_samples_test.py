@@ -313,33 +313,60 @@ def _run_siglus_test(
     if not pcks:
         raise RuntimeError(f"No .pck files found in {samples_dir}")
     prefix = _command_prefix(command)
+    report_path = Path(report_json).resolve() if report_json else None
+    if (
+        report_path is not None
+        and report_path.exists()
+        and any(report_path.samefile(path) for path in pcks)
+    ):
+        raise ValueError("--report-json must not overwrite an input .pck")
+    report_results = []
+    profiles = {}
     if decompile:
         profiles = (
             _profiles_from_report(profiles_from, pcks)
             if profiles_from
             else dict.fromkeys(pcks, const_profile)
         )
-        failed = 0
-        for path in pcks:
+    for index, path in enumerate(pcks, 1):
+        if decompile:
             cmd = prefix + [
                 "--const-profile",
                 str(profiles[path]),
                 "test",
                 "--decompile",
             ]
-            if serial:
-                cmd.append("--serial")
-            cmd.append(str(path))
-            failed += _run_test_command(cmd, 1, expected_status or "PAYLOAD_SAME") != 0
-        print(f"decompile samples: total={len(pcks):d} failed={failed:d}")
-        return 1 if failed else 0
-    cmd = prefix + ["test"]
-    if serial:
-        cmd.append("--serial")
-    if report_json:
-        cmd.extend(["--report-json", report_json])
-    cmd.append(str(samples_dir))
-    return _run_test_command(cmd, len(pcks), expected_status)
+        else:
+            cmd = prefix + ["test"]
+        if serial:
+            cmd.append("--serial")
+        if report_path is not None:
+            report_path.unlink(missing_ok=True)
+            cmd.extend(["--report-json", str(report_path)])
+        cmd.append(str(path))
+        status = expected_status or ("PAYLOAD_SAME" if decompile else "")
+        rc = _run_test_command(cmd, 1, status)
+        if report_path is not None:
+            if report_path.is_file():
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                report_results.extend(report["results"])
+            elif rc == 0:
+                raise RuntimeError("test did not write the requested JSON report")
+            if report_results:
+                with report_path.open("w", encoding="utf-8", newline="\r\n") as report:
+                    json.dump(
+                        {"decompile": False, "results": report_results},
+                        report,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    report.write("\n")
+        if rc != 0:
+            print(f"samples: stopped after {index:d}/{len(pcks):d} (first failure)")
+            return rc
+    if decompile:
+        print(f"decompile samples: total={len(pcks):d} failed=0")
+    return 0
 
 
 def main(argv=None) -> int:

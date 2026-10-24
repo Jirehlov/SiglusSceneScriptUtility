@@ -720,6 +720,7 @@ def build_decompile_hints(bundles, status):
     seed = None
     slots = {}
     name_texts = set()
+    scene_analysis = {}
     for bundle in bundles:
         if seed is None:
             pack_ctx = bundle["pack_context"]
@@ -744,6 +745,13 @@ def build_decompile_hints(bundles, status):
                 raise ValueError("incomplete PCK declaration metadata")
         status(bundle)
         dec = _Decompiler(bundle, hints=seed, analysis_only=True)
+        scene_analysis[bundle["dat_path"]] = (
+            dec.local_command_by_ofs,
+            dec.return_event_offsets,
+            dec.return_event_forms,
+            dec.command_def_info,
+            dec.command_call_info,
+        )
         name_texts.update(_iter_name_macro_texts(dec.events))
         for command_info, forms_key in (
             (dec.command_call_info, "call_forms"),
@@ -782,6 +790,7 @@ def build_decompile_hints(bundles, status):
     hints["global_commands"] = {**seed["global_commands"], **out}
     hints["name_macros"] = _build_name_macros(name_texts)
     hints["inc_lines"] = _support_inc_lines_from_hints(hints)
+    hints["scene_analysis"] = scene_analysis
     return hints
 
 
@@ -798,12 +807,7 @@ class _Decompiler:
         self.global_command_hints = self.hints["global_commands"]
         self.global_property_hints = self.hints["global_properties"]
         self.global_property_count = self.hints["global_property_count"]
-        self.local_command_by_ofs = self._build_local_command_index()
-        self.return_event_offsets, self.return_event_forms = (
-            self._build_return_form_index()
-        )
-        self.command_def_info = self._collect_command_def_info()
-        self.command_call_info = self._collect_command_call_info()
+        self._prepare_command_analysis()
         if analysis_only:
             return
         self._end_index_cache = {}
@@ -859,6 +863,24 @@ class _Decompiler:
         self.suppressed_label_offsets = set()
         self.placed_z_label_offsets = set()
         self.for_header_offsets = set()
+
+    def _prepare_command_analysis(self):
+        cached = self.hints.get("scene_analysis", {}).get(self.bundle["dat_path"])
+        if cached is not None:
+            (
+                self.local_command_by_ofs,
+                self.return_event_offsets,
+                self.return_event_forms,
+                self.command_def_info,
+                self.command_call_info,
+            ) = cached
+            return
+        self.local_command_by_ofs = self._build_local_command_index()
+        self.return_event_offsets, self.return_event_forms = (
+            self._build_return_form_index()
+        )
+        self.command_def_info = self._collect_command_def_info()
+        self.command_call_info = self._collect_command_call_info()
 
     def _build_next_op_index(self, opname):
         out = [len(self.events)] * len(self.events)
