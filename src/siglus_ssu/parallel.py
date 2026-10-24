@@ -206,8 +206,9 @@ def _compile_one_process(
     ss_path: str,
     display_name: str,
     source_text: str,
-) -> tuple[str, str | None, dict, dict, dict]:
+) -> tuple[str, str | None, dict, dict, dict, list[str]]:
     fname = os.path.basename(ss_path)
+    warnings = []
     try:
         if _COMPILE_WORKER_STATE is None:
             raise RuntimeError("compile worker is not initialized")
@@ -223,6 +224,7 @@ def _compile_one_process(
             "debug_outputs": debug_outputs,
             "stats": {"full_compile_stats": full_compile_stats},
             "source_texts": {fname: source_text},
+            "warnings": warnings,
         }
         res = compile_one_pipeline(
             worker_ctx,
@@ -239,9 +241,10 @@ def _compile_one_process(
             res["scene_macro_counts"],
             res["global_macro_usage_delta"],
             res["source_stats"],
+            warnings,
         )
     except Exception as e:
-        return (display_name, str(e), {}, {}, {})
+        return (display_name, str(e), {}, {}, {}, warnings)
 
 
 def parallel_compile(
@@ -292,9 +295,16 @@ def parallel_compile(
             for ss_path in ss_files
         ]
         for future in as_completed(futures):
-            display_name, error, macro_counts, usage_delta, scene_source_stats = (
-                future.result()
-            )
+            (
+                display_name,
+                error,
+                macro_counts,
+                usage_delta,
+                scene_source_stats,
+                warnings,
+            ) = future.result()
+            for warning in warnings:
+                sys.stderr.write(warning)
             completed += 1
             if error is not None:
                 errors.append((display_name, error))

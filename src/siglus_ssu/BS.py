@@ -1,6 +1,7 @@
 import os
 import struct
 import copy
+import sys
 import time
 from collections import Counter
 from . import const as C
@@ -1751,6 +1752,12 @@ def compile_one_pipeline(
     t = time.time()
     sa = SA(iad, lad)
     ok, sad = sa.analize()
+    for message, atom in sa.warnings.items():
+        warning = f"warning: {fmt_err(message, atom.get('line', 0))}\n"
+        if "warnings" in ctx:
+            ctx["warnings"].append(warning)
+        else:
+            sys.stderr.write(warning)
     if record_time:
         record_stage_time(ctx, "SA", time.time() - t)
     if not ok:

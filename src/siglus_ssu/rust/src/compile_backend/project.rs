@@ -1642,6 +1642,7 @@ fn prepare_scene(
     base_ia: &IaData,
     mut log: Option<&mut OutputLog<'_>>,
     mut stage_times: Option<&mut Vec<(String, f64)>>,
+    warnings: &mut Vec<String>,
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
     let mut ia_data = base_ia.clone();
@@ -1707,6 +1708,14 @@ fn prepare_scene(
     let stage_start = Instant::now();
     let mut syntax = SyntaxAnalyzer::new(&lex, ia_data.codes.clone());
     let syntax_result = syntax.analyze(&mut ia_data);
+    for (atom, message) in &syntax.warnings {
+        let warning = format!("warning: {}", scene_error(message, display_name, atom.line));
+        if let Some(log) = log.as_mut() {
+            log.push_warning(&warning)?;
+        } else {
+            warnings.push(warning);
+        }
+    }
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "SA", stage_start);
     }
@@ -2008,6 +2017,7 @@ fn compile_project_inner(
             |worker_rand, task| {
                 let key = lower_file_name(&task.name);
                 let status = task.status_display_name.clone();
+                let mut warnings = Vec::new();
                 let result = match prepare_scene(
                     config,
                     &task.path,
@@ -2015,6 +2025,7 @@ fn compile_project_inner(
                     &base_ia,
                     None,
                     None,
+                    &mut warnings,
                 ) {
                     Ok(mut scene) => {
                         if scene.stem.is_empty() {
@@ -2038,9 +2049,12 @@ fn compile_project_inner(
                     }
                     Err(message) => Err(message),
                 };
-                (key, status, result)
+                (key, status, warnings, result)
             },
-            |_, (key, status, result)| {
+            |_, (key, status, warnings, result)| {
+                for warning in warnings {
+                    stdout.push_warning(&warning)?;
+                }
                 completed_count += 1;
                 match result {
                     Ok(scene) => {
@@ -2084,6 +2098,7 @@ fn compile_project_inner(
                 &base_ia,
                 Some(&mut *stdout),
                 Some(stage_times),
+                &mut Vec::new(),
             )?;
             if scene.stem.is_empty() {
                 scene.stem = scene_stem(&task.name);

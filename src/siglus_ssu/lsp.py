@@ -44,6 +44,7 @@ from .path_policy import (
 )
 
 SEVERITY_ERROR = 1
+SEVERITY_WARNING = 2
 JSONRPC_PARSE_ERROR = -32700
 JSONRPC_INVALID_REQUEST = -32600
 JSONRPC_METHOD_NOT_FOUND = -32601
@@ -1147,6 +1148,16 @@ def _analyze_ss_document(
     result.lad = lad
     sa = SA(iad, lad)
     ok, sad = sa.analize()
+    for message, atom in sa.warnings.items():
+        result.diagnostics.append(
+            SourceDiagnostic(
+                path=abs_path,
+                line=max(1, int(atom.get("line", 1) or 1)),
+                message=message,
+                severity=SEVERITY_WARNING,
+                code="SA",
+            )
+        )
     if not ok:
         atom = sa.last.get("atom") or {}
         result.diagnostics.append(
@@ -1305,7 +1316,7 @@ LinkScanResult = tuple[bool, list[DefinitionRecord], list[SymbolOccurrence], lis
 
 def _link_scan_result(result: AnalysisResult) -> LinkScanResult:
     return (
-        bool(result.diagnostics),
+        any(item.severity == SEVERITY_ERROR for item in result.diagnostics),
         _command_records(result),
         list(occurrences_for_result(result)),
         list(result.unmapped_bindings),
@@ -2379,7 +2390,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 26
+LSP_INDEX_CACHE_VERSION = 27
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -3581,7 +3592,7 @@ class SSLanguageServer:
         result = self.analyze_base(doc)
         if (
             not doc.path.lower().endswith(".inc")
-            or result.diagnostics
+            or any(item.severity == SEVERITY_ERROR for item in result.diagnostics)
             or (
                 position is not None
                 and occurrence_at_position(result, *position, self.position_encoding)
@@ -3818,7 +3829,9 @@ class SSLanguageServer:
     def analyze(self, doc: DocumentState) -> AnalysisResult:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
         base = self.analyze_base(doc)
-        if not doc.path.lower().endswith(".ss") or base.diagnostics:
+        if not doc.path.lower().endswith(".ss") or any(
+            item.severity == SEVERITY_ERROR for item in base.diagnostics
+        ):
             doc.analysis = base
             doc.analysis_signature = doc.base_analysis_signature
             return doc.analysis

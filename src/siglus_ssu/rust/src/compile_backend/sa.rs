@@ -31,6 +31,7 @@ pub struct SyntaxAnalyzer {
     labels: Vec<LabelState>,
     z_labels: Vec<LabelState>,
     pub last: Option<SyntaxErrorInfo>,
+    pub warnings: Vec<(Atom, &'static str)>,
     nesting: usize,
     expression_heights: Vec<usize>,
 }
@@ -59,6 +60,7 @@ impl SyntaxAnalyzer {
                 z_label_count
             ],
             last: None,
+            warnings: Vec::new(),
             nesting: 0,
             expression_heights: Vec::new(),
         }
@@ -105,13 +107,19 @@ impl SyntaxAnalyzer {
         Err(())
     }
 
+    fn warn(&mut self, message: &'static str, index: usize) {
+        if !self.warnings.iter().any(|(_, value)| *value == message) {
+            self.warnings.push((self.atom(index), message));
+        }
+    }
+
     fn parse_nested<T>(
         &mut self,
         index: usize,
         parse: impl FnOnce(&mut Self) -> ParseResult<T>,
     ) -> ParseResult<T> {
         if self.nesting >= 64 {
-            return self.fail("TNMSERR_SA_NESTING_LIMIT", index);
+            self.warn("analysis nesting depth exceeds 64; continuing", index);
         }
         self.nesting += 1;
         let result = parse(self);
@@ -959,7 +967,7 @@ impl SyntaxAnalyzer {
         });
         let height = self.expression_heights.pop().unwrap();
         if matches!(&result, Ok(Some(_))) && height > 128 {
-            return self.fail("TNMSERR_SA_NESTING_LIMIT", index);
+            self.warn("expression tree height exceeds 128; continuing", index);
         }
         if matches!(&result, Ok(Some(_)))
             && let Some(parent) = self.expression_heights.last_mut()
@@ -1005,7 +1013,7 @@ impl SyntaxAnalyzer {
             };
             let height = height.max(*self.expression_heights.last().unwrap());
             if height > 128 {
-                return self.fail("TNMSERR_SA_NESTING_LIMIT", pos);
+                self.warn("expression tree height exceeds 128; continuing", pos);
             }
             *self.expression_heights.last_mut().unwrap() = height;
             expression = self.node(
@@ -1369,6 +1377,7 @@ impl SyntaxAnalyzer {
 
     pub fn analyze(&mut self, iad: &mut IaData) -> Result<AstNode, ()> {
         self.last = None;
+        self.warnings.clear();
         let root = self.parse_root(iad)?;
         self.validate(iad)?;
         Ok(root)

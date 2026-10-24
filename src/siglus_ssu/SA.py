@@ -9,10 +9,6 @@ def N(ln, **k):
     return d
 
 
-class _NestingLimit(Exception):
-    pass
-
-
 class SA:
     def __init__(s, piad, plad):
         s.piad = piad
@@ -31,10 +27,14 @@ class SA:
         }
         s.nesting = 0
         s.expression_heights = []
+        s.warnings = {}
+
+    def warn(s, message, i):
+        s.warnings.setdefault(message, normalize_atom(s._a(i)))
 
     def _parse(s, parse, i, *args):
         if s.nesting >= 64:
-            raise _NestingLimit(s._a(i))
+            s.warn("analysis nesting depth exceeds 64; continuing", i)
         s.nesting += 1
         try:
             return parse(i, *args)
@@ -845,7 +845,7 @@ class SA:
         finally:
             height = s.expression_heights.pop()
         if result[0] and height > 128:
-            raise _NestingLimit(s._a(i))
+            s.warn("expression tree height exceeds 128; continuing", i)
         if result[0] and s.expression_heights:
             s.expression_heights[-1] = max(s.expression_heights[-1], height + 1)
         return result
@@ -890,7 +890,7 @@ class SA:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p2)), i, None
             height = max(height, s.expression_heights[-1])
             if height > 128:
-                raise _NestingLimit(s._a(p))
+                s.warn("expression tree height exceeds 128; continuing", p)
             s.expression_heights[-1] = height
             exp = N(
                 s._a(i).get("line", 0),
@@ -1312,11 +1312,8 @@ class SA:
                 }
             )
         s.clear()
-        try:
-            ok, root = s.sa_ss()[::2]
-        except _NestingLimit as exc:
-            s.error("TNMSERR_SA_NESTING_LIMIT", exc.args[0])
-            return 0, None
+        s.warnings.clear()
+        ok, root = s.sa_ss()[::2]
         if not ok:
             return 0, None
         s.clear()
