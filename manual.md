@@ -1389,23 +1389,25 @@ LOC   : enabled (original function, func=0x22BF20)
 
 Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical `.pck` rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
 
-This mode is intended for `.pck` archives that contain embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
+By default, this mode uses embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
 
-This mode tests compilation of embedded original sources. To test decompilation, follow the `--decompile` extraction, compilation, and payload-comparison workflow above.
+With `--decompile`, the command reconstructs scripts from the compiled scenes and package metadata, recompiles only `decompiled/`, and compares normalized payloads. An explicit global `--const-profile N` is required and applies to decompilation, compilation, and comparison. This path tests only that profile, with strict UTF-8 source decoding and no profile or invalid-charset fallback. Embedded original sources are not required or used to reconstruct scripts.
 
 #### Syntax
 
 ```bash
-siglus-ssu test [--serial] <input_pck|input_dir>
+siglus-ssu [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
 `--serial` disables parallel compilation during the rebuild step. Rebuilds are parallel by default.
 
-Directory inputs are processed one `.pck` at a time. Global `--const-profile` does not restrict the profiles tried by this mode; profile search always starts at `0`.
+Directory inputs are processed one `.pck` at a time. Without `--decompile`, global `--const-profile` does not restrict profile search, which starts at `0`. With `--decompile`, every input uses the explicitly selected profile.
+
+`--report-json FILE` writes per-file results, timings, and the successful `profile` (`null` for failed or skipped files). The sample runner accepts an embedded-source report through `--profiles-from FILE` and invokes `test --decompile` separately for each sample with its recorded successful profile. Missing or unsuccessful profile records fail the run.
 
 #### Workflow
 
-For each `.pck`, the command:
+For each `.pck`, the default embedded-source test:
 
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
@@ -1413,11 +1415,15 @@ For each `.pck`, the command:
 4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 
+With `--decompile`, the command analyzes the PCK, reconstructs scripts under the required profile, recompiles them under the same profile, compares payloads even when the rebuilt bytes are identical, and removes temporary files. Success is always `PAYLOAD_SAME`. Missing scenes, `text_only`, `real_diff`, unavailable payloads, and incomplete disassembly fail the test. A missing OS section does not cause a skip.
+
 #### Output
 
-Step log lines report status only. A completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. The `compile` and `payload` timings include all attempts across both rounds. Logs identify attempts using `--charset utf8 --allow-invalid`; this retry does not relax the comparison criteria.
+Step log lines report status only. In the default embedded-source test, a completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. The `compile` and `payload` timings include all attempts across both rounds. Logs identify attempts using `--charset utf8 --allow-invalid`; this retry does not relax the comparison criteria.
 
-Compile errors are kept quiet while attempts remain in either round. If neither round produces a matching rebuild, the file is marked as `FAIL`: the command reports the closest payload comparison, or the captured compile output if no attempt reached comparison.
+In embedded-source tests, compile errors are kept quiet while attempts remain in either round. If neither round produces a matching rebuild, the file is marked as `FAIL`: the command reports the closest payload comparison, or the captured compile output if no attempt reached comparison.
+
+Decompile tests include a `decompile` timing in place of `extract` and report decompilation, compilation, or payload errors for the selected profile without retrying.
 
 The final summary reports total counts, and lists only failed files with their total time and step timings.
 
@@ -1428,6 +1434,8 @@ The command exits with `0` when at least one file is `EXACT` or `PAYLOAD_SAME` a
 ```bash
 siglus-ssu test /path/to/Scene.pck
 siglus-ssu test /path/to/pck_dir/
+siglus-ssu test --report-json /path/to/profiles.json /path/to/pck_dir/
+siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 ```
 
 <a id="siglusss-language-spec"></a>

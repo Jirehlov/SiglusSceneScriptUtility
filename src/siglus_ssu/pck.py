@@ -1336,6 +1336,8 @@ def compare_pck(
     b2: bytes,
     compare_payload=False,
     explicit_angou: str = "",
+    *,
+    ignore_original_sources=False,
 ) -> int:
     m1 = _pck_sections(b1, preview=False)[1]
     m2 = _pck_sections(b2, preview=False)[1]
@@ -1394,6 +1396,9 @@ def compare_pck(
     source_entries = []
     source_failed = False
     for path, blob, header in ((p1, b1, h1), (p2, b2, h2)):
+        if ignore_original_sources:
+            source_entries.append([])
+            continue
         try:
             source_entries.append(_pck_original_source_entries(blob, header))
         except ValueError as exc:
@@ -1425,7 +1430,9 @@ def compare_pck(
                 hdr=h1,
                 scn_data=data1,
                 explicit_angou=explicit_angou,
-                source_entries=source_entries1 if not source_failed else None,
+                source_entries=source_entries1
+                if not source_failed and not ignore_original_sources
+                else None,
             )
             exe_el2 = require_pck_scene_exe_el(
                 b2,
@@ -1433,7 +1440,9 @@ def compare_pck(
                 hdr=h2,
                 scn_data=data2,
                 explicit_angou=explicit_angou,
-                source_entries=source_entries2 if not source_failed else None,
+                source_entries=source_entries2
+                if not source_failed and not ignore_original_sources
+                else None,
             )
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
@@ -1973,7 +1982,6 @@ def extract_pck(
             hdr=hdr,
             scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
-            source_entries=[] if decompile else None,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")

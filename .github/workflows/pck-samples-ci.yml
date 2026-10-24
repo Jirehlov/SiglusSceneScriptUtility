@@ -32,19 +32,34 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .cache/pck-samples
-          key: pck-samples-0-1-main-v1
+          key: pck-samples-0-1-2-main-v1
           restore-keys: |
+            pck-samples-0-1-2-main-
             pck-samples-0-1-main-
 
       - name: Install dependencies
-        run: uv sync
+        run: uv sync --locked
 
       - name: Run exact pck samples
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --expected-status EXACT --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --expected-status EXACT --report-json .cache/pck-test-profiles-0.json --command siglus-ssu
 
       - name: Run payload-same pck samples
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --expected-status PAYLOAD_SAME --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --expected-status PAYLOAD_SAME --report-json .cache/pck-test-profiles-1.json --command siglus-ssu
+
+      - name: Decompile exact pck samples with recorded profiles
+        if: ${{ !cancelled() && hashFiles('.cache/pck-test-profiles-0.json') != '' }}
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --samples-dir .cache/pck-samples/0 --decompile --profiles-from .cache/pck-test-profiles-0.json --expected-status PAYLOAD_SAME --command siglus-ssu
+
+      - name: Decompile payload-same pck samples with recorded profiles
+        if: ${{ !cancelled() && hashFiles('.cache/pck-test-profiles-1.json') != '' }}
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --samples-dir .cache/pck-samples/1 --decompile --profiles-from .cache/pck-test-profiles-1.json --expected-status PAYLOAD_SAME --command siglus-ssu
+
+      - name: Decompile pck samples without usable original sources
+        if: ${{ !cancelled() }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 2 --decompile --const-profile 0 --expected-status PAYLOAD_SAME --command siglus-ssu

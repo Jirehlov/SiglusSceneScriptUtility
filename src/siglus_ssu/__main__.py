@@ -37,7 +37,7 @@ def _usage():
         "  -s, --sound     Decode/extract/play .ovk/.owp/.nwa sounds\n"
         "  -v, --video     Extract/analyze .omv videos\n"
         "  -p, --patch     Patch SiglusEngine.exe (altkey/lang/info/loc)\n"
-        "  test            Round-trip compile-test .pck files with embedded original sources; reports EXACT or PAYLOAD_SAME\n"
+        "  test            Round-trip test .pck embedded sources or decompiled scripts\n"
         "\n"
         "LSP mode:\n"
         f"  {p} -lsp [--serial]\n"
@@ -151,11 +151,13 @@ def _usage():
         "    --allow-partial   Write a language patch even when part of the selected preset is unavailable\n"
         "\n"
         "Test mode:\n"
-        f"  {p} test [--serial] <input_pck|input_dir>\n"
+        f"  {p} [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
         "    input_dir      Tests .pck files directly under the directory\n"
+        "    --decompile    Require --const-profile N; decompile and rebuild only that profile, checking payload equality\n"
         "    --serial       Disable parallel compilation during rebuild\n"
-        "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and total/summary timings for analyze/extract/compile/payload/cleanup\n"
-        f"    const-profile  Compile tries profiles {', '.join(map(str, CONST_PROFILE_IDS))}; if all fail, retries with --charset utf8 --allow-invalid\n"
+        "    --report-json  Write per-file results and successful profiles as JSON\n"
+        "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and timings; --decompile success is always PAYLOAD_SAME\n"
+        f"    const-profile  Embedded-source tests try profiles {', '.join(map(str, CONST_PROFILE_IDS))}, then retry with --charset utf8 --allow-invalid; --decompile has no fallback\n"
     )
     sys.stdout.write(text)
 
@@ -258,10 +260,13 @@ def _consume_global_options(argv):
     )
 
 
-def _run_mode(module_name, args):
+def _run_mode(module_name, args, const_profile=None):
     module = import_module(f"siglus_ssu.{module_name}")
     try:
-        rc = module.main(args)
+        if module_name == "test":
+            rc = module.main(args, const_profile=const_profile)
+        else:
+            rc = module.main(args)
     except OSError as exc:
         sys.stderr.write(f"{_prog()}: error: {exc}\n")
         return 1
@@ -386,7 +391,7 @@ def main():
         return lsp_server.main(argv[1:])
     module_name = MODE_MODULES.get(mode)
     if module_name is not None:
-        return _run_mode(module_name, argv[1:])
+        return _run_mode(module_name, argv[1:], const_profile=const_profile)
     sys.stderr.write(f"{_prog()}: unknown mode: {mode}\n")
     _usage_short()
     return 2

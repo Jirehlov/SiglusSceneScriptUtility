@@ -1389,23 +1389,25 @@ LOC   : enabled (original function, func=0x22BF20)
 
 测试一个 `.pck`，或某个目录正下方的所有 `.pck`，能否在提取后原地回编。回编后的 `.pck` 字节完全一致时为 `EXACT`；`.pck` 不完全一致但规范化场景 payload 语义一致时为 `PAYLOAD_SAME`。
 
-本模式面向带有内嵌原始源码数据的 `.pck`。如果某个 `.pck` 没有 OS 区段，就会跳过，因为没有可用于回编的原始 `.ss` 源码。
+默认测试使用 `.pck` 内嵌的原始源码，不处理没有 OS 区段的文件。
 
-本模式测试内嵌原始源码的编译。反编译测试请按前述 `--decompile` 提取、回编和 payload 比较流程执行。
+加上 `--decompile` 时，命令会根据已编译场景和包级元数据重建源码，回编 `decompiled/` 目录，并比较规范化 payload。反编译测试必须搭配显式的全局 `--const-profile N`，在反编译、回编和比较阶段使用同一 profile，按严格 UTF-8 解码重建源码，不尝试其他 profile 或 `--allow-invalid`。反编译测试无需内嵌原始源码，也不会使用内嵌源码重建脚本。
 
 #### 语法
 
 ```bash
-siglus-ssu test [--serial] <input_pck|input_dir>
+siglus-ssu [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
 `--serial` 会在回编阶段禁用并行编译；默认使用并行编译。
 
-目录输入中的 `.pck` 按顺序逐个处理。全局 `--const-profile` 不会限制本模式尝试的 profile，搜索始终从 `0` 开始。
+目录输入中的 `.pck` 按顺序逐个处理。普通回编测试始终从 profile `0` 开始搜索，不受全局 `--const-profile` 限制。反编译测试只使用显式指定的 profile。
+
+`--report-json FILE` 会保存每个文件的结果、耗时和成功的 `profile`，失败或跳过的文件记为 `null`。样本运行脚本可通过 `--profiles-from FILE` 读取普通回编报告，逐个搭配对应的 `--const-profile` 调用 `test --decompile`，遇到缺失或未成功的 profile 记录时返回失败。
 
 #### 流程
 
-对每个 `.pck`，命令会：
+普通回编测试会对每个 `.pck` 执行以下步骤：
 
 1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
 2. 将 archive 解压到临时测试目录；
@@ -1413,11 +1415,15 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 4. 先检查回编 `.pck` 是否与原始 `.pck` 字节完全一致；若不一致，再采用规范化的 `-a --payload` 语义比较；
 5. 删除所有测试产生的临时文件。
 
+反编译测试会分析 PCK，按指定 profile 重建源码，再按同一 profile 回编和比较 payload，最后删除临时文件。反编译测试始终执行 payload 比较，在回编字节完全一致时也不省略比较，成功结果统一为 `PAYLOAD_SAME`。缺失场景、`text_only`、`real_diff`、无法解析的 payload 和不完整反汇编均算失败。没有 OS 区段的 PCK 也会进入反编译测试。
+
 #### 输出
 
-分步骤日志只显示状态。原始与回编 `.pck` 字节完全一致时为 `EXACT`；字节不一致但规范化 payload 比较成功时为 `PAYLOAD_SAME`。不再使用 `PASS` 分类。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。`compile` 和 `payload` 耗时包括两轮中的全部尝试。日志会标明使用了 `--charset utf8 --allow-invalid` 的尝试；重试不放宽比较标准。
+分步骤日志只显示状态。普通回编测试会将字节完全一致的结果记为 `EXACT`，将字节不一致但规范化 payload 一致的结果记为 `PAYLOAD_SAME`。不再使用 `PASS` 分类。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。`compile` 和 `payload` 耗时包括两轮中的全部尝试。日志会标明使用了 `--charset utf8 --allow-invalid` 的尝试；重试不放宽比较标准。
 
-只要两轮中还有未完成的尝试，编译错误会先静默捕获，不立即打印。两轮都没有得到匹配的回编结果时，文件标记为 `FAIL`：命令报告最接近的 payload 比较结果；若没有任何尝试进入比较，则打印捕获的编译输出。
+普通回编测试会先静默捕获编译错误，在两轮都未得到匹配结果时将文件标记为 `FAIL`，并报告最接近的 payload 比较结果或捕获的编译输出。
+
+反编译测试通过 `decompile` 记录提取和重建源码的耗时，不单独记录 `extract`，并直接报告指定 profile 下的反编译、编译或 payload 错误，不进行重试。
 
 最终汇总会输出总计数，并且只列出失败文件的总耗时与步骤耗时。
 
@@ -1428,6 +1434,8 @@ siglus-ssu test [--serial] <input_pck|input_dir>
 ```bash
 siglus-ssu test /path/to/Scene.pck
 siglus-ssu test /path/to/pck_dir/
+siglus-ssu test --report-json /path/to/profiles.json /path/to/pck_dir/
+siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 ```
 
 <a id="siglusss-language-spec"></a>

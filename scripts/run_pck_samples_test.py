@@ -225,16 +225,7 @@ def _command_prefix(command: str | None) -> list[str]:
     return [sys.executable, "-m", "siglus_ssu"]
 
 
-def _run_siglus_test(
-    samples_dir: Path, command: str | None, serial: bool, expected_status=""
-) -> int:
-    pcks = _find_pcks(samples_dir)
-    if not pcks:
-        raise RuntimeError(f"No .pck files found in {samples_dir}")
-    cmd = _command_prefix(command) + ["test"]
-    if serial:
-        cmd.append("--serial")
-    cmd.append(str(samples_dir))
+def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
     print(f"running: {' '.join(cmd)}")
     completed = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if completed.stdout:
@@ -262,7 +253,7 @@ def _run_siglus_test(
     if expected_status not in counts:
         raise ValueError(f"unsupported expected status: {expected_status}")
     if (
-        total != len(pcks)
+        total != expected_count
         or counts[expected_status] != total
         or any(count for status, count in counts.items() if status != expected_status)
     ):
@@ -273,6 +264,82 @@ def _run_siglus_test(
         )
         return 1
     return 0
+
+
+def _profiles_from_report(report_path: str, pcks: list[Path]) -> dict[Path, int]:
+    from siglus_ssu import CONST_PROFILE_IDS
+
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    if not isinstance(report, dict) or report.get("decompile") is not False:
+        raise ValueError("--profiles-from requires an embedded-source test JSON report")
+    results = report.get("results")
+    if not isinstance(results, list):
+        raise ValueError("profile report has no results list")
+    profiles = {}
+    for result in results:
+        if not isinstance(result, dict):
+            raise ValueError("invalid profile report result")
+        if result.get("status") not in ("EXACT", "PAYLOAD_SAME"):
+            continue
+        profile = result.get("profile")
+        if type(profile) is not int or profile not in CONST_PROFILE_IDS:
+            raise ValueError("profile report contains an invalid successful profile")
+        path = result.get("path")
+        if not isinstance(path, str) or not path:
+            raise ValueError("profile report contains an invalid sample path")
+        path = Path(path).resolve()
+        if path in profiles:
+            raise ValueError(f"profile report contains duplicate results for {path}")
+        profiles[path] = profile
+    for path in pcks:
+        if path not in profiles:
+            raise ValueError(
+                f"no successful embedded-source profile recorded for {path}"
+            )
+    return profiles
+
+
+def _run_siglus_test(
+    samples_dir: Path,
+    command: str | None,
+    serial: bool,
+    expected_status="",
+    decompile=False,
+    const_profile=None,
+    profiles_from="",
+    report_json="",
+) -> int:
+    pcks = _find_pcks(samples_dir)
+    if not pcks:
+        raise RuntimeError(f"No .pck files found in {samples_dir}")
+    prefix = _command_prefix(command)
+    if decompile:
+        profiles = (
+            _profiles_from_report(profiles_from, pcks)
+            if profiles_from
+            else dict.fromkeys(pcks, const_profile)
+        )
+        failed = 0
+        for path in pcks:
+            cmd = prefix + [
+                "--const-profile",
+                str(profiles[path]),
+                "test",
+                "--decompile",
+            ]
+            if serial:
+                cmd.append("--serial")
+            cmd.append(str(path))
+            failed += _run_test_command(cmd, 1, expected_status or "PAYLOAD_SAME") != 0
+        print(f"decompile samples: total={len(pcks):d} failed={failed:d}")
+        return 1 if failed else 0
+    cmd = prefix + ["test"]
+    if serial:
+        cmd.append("--serial")
+    if report_json:
+        cmd.extend(["--report-json", report_json])
+    cmd.append(str(samples_dir))
+    return _run_test_command(cmd, len(pcks), expected_status)
 
 
 def main(argv=None) -> int:
@@ -287,12 +354,26 @@ def main(argv=None) -> int:
     parser.add_argument("--samples-dir", default="")
     parser.add_argument("--command", default="")
     parser.add_argument("--serial", action="store_true")
+    parser.add_argument("--decompile", action="store_true")
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument("--const-profile", type=int)
+    profiles.add_argument("--profiles-from", default="")
+    parser.add_argument("--report-json", default="")
     parser.add_argument(
         "--expected-status", choices=("EXACT", "PAYLOAD_SAME"), default=""
     )
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args(argv)
+    if args.decompile:
+        if args.const_profile is None and not args.profiles_from:
+            parser.error("--decompile requires --const-profile or --profiles-from")
+        if args.report_json:
+            parser.error(
+                "--report-json is only used to record embedded-source profiles"
+            )
+    elif args.const_profile is not None or args.profiles_from:
+        parser.error("--const-profile and --profiles-from require --decompile")
 
     if args.samples_dir:
         samples_dir = Path(args.samples_dir).resolve()
@@ -320,6 +401,10 @@ def main(argv=None) -> int:
         args.command or None,
         bool(args.serial),
         args.expected_status,
+        decompile=bool(args.decompile),
+        const_profile=args.const_profile,
+        profiles_from=args.profiles_from,
+        report_json=args.report_json,
     )
 
 

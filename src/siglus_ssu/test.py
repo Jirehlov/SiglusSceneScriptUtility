@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import shutil
@@ -6,7 +7,7 @@ import sys
 import tempfile
 import time
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from itertools import product
 
 from . import CONST_PROFILE_IDS
@@ -38,23 +39,26 @@ class _TestResult:
     detail: str
     elapsed: float
     timings: tuple[tuple[str, float], ...]
+    profile: int | None
 
 
 def _usage(out=None) -> None:
     if out is None:
         out = sys.stderr
-    out.write("usage: siglus-ssu test [--serial] <input_pck|input_dir>\n")
     out.write(
-        "Round-trip test .pck files with OS data, timings, and const-profile/charset fallback.\n"
+        "usage: siglus-ssu [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
+    )
+    out.write(
+        "Round-trip test embedded sources or decompiled scripts; --decompile requires --const-profile.\n"
     )
 
 
-def _capture(callable_obj, *args):
+def _capture(callable_obj, *args, **kwargs):
     out = io.StringIO()
     err = io.StringIO()
     try:
         with redirect_stdout(out), redirect_stderr(err):
-            rc = callable_obj(*args)
+            rc = callable_obj(*args, **kwargs)
     except Exception as exc:
         err.write(str(exc) + "\n")
         return 1, out.getvalue(), err.getvalue()
@@ -207,7 +211,12 @@ def _count_files_with_ext(path: str) -> int:
 
 
 def _compare_payload(
-    original_pck: str, rebuilt_pck: str, original_blob: bytes, rebuilt_blob=None
+    original_pck: str,
+    rebuilt_pck: str,
+    original_blob: bytes,
+    rebuilt_blob=None,
+    *,
+    ignore_original_sources=False,
 ):
     if rebuilt_blob is None:
         rebuilt_blob = read_bytes(rebuilt_pck)
@@ -218,6 +227,7 @@ def _compare_payload(
         original_blob,
         rebuilt_blob,
         True,
+        ignore_original_sources=ignore_original_sources,
     )
     if rc != 0:
         return False, "compare failed", out, err, None
@@ -294,6 +304,83 @@ def _best_payload_attempt(attempts):
     )
 
 
+def _compile_payload_attempt(
+    original_pck: str,
+    original_blob: bytes,
+    extract_dir: str,
+    rebuilt_pck: str,
+    serial=False,
+    *,
+    profile: int,
+    allow_invalid=False,
+    decompile=False,
+):
+    C.set_profile(profile)
+    if os.path.isfile(rebuilt_pck):
+        os.remove(rebuilt_pck)
+    started = time.perf_counter()
+    set_shuffle_seed(1)
+    compile_args = []
+    if serial:
+        compile_args.append("--serial")
+    if allow_invalid:
+        compile_args.extend(["--charset", "utf8", "--allow-invalid"])
+    elif decompile:
+        compile_args.extend(["--charset", "utf8"])
+    compile_args.extend([extract_dir, rebuilt_pck])
+    rc, out, err = _capture(compiler.main, compile_args)
+    elapsed = max(0.0, time.perf_counter() - started)
+    try:
+        rebuilt_read_path = resolve_read_path(rebuilt_pck, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        rebuilt_read_path = ""
+    ok = rc == 0 and bool(rebuilt_read_path)
+    if rc == 0 and not rebuilt_read_path:
+        err = (err.rstrip("\r\n") + "\nrebuilt .pck not found\n").lstrip("\n")
+    attempt = {
+        "profile": profile,
+        "allow_invalid": allow_invalid,
+        "charset_utf8": decompile,
+        "rc": rc,
+        "ok": ok,
+        "stdout": out,
+        "stderr": err,
+        "elapsed": elapsed,
+    }
+    if not ok:
+        return attempt
+    payload_started = time.perf_counter()
+    if decompile:
+        payload_ok, detail, payload_out, payload_err, counts = _compare_payload(
+            original_pck,
+            rebuilt_read_path,
+            original_blob,
+            ignore_original_sources=True,
+        )
+        result = "PAYLOAD_SAME" if payload_ok else "FAIL"
+    else:
+        result, detail, payload_out, payload_err, counts = _compare_rebuilt_pck(
+            original_pck,
+            rebuilt_read_path,
+            original_blob,
+        )
+        payload_ok = result != "FAIL"
+    payload_elapsed = max(0.0, time.perf_counter() - payload_started)
+    attempt.update(
+        {
+            "payload_compared": True,
+            "payload_ok": payload_ok,
+            "result": result,
+            "payload_detail": detail,
+            "payload_stdout": payload_out,
+            "payload_stderr": payload_err,
+            "payload_counts": counts,
+            "payload_elapsed": payload_elapsed,
+        }
+    )
+    return attempt
+
+
 def _compile_payload_with_profile_fallback(
     original_pck: str,
     original_blob: bytes,
@@ -303,61 +390,17 @@ def _compile_payload_with_profile_fallback(
 ):
     attempts = []
     for allow_invalid, profile in product((False, True), CONST_PROFILE_IDS):
-        C.set_profile(profile)
-        if os.path.isfile(rebuilt_pck):
-            os.remove(rebuilt_pck)
-        started = time.perf_counter()
-        set_shuffle_seed(1)
-        compile_args = []
-        if serial:
-            compile_args.append("--serial")
-        if allow_invalid:
-            compile_args.extend(["--charset", "utf8", "--allow-invalid"])
-        compile_args.extend([extract_dir, rebuilt_pck])
-        rc, out, err = _capture(compiler.main, compile_args)
-        elapsed = max(0.0, time.perf_counter() - started)
-        try:
-            rebuilt_read_path = resolve_read_path(rebuilt_pck, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            rebuilt_read_path = ""
-        ok = rc == 0 and bool(rebuilt_read_path)
-        if rc == 0 and not rebuilt_read_path:
-            err = (err.rstrip("\r\n") + "\nrebuilt .pck not found\n").lstrip("\n")
-        attempts.append(
-            {
-                "profile": profile,
-                "allow_invalid": allow_invalid,
-                "rc": rc,
-                "ok": ok,
-                "stdout": out,
-                "stderr": err,
-                "elapsed": elapsed,
-            }
-        )
-        attempt = attempts[-1]
-        if not ok:
-            continue
-        payload_started = time.perf_counter()
-        result, detail, payload_out, payload_err, counts = _compare_rebuilt_pck(
+        attempt = _compile_payload_attempt(
             original_pck,
-            rebuilt_read_path,
             original_blob,
+            extract_dir,
+            rebuilt_pck,
+            serial=serial,
+            profile=profile,
+            allow_invalid=allow_invalid,
         )
-        payload_ok = result != "FAIL"
-        payload_elapsed = max(0.0, time.perf_counter() - payload_started)
-        attempt.update(
-            {
-                "payload_compared": True,
-                "payload_ok": payload_ok,
-                "result": result,
-                "payload_detail": detail,
-                "payload_stdout": payload_out,
-                "payload_stderr": payload_err,
-                "payload_counts": counts,
-                "payload_elapsed": payload_elapsed,
-            }
-        )
-        if payload_ok:
+        attempts.append(attempt)
+        if attempt.get("payload_ok"):
             return True, profile, attempts, attempt
     best = _best_payload_attempt(attempts)
     return (
@@ -368,14 +411,73 @@ def _compile_payload_with_profile_fallback(
     )
 
 
+def _decompile_payload(
+    original_pck: str,
+    original_blob: bytes,
+    tmp_root: str,
+    rebuilt_pck: str,
+    serial=False,
+    *,
+    profile: int,
+):
+    C.set_profile(profile)
+    started = time.perf_counter()
+    rc, out, err = _capture(
+        pck.extract_pck,
+        original_pck,
+        tmp_root,
+        dat_txt=True,
+        decompile=True,
+    )
+    extract_dir = _find_extract_dir(tmp_root)
+    source_dir = os.path.join(extract_dir, "decompiled") if extract_dir else ""
+    source_count = _count_files_with_ext(source_dir) if source_dir else 0
+    decompile_elapsed = max(0.0, time.perf_counter() - started)
+    if rc != 0 or source_count == 0:
+        if rc == 0:
+            rc = 1
+            err += "\ndecompilation produced no .ss files\n"
+        attempt = {
+            "profile": profile,
+            "stage": "decompile",
+            "rc": rc,
+            "ok": False,
+            "stdout": out,
+            "stderr": err,
+            "elapsed": 0.0,
+            "decompile_elapsed": decompile_elapsed,
+        }
+        return False, profile, [attempt], None
+    attempt = _compile_payload_attempt(
+        original_pck,
+        original_blob,
+        source_dir,
+        rebuilt_pck,
+        serial=serial,
+        profile=profile,
+        decompile=True,
+    )
+    attempt["decompile_elapsed"] = decompile_elapsed
+    attempt["source_ss"] = source_count
+    return (
+        bool(attempt.get("payload_ok")),
+        profile,
+        [attempt],
+        attempt if attempt.get("payload_compared") else None,
+    )
+
+
 def _format_compile_attempts(attempts) -> str:
     parts = []
     for attempt in attempts or ():
         profile = int((attempt or {}).get("profile", 0) or 0)
         rc = int((attempt or {}).get("rc", 0) or 0)
-        text = f"profile={profile:d} rc={rc:d}"
+        stage = "decompile_rc" if (attempt or {}).get("stage") == "decompile" else "rc"
+        text = f"profile={profile:d} {stage}={rc:d}"
         if (attempt or {}).get("allow_invalid"):
             text += " --charset utf8 --allow-invalid"
+        elif (attempt or {}).get("charset_utf8"):
+            text += " --charset utf8"
         if bool((attempt or {}).get("payload_compared")):
             result = str((attempt or {}).get("result") or "FAIL")
             detail = str((attempt or {}).get("payload_detail") or "")
@@ -389,9 +491,14 @@ def _format_compile_attempts(attempts) -> str:
 def _print_compile_errors(attempts) -> None:
     for attempt in attempts or ():
         profile = int((attempt or {}).get("profile", 0) or 0)
-        stage = f"compile profile={profile:d}"
+        operation = (
+            "decompile" if (attempt or {}).get("stage") == "decompile" else "compile"
+        )
+        stage = f"{operation} profile={profile:d}"
         if (attempt or {}).get("allow_invalid"):
             stage += " --charset utf8 --allow-invalid"
+        elif (attempt or {}).get("charset_utf8"):
+            stage += " --charset utf8"
         _print_tail(
             stage,
             str((attempt or {}).get("stdout") or ""),
@@ -399,7 +506,9 @@ def _print_compile_errors(attempts) -> None:
         )
 
 
-def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
+def _test_one(
+    path: str, index: int, total: int, serial=False, decompile=False, const_profile=None
+) -> _TestResult:
     started = time.perf_counter()
     path = os.path.abspath(path)
     print(f"[{index:d}/{total:d}] {path}")
@@ -408,8 +517,9 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
     status = "PENDING"
     detail = ""
     original_blob = b""
+    result_profile = None
     try:
-        C.set_profile(0)
+        C.set_profile(const_profile if decompile else 0)
         step_started = time.perf_counter()
         try:
             original_blob, hdr, err = _read_siglus_pck(path)
@@ -430,15 +540,20 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                 )
                 if original_source_header_size == 0:
                     print("  analyze: os=no")
-                    status = "SKIP"
-                    detail = "original-source (OS) section is not embedded"
+                    if not decompile:
+                        status = "SKIP"
+                        detail = "original-source (OS) section is not embedded"
                 else:
                     print(
                         "  analyze: os=declared "
                         f"original_source_header_size={original_source_header_size:d}"
                     )
 
-        if status == "PENDING":
+        if status == "PENDING" and decompile:
+            tmp_root = tempfile.mkdtemp(prefix="siglus_ssu_test_")
+            extract_dir = tmp_root
+
+        if status == "PENDING" and not decompile:
             step_started = time.perf_counter()
             tmp_root = tempfile.mkdtemp(prefix="siglus_ssu_test_")
             rc, out, err_text = _capture(pck.extract_pck, path, tmp_root, False)
@@ -466,15 +581,30 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
 
         if status == "PENDING":
             rebuilt_pck = os.path.join(extract_dir, os.path.basename(path))
-            payload_ok, selected_profile, attempts, selected_attempt = (
-                _compile_payload_with_profile_fallback(
+            if decompile:
+                result = _decompile_payload(
+                    path,
+                    original_blob,
+                    extract_dir,
+                    rebuilt_pck,
+                    serial=serial,
+                    profile=const_profile,
+                )
+            else:
+                result = _compile_payload_with_profile_fallback(
                     path,
                     original_blob,
                     extract_dir,
                     rebuilt_pck,
                     serial=serial,
                 )
-            )
+            payload_ok, selected_profile, attempts, selected_attempt = result
+            if decompile:
+                _append_timing(
+                    timings,
+                    "decompile",
+                    sum(float(a.get("decompile_elapsed", 0.0)) for a in attempts),
+                )
             compile_elapsed = sum(
                 float((attempt or {}).get("elapsed", 0.0) or 0.0)
                 for attempt in attempts or ()
@@ -492,11 +622,22 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                 _append_timing(timings, "payload", payload_elapsed)
             attempt_text = _format_compile_attempts(attempts)
             if selected_attempt is None:
-                print(f"  compile: failed attempts={attempt_text}")
+                stage = (
+                    "decompile"
+                    if decompile
+                    and all(a.get("stage") == "decompile" for a in attempts)
+                    else "compile"
+                )
+                print(f"  {stage}: failed attempts={attempt_text}")
                 _print_compile_errors(attempts)
                 status = "FAIL"
-                detail = "compile failed"
+                detail = f"{stage} failed"
             else:
+                if decompile:
+                    print(
+                        f"  decompile: ok profile={int(selected_profile):d} "
+                        f"source_ss={int(selected_attempt['source_ss']):d}"
+                    )
                 print(
                     f"  compile: ok {os.path.basename(rebuilt_pck)} "
                     f"profile={int(selected_profile):d} attempts={attempt_text}"
@@ -526,10 +667,18 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
                         f"  result: {result} profile={int(selected_profile):d} {detail_text}"
                     )
                     status = result
+                    result_profile = int(selected_profile)
                     detail = f"profile={int(selected_profile):d} {detail_text}".strip()
     finally:
         if tmp_root:
             step_started = time.perf_counter()
+            resolved_root = os.path.realpath(tmp_root)
+            temp_parent = os.path.realpath(tempfile.gettempdir())
+            if (
+                resolved_root == temp_parent
+                or os.path.commonpath((resolved_root, temp_parent)) != temp_parent
+            ):
+                raise ValueError("test directory is outside the temporary directory")
             shutil.rmtree(tmp_root, ignore_errors=True)
             _record_timing(timings, "cleanup", step_started)
             print("  cleanup: ok")
@@ -541,10 +690,12 @@ def _test_one(path: str, index: int, total: int, serial=False) -> _TestResult:
         f"  total: status={status} time={_format_seconds(total_elapsed)} "
         f"timings={_format_timings(timings)}"
     )
-    return _TestResult(path, status, detail, total_elapsed, tuple(timings))
+    return _TestResult(
+        path, status, detail, total_elapsed, tuple(timings), result_profile
+    )
 
 
-def main(argv=None):
+def main(argv=None, *, const_profile=None):
     if argv is None:
         argv = sys.argv[1:]
     argv = list(argv)
@@ -553,12 +704,34 @@ def main(argv=None):
         return 0
     argv, positional_args = split_end_of_options(argv)
     serial = False
+    decompile = False
+    report_json = ""
     filtered = []
-    for arg in argv:
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
         if arg == "--serial":
             serial = True
+        elif arg == "--decompile":
+            decompile = True
+        elif arg == "--report-json":
+            if (
+                i + 1 >= len(argv)
+                or not argv[i + 1]
+                or first_option_token([argv[i + 1]]) is not None
+            ):
+                sys.stderr.write("--report-json requires a file path\n")
+                return 2
+            i += 1
+            report_json = argv[i]
+        elif arg.startswith("--report-json="):
+            report_json = arg.split("=", 1)[1]
+            if not report_json:
+                sys.stderr.write("--report-json requires a file path\n")
+                return 2
         else:
             filtered.append(arg)
+        i += 1
     argv = filtered
     unknown_option = first_option_token(argv)
     if unknown_option is not None:
@@ -570,6 +743,9 @@ def main(argv=None):
     if len(argv) != 1:
         _usage(sys.stderr)
         return 2
+    if decompile and const_profile is None:
+        sys.stderr.write("test --decompile requires explicit --const-profile N\n")
+        return 2
     try:
         input_path = resolve_read_path(argv[0])
     except (FileNotFoundError, NotADirectoryError):
@@ -579,10 +755,27 @@ def main(argv=None):
     if not paths:
         sys.stderr.write(f"no .pck files found: {input_path}\n")
         return 1
-    print(f"Round-trip test pck files: {len(paths):d}")
+    if report_json:
+        report_json = os.path.abspath(report_json)
+        if os.path.exists(report_json) and any(
+            os.path.samefile(report_json, p) for p in paths
+        ):
+            sys.stderr.write("--report-json must not overwrite an input .pck\n")
+            return 2
+    label = "Decompile round-trip test" if decompile else "Round-trip test"
+    print(f"{label} pck files: {len(paths):d}")
     results = []
     for i, path in enumerate(paths, 1):
-        results.append(_test_one(path, i, len(paths), serial=serial))
+        results.append(
+            _test_one(
+                path,
+                i,
+                len(paths),
+                serial=serial,
+                decompile=decompile,
+                const_profile=const_profile,
+            )
+        )
     exact = sum(1 for r in results if r.status == "EXACT")
     payload_same = sum(1 for r in results if r.status == "PAYLOAD_SAME")
     skipped = sum(1 for r in results if r.status == "SKIP")
@@ -606,6 +799,16 @@ def main(argv=None):
                     _format_timings(r.timings),
                 )
             )
+    if report_json:
+        os.makedirs(os.path.dirname(report_json), exist_ok=True)
+        with open(report_json, "w", encoding="utf-8", newline="\r\n") as report:
+            json.dump(
+                {"decompile": decompile, "results": [asdict(r) for r in results]},
+                report,
+                ensure_ascii=False,
+                indent=2,
+            )
+            report.write("\n")
     return 1 if failed or exact + payload_same == 0 else 0
 
 

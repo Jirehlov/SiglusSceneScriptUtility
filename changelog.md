@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [Unreleased]
+
+- Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Test JSON reports record successful profiles for reuse by the sample runner.
+- Extended PCK Samples CI with decompile checks for sample folders `0`, `1`, and `2`, requiring `PAYLOAD_SAME` throughout. Folders `0` and `1` reuse ordinary round-trip profiles; folder `2` explicitly uses profile `0`.
+
+
 ## [v0.5.7] - 2026-10-14
 
 - Improved LSP.
