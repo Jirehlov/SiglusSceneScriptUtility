@@ -191,24 +191,28 @@ class IncAnalyzer:
     def _ia_property_name(self, i, line):
         i, line, ok = self._skip(i, line)
         if not ok:
+            self.err(line, "Property name is missing.")
             return None, i, line, 0
         st = i
         t = self.t
         while i < len(t) and t[i] not in " :\t\n":
             i += 1
         if i == st:
+            self.err(line, "Property name is missing.")
             return None, i, line, 0
         return t[st:i], i, line, 1
 
     def _ia_command_name(self, i, line):
         i, line, ok = self._skip(i, line)
         if not ok:
+            self.err(line, "Command name is missing.")
             return None, i, line, 0
         st = i
         t = self.t
         while i < len(t) and t[i] not in " (:\t\n":
             i += 1
         if i == st:
+            self.err(line, "Command name is missing.")
             return None, i, line, 0
         return t[st:i], i, line, 1
 
@@ -279,6 +283,7 @@ class IncAnalyzer:
             i, line, _ = self._skip(i, line)
             i, okc = self._chk_moji(i, ")")
             if not okc:
+                self.err(line, "Default argument is not closed with ).")
                 return None, i, line, 0
         return arg, i, line, 1
 

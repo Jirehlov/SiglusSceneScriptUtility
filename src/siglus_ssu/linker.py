@@ -91,6 +91,8 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
         except (FileNotFoundError, NotADirectoryError):
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         dat = read_bytes(dat_path)
+        if len(dat) < C.SCN_HDR_SIZE:
+            raise ValueError(f"{dat_path}: bad dat header")
         if lzss_mode:
             lz_path = os.path.join(bs_dir, nm + ".lzss")
             try:

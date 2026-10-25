@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use super::ast::{ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, Parameter};
+use super::ast::{
+    ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, Parameter, grow_stack,
+};
 use super::codes::RuntimeCodes;
 use super::form_table::{ArgInfo, ElementInfo, ElementKind, create_elm_code};
 use super::ia::IaData;
@@ -238,6 +240,14 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn analyze_node(&mut self, node: &mut AstNode, selection: &mut bool) -> Result<i32, ()> {
+        grow_stack(|| self.analyze_node_with_stack(node, selection))
+    }
+
+    fn analyze_node_with_stack(
+        &mut self,
+        node: &mut AstNode,
+        selection: &mut bool,
+    ) -> Result<i32, ()> {
         let form = match &mut node.payload {
             AstPayload::Root(statements) => {
                 self.analyze_statements(statements)?;
@@ -438,7 +448,10 @@ impl<'a> SemanticAnalyzer<'a> {
                 }
                 self.codes.forms.void.code
             }
-            AstPayload::Command { expression } => {
+            AstPayload::Command {
+                expression,
+                end_line,
+            } => {
                 self.analyze_element_expression(expression, selection, false)?;
                 let is_command = match &expression.payload {
                     AstPayload::ElementExpression { element_type, .. } => {
@@ -447,7 +460,7 @@ impl<'a> SemanticAnalyzer<'a> {
                     _ => false,
                 };
                 if !is_command {
-                    return self.fail("TNMSERR_MA_ELEMENT_IS_PROPERTY", node.line, None);
+                    return self.fail("TNMSERR_MA_ELEMENT_IS_PROPERTY", *end_line, None);
                 }
                 self.codes.forms.void.code
             }
@@ -470,12 +483,13 @@ impl<'a> SemanticAnalyzer<'a> {
                     self.codes.forms.void.code
                 }
             }
-            AstPayload::Unary { value, .. } => {
+            AstPayload::Unary { operators, value } => {
                 let value_form = self.analyze_expression(value, selection)?;
                 if self.is_int(value_form) {
                     self.codes.forms.int.code
                 } else {
-                    return self.fail("TNMSERR_MA_EXP_TYPE_NO_MATCH", node.line, None);
+                    let line = operators.last().map(|(_, line)| *line).unwrap_or(node.line);
+                    return self.fail("TNMSERR_MA_EXP_TYPE_NO_MATCH", line, None);
                 }
             }
             AstPayload::Binary {

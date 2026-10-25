@@ -918,6 +918,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
         tmpdir = os.path.realpath(tmpdir)
         ss_paths = []
         seen_ss_paths = set()
+        restored_paths = {}
         for item in sources:
             raw = bytes(item.get("raw") or b"")
             name = str(item.get("name") or "")
@@ -925,8 +926,14 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
             if not rel:
                 rel = "unknown.bin"
             rel_display = rel.replace("\\", "/")
+            out_path = tmpdir
+            for part in rel.split(os.sep):
+                out_path = os.path.join(out_path, part)
+                out_path = restored_paths.setdefault(
+                    windows_filename_key(out_path), out_path
+                )
             try:
-                out_path = os.path.realpath(os.path.join(tmpdir, rel))
+                out_path = os.path.realpath(out_path)
                 inside_tmpdir = (
                     os.path.commonpath((tmpdir, os.path.dirname(out_path))) == tmpdir
                 )
@@ -957,6 +964,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                     write_bytes(out_path, raw)
             else:
                 write_bytes(out_path, raw)
+            restored_paths.setdefault(windows_filename_key(out_path), out_path)
             if os.path.splitext(out_path)[1].lower() == ".ss":
                 key = (os.path.abspath(out_path), rel_display)
                 if key not in seen_ss_paths:
@@ -1774,16 +1782,20 @@ def _create_extract_dir(output_dir: str) -> str:
             timestamp_ns += 1
 
 
-def _unique_outpath(out_dir: str, name: str) -> str:
+def _unique_outpath(out_dir: str, name: str, used_names=None) -> str:
     s = os.path.basename(str(name or ""))
     if not s:
         s = "unknown.bin"
     root, ext = os.path.splitext(s)
+    if used_names is None:
+        with os.scandir(out_dir) as entries:
+            used_names = {windows_filename_key(entry.name) for entry in entries}
     p = os.path.join(out_dir, s)
     i = 1
-    while os.path.exists(p):
+    while windows_filename_key(os.path.basename(p)) in used_names:
         p = os.path.join(out_dir, f"{root}_{i:d}{ext}")
         i += 1
+    used_names.add(windows_filename_key(os.path.basename(p)))
     return p
 
 
@@ -1952,12 +1964,13 @@ def extract_pck(
         names = flix_info["names"]
         entries = flix_info["entries"]
         out_dir = _create_extract_dir(output_dir)
+        output_names = set()
         sys.stdout.write(f"Output: {out_dir}\n")
         for i in range(flix_info["cnt"]):
             nm = names[i] or f"file_{i:d}.bin"
             rel = _safe_relpath(nm) or nm
             out_name = os.path.basename(rel) or rel
-            out_path = _unique_outpath(out_dir, out_name)
+            out_path = _unique_outpath(out_dir, out_name, output_names)
             off, sz = entries[i]
             write_bytes(out_path, dat[int(off) : int(off) + int(sz)])
             ok_cnt += 1
@@ -1988,6 +2001,7 @@ def extract_pck(
         sys.stderr.write(str(exc) + "\n")
         return 1
     out_dir = _create_extract_dir(output_dir)
+    output_names = set()
     bs_dir = out_dir
     os_dir = out_dir
     sys.stdout.write(f"Output: {out_dir}\n")
@@ -2003,7 +2017,7 @@ def extract_pck(
                 if not rel:
                     rel = "unknown.bin"
                 out_name = os.path.basename(rel) or rel
-                out_path = _unique_outpath(os_dir, out_name)
+                out_path = _unique_outpath(os_dir, out_name, output_names)
                 write_bytes(out_path, raw)
             sys.stdout.write(f"Extracted original sources: {len(source_items):d}\n")
         except Exception as e:
@@ -2041,7 +2055,7 @@ def extract_pck(
                 fail_cnt += 1
                 continue
             out_dat = bytes(blob)
-            out_path = _unique_outpath(bs_dir, out_name)
+            out_path = _unique_outpath(bs_dir, out_name, output_names)
             write_bytes(out_path, out_dat)
             ok_cnt += 1
             if D and not D.is_decompiler_excluded_dat(out_path, nm):

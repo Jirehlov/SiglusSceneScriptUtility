@@ -193,6 +193,10 @@ impl<'a> BytecodeBuilder<'a> {
     }
 
     fn compile_node(&mut self, node: &AstNode) -> Result<(), ()> {
+        super::ast::grow_stack(|| self.compile_node_with_stack(node))
+    }
+
+    fn compile_node_with_stack(&mut self, node: &AstNode) -> Result<(), ()> {
         match &node.payload {
             AstPayload::Root(statements) => self.compile_statements(statements),
             AstPayload::Label { index } => {
@@ -374,7 +378,7 @@ impl<'a> BytecodeBuilder<'a> {
                 self.push_i32(*assignment_list_id);
                 Ok(())
             }
-            AstPayload::Command { expression } => {
+            AstPayload::Command { expression, .. } => {
                 self.compile_element_expression(expression, true)?;
                 self.push_u8(self.codes.cd.pop);
                 self.push_form(expression.form);
@@ -518,6 +522,14 @@ impl<'a> BytecodeBuilder<'a> {
     }
 
     fn compile_expression(&mut self, node: &AstNode, need_value: bool) -> Result<(), ()> {
+        super::ast::grow_stack(|| self.compile_expression_with_stack(node, need_value))
+    }
+
+    fn compile_expression_with_stack(
+        &mut self,
+        node: &AstNode,
+        need_value: bool,
+    ) -> Result<(), ()> {
         match &node.payload {
             AstPayload::Paren { expression } => self.compile_expression(expression, need_value),
             AstPayload::ExpressionList { values, .. } => {
@@ -541,14 +553,18 @@ impl<'a> BytecodeBuilder<'a> {
                 }
                 self.compile_literal(atom, node.form)
             }
-            AstPayload::Unary { operator, value } => {
+            AstPayload::Unary { operators, value } => {
                 if !need_value {
                     return self.error(TNMSERR_BS_NEED_REFERENCE, node);
                 }
                 self.compile_expression(value, true)?;
-                self.push_u8(self.codes.cd.operate_1);
-                self.push_form(self.dereference(value.form));
-                self.push_u8(*operator);
+                let mut form = self.dereference(value.form);
+                for (operator, _) in operators.iter().rev() {
+                    self.push_u8(self.codes.cd.operate_1);
+                    self.push_form(form);
+                    self.push_u8(*operator);
+                    form = self.codes.forms.int.code;
+                }
                 Ok(())
             }
             AstPayload::Binary {

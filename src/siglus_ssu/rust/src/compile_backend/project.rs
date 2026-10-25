@@ -780,6 +780,14 @@ fn visit_statement_stats(
     stats: &mut SourceStats,
     ctx: &mut StatementStatContext<'_>,
 ) {
+    super::ast::grow_stack(|| visit_statement_stats_with_stack(node, stats, ctx));
+}
+
+fn visit_statement_stats_with_stack(
+    node: &AstNode,
+    stats: &mut SourceStats,
+    ctx: &mut StatementStatContext<'_>,
+) {
     match &node.payload {
         AstPayload::Root(items) => {
             for item in items {
@@ -906,6 +914,15 @@ fn visit_label_refs(
     label_refs: &mut Vec<i32>,
     z_refs: &mut Vec<i32>,
 ) {
+    super::ast::grow_stack(|| visit_label_refs_with_stack(node, ctx, label_refs, z_refs));
+}
+
+fn visit_label_refs_with_stack(
+    node: &AstNode,
+    ctx: &StatementStatContext<'_>,
+    label_refs: &mut Vec<i32>,
+    z_refs: &mut Vec<i32>,
+) {
     match &node.payload {
         AstPayload::Root(items) => {
             for item in items {
@@ -996,7 +1013,7 @@ fn visit_label_refs(
             visit_label_refs(left, ctx, label_refs, z_refs);
             visit_label_refs(right, ctx, label_refs, z_refs);
         }
-        AstPayload::Command { expression } => {
+        AstPayload::Command { expression, .. } => {
             visit_label_refs(expression, ctx, label_refs, z_refs);
         }
         AstPayload::Paren { expression } => {
@@ -1038,6 +1055,14 @@ fn visit_label_refs(
 }
 
 fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) -> usize {
+    super::ast::grow_stack(|| visit_expression_stats_with_stack(node, stats, codes))
+}
+
+fn visit_expression_stats_with_stack(
+    node: &AstNode,
+    stats: &mut SourceStats,
+    codes: &RuntimeCodes,
+) -> usize {
     let depth = match &node.payload {
         AstPayload::Root(items) => {
             for item in items {
@@ -1150,7 +1175,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             visit_expression_stats(right, stats, codes);
             0
         }
-        AstPayload::Command { expression } => {
+        AstPayload::Command { expression, .. } => {
             visit_expression_stats(expression, stats, codes);
             0
         }
@@ -1162,14 +1187,16 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             }
             1 + max_depth
         }
-        AstPayload::Unary { operator, value } => {
-            inc_counter(&mut stats.expressions, "unary_ops", 1);
-            inc_counter(
-                &mut stats.unary_op_kinds,
-                operator_symbol(codes, *operator, true),
-                1,
-            );
-            1 + visit_expression_stats(value, stats, codes)
+        AstPayload::Unary { operators, value } => {
+            inc_counter(&mut stats.expressions, "unary_ops", operators.len());
+            for (operator, _) in operators {
+                inc_counter(
+                    &mut stats.unary_op_kinds,
+                    operator_symbol(codes, *operator, true),
+                    1,
+                );
+            }
+            operators.len() + visit_expression_stats(value, stats, codes)
         }
         AstPayload::Binary {
             operator,
@@ -1663,19 +1690,6 @@ fn prepare_scene(
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "CA", stage_start);
     }
-    if config.context.debug_outputs && !config.tmp_dir.is_empty() {
-        let stem = source_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
-        write_text_encoded(
-            &Path::new(&config.tmp_dir)
-                .join("ca")
-                .join(format!("{stem}.txt")),
-            &file2.scene_text,
-            config.context.utf8,
-        )?;
-    }
     let mut scene_inc_properties = 0usize;
     let mut scene_inc_commands = 0usize;
     if !file2.inc_text.is_empty() {
@@ -1694,6 +1708,19 @@ fn prepare_scene(
     let scene_text = ca
         .analyze_line(&file2.scene_text, &ia_data.replace_tree)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
+    if config.context.debug_outputs && !config.tmp_dir.is_empty() {
+        let stem = source_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        write_text_encoded(
+            &Path::new(&config.tmp_dir)
+                .join("ca")
+                .join(format!("{stem}.txt")),
+            &scene_text,
+            config.context.utf8,
+        )?;
+    }
     ia_data.record_replacement_usage(&ca.used_replacements);
     if let Some(log) = log.as_mut() {
         log_stage(log, "LA", display_name)?;
@@ -2168,6 +2195,9 @@ fn compile_project_inner(
                     )
                 })?;
             let dat = fs::read(&dat_path).map_err(|error| format_path_error(&dat_path, error))?;
+            if dat.len() < config.constants.scn_header_size {
+                return Err(format!("{}: bad dat header", dat_path.display()));
+            }
             let command_labels = parse_command_labels(config, &dat);
             let read_flag_count =
                 header_value(&parse_scn_header(config, &dat), "read_flag_cnt").max(0) as usize;

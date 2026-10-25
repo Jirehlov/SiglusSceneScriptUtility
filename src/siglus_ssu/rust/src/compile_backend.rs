@@ -156,6 +156,11 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
         return Ok(out.unbind());
     }
     out.set_item("handled", true)?;
+    let inc_files = if parsed.options.gei {
+        0
+    } else {
+        parsed.context.inc_list.len()
+    };
     let sys = py.import("sys")?;
     let mut stream_output = |channel: &str, line: &str| -> Result<(), String> {
         let stream = sys.getattr(channel).map_err(|error| error.to_string())?;
@@ -174,7 +179,7 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
         Ok(result) => {
             out.set_item("ok", true)?;
             let stats = PyDict::new(py);
-            stats.set_item("inc_files", parsed.context.inc_list.len())?;
+            stats.set_item("inc_files", inc_files)?;
             stats.set_item("scene_files", result.scene_count)?;
             stats.set_item("compiled_scene_files", result.compiled_scene_count)?;
             stats.set_item("full_compile_stats", result.full_compile_stats)?;
@@ -195,7 +200,7 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
             out.set_item("ok", false)?;
             let stats = PyDict::new(py);
             if !failure.stage_times.is_empty() {
-                stats.set_item("inc_files", parsed.context.inc_list.len())?;
+                stats.set_item("inc_files", inc_files)?;
                 stats.set_item("scene_files", parsed.context.scn_list.len())?;
                 stats.set_item("compiled_scene_files", parsed.cache.compiled_scene_files)?;
                 stats.set_item("full_compile_stats", false)?;

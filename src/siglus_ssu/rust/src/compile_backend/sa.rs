@@ -1,6 +1,6 @@
 use super::ast::{
     Argument, ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, IfBranch,
-    Parameter, SwitchCase,
+    Parameter, SwitchCase, grow_stack,
 };
 use super::codes::RuntimeCodes;
 use super::form_table::{ArgInfo, ArgList, ElementInfo, ElementKind, create_elm_code};
@@ -228,7 +228,7 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_sentence(&mut self, index: usize, iad: &mut IaData) -> ParseResult<AstNode> {
-        self.parse_nested(index, |this| this.parse_sentence_inner(index, iad))
+        grow_stack(|| self.parse_nested(index, |this| this.parse_sentence_inner(index, iad)))
     }
 
     fn parse_sentence_inner(&mut self, index: usize, iad: &mut IaData) -> ParseResult<AstNode> {
@@ -349,11 +349,17 @@ impl SyntaxAnalyzer {
         if let Some((next, open)) = self.accept(pos, self.codes.la.open_bracket) {
             open_bracket_line = open.line;
             let Some((after_exp, expression)) = self.parse_expression(next, 0, iad)? else {
-                return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
+                return Ok(None);
             };
             let Some((after_close, _close)) = self.accept(after_exp, self.codes.la.close_bracket)
             else {
-                return self.fail("TNMSERR_SA_DEF_PROP_NO_CLOSE_BRACKET", after_exp);
+                let kind = "TNMSERR_SA_DEF_PROP_NO_CLOSE_BRACKET";
+                if let Some(error) = self.last.as_mut() {
+                    error.kind = kind.to_string();
+                } else {
+                    self.set_error(kind, self.atom(0));
+                }
+                return Ok(None);
             };
             pos = after_close;
             array_index = Some(Box::new(expression));
@@ -407,6 +413,7 @@ impl SyntaxAnalyzer {
         let Some((mut pos, _command)) = self.accept(index, self.codes.la.command) else {
             return Ok(None);
         };
+        let name_index = pos;
         let Some((next, name_atom)) = self.accept(pos, self.codes.la.unknown) else {
             return self.fail("TNMSERR_SA_DEF_CMD_ILLEGAL_NAME", pos);
         };
@@ -419,7 +426,8 @@ impl SyntaxAnalyzer {
                 pos = next;
             } else {
                 loop {
-                    let Some((next, parameter_node)) = self.parse_def_property(pos, iad)? else {
+                    let Some((next, mut parameter_node)) = self.parse_def_property(pos, iad)?
+                    else {
                         return self.fail("TNMSERR_SA_DEF_CMD_ILLEGAL_ARG", pos);
                     };
                     let AstPayload::DefProperty {
@@ -427,7 +435,7 @@ impl SyntaxAnalyzer {
                         name_atom,
                         form,
                         property_id,
-                    } = parameter_node.payload
+                    } = std::mem::replace(&mut parameter_node.payload, AstPayload::Eof)
                     else {
                         unreachable!()
                     };
@@ -463,7 +471,7 @@ impl SyntaxAnalyzer {
             form = parsed_form;
         }
         let Some((after_body, body)) = self.parse_block(pos, iad)? else {
-            return self.fail("TNMSERR_SA_DEF_CMD_NO_OPEN_BRACE", pos);
+            return self.fail("TNMSERR_SA_DEF_CMD_NO_OPEN_BRACE", name_index);
         };
         pos = after_body;
 
@@ -474,11 +482,11 @@ impl SyntaxAnalyzer {
         let command_id = if let Some(command_index) = existing {
             let command = iad.command_list[command_index].clone();
             if command.is_defined {
-                return self.fail("TNMSERR_SA_DEF_CMD_ALREADY_DEFINED", index);
+                return self.fail("TNMSERR_SA_DEF_CMD_ALREADY_DEFINED", name_index);
             }
             if command.id < iad.inc_command_cnt {
                 if command.form != form.name {
-                    return self.fail("TNMSERR_SA_DEF_CMD_TYPE_NO_MATCH", index);
+                    return self.fail("TNMSERR_SA_DEF_CMD_TYPE_NO_MATCH", name_index);
                 }
                 if command.arg_list.len() != parameters.len()
                     || command
@@ -487,7 +495,7 @@ impl SyntaxAnalyzer {
                         .zip(&parameters)
                         .any(|(left, right)| left.form != right.form.name)
                 {
-                    return self.fail("TNMSERR_SA_DEF_CMD_ARG_TYPE_NO_MATCH", index);
+                    return self.fail("TNMSERR_SA_DEF_CMD_ARG_TYPE_NO_MATCH", name_index);
                 }
             } else {
                 iad.command_list[command_index].is_defined = true;
@@ -642,15 +650,15 @@ impl SyntaxAnalyzer {
             pos = next;
             let condition = if needs_condition {
                 let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) else {
-                    return self.fail("TNMSERR_SA_IF_NO_OPEN_PAREN", pos);
+                    return self.fail("TNMSERR_SA_IF_NO_OPEN_PAREN", keyword_index);
                 };
                 let Some((after_cond, condition)) = self.parse_expression(next, 0, iad)? else {
-                    return self.fail("TNMSERR_SA_IF_ILLEGAL_COND", next);
+                    return self.fail("TNMSERR_SA_IF_ILLEGAL_COND", keyword_index);
                 };
                 let Some((after_close, _close)) =
                     self.accept(after_cond, self.codes.la.close_paren)
                 else {
-                    return self.fail("TNMSERR_SA_IF_NO_CLOSE_PAREN", after_cond);
+                    return self.fail("TNMSERR_SA_IF_NO_CLOSE_PAREN", pos);
                 };
                 pos = after_close;
                 Some(condition)
@@ -692,7 +700,7 @@ impl SyntaxAnalyzer {
             return Ok(None);
         };
         let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) else {
-            return self.fail("TNMSERR_SA_FOR_NO_OPEN_PAREN", pos);
+            return self.fail("TNMSERR_SA_FOR_NO_OPEN_PAREN", index);
         };
         pos = next;
         let mut init = Vec::new();
@@ -701,20 +709,20 @@ impl SyntaxAnalyzer {
             &[self.codes.la.none, self.codes.la.eof, self.codes.la.comma],
         ) {
             let Some((next, statement)) = self.parse_sentence(pos, iad)? else {
-                return self.fail("TNMSERR_SA_FOR_ILLEGAL_INIT", pos);
+                return self.fail("TNMSERR_SA_FOR_ILLEGAL_INIT", index);
             };
             init.push(statement);
             pos = next;
         }
         let Some((next, _comma)) = self.accept(pos, self.codes.la.comma) else {
-            return self.fail("TNMSERR_SA_FOR_NO_INIT_COMMA", pos);
+            return self.fail("TNMSERR_SA_FOR_NO_INIT_COMMA", index);
         };
         let Some((after_condition, condition)) = self.parse_expression(next, 0, iad)? else {
-            return self.fail("TNMSERR_SA_FOR_ILLEGAL_COND", next);
+            return self.fail("TNMSERR_SA_FOR_ILLEGAL_COND", index);
         };
         pos = after_condition;
         let Some((next, _comma)) = self.accept(pos, self.codes.la.comma) else {
-            return self.fail("TNMSERR_SA_FOR_NO_COND_COMMA", pos);
+            return self.fail("TNMSERR_SA_FOR_NO_COND_COMMA", index);
         };
         pos = next;
         let mut update = Vec::new();
@@ -727,13 +735,13 @@ impl SyntaxAnalyzer {
             ],
         ) {
             let Some((next, statement)) = self.parse_sentence(pos, iad)? else {
-                return self.fail("TNMSERR_SA_FOR_ILLEGAL_LOOP", pos);
+                return self.fail("TNMSERR_SA_FOR_ILLEGAL_LOOP", index);
             };
             update.push(statement);
             pos = next;
         }
         let Some((next, _close)) = self.accept(pos, self.codes.la.close_paren) else {
-            return self.fail("TNMSERR_SA_FOR_NO_CLOSE_PAREN", pos);
+            return self.fail("TNMSERR_SA_FOR_NO_CLOSE_PAREN", index);
         };
         pos = next;
         let Some((after_body, body)) = self.parse_control_block(
@@ -767,13 +775,13 @@ impl SyntaxAnalyzer {
             return Ok(None);
         };
         let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) else {
-            return self.fail("TNMSERR_SA_WHILE_NO_OPEN_PAREN", pos);
+            return self.fail("TNMSERR_SA_WHILE_NO_OPEN_PAREN", index);
         };
         let Some((after_condition, condition)) = self.parse_expression(next, 0, iad)? else {
-            return self.fail("TNMSERR_SA_WHILE_ILLEGAL_COND", next);
+            return self.fail("TNMSERR_SA_WHILE_ILLEGAL_COND", index);
         };
         let Some((next, _close)) = self.accept(after_condition, self.codes.la.close_paren) else {
-            return self.fail("TNMSERR_SA_WHILE_NO_CLOSE_PAREN", after_condition);
+            return self.fail("TNMSERR_SA_WHILE_NO_CLOSE_PAREN", index);
         };
         pos = next;
         let Some((after_body, body)) = self.parse_control_block(
@@ -805,17 +813,18 @@ impl SyntaxAnalyzer {
             return Ok(None);
         };
         let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) else {
-            return self.fail("TNMSERR_SA_SWITCH_NO_OPEN_PAREN", pos);
+            return self.fail("TNMSERR_SA_SWITCH_NO_OPEN_PAREN", index);
         };
         let Some((after_condition, condition)) = self.parse_expression(next, 0, iad)? else {
-            return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_COND", next);
+            return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_COND", index);
         };
         let Some((next, _close)) = self.accept(after_condition, self.codes.la.close_paren) else {
-            return self.fail("TNMSERR_SA_SWITCH_NO_CLOSE_PAREN", after_condition);
+            return self.fail("TNMSERR_SA_SWITCH_NO_CLOSE_PAREN", index);
         };
         pos = next;
+        let open_index = pos;
         let Some((next, _open)) = self.accept(pos, self.codes.la.open_brace) else {
-            return self.fail("TNMSERR_SA_SWITCH_NO_OPEN_BRACE", pos);
+            return self.fail("TNMSERR_SA_SWITCH_NO_OPEN_BRACE", index);
         };
         pos = next;
         let mut cases = Vec::new();
@@ -841,10 +850,13 @@ impl SyntaxAnalyzer {
                 pos = next;
                 continue;
             }
-            return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_CASE", pos);
+            return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_CASE", index);
+        }
+        if self.atom_type(pos) == self.codes.la.eof && cases.is_empty() && default_body.is_none() {
+            return self.fail("TNMSERR_SA_SWITCH_ILLEGAL_CASE", index);
         }
         let Some((next, _)) = self.accept(pos, self.codes.la.close_brace) else {
-            return self.fail("TNMSERR_SA_SWITCH_NO_CLOSE_BRACE", pos);
+            return self.fail("TNMSERR_SA_SWITCH_NO_CLOSE_BRACE", open_index);
         };
         pos = next;
         Ok(Some((
@@ -865,13 +877,13 @@ impl SyntaxAnalyzer {
             return Ok(None);
         };
         let Some((next, _open)) = self.accept(pos, self.codes.la.open_paren) else {
-            return self.fail("TNMSERR_SA_CASE_NO_OPEN_PAREN", pos);
+            return self.fail("TNMSERR_SA_CASE_NO_OPEN_PAREN", index);
         };
         let Some((after_value, value)) = self.parse_expression(next, 0, iad)? else {
-            return self.fail("TNMSERR_SA_CASE_ILLEGAL_VALUE", next);
+            return self.fail("TNMSERR_SA_CASE_ILLEGAL_VALUE", index);
         };
         let Some((next, _close)) = self.accept(after_value, self.codes.la.close_paren) else {
-            return self.fail("TNMSERR_SA_CASE_NO_CLOSE_PAREN", after_value);
+            return self.fail("TNMSERR_SA_CASE_NO_CLOSE_PAREN", index);
         };
         pos = next;
         let mut body = Vec::new();
@@ -957,6 +969,7 @@ impl SyntaxAnalyzer {
                 index,
                 AstPayload::Command {
                     expression: Box::new(expression),
+                    end_line: self.atom(pos - 1).line,
                 },
             ),
         )))
@@ -968,20 +981,38 @@ impl SyntaxAnalyzer {
         minimum_precedence: i32,
         iad: &mut IaData,
     ) -> ParseResult<AstNode> {
+        grow_stack(|| self.parse_expression_with_stack(index, minimum_precedence, iad))
+    }
+
+    fn parse_expression_with_stack(
+        &mut self,
+        index: usize,
+        minimum_precedence: i32,
+        iad: &mut IaData,
+    ) -> ParseResult<AstNode> {
+        self.start_expression(index);
+        let result = self.parse_expression_inner(index, minimum_precedence, iad);
+        self.finish_expression(index, matches!(&result, Ok(Some(_))));
+        result
+    }
+
+    fn start_expression(&mut self, index: usize) {
         self.expression_heights.push(0);
-        let result = self.parse_nested(index, |this| {
-            this.parse_expression_inner(index, minimum_precedence, iad)
-        });
+        if self.nesting >= 64 {
+            self.warn("analysis nesting depth exceeds 64; continuing", index);
+        }
+        self.nesting += 1;
+    }
+
+    fn finish_expression(&mut self, index: usize, successful: bool) {
+        self.nesting -= 1;
         let height = self.expression_heights.pop().unwrap();
-        if matches!(&result, Ok(Some(_))) && height > 128 {
+        if successful && height > 128 {
             self.warn("expression tree height exceeds 128; continuing", index);
         }
-        if matches!(&result, Ok(Some(_)))
-            && let Some(parent) = self.expression_heights.last_mut()
-        {
+        if successful && let Some(parent) = self.expression_heights.last_mut() {
             *parent = (*parent).max(height + 1);
         }
-        result
     }
 
     fn parse_expression_inner(
@@ -990,16 +1021,30 @@ impl SyntaxAnalyzer {
         minimum_precedence: i32,
         iad: &mut IaData,
     ) -> ParseResult<AstNode> {
-        let (mut pos, mut expression) = if let Some((next, operator)) = self.unary_operator(index) {
-            let Some((after_value, value)) = self.parse_expression(next, 999, iad)? else {
-                return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
+        let (mut pos, mut expression) = if self.unary_operator(index).is_some() {
+            let mut operators = Vec::new();
+            let mut nested_indices = Vec::new();
+            let mut pos = index;
+            while let Some((next, operator)) = self.unary_operator(pos) {
+                operators.push((operator, self.atom(pos).line));
+                nested_indices.push(next);
+                self.start_expression(next);
+                pos = next;
+            }
+            let result = self.parse_expression_inner(pos, 999, iad);
+            let successful = matches!(&result, Ok(Some(_)));
+            for nested in nested_indices.into_iter().rev() {
+                self.finish_expression(nested, successful);
+            }
+            let Some((after_value, value)) = result? else {
+                return self.fail("TNMSERR_SA_EXP_ILLEGAL", pos);
             };
             (
                 after_value,
                 self.node(
                     index,
                     AstPayload::Unary {
-                        operator,
+                        operators,
                         value: Box::new(value),
                     },
                 ),
@@ -1045,7 +1090,7 @@ impl SyntaxAnalyzer {
             };
             let Some((after_close, _)) = self.accept(after_expression, self.codes.la.close_paren)
             else {
-                return self.fail("TNMSERR_SA_SMP_EXP_NO_CLOSE_PAREN", after_expression);
+                return self.fail("TNMSERR_SA_SMP_EXP_NO_CLOSE_PAREN", index);
             };
             return Ok(Some((
                 after_close,
@@ -1112,7 +1157,7 @@ impl SyntaxAnalyzer {
         let mut elements = vec![first];
         while self.atom_type_is_any(pos, &[self.codes.la.open_bracket, self.codes.la.dot]) {
             let Some((next, element)) = self.parse_element(pos, false, iad)? else {
-                return self.fail("TNMSERR_SA_ELEMENT_NO_CHILD", pos);
+                return self.fail("TNMSERR_SA_ELEMENT_NO_CHILD", pos + 1);
             };
             elements.push(element);
             pos = next;
@@ -1224,24 +1269,30 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_argument(&mut self, index: usize, iad: &mut IaData) -> ParseResult<Argument> {
+        let previous_error = self.last.clone();
         if let Some((next, name_atom)) = self.accept(index, self.codes.la.unknown)
             && let Some((after_equal, _equal)) = self.accept(next, self.codes.la.assign)
         {
-            let Some((after_value, value)) = self.parse_expression(after_equal, 0, iad)? else {
-                return self.fail("TNMSERR_SA_EXP_ILLEGAL", after_equal);
-            };
-            return Ok(Some((
-                after_value,
-                Argument {
-                    name: Some(self.unknown_name(&name_atom)),
-                    value,
-                    name_id: 0,
-                },
-            )));
+            match self.parse_expression(after_equal, 0, iad) {
+                Ok(Some((after_value, value))) => {
+                    self.last = previous_error;
+                    return Ok(Some((
+                        after_value,
+                        Argument {
+                            name: Some(self.unknown_name(&name_atom)),
+                            value,
+                            name_id: 0,
+                        },
+                    )));
+                }
+                Ok(None) => self.set_error("TNMSERR_SA_EXP_ILLEGAL", self.atom(after_equal)),
+                Err(()) => {}
+            }
         }
         let Some((next, value)) = self.parse_expression(index, 0, iad)? else {
-            return Ok(None);
+            return self.fail("TNMSERR_SA_EXP_ILLEGAL", index);
         };
+        self.last = previous_error;
         Ok(Some((
             next,
             Argument {

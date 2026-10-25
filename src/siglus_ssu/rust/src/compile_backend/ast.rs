@@ -1,5 +1,9 @@
 use super::la::Atom;
 
+pub fn grow_stack<T>(callback: impl FnOnce() -> T) -> T {
+    stacker::maybe_grow(64 * 1024, 1024 * 1024, callback)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GotoKind {
     #[default]
@@ -129,6 +133,7 @@ pub enum AstPayload {
     },
     Command {
         expression: Box<AstNode>,
+        end_line: usize,
     },
     Text {
         string_index: usize,
@@ -148,7 +153,7 @@ pub enum AstPayload {
         atom: Atom,
     },
     Unary {
-        operator: i32,
+        operators: Vec<(i32, usize)>,
         value: Box<AstNode>,
     },
     Binary {
@@ -163,7 +168,7 @@ pub enum AstPayload {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AstNode {
     pub line: usize,
     pub form: i32,
@@ -171,6 +176,26 @@ pub struct AstNode {
     pub include_selection: bool,
     pub first_atom: Option<Atom>,
     pub payload: AstPayload,
+}
+
+impl Clone for AstNode {
+    fn clone(&self) -> Self {
+        grow_stack(|| Self {
+            line: self.line,
+            form: self.form,
+            temp_form: self.temp_form,
+            include_selection: self.include_selection,
+            first_atom: self.first_atom.clone(),
+            payload: self.payload.clone(),
+        })
+    }
+}
+
+impl Drop for AstNode {
+    fn drop(&mut self) {
+        let payload = std::mem::replace(&mut self.payload, AstPayload::Eof);
+        grow_stack(|| drop(payload));
+    }
 }
 
 impl AstNode {

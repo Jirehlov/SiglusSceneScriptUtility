@@ -42,6 +42,7 @@ from .path_policy import (
     read_file_stat,
     read_directory,
     resolve_read_path,
+    windows_filename_key,
 )
 
 
@@ -1536,15 +1537,14 @@ def _extract_one(
 
     def _write_output(out_name, data):
         out_path = os.path.join(out_dir, out_name)
-        key = os.path.normcase(os.path.abspath(out_path))
+        key = windows_filename_key(os.path.abspath(out_path))
         previous = output_claims.get(key)
         if previous is not None:
-            eprint(
-                f"warning: output collision: {out_path} from {src_path} overwrites {previous}"
+            raise ValueError(
+                f"output path collision: {previous} and {src_path} -> {out_path}"
             )
-        else:
-            output_claims[key] = src_path
         write_bytes(out_path, data)
+        output_claims[key] = src_path
 
     if ext == ".owp":
         ogg = sound.decode_owp_to_ogg_bytes(src_path)

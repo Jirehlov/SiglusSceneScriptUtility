@@ -290,6 +290,26 @@ fn collect_definitions_node(
     defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
 ) {
+    super::ast::grow_stack(|| {
+        collect_definitions_node_with_stack(
+            node,
+            lex,
+            path,
+            current_command,
+            defs,
+            document_symbols,
+        )
+    });
+}
+
+fn collect_definitions_node_with_stack(
+    node: &AstNode,
+    lex: &LexResult,
+    path: &str,
+    current_command: &str,
+    defs: &mut HashMap<String, Vec<LspDefinition>>,
+    document_symbols: &mut Vec<LspDefinition>,
+) {
     match &node.payload {
         AstPayload::Root(items) => {
             for item in items {

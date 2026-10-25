@@ -360,6 +360,8 @@ def parallel_lzss_compress(
             raise FileNotFoundError(f"scene dat not found: {dat_path}")
         lz_path = os.path.join(bs_dir, nm + ".lzss")
         dat = read_bytes(dat_path)
+        if len(dat) < C.SCN_HDR_SIZE:
+            raise ValueError(f"{dat_path}: bad dat header")
         try:
             lz_path = resolve_read_path(lz_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
