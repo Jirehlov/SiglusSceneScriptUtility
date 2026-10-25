@@ -13,6 +13,7 @@ pub enum GotoKind {
 pub struct FormSpec {
     pub name: String,
     pub index: Option<Box<AstNode>>,
+    pub open_bracket_line: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +121,7 @@ pub enum AstPayload {
     Assign {
         left: Box<AstNode>,
         operator: i32,
+        operator_line: usize,
         right: Box<AstNode>,
         equal_form: i32,
         set_flag: bool,
@@ -151,6 +153,7 @@ pub enum AstPayload {
     },
     Binary {
         operator: i32,
+        operator_line: usize,
         left: Box<AstNode>,
         right: Box<AstNode>,
     },

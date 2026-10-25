@@ -1,6 +1,6 @@
 import copy
 from . import const as C
-from .common import normalize_atom
+from .common import iterative_method, normalize_atom
 
 
 def _form_name(f):
@@ -283,15 +283,16 @@ class MA:
         return 0
 
     def _atoms(s, x, r):
-        if isinstance(x, dict):
-            a = x.get("atom")
-            if isinstance(a, dict) and "id" in a:
-                r.append(a)
-            for v in x.values():
-                s._atoms(v, r)
-        elif isinstance(x, list):
-            for v in x:
-                s._atoms(v, r)
+        pending = [x]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, dict):
+                a = node.get("atom")
+                if isinstance(a, dict) and "id" in a:
+                    r.append(a)
+                pending.extend(reversed(node.values()))
+            elif isinstance(node, list):
+                pending.extend(reversed(node))
 
     def first_atom(s, x):
         r = []
@@ -327,9 +328,10 @@ class MA:
             ss["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_block(s, b):
         for sen in (b or {}).get("sentense_list", []):
-            if not s.ma_sentence(sen):
+            if not (yield (s.ma_sentence, sen)):
                 return 0
         s.ft.reset_call()
         s.psad["cur_call_prop_cnt"] = 0
@@ -337,6 +339,7 @@ class MA:
             b["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_sentence(s, sen):
         if not isinstance(sen, dict):
             return 0
@@ -349,23 +352,23 @@ class MA:
         elif t == C.NT_S_DEF_PROP:
             ok = s.ma_def_prop(sen.get("def_prop"))
         elif t == C.NT_S_DEF_CMD:
-            ok = s.ma_def_cmd(sen.get("def_cmd"))
+            ok = yield (s.ma_def_cmd, sen.get("def_cmd"))
         elif t == C.NT_S_GOTO:
             ok = s.ma_goto(sen.get("Goto"))
         elif t == C.NT_S_RETURN:
             ok = s.ma_return(sen.get("Return"), sel)
         elif t == C.NT_S_IF:
-            ok = s.ma_if(sen.get("If"))
+            ok = yield (s.ma_if, sen.get("If"))
         elif t == C.NT_S_FOR:
-            ok = s.ma_for(sen.get("For"))
+            ok = yield (s.ma_for, sen.get("For"))
         elif t == C.NT_S_WHILE:
-            ok = s.ma_while(sen.get("While"))
+            ok = yield (s.ma_while, sen.get("While"))
         elif t == C.NT_S_CONTINUE:
             ok = s.ma_label(sen.get("Continue"))
         elif t == C.NT_S_BREAK:
             ok = s.ma_label(sen.get("Break"))
         elif t == C.NT_S_SWITCH:
-            ok = s.ma_switch(sen.get("Switch"))
+            ok = yield (s.ma_switch, sen.get("Switch"))
         elif t == C.NT_S_ASSIGN:
             ok = s.ma_assign(sen.get("assign"), sel)
         elif t == C.NT_S_COMMAND:
@@ -430,6 +433,7 @@ class MA:
         s.psad["total_call_prop_cnt"] = int(s.psad.get("total_call_prop_cnt", 0)) + 1
         return 1
 
+    @iterative_method
     def ma_def_cmd(s, n):
         s.psad["command_in"] = 1
         if s.bindings is not None:
@@ -441,7 +445,7 @@ class MA:
         for p in (n or {}).get("prop_list", []):
             if not s.ma_def_prop(p, True):
                 return 0
-        if not s.ma_block((n or {}).get("block")):
+        if not (yield (s.ma_block, (n or {}).get("block"))):
             return 0
         s.psad["command_in"] = 0
         if isinstance(n, dict):
@@ -463,12 +467,13 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_goto_exp(s, n, sel):
         if not isinstance(n, dict):
             return 0
         al = n.get("arg_list")
         if al is not None:
-            if not s.ma_arg_list(al, sel):
+            if not (yield (s.ma_arg_list, al, sel)):
                 return 0
         nt = n.get("node_type")
         if nt == C.NT_GOTO_GOTO:
@@ -490,6 +495,7 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_if(s, n):
         if not isinstance(n, dict):
             return 0
@@ -497,7 +503,7 @@ class MA:
             If = (sub.get("If") or {}).get("atom", {})
             if If.get("type") in (C.LA_T["IF"], C.LA_T["ELSEIF"]):
                 sel = [False]
-                if not s.ma_exp(sub.get("cond"), sel):
+                if not (yield (s.ma_exp, sub.get("cond"), sel)):
                     return 0
                 cf = (sub.get("cond") or {}).get("node_form")
                 if cf not in (C.FM_INT, C.FM_INTREF):
@@ -505,19 +511,20 @@ class MA:
                 if sel[0]:
                     return s.error("TNMSERR_MA_SEL_CANNOT_USE_IN_COND", If)
             for sen in sub.get("block", []):
-                if not s.ma_sentence(sen):
+                if not (yield (s.ma_sentence, sen)):
                     return 0
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_for(s, n):
         if not isinstance(n, dict):
             return 0
         for sen in n.get("init", []):
-            if not s.ma_sentence(sen):
+            if not (yield (s.ma_sentence, sen)):
                 return 0
         sel = [False]
-        if not s.ma_exp(n.get("cond"), sel):
+        if not (yield (s.ma_exp, n.get("cond"), sel)):
             return 0
         if sel[0]:
             return s.error(
@@ -528,19 +535,20 @@ class MA:
                 "TNMSERR_MA_FOR_COND_IS_NOT_INT", (n.get("For") or {}).get("atom")
             )
         for sen in n.get("loop", []):
-            if not s.ma_sentence(sen):
+            if not (yield (s.ma_sentence, sen)):
                 return 0
         for sen in n.get("block", []):
-            if not s.ma_sentence(sen):
+            if not (yield (s.ma_sentence, sen)):
                 return 0
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_while(s, n):
         if not isinstance(n, dict):
             return 0
         sel = [False]
-        if not s.ma_exp(n.get("cond"), sel):
+        if not (yield (s.ma_exp, n.get("cond"), sel)):
             return 0
         if sel[0]:
             return s.error(
@@ -551,16 +559,17 @@ class MA:
                 "TNMSERR_MA_WHILE_COND_IS_NOT_INT", (n.get("While") or {}).get("atom")
             )
         for sen in n.get("block", []):
-            if not s.ma_sentence(sen):
+            if not (yield (s.ma_sentence, sen)):
                 return 0
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_switch(s, n):
         if not isinstance(n, dict):
             return 0
         sel = [False]
-        if not s.ma_exp(n.get("cond"), sel):
+        if not (yield (s.ma_exp, n.get("cond"), sel)):
             return 0
         if sel[0]:
             return s.error(
@@ -568,7 +577,7 @@ class MA:
             )
         for sub in n.get("case", []):
             sel2 = [False]
-            if not s.ma_exp(sub.get("value"), sel2):
+            if not (yield (s.ma_exp, sub.get("value"), sel2)):
                 return 0
             if sel2[0]:
                 return s.error(
@@ -594,11 +603,11 @@ class MA:
                     "TNMSERR_MA_CASE_TYPE_MISMATCH", (sub.get("Case") or {}).get("atom")
                 )
             for sen in sub.get("block", []):
-                if not s.ma_sentence(sen):
+                if not (yield (s.ma_sentence, sen)):
                     return 0
         if n.get("Default"):
             for sen in (n.get("Default") or {}).get("block", []):
-                if not s.ma_sentence(sen):
+                if not (yield (s.ma_sentence, sen)):
                     return 0
         n["node_form"] = C.FM_VOID
         return 1
@@ -663,8 +672,9 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_exp(s, n, sel):
-        if not s.ma_exp_sub(n, sel):
+        if not (yield (s.ma_exp_sub, n, sel)):
             if not isinstance(n, dict):
                 return 0
             if s.last.get("type") != "TNMSERR_MA_ELEMENT_UNKNOWN":
@@ -725,76 +735,88 @@ class MA:
             return 1
         return 1
 
+    @iterative_method
     def ma_exp_sub(s, n, sel):
         if not isinstance(n, dict):
             return 0
         nt = n.get("node_type")
         if nt == C.NT_EXP_SIMPLE:
-            if not s.ma_smp_exp(n.get("smp_exp"), sel):
+            if not (yield (s.ma_smp_exp, n.get("smp_exp"), sel)):
                 return 0
             n["node_form"] = (n.get("smp_exp") or {}).get("node_form")
             n["tmp_form"] = n["node_form"]
             return 1
-        if nt == C.NT_EXP_OPR1:
-            if not s.ma_exp(n.get("exp_1"), sel):
+        if nt not in (C.NT_EXP_OPR1, C.NT_EXP_OPR2):
+            return 0
+        pending = [(n, False)]
+        while pending:
+            node, visited = pending.pop()
+            if not isinstance(node, dict):
                 return 0
-            n["node_form"] = s.check_operate_1(
-                (n.get("exp_1") or {}).get("node_form"),
-            )
-            n["tmp_form"] = n["node_form"]
-            if n["node_form"] == C.FM_VOID:
-                return s.error(
-                    "TNMSERR_MA_EXP_TYPE_NO_MATCH", (n.get("opr") or {}).get("atom")
-                )
-            return 1
-        if nt == C.NT_EXP_OPR2:
-            if not s.ma_exp(n.get("exp_1"), sel) or not s.ma_exp(n.get("exp_2"), sel):
+            nt = node.get("node_type")
+            if nt == C.NT_EXP_SIMPLE:
+                if not (yield (s.ma_exp, node, sel)):
+                    return 0
+                continue
+            if nt not in (C.NT_EXP_OPR1, C.NT_EXP_OPR2):
                 return 0
-            n["node_form"] = s.check_operate_2(
-                (n.get("exp_1") or {}).get("node_form"),
-                (n.get("exp_2") or {}).get("node_form"),
-                (n.get("opr") or {}).get("atom", {}).get("opt"),
-            )
-            n["tmp_form"] = n["node_form"]
-            if n["node_form"] == C.FM_VOID:
-                return s.error(
-                    "TNMSERR_MA_EXP_TYPE_NO_MATCH", (n.get("opr") or {}).get("atom")
+            if not visited:
+                pending.append((node, True))
+                if nt == C.NT_EXP_OPR2:
+                    pending.append((node.get("exp_2"), False))
+                pending.append((node.get("exp_1"), False))
+                continue
+            if nt == C.NT_EXP_OPR1:
+                node["node_form"] = s.check_operate_1(
+                    (node.get("exp_1") or {}).get("node_form")
                 )
-            return 1
-        return 0
+            else:
+                node["node_form"] = s.check_operate_2(
+                    (node.get("exp_1") or {}).get("node_form"),
+                    (node.get("exp_2") or {}).get("node_form"),
+                    (node.get("opr") or {}).get("atom", {}).get("opt"),
+                )
+            node["tmp_form"] = node["node_form"]
+            if node["node_form"] == C.FM_VOID:
+                return s.error(
+                    "TNMSERR_MA_EXP_TYPE_NO_MATCH", (node.get("opr") or {}).get("atom")
+                )
+        return 1
 
+    @iterative_method
     def ma_exp_list(s, n, sel):
         if not isinstance(n, dict):
             return 0
         fl = n.setdefault("form_list", [])
         for e in n.get("exp", []):
-            if not s.ma_exp(e, sel):
+            if not (yield (s.ma_exp, e, sel)):
                 return 0
             fl.append((e or {}).get("node_form"))
         n["node_form"] = C.FM_LIST
         return 1
 
+    @iterative_method
     def ma_smp_exp(s, n, sel):
         if not isinstance(n, dict):
             return 0
         nt = n.get("node_type")
         if nt == C.NT_SMP_KAKKO:
-            if not s.ma_exp(n.get("exp"), sel):
+            if not (yield (s.ma_exp, n.get("exp"), sel)):
                 return 0
             n["node_form"] = (n.get("exp") or {}).get("node_form")
             return 1
         if nt == C.NT_SMP_EXP_LIST:
-            if not s.ma_exp_list(n.get("exp_list"), sel):
+            if not (yield (s.ma_exp_list, n.get("exp_list"), sel)):
                 return 0
             n["node_form"] = (n.get("exp_list") or {}).get("node_form")
             return 1
         if nt == C.NT_SMP_GOTO:
-            if not s.ma_goto_exp(n.get("Goto"), sel):
+            if not (yield (s.ma_goto_exp, n.get("Goto"), sel)):
                 return 0
             n["node_form"] = (n.get("Goto") or {}).get("node_form")
             return 1
         if nt == C.NT_SMP_ELM_EXP:
-            if not s.ma_elm_exp(n.get("elm_exp"), sel):
+            if not (yield (s.ma_elm_exp, n.get("elm_exp"), sel)):
                 return 0
             n["node_form"] = (n.get("elm_exp") or {}).get("node_form")
             return 1
@@ -814,15 +836,17 @@ class MA:
         n["node_form"] = (n.get("elm_list") or {}).get("node_form")
         return 1
 
+    @iterative_method
     def ma_elm_exp(s, n, sel):
         if not isinstance(n, dict):
             return 0
-        if not s.ma_elm_list(n.get("elm_list"), sel):
+        if not (yield (s.ma_elm_list, n.get("elm_list"), sel)):
             return 0
         n["element_type"] = (n.get("elm_list") or {}).get("element_type")
         n["node_form"] = (n.get("elm_list") or {}).get("node_form")
         return 1
 
+    @iterative_method
     def ma_elm_list(s, n, sel):
         if not isinstance(n, dict):
             return 0
@@ -868,7 +892,7 @@ class MA:
             n["parent_form_code"] = pf
             parent = pf
             for el in els:
-                if not s.ma_element(parent, el, sel):
+                if not (yield (s.ma_element, parent, el, sel)):
                     return 0
                 n["node_form"] = el.get("node_form")
                 n["element_type"] = el.get("element_type")
@@ -885,6 +909,7 @@ class MA:
                 n["node_form"] = C.FM_STRLISTREF
         return 1
 
+    @iterative_method
     def ma_element(s, parent, n, sel):
         if not isinstance(n, dict):
             return 0
@@ -912,7 +937,7 @@ class MA:
             s.record_binding(n["name"]["atom"], parent, info)
             if n["element_type"] == C.ET_COMMAND:
                 isel = [False]
-                if not s.ma_arg_list(n.get("arg_list"), isel):
+                if not (yield (s.ma_arg_list, n.get("arg_list"), isel)):
                     return 0
                 if isel[0]:
                     return s.error(
@@ -943,7 +968,7 @@ class MA:
             n["element_code"] = info.get("code", 0)
             n["element_type"] = info.get("type", 0)
             n["element_parent_form"] = parent
-            if not s.ma_exp(n.get("exp"), isel):
+            if not (yield (s.ma_exp, n.get("exp"), isel)):
                 return 0
             if isel[0]:
                 return s.error(
@@ -967,19 +992,21 @@ class MA:
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_arg_list(s, n, sel):
         if not isinstance(n, dict):
             n = {"arg": [], "named_arg_cnt": 0}
         for a in n.get("arg", []):
-            if not s.ma_arg(a, sel):
+            if not (yield (s.ma_arg, a, sel)):
                 return 0
         n["node_form"] = C.FM_VOID
         return 1
 
+    @iterative_method
     def ma_arg(s, n, sel):
         if not isinstance(n, dict):
             return 0
-        if not s.ma_exp(n.get("exp"), sel):
+        if not (yield (s.ma_exp, n.get("exp"), sel)):
             return 0
         n["node_form"] = (n.get("exp") or {}).get("node_form")
         return 1

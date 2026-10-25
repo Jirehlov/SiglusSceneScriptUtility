@@ -1,6 +1,6 @@
 from . import const as C
 from .CA import get_form_code_by_name
-from .common import normalize_atom
+from .common import iterative_method, normalize_atom
 
 
 def N(ln, **k):
@@ -32,12 +32,13 @@ class SA:
     def warn(s, message, i):
         s.warnings.setdefault(message, normalize_atom(s._a(i)))
 
+    @iterative_method
     def _parse(s, parse, i, *args):
         if s.nesting >= 64:
             s.warn("analysis nesting depth exceeds 64; continuing", i)
         s.nesting += 1
         try:
-            return parse(i, *args)
+            return (yield (parse, i, *args))
         finally:
             s.nesting -= 1
 
@@ -81,6 +82,7 @@ class SA:
         s.last = err
         return 1, p, ss
 
+    @iterative_method
     def sa_block(s, i):
         p = i
         err = s.last
@@ -89,7 +91,7 @@ class SA:
             return 0, i, None
         b = N(s._a(i).get("line", 0), open_b=ob, close_b=None, sentense_list=[])
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_BRACE"]):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return s.error("TNMSERR_SA_BLOCK_ILLEGAL_SENTENCE", s._a(p)), i, None
             b["sentense_list"].append(sen)
@@ -101,9 +103,11 @@ class SA:
         s.last = err
         return 1, p, b
 
+    @iterative_method
     def sa_sentence(s, i):
-        return s._parse(s._sa_sentence, i)
+        return (yield (s._parse, s._sa_sentence, i))
 
+    @iterative_method
     def _sa_sentence(s, i):
         p = i
         err = s.last
@@ -143,7 +147,7 @@ class SA:
             (s.sa_break, C.NT_S_BREAK, "Break"),
             (s.sa_switch, C.NT_S_SWITCH, "Switch"),
         ):
-            ok, p2, x = fn(p)
+            ok, p2, x = yield (fn, p)
             if ok:
                 sen[ky] = x
                 sen["node_type"] = nt
@@ -244,6 +248,7 @@ class SA:
             if c.get("name") == name:
                 return c
 
+    @iterative_method
     def _def_cmd_common(s, i, p, kw):
         err = s.last
         ok, p, nm = s.sa_atom(p, C.LA_T["UNKNOWN"])
@@ -293,7 +298,7 @@ class SA:
                 return s.error("TNMSERR_SA_DEF_CMD_ILLEGAL_FORM", s._a(p)), i, None
             n["form"] = f
         n["form_code"] = n["form"]["form_code"] if n["form"] else C.FM_INT
-        ok, p, bl = s.sa_block(p)
+        ok, p, bl = yield (s.sa_block, p)
         if not ok:
             return s.error("TNMSERR_SA_DEF_CMD_NO_OPEN_BRACE", nm["atom"]), i, None
         n["block"] = bl
@@ -391,13 +396,15 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_def_cmd(s, i):
         p = i
         ok, p, kw = s.sa_atom(p, C.LA_T["COMMAND"])
         if not ok:
             return 0, i, None
-        return s._def_cmd_common(i, p, kw)
+        return (yield (s._def_cmd_common, i, p, kw))
 
+    @iterative_method
     def sa_goto(s, i):
         p = i
         err = s.last
@@ -426,7 +433,7 @@ class SA:
         )
         n["node_type"] = nt
         if gt["atom"]["type"] in (C.LA_T["GOSUB"], C.LA_T["GOSUBSTR"]):
-            ok, p, al = s.sa_arg_list(p)
+            ok, p, al = yield (s.sa_arg_list, p)
             if not ok:
                 return 0, i, None
             n["arg_list"] = al
@@ -467,6 +474,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_if(s, i):
         p = i
         err = s.last
@@ -506,7 +514,7 @@ class SA:
                 if not ok:
                     return s.error("TNMSERR_SA_IF_NO_OPEN_PAREN", w["atom"]), i, None
                 sub["open_p"] = op
-                ok, p, c = s.sa_exp(p, 0)
+                ok, p, c = yield (s.sa_exp, p, 0)
                 if not ok:
                     return s.error("TNMSERR_SA_IF_ILLEGAL_COND", w["atom"]), i, None
                 sub["cond"] = c
@@ -519,7 +527,7 @@ class SA:
                 return s.error("TNMSERR_SA_IF_NO_OPEN_BRACE", w["atom"]), i, None
             sub["open_b"] = ob
             while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_BRACE"]):
-                ok, p2, sen = s.sa_sentence(p)
+                ok, p2, sen = yield (s.sa_sentence, p)
                 if not ok:
                     return s.error("TNMSERR_SA_IF_ILLEGAL_BLOCK", w["atom"]), i, None
                 sub["block"].append(sen)
@@ -537,6 +545,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_for(s, i):
         p = i
         err = s.last
@@ -561,7 +570,7 @@ class SA:
             return s.error("TNMSERR_SA_FOR_NO_OPEN_PAREN", w["atom"]), i, None
         n["open_p"] = op
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["COMMA"]):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return s.error("TNMSERR_SA_FOR_ILLEGAL_INIT", w["atom"]), i, None
             n["init"].append(sen)
@@ -570,7 +579,7 @@ class SA:
         if not ok:
             return s.error("TNMSERR_SA_FOR_NO_INIT_COMMA", w["atom"]), i, None
         n["comma"][0] = c0
-        ok, p, c = s.sa_exp(p, 0)
+        ok, p, c = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_FOR_ILLEGAL_COND", w["atom"]), i, None
         n["cond"] = c
@@ -579,7 +588,7 @@ class SA:
             return s.error("TNMSERR_SA_FOR_NO_COND_COMMA", w["atom"]), i, None
         n["comma"][1] = c1
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_PAREN"]):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return s.error("TNMSERR_SA_FOR_ILLEGAL_LOOP", w["atom"]), i, None
             n["loop"].append(sen)
@@ -593,7 +602,7 @@ class SA:
             return s.error("TNMSERR_SA_FOR_NO_OPEN_BRACE", w["atom"]), i, None
         n["open_b"] = ob
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_BRACE"]):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return s.error("TNMSERR_SA_FOR_ILLEGAL_BLOCK", w["atom"]), i, None
             n["block"].append(sen)
@@ -605,6 +614,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_while(s, i):
         p = i
         err = s.last
@@ -625,7 +635,7 @@ class SA:
         if not ok:
             return s.error("TNMSERR_SA_WHILE_NO_OPEN_PAREN", w["atom"]), i, None
         n["open_p"] = op
-        ok, p, c = s.sa_exp(p, 0)
+        ok, p, c = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_WHILE_ILLEGAL_COND", w["atom"]), i, None
         n["cond"] = c
@@ -638,7 +648,7 @@ class SA:
             return s.error("TNMSERR_SA_WHILE_NO_OPEN_BRACE", w["atom"]), i, None
         n["open_b"] = ob
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_BRACE"]):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return s.error("TNMSERR_SA_WHILE_ILLEGAL_BLOCK", w["atom"]), i, None
             n["block"].append(sen)
@@ -668,6 +678,7 @@ class SA:
         s.last = err
         return 1, p, N(s._a(i).get("line", 0), Break=b)
 
+    @iterative_method
     def sa_switch(s, i):
         p = i
         err = s.last
@@ -689,7 +700,7 @@ class SA:
         if not ok:
             return s.error("TNMSERR_SA_SWITCH_NO_OPEN_PAREN", w["atom"]), i, None
         n["open_p"] = op
-        ok, p, c = s.sa_exp(p, 0)
+        ok, p, c = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_SWITCH_ILLEGAL_COND", w["atom"]), i, None
         n["cond"] = c
@@ -702,11 +713,11 @@ class SA:
             return s.error("TNMSERR_SA_SWITCH_NO_OPEN_BRACE", w["atom"]), i, None
         n["open_b"] = ob
         while s._a(p).get("type") not in (C.LA_T["NONE"], C.LA_T["CLOSE_BRACE"]):
-            ok, p, cs = s.sa_case(p)
+            ok, p, cs = yield (s.sa_case, p)
             if ok:
                 n.setdefault("case", []).append(cs)
                 continue
-            ok, p, df = s.sa_default(p)
+            ok, p, df = yield (s.sa_default, p)
             if ok:
                 if n.get("Default"):
                     return (
@@ -727,6 +738,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_case(s, i):
         p = i
         err = s.last
@@ -745,7 +757,7 @@ class SA:
         if not ok:
             return s.error("TNMSERR_SA_CASE_NO_OPEN_PAREN", cs["atom"]), i, None
         n["open_p"] = op
-        ok, p, val = s.sa_exp(p, 0)
+        ok, p, val = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_CASE_ILLEGAL_VALUE", cs["atom"]), i, None
         n["value"] = val
@@ -759,7 +771,7 @@ class SA:
             C.LA_T["DEFAULT"],
             C.LA_T["CLOSE_BRACE"],
         ):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return 0, i, None
             n["block"].append(sen)
@@ -767,6 +779,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_default(s, i):
         p = i
         err = s.last
@@ -780,7 +793,7 @@ class SA:
             C.LA_T["DEFAULT"],
             C.LA_T["CLOSE_BRACE"],
         ):
-            ok, p2, sen = s.sa_sentence(p)
+            ok, p2, sen = yield (s.sa_sentence, p)
             if not ok:
                 return 0, i, None
             n["block"].append(sen)
@@ -811,6 +824,7 @@ class SA:
         s.last = err
         return 1, p, n, None
 
+    @iterative_method
     def sa_exp_list(s, i):
         p = i
         err = s.last
@@ -818,7 +832,7 @@ class SA:
         if not ok:
             return 0, i, None
         n = N(s._a(i).get("line", 0), open_b=op, close_b=None, exp=[], comma=[])
-        ok, p, x = s.sa_exp(p, 0)
+        ok, p, x = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
         n["exp"].append(x)
@@ -831,17 +845,24 @@ class SA:
             if not ok:
                 return s.error("TNMSERR_SA_EXP_LIST_NO_CLOSE_BRACKET", s._a(p)), i, None
             n["comma"].append(c)
-            ok, p, x = s.sa_exp(p, 0)
+            ok, p, x = yield (s.sa_exp, p, 0)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
             n["exp"].append(x)
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_exp(s, i, pri):
         s.expression_heights.append(0)
         try:
-            result = s._parse(s._sa_exp, i, pri)
+            if s.nesting >= 64:
+                s.warn("analysis nesting depth exceeds 64; continuing", i)
+            s.nesting += 1
+            try:
+                result = yield (s._sa_exp, i, pri)
+            finally:
+                s.nesting -= 1
         finally:
             height = s.expression_heights.pop()
         if result[0] and height > 128:
@@ -850,12 +871,13 @@ class SA:
             s.expression_heights[-1] = max(s.expression_heights[-1], height + 1)
         return result
 
+    @iterative_method
     def _sa_exp(s, i, pri):
         p = i
         err = s.last
         ok, p, op = s.sa_operator_1(p)
         if ok:
-            ok, p, x = s.sa_exp(p, C.SA_PRI_MAX)
+            ok, p, x = yield (s.sa_exp, p, C.SA_PRI_MAX)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
             exp = N(
@@ -868,7 +890,7 @@ class SA:
                 pri=pri,
             )
         else:
-            ok, p, smp = s.sa_smp_exp(p)
+            ok, p, smp = yield (s.sa_smp_exp, p)
             if not ok:
                 return 0, i, None
             exp = N(
@@ -885,7 +907,7 @@ class SA:
             if not ok:
                 break
             height = s.expression_heights[-1] + 1
-            ok, p3, rhs = s.sa_exp(p2, npri)
+            ok, p3, rhs = yield (s.sa_exp, p2, npri)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p2)), i, None
             height = max(height, s.expression_heights[-1])
@@ -905,6 +927,7 @@ class SA:
         s.last = err
         return 1, p, exp
 
+    @iterative_method
     def sa_smp_exp(s, i):
         p = i
         err = s.last
@@ -921,7 +944,7 @@ class SA:
         ok, p, op = s.sa_atom(p, C.LA_T["OPEN_PAREN"])
         if ok:
             n["open"] = op
-            ok, p, x = s.sa_exp(p, 0)
+            ok, p, x = yield (s.sa_exp, p, 0)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
             n["exp"] = x
@@ -932,13 +955,13 @@ class SA:
             n["node_type"] = C.NT_SMP_KAKKO
             s.last = err
             return 1, p, n
-        ok, p, x = s.sa_exp_list(p)
+        ok, p, x = yield (s.sa_exp_list, p)
         if ok:
             n["exp_list"] = x
             n["node_type"] = C.NT_SMP_EXP_LIST
             s.last = err
             return 1, p, n
-        ok, p, x = s.sa_goto(p)
+        ok, p, x = yield (s.sa_goto, p)
         if ok:
             n["Goto"] = x
             n["node_type"] = C.NT_SMP_GOTO
@@ -950,7 +973,7 @@ class SA:
             n["node_type"] = C.NT_SMP_LITERAL
             s.last = err
             return 1, p, n
-        ok, p, x = s.sa_elm_exp(p)
+        ok, p, x = yield (s.sa_elm_exp, p)
         if ok:
             n["elm_exp"] = x
             n["node_type"] = C.NT_SMP_ELM_EXP
@@ -991,24 +1014,26 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_elm_exp(s, i):
         p = i
         err = s.last
-        ok, p, el_list = s.sa_elm_list(p)
+        ok, p, el_list = yield (s.sa_elm_list, p)
         if not ok:
             return 0, i, None
         s.last = err
         return 1, p, N(s._a(i).get("line", 0), elm_list=el_list, element_type=0)
 
+    @iterative_method
     def sa_elm_list(s, i):
         p = i
         err = s.last
-        ok, p, el = s.sa_element(p, 1)
+        ok, p, el = yield (s.sa_element, p, 1)
         if not ok:
             return 0, i, None
         n = N(s._a(i).get("line", 0), parent_form_code=0, element=[el], element_type=0)
         while s._a(p).get("type") in (C.LA_T["OPEN_BRACKET"], C.LA_T["DOT"]):
-            ok, p2, el = s.sa_element(p, 0)
+            ok, p2, el = yield (s.sa_element, p, 0)
             if not ok:
                 return 0, i, None
             n["element"].append(el)
@@ -1016,6 +1041,7 @@ class SA:
         s.last = err
         return 1, p, n
 
+    @iterative_method
     def sa_element(s, i, top):
         p = i
         err = s.last
@@ -1037,7 +1063,7 @@ class SA:
                     arg_list_id=0,
                 )
                 e["node_type"] = C.NT_ELM_ARRAY
-                ok, p, x = s.sa_exp(p, 0)
+                ok, p, x = yield (s.sa_exp, p, 0)
                 if not ok:
                     return s.error("TNMSERR_SA_ELEMENT_ILLEGAL_EXP", s._a(p)), i, None
                 e["exp"] = x
@@ -1049,7 +1075,7 @@ class SA:
                 return 1, p, e
             ok, p = s.sa_atom(p, C.LA_T["DOT"])[:2]
             if ok:
-                ok, p2, ch = s.sa_element(p, 1)
+                ok, p2, ch = yield (s.sa_element, p, 1)
                 if not ok:
                     return s.error("TNMSERR_SA_ELEMENT_NO_CHILD", s._a(p)), i, None
                 s.last = err
@@ -1071,13 +1097,14 @@ class SA:
             arg_list_id=0,
         )
         e["node_type"] = C.NT_ELM_ELEMENT
-        ok, p, al = s.sa_arg_list(p)
+        ok, p, al = yield (s.sa_arg_list, p)
         if not ok:
             return 0, i, None
         e["arg_list"] = al
         s.last = err
         return 1, p, e
 
+    @iterative_method
     def sa_arg_list(s, i):
         p = i
         err = s.last
@@ -1100,7 +1127,7 @@ class SA:
             s.last = err
             return 1, p, al
         while 1:
-            ok, p, a = s.sa_arg(p)
+            ok, p, a = yield (s.sa_arg, p)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
             al["arg"].append(a)
@@ -1119,14 +1146,15 @@ class SA:
         s.last = err
         return 1, p, al
 
+    @iterative_method
     def sa_arg(s, i):
         p = i
         err = s.last
-        ok, p, a = s.sa_named_arg(p)
+        ok, p, a = yield (s.sa_named_arg, p)
         if ok:
             s.last = err
             return 1, p, a
-        ok, p, x = s.sa_exp(p, 0)
+        ok, p, x = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
         s.last = err
@@ -1143,6 +1171,7 @@ class SA:
             ),
         )
 
+    @iterative_method
     def sa_named_arg(s, i):
         p = i
         err = s.last
@@ -1152,7 +1181,7 @@ class SA:
         ok, p, eq = s.sa_atom(p, C.LA_T["ASSIGN"])
         if not ok:
             return 0, i, None
-        ok, p, x = s.sa_exp(p, 0)
+        ok, p, x = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
         s.last = err

@@ -4,7 +4,7 @@ import sys
 import struct
 import hashlib
 import re
-from functools import lru_cache, partial
+from functools import lru_cache, partial, wraps
 from types import SimpleNamespace
 import siglus_ssu as _runtime
 from . import command_name, const as C
@@ -20,6 +20,33 @@ from .path_policy import (
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
+
+
+def iterative_method(function):
+    @wraps(function)
+    def run(instance, *args, **kwargs):
+        pending = [function(instance, *args, **kwargs)]
+        result = None
+        try:
+            while pending:
+                try:
+                    method, *arguments = pending[-1].send(result)
+                except StopIteration as finished:
+                    pending.pop()
+                    result = finished.value
+                else:
+                    body = getattr(method, "__wrapped__", None)
+                    if body is None:
+                        result = method(*arguments)
+                    else:
+                        pending.append(body(method.__self__, *arguments))
+                        result = None
+        finally:
+            while pending:
+                pending.pop().close()
+        return result
+
+    return run
 
 
 def scene_string_xor_key(index):

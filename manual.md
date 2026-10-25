@@ -108,6 +108,8 @@ Starting with v0.5.0, `init` and `--init` are removed. Delete initialization ste
 siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [args]
 ```
 
+CLI text output uses the configured stream encoding and backslash-escapes characters that cannot be encoded, allowing file processing to continue.
+
 ### Global Options
 
 | Option | Description |
@@ -281,7 +283,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | Disable LZSS compression and outer XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. The scene-string XOR transform is still controlled by `--string-xor-multiplier`. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
 | `--serial` | Force the compile stage to run serially. Parallel compilation is enabled by default, using threads in the Rust backend and processes in the Python backend. |
-| `--max-workers N` | Positive maximum number of parallel compile workers. Only effective while parallel compilation is enabled. By default, both backends use half of the available CPU count, limited to 1 through 16 workers. |
+| `--max-workers N` | Positive maximum number of parallel compile workers. Only effective while parallel compilation is enabled. By default, both backends use half of the available CPU count, limited to 1 through 16 workers. On Windows, the Python backend caps an explicit value at 61 workers. |
 | `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex from `0` through `0xFFFFFFFF`. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. A numeric argument immediately after the option is consumed as the seed only when all three required paths remain. Cannot be combined with `--tmp` or `--gei`. |
@@ -481,7 +483,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 
 | Parameter | Description |
 |---|---|
-| `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. When analyzing or comparing `.pck` files, embedded `SCENE_SCRIPT_ID` values are shown in the existing tables as an `ID` column for embedded `.ss` source chunks; `.pck` comparisons also treat source IDs as comparison data. |
+| `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. When analyzing or comparing `.pck` files, embedded `SCENE_SCRIPT_ID` values are shown in the existing tables as an `ID` column for embedded `.ss` source chunks; `.pck` comparisons also treat source IDs as comparison data. ID matching uses Windows path rules for embedded source names on every platform. |
 | `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
 | `--disam` | When analyzing a `.dat` file or comparing two `.dat` files, write human-readable disassembly to `<scene>.dat.txt` alongside each input `.dat`. Prints total disassembly timing before the command finishes. Use `-x --decompile <input_pck>` for reconstructed `.ss` output. |
 | `--readall` | Only valid for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
@@ -844,6 +846,8 @@ SiglusEngine.exe /work_dir=<work_dir> /start=<scene_name> /z_no=<label> /end_sta
 
 The engine is launched as a separate subprocess; the utility returns immediately after launch. The work directory is retained.
 
+The engine itself requires a compatible Windows execution environment. This command does not configure or invoke Wine.
+
 #### Examples
 
 ```bash
@@ -1047,7 +1051,7 @@ Notes:
 - `canvas` is the output type2 canvas size.
 - `cuts[]` is ordered by index. You may insert `null` to leave holes.
 - Each non-null cut should provide `source` and `canvas_rect`.
-- `source` is resolved relative to the JSON file.
+- `source` is resolved relative to the JSON file. Both `/` and `\` are accepted as directory separators on every platform.
 - `canvas_rect` is the cut rectangle written into the outer type2 cut table.
 - `source_rect` is optional. If omitted, the full source image is used; if `canvas_rect` is also present, its width and height must match that full source image. When both `source_rect` and `canvas_rect` are present, they must have the same width and height.
 - `center` is optional per cut and defaults to `default_center` or `(0,0)`.
@@ -1187,6 +1191,8 @@ The `--trim` option reads the Gameexe.dat/Gameexe.ini BGM table (entries formatt
 #### Loop Playback Details
 
 The `--play` option reads the Gameexe BGM table from either `Gameexe.dat` or `Gameexe.ini` and matches entries by input basename. The Gameexe path is optional; when omitted, the tool looks in the parent directory of the audio folder for `Gameexe.dat`, then falls back to the first nearby `Gameexe.*` file (preferring `Gameexe.ini`).
+
+The `Gameexe.dat` lookup uses the input path case-matching policy, so a file named `GAMEEXE.DAT` also takes priority on case-sensitive filesystems.
 
 If multiple `#BGM.*` rows point at the same physical file, the player keeps every candidate instead of letting the last row overwrite the others. It first prefers the row whose `#BGM` name matches the current basename exactly, then falls back to the first row for that file.
 

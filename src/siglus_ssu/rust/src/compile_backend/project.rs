@@ -1175,6 +1175,7 @@ fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &Runti
             operator,
             left,
             right,
+            ..
         } => {
             inc_counter(&mut stats.expressions, "binary_ops", 1);
             inc_counter(
@@ -1657,6 +1658,8 @@ fn prepare_scene(
     let file2 = ca
         .analyze_file_2(&file1, &ia_data.name_set)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
+    ia_data.record_replacement_usage(&ca.used_replacements);
+    ca.used_replacements.clear();
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "CA", stage_start);
     }

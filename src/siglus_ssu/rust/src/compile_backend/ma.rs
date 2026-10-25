@@ -165,11 +165,8 @@ impl<'a> SemanticAnalyzer<'a> {
         if let Some(index) = form.index.as_mut() {
             let mut selection = false;
             let index_form = self.analyze_expression(index, &mut selection)?;
-            if selection {
-                return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_INDEX", index.line, None);
-            }
             if index_form != self.codes.forms.int.code {
-                return self.fail("TNMSERR_MA_DEF_PROP_NOT_INT", index.line, None);
+                return self.fail("TNMSERR_MA_DEF_PROP_NOT_INT", form.open_bracket_line, None);
             }
         }
         Ok(())
@@ -403,6 +400,7 @@ impl<'a> SemanticAnalyzer<'a> {
             AstPayload::Assign {
                 left,
                 operator,
+                operator_line,
                 right,
                 equal_form,
                 set_flag,
@@ -428,11 +426,15 @@ impl<'a> SemanticAnalyzer<'a> {
                 ]
                 .contains(&left_form)
                 {
-                    return self.fail("TNMSERR_MA_ASSIGN_LEFT_NEED_REFERENCE", node.line, None);
+                    return self.fail(
+                        "TNMSERR_MA_ASSIGN_LEFT_NEED_REFERENCE",
+                        *operator_line,
+                        None,
+                    );
                 } else if left_form == effective_form {
                     *set_flag = true;
                 } else {
-                    return self.fail("TNMSERR_MA_ASSIGN_TYPE_NO_MATCH", node.line, None);
+                    return self.fail("TNMSERR_MA_ASSIGN_TYPE_NO_MATCH", *operator_line, None);
                 }
                 self.codes.forms.void.code
             }
@@ -478,6 +480,7 @@ impl<'a> SemanticAnalyzer<'a> {
             }
             AstPayload::Binary {
                 operator,
+                operator_line,
                 left,
                 right,
             } => {
@@ -485,7 +488,7 @@ impl<'a> SemanticAnalyzer<'a> {
                 let right_form = self.analyze_expression(right, selection)?;
                 let result = self.binary_result(left_form, right_form, *operator);
                 if result == self.codes.forms.void.code {
-                    return self.fail("TNMSERR_MA_EXP_TYPE_NO_MATCH", node.line, None);
+                    return self.fail("TNMSERR_MA_EXP_TYPE_NO_MATCH", *operator_line, None);
                 }
                 result
             }
@@ -661,10 +664,10 @@ impl<'a> SemanticAnalyzer<'a> {
         let mut index_selection = false;
         let index_form = self.analyze_expression(index, &mut index_selection)?;
         if index_selection {
-            return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_INDEX", element.line, None);
+            return self.fail("TNMSERR_MA_SEL_CANNOT_USE_IN_INDEX", index.line, None);
         }
         if !self.is_int(index_form) {
-            return self.fail("TNMSERR_MA_INDEX_NOT_INT", element.line, None);
+            return self.fail("TNMSERR_MA_INDEX_NOT_INT", index.line, None);
         }
         element.element_code = info.code;
         element.element_type = match info.kind {

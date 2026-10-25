@@ -961,9 +961,19 @@ def _collect_scene_symbols(
             record.symbol_id = _label_symbol_id(result.path, record.name)
         return record
 
-    def walk_sentence(sentence: dict[str, Any], current_command: str = "") -> None:
+    root = sad.get("root") or {}
+    pending = [(sentence, "") for sentence in reversed(root.get("sentense_list") or [])]
+
+    def queue_block(items: Any, cmd_name: str) -> None:
+        if isinstance(items, dict) and "sentense_list" in items:
+            items = items.get("sentense_list")
+        if isinstance(items, list):
+            pending.extend((sub, cmd_name) for sub in reversed(items))
+
+    while pending:
+        sentence, current_command = pending.pop()
         if not isinstance(sentence, dict):
-            return
+            continue
         nt = int(sentence.get("node_type", 0) or 0)
         if nt == C.NT_S_LABEL:
             node = sentence.get("label") or {}
@@ -985,7 +995,7 @@ def _collect_scene_symbols(
             rec = span_record(rec, atom, name)
             label_defs[ascii_lower(name)] = rec
             doc_symbols.append(rec)
-            return
+            continue
         if nt == C.NT_S_Z_LABEL:
             node = sentence.get("z_label") or {}
             atom = (
@@ -1007,7 +1017,7 @@ def _collect_scene_symbols(
             rec = span_record(rec, atom, _scene_name_from_label_atom(lad, atom))
             z_label_defs[ascii_lower(name)] = rec
             doc_symbols.append(rec)
-            return
+            continue
         if nt == C.NT_S_DEF_CMD:
             node = sentence.get("def_cmd") or {}
             name_atom = (node.get("name") or {}).get("atom") or {}
@@ -1049,9 +1059,8 @@ def _collect_scene_symbols(
                 prec = span_record(prec, pname_atom, pname)
                 add_local(prec)
             block = (node.get("block") or {}).get("sentense_list") or []
-            for sub in block:
-                walk_sentence(sub, name)
-            return
+            queue_block(block, name)
+            continue
         if nt == C.NT_S_DEF_PROP:
             node = sentence.get("def_prop") or {}
             name_atom = (node.get("name") or {}).get("atom") or {}
@@ -1066,42 +1075,31 @@ def _collect_scene_symbols(
                 scope=scope,
             )
             add_local(span_record(rec, name_atom, name))
-            return
-
-        def walk_block(items: Any, cmd_name: str = current_command) -> None:
-            if isinstance(items, dict) and "sentense_list" in items:
-                items = items.get("sentense_list")
-            if not isinstance(items, list):
-                return
-            for sub in items:
-                walk_sentence(sub, cmd_name)
+            continue
 
         if nt == C.NT_S_IF:
             node = sentence.get("If") or {}
-            for sub in node.get("sub") or []:
-                walk_block(sub.get("block"), current_command)
-            return
+            for sub in reversed(node.get("sub") or []):
+                queue_block(sub.get("block"), current_command)
+            continue
         if nt == C.NT_S_FOR:
             node = sentence.get("For") or {}
-            walk_block(node.get("init"), current_command)
-            walk_block(node.get("loop"), current_command)
-            walk_block(node.get("block"), current_command)
-            return
+            queue_block(node.get("block"), current_command)
+            queue_block(node.get("loop"), current_command)
+            queue_block(node.get("init"), current_command)
+            continue
         if nt == C.NT_S_WHILE:
             node = sentence.get("While") or {}
-            walk_block(node.get("block"), current_command)
-            return
+            queue_block(node.get("block"), current_command)
+            continue
         if nt == C.NT_S_SWITCH:
             node = sentence.get("Switch") or {}
-            for case in node.get("case") or []:
-                walk_block(case.get("block"), current_command)
             default = node.get("Default") or {}
-            walk_block(default.get("block"), current_command)
-            return
+            queue_block(default.get("block"), current_command)
+            for case in reversed(node.get("case") or []):
+                queue_block(case.get("block"), current_command)
+            continue
 
-    root = sad.get("root") or {}
-    for sentence in root.get("sentense_list") or []:
-        walk_sentence(sentence)
     return local_defs, label_defs, z_label_defs, doc_symbols
 
 

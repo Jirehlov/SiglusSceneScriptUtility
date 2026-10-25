@@ -108,6 +108,8 @@ pip install siglus-ssu
 siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [参数]
 ```
 
+工具在 CLI 文本输出中保留当前编码，并将无法编码的字符写为反斜杠转义序列，以免中断文件处理。
+
 ### 全局选项
 
 | 选项 | 说明 |
@@ -281,7 +283,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | 禁用 LZSS 压缩和外层 XOR 加密，将 `scn_data_exe_angou_mod = 0`，并且不嵌入原始 source。场景字符串 XOR 变换仍由 `--string-xor-multiplier` 控制。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 阶段，同时保留脚本原有的加密与头部行为。此模式不嵌入原始 source chunk，对应官方的“easy link”式输出。不能与 `--tmp` 同用。 |
 | `--serial` | 强制编译阶段按串行方式运行。默认启用并行编译：Rust 后端使用线程，Python 后端使用进程。 |
-| `--max-workers N` | 最大并行编译 worker 数，必须为正整数。仅在启用并行编译时生效。两个后端默认使用可用 CPU 数的一半，限制在 1 至 16 个 worker 之间。 |
+| `--max-workers N` | 最大并行编译 worker 数，必须为正整数。仅在启用并行编译时生效。两个后端默认使用可用 CPU 数的一半，限制在 1 至 16 个 worker 之间。Windows 上的 Python 后端会将显式指定的数值限制为最多 61 个 worker。 |
 | `--set-shuffle SEED` | 设置每脚本字符串表位置混淆的 MSVC 兼容 `rand()` 初始种子。接受十进制或 `0x...` 十六进制，范围为 `0` 至 `0xFFFFFFFF`。默认：`1`。启用时等同于隐式带上 `--serial`。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 使用指定的持久临时目录。提供此参数后，编译器会在该目录内维护 SHA-256 缓存（`_source_hashes.json`），从而实现**增量编译**——后续运行时只重编译已更改的 `.ss` 文件。该缓存仅允许单写者；并发编译若使用同一目录会被拒绝。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）扫描到 `0xFFFFFFFF`，寻找能复现 `<test_dir>` 中第一个 scene 字符串表顺序的 32 位 MSVC `rand()` 种子，再用全部 scene 验证该种子。`seed0` 支持十进制或 `0x...` 十六进制，且必须落在 `u32` 范围内。只有取走紧随选项的数字参数后仍有全部三个必需路径，才会将其视为种子。不能与 `--tmp` 或 `--gei` 同用。 |
@@ -481,7 +483,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 
 | 参数 | 说明 |
 |---|---|
-| `<input_file>` | 要分析的文件路径。支持扩展名：`.pck`、`.dat`、`.gan`、`.sav`、`.cgm`、`.tcr`。分析或比较 `.pck` 时，若可读取内嵌 `.ss` original source chunk，会在原有表格中以 `ID` 列显示其中的 `SCENE_SCRIPT_ID`；比较 `.pck` 时，source ID 也会作为比较对象。 |
+| `<input_file>` | 要分析的文件路径。支持扩展名：`.pck`、`.dat`、`.gan`、`.sav`、`.cgm`、`.tcr`。分析或比较 `.pck` 时，若可读取内嵌 `.ss` original source chunk，会在原有表格中以 `ID` 列显示其中的 `SCENE_SCRIPT_ID`；比较 `.pck` 时，source ID 也会作为比较对象。所有平台均按 Windows 路径规则匹配内嵌源码名称的 ID。 |
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
 | `--disam` | 分析 `.dat` 文件或比较两个 `.dat` 文件时，将可读反汇编写在各自输入 `.dat` 同目录下的 `<scene>.dat.txt`。命令结束前会打印反汇编总耗时。如需重建 `.ss` 输出，请使用 `-x --decompile <input_pck>`。 |
 | `--readall` | 只允许用于 `read.sav` 和 `global.sav`。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
@@ -844,6 +846,8 @@ SiglusEngine.exe /work_dir=<work_dir> /start=<scene_name> /z_no=<label> /end_sta
 
 引擎作为独立子进程启动，工具在启动后立即返回。工作目录会保留。
 
+引擎本身需要兼容的 Windows 运行环境。本命令不会自动配置或调用 Wine。
+
 #### 示例
 
 ```bash
@@ -1047,7 +1051,7 @@ siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/orig
 - `canvas` 是输出 type2 的画布尺寸。
 - `cuts[]` 按 index 排序；可插入 `null` 留空。
 - 每个非空 cut 建议显式提供 `source` 与 `canvas_rect`。
-- `source` 相对于 JSON 文件路径解析。
+- `source` 相对于 JSON 文件解析，支持 `/` 和 `\` 两种目录分隔符，所有平台采用相同规则。
 - `canvas_rect` 会写入外层 type2 cut 表。
 - `source_rect` 为可选；省略时使用整张源图；若此时也给出 `canvas_rect`，其宽高必须与整张源图一致。若同时给出 `source_rect` 与 `canvas_rect`，两者宽高必须一致。
 - `center` 为可选，默认继承 `default_center` 或 `(0,0)`。
@@ -1187,6 +1191,8 @@ siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
 #### 循环播放细节
 
 `--play` 会从 `Gameexe.dat` 或 `Gameexe.ini` 读取 BGM 表，并按输入文件的 basename 匹配条目。Gameexe 路径是可选的；省略时，工具会先在音频目录的父目录中查找 `Gameexe.dat`，找不到时再回退到同一位置的第一个 `Gameexe.*` 文件（优先 `Gameexe.ini`）。
+
+`Gameexe.dat` 的查找遵循输入路径的大小写匹配规则，因此在大小写敏感的文件系统上也会优先选中 `GAMEEXE.DAT`。
 
 如果同一个物理文件在 `#BGM.*` 表中出现了多次，播放器会保留该文件对应的全部候选条目，而不是简单让后面的记录覆盖前面的记录。它会优先选择 `#BGM` 名称与当前文件 basename 完全一致的那一条，找不到时才回退到该文件的第一条记录。
 

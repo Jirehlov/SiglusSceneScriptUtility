@@ -323,6 +323,7 @@ def _uses_string_xor_multiplier(mode, args):
 
 
 def main():
+    _runtime._configure_output_streams()
     argv = sys.argv[1:]
     _runtime._LEGACY_COMPILE = False
     _runtime._LEGACY_FULL = False

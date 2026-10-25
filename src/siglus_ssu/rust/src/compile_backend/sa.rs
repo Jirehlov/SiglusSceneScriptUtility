@@ -345,7 +345,9 @@ impl SyntaxAnalyzer {
             return self.fail("TNMSERR_SA_DEF_PROP_ILLEGAL_FORM", pos);
         }
         let mut array_index = None;
-        if let Some((next, _open)) = self.accept(pos, self.codes.la.open_bracket) {
+        let mut open_bracket_line = 0;
+        if let Some((next, open)) = self.accept(pos, self.codes.la.open_bracket) {
+            open_bracket_line = open.line;
             let Some((after_exp, expression)) = self.parse_expression(next, 0, iad)? else {
                 return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
             };
@@ -361,6 +363,7 @@ impl SyntaxAnalyzer {
             FormSpec {
                 name,
                 index: array_index,
+                open_bracket_line,
             },
         )))
     }
@@ -377,6 +380,7 @@ impl SyntaxAnalyzer {
         let mut form = FormSpec {
             name: iad.codes.forms.int.name.clone(),
             index: None,
+            open_bracket_line: 0,
         };
         if let Some((next, _colon)) = self.accept(pos, self.codes.la.colon) {
             let Some((after_form, parsed_form)) = self.parse_form(next, iad)? else {
@@ -449,6 +453,7 @@ impl SyntaxAnalyzer {
         let mut form = FormSpec {
             name: iad.codes.forms.int.name.clone(),
             index: None,
+            open_bracket_line: 0,
         };
         if let Some((next, _colon)) = self.accept(pos, self.codes.la.colon) {
             let Some((after_form, parsed_form)) = self.parse_form(next, iad)? else {
@@ -925,6 +930,7 @@ impl SyntaxAnalyzer {
             return Ok(None);
         };
         if let Some((next, operator)) = self.assign_operator(pos) {
+            let operator_line = self.atom(pos).line;
             let Some((after_right, right)) = self.parse_expression(next, 0, iad)? else {
                 return self.fail("TNMSERR_SA_ASSIGN_ILLEGAL_RIGHT", next);
             };
@@ -936,6 +942,7 @@ impl SyntaxAnalyzer {
                     AstPayload::Assign {
                         left: Box::new(expression),
                         operator,
+                        operator_line,
                         right: Box::new(right),
                         equal_form: 0,
                         set_flag: false,
@@ -1007,6 +1014,7 @@ impl SyntaxAnalyzer {
             if precedence <= minimum_precedence {
                 break;
             }
+            let operator_line = self.atom(pos).line;
             let height = self.expression_heights.last().unwrap() + 1;
             let Some((after_right, right)) = self.parse_expression(next, precedence, iad)? else {
                 return self.fail("TNMSERR_SA_EXP_ILLEGAL", next);
@@ -1020,6 +1028,7 @@ impl SyntaxAnalyzer {
                 index,
                 AstPayload::Binary {
                     operator,
+                    operator_line,
                     left: Box::new(expression),
                     right: Box::new(right),
                 },
@@ -1362,14 +1371,14 @@ impl SyntaxAnalyzer {
             .map(|label| label.exists)
             .unwrap_or(false)
         {
-            return self.fail("TNMSERR_SA_Z_LABEL_00_NOT_EXIST", self.atoms.len());
+            return self.fail("TNMSERR_SA_Z_LABEL_00_NOT_EXIST", 0);
         }
         for command_id in iad.inc_command_cnt.max(0)..iad.command_cnt.max(0) {
             let Some(command) = iad.command_list.get(command_id as usize) else {
-                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", self.atoms.len());
+                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", 0);
             };
             if !command.is_defined {
-                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", self.atoms.len());
+                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", 0);
             }
         }
         Ok(())

@@ -924,8 +924,10 @@ def _default_play_gameexe_path(inp: str) -> str:
     audio_dir = src_path if os.path.isdir(src_path) else os.path.dirname(src_path)
     root_dir = os.path.dirname(audio_dir)
     exact = os.path.join(root_dir, "Gameexe.dat")
-    if os.path.isfile(exact):
-        return exact
+    try:
+        return resolve_read_path(exact, kind="file")
+    except (FileNotFoundError, NotADirectoryError):
+        pass
     wildcard_matches = []
     try:
         _, entries = read_directory(root_dir)

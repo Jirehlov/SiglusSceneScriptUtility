@@ -737,7 +737,9 @@ impl CharacterAnalyzer {
         let Some(replacement) = Self::replacement_at(default_tree, added_tree, &text, pos) else {
             return Ok((text, pos + 1, None));
         };
-        self.used_replacements.push(replacement.name.clone());
+        if replacement.decl_type != "parameter" {
+            self.used_replacements.push(replacement.name.clone());
+        }
         let name_len = replacement.name.chars().count();
         if let (Some(map), Some(declaration)) = (
             source_map,

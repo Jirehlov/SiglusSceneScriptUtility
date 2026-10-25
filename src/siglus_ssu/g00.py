@@ -963,7 +963,7 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     defaults = obj.get("defaults") if isinstance(obj.get("defaults"), dict) else {}
     default_source = obj.get("default_source", defaults.get("source"))
     if default_source is None and default_source_hint is not None:
-        default_source = str(default_source_hint)
+        default_source = default_source_hint
     default_center = _parse_json_xy(
         obj.get("default_center", defaults.get("center")), "default_center"
     ) or (0, 0)
@@ -987,6 +987,8 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
             while len(cuts) <= idx:
                 cuts.append(None)
         source = raw.get("source", default_source)
+        if isinstance(source, str):
+            source = source.replace("\\", "/")
         source_rect = _parse_json_rect(
             raw.get("source_rect", raw.get("crop", raw.get("rect"))),
             "cuts[].source_rect/rect",

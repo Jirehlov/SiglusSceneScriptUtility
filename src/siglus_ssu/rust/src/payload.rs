@@ -4,6 +4,7 @@ use pyo3::types::{PyAny, PyDict, PyList, PyTuple};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Clone)]
 struct Codes {
@@ -61,6 +62,26 @@ struct Codes {
 struct ElementInfo {
     tp: i32,
     ret: Option<i32>,
+    arg_map: Option<Arc<HashMap<i32, Vec<ArgumentSpec>>>>,
+}
+
+#[derive(Clone, FromPyObject)]
+struct ArgumentSpec {
+    #[pyo3(item(0))]
+    form: Option<i32>,
+    #[pyo3(item(1))]
+    id: i32,
+    #[pyo3(item(2))]
+    variadic: bool,
+    #[pyo3(item(3))]
+    int_reference: bool,
+}
+
+struct CommandSignature<'a> {
+    args: &'a [ArgInfo],
+    arg_list_id: i32,
+    named_ids: &'a [i32],
+    ret_form: i32,
 }
 
 #[derive(Clone)]
@@ -265,10 +286,12 @@ impl Config {
                 };
                 let ec: i32 = tup.get_item(3)?.extract()?;
                 let name: String = tup.get_item(4)?.extract()?;
+                let arg_map: HashMap<i32, Vec<ArgumentSpec>> = tup.get_item(5)?.extract()?;
+                let arg_map = (!arg_map.is_empty()).then(|| Arc::new(arg_map));
                 elements
                     .entry((parent, ec))
                     .or_default()
-                    .push(ElementInfo { tp, ret });
+                    .push(ElementInfo { tp, ret, arg_map });
                 receiver_forms.insert(parent);
                 if tp == codes.et_property
                     && name == "array"
@@ -1147,7 +1170,12 @@ impl<'a> Scanner<'a> {
                     return false;
                 };
                 i = p + 4;
-                let resolved = self.resolve_command(args.len(), ret_form);
+                let resolved = self.resolve_command(&CommandSignature {
+                    args: &args,
+                    arg_list_id,
+                    named_ids: &named_ids,
+                    ret_form,
+                });
                 let element_code = resolved.map(|r| r.0);
                 let parent_form = resolved.map(|r| r.1);
                 let mut read_flag = None;
@@ -1631,17 +1659,42 @@ impl<'a> Scanner<'a> {
         None
     }
 
-    fn resolve_command(&self, argc: usize, ret_form: i32) -> Option<(i32, i32, usize)> {
+    fn resolve_command(&mut self, signature: &CommandSignature<'_>) -> Option<(i32, i32, usize)> {
+        if signature
+            .args
+            .iter()
+            .all(|arg| self.is_scalar_form(arg.form))
+        {
+            return self.resolve_command_path(
+                signature,
+                self.stack.len().saturating_sub(signature.args.len()),
+            );
+        }
+        let saved_stack = self.stack.clone();
+        let saved_points = self.elm_points.clone();
+        for arg in signature.args.iter().rev() {
+            self.consume_arg_value(arg);
+        }
+        let resolved = self.resolve_command_path(signature, self.stack.len());
+        self.stack = saved_stack;
+        self.elm_points = saved_points;
+        resolved
+    }
+
+    fn resolve_command_path(
+        &self,
+        signature: &CommandSignature<'_>,
+        stack_end: usize,
+    ) -> Option<(i32, i32, usize)> {
         for ep in self.elm_points.iter().rev() {
-            if ep.stack_len > self.stack.len() {
+            if ep.stack_len >= stack_end {
                 continue;
             }
             if let Some((ec, parent)) = self.scan_command(
-                &self.stack[ep.stack_len..],
+                &self.stack[ep.stack_len..stack_end],
                 0,
                 self.cfg.codes.fm_global,
-                argc,
-                ret_form,
+                signature,
             ) {
                 return Some((ec, parent, ep.stack_len));
             }
@@ -1654,8 +1707,7 @@ impl<'a> Scanner<'a> {
         items: &[StackItem],
         mut idx: usize,
         mut parent: i32,
-        argc: usize,
-        expected_ret: i32,
+        signature: &CommandSignature<'_>,
     ) -> Option<(i32, i32)> {
         let c = &self.cfg.codes;
         while idx < items.len() {
@@ -1673,18 +1725,17 @@ impl<'a> Scanner<'a> {
                 for info in infos.iter() {
                     if info.tp == c.et_property {
                         if let Some(ret) = info.ret
-                            && let Some(found) =
-                                self.scan_command(items, idx + 1, ret, argc, expected_ret)
+                            && let Some(found) = self.scan_command(items, idx + 1, ret, signature)
                         {
                             return Some(found);
                         }
-                    } else if info.tp == c.et_command {
+                    } else if info.tp == c.et_command && idx == items.len() - 1 {
                         if let Some(ret) = info.ret
-                            && ret != expected_ret
+                            && ret != signature.ret_form
                         {
                             continue;
                         }
-                        if items.len().saturating_sub(idx + 1) < argc {
+                        if !self.command_signature_matches(info, signature) {
                             continue;
                         }
                         return Some((code, parent));
@@ -1701,6 +1752,60 @@ impl<'a> Scanner<'a> {
         None
     }
 
+    fn command_signature_matches(
+        &self,
+        info: &ElementInfo,
+        signature: &CommandSignature<'_>,
+    ) -> bool {
+        let Some(arg_map) = &info.arg_map else {
+            return true;
+        };
+        let Some(positional_count) = signature.args.len().checked_sub(signature.named_ids.len())
+        else {
+            return false;
+        };
+        let Some(args) = arg_map.get(&signature.arg_list_id) else {
+            return false;
+        };
+        if signature.arg_list_id == -1 {
+            return false;
+        }
+        let fixed = args
+            .iter()
+            .position(|arg| arg.variadic)
+            .unwrap_or(args.len());
+        if positional_count < fixed || (fixed == args.len() && positional_count != fixed) {
+            return false;
+        }
+        let matches = |spec: &ArgumentSpec, actual: &ArgInfo| {
+            spec.form.is_none_or(|form| {
+                form == actual.form
+                    || (form == self.cfg.codes.fm_int
+                        && actual.form == self.cfg.codes.fm_intref
+                        && spec.int_reference)
+            })
+        };
+        if !args[..fixed]
+            .iter()
+            .zip(signature.args)
+            .all(|(spec, actual)| matches(spec, actual))
+        {
+            return false;
+        }
+        for (index, id) in signature.named_ids.iter().rev().enumerate() {
+            let Some(spec) = arg_map
+                .get(&-1)
+                .and_then(|args| args.iter().find(|arg| arg.id == *id))
+            else {
+                return false;
+            };
+            if !matches(spec, &signature.args[positional_count + index]) {
+                return false;
+            }
+        }
+        true
+    }
+
     fn lookup_element(&self, parent: i32, code: i32) -> Vec<ElementInfo> {
         let c = &self.cfg.codes;
         if parent == c.fm_call {
@@ -1712,6 +1817,7 @@ impl<'a> Scanner<'a> {
                 return vec![ElementInfo {
                     tp: c.et_property,
                     ret: Some(slot.ret),
+                    arg_map: None,
                 }];
             }
         }
@@ -1723,6 +1829,7 @@ impl<'a> Scanner<'a> {
                     return vec![ElementInfo {
                         tp: c.et_property,
                         ret: Some(*form),
+                        arg_map: None,
                     }];
                 }
                 let local = code_idx - self.pack.inc_property_cnt;
@@ -1732,12 +1839,14 @@ impl<'a> Scanner<'a> {
                     return vec![ElementInfo {
                         tp: c.et_property,
                         ret: Some(*form),
+                        arg_map: None,
                     }];
                 }
             } else if owner == c.owner_user_cmd {
                 return vec![ElementInfo {
                     tp: c.et_command,
                     ret: None,
+                    arg_map: None,
                 }];
             }
         }

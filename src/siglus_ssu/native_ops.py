@@ -55,6 +55,8 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
 
 @lru_cache(maxsize=8)
 def _payload_native_config_cached(_profile, scene_string_xor_multiplier):
+    from .common import scn_expression_tables
+
     fm = C._FORM_CODE
 
     def form(name):
@@ -64,22 +66,31 @@ def _payload_native_config_cached(_profile, scene_string_xor_multiplier):
         return int(getattr(C, name))
 
     elements = []
-    for item in list(C.SYSTEM_ELEMENT_DEFS or []):
-        if not isinstance(item, (list, tuple)) or len(item) < 7:
-            continue
-        tp, parent, ret, name, owner, group, elem_code, *_rest = item
-        if parent not in fm:
-            continue
-        ret_code = int(fm[ret]) if ret in fm else None
-        elements.append(
-            (
-                int(tp),
-                int(fm[parent]),
-                ret_code,
-                int(C.create_elm_code(int(owner), int(group), int(elem_code))),
-                str(name),
+    for (parent, elem_code), entry in scn_expression_tables(_profile).elements.items():
+        for info in entry.get("alts") or (entry,):
+            arg_map = {
+                int(arg_id): [
+                    (
+                        fm.get(arg.get("form")),
+                        int(arg.get("id", 0)),
+                        arg.get("form") in (C.FM___ARGS, C.FM___ARGSREF),
+                        (info.get("parent"), info.get("name"), arg.get("name"))
+                        in C.NAMED_INT_REFERENCE_ARGUMENTS,
+                    )
+                    for arg in args["arg_list"]
+                ]
+                for arg_id, args in (info.get("arg_map") or {}).items()
+            }
+            elements.append(
+                (
+                    int(info["type"]),
+                    int(parent),
+                    info.get("ret"),
+                    int(elem_code),
+                    str(info["name"]),
+                    arg_map,
+                )
             )
-        )
     config = {
         **{name: code(name) for name in C.SCN_OP_NAMES},
         "OP_PLUS": code("OP_PLUS"),

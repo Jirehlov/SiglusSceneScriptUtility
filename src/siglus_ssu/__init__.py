@@ -10,6 +10,13 @@ _SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = False
 CONST_PROFILE_IDS = tuple(range(11))
 
 
+def _configure_output_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="backslashreplace")
+
+
 def command_name() -> str:
     name = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else ""
     return "siglus-ssu" if name in {"", "__main__.py", "__main__"} else name

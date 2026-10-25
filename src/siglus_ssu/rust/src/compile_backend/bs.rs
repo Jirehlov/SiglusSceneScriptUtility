@@ -352,6 +352,7 @@ impl<'a> BytecodeBuilder<'a> {
                 equal_form,
                 set_flag,
                 assignment_list_id,
+                ..
             } => {
                 self.compile_element_expression(left, false)?;
                 if *operator != 0 {
@@ -554,6 +555,7 @@ impl<'a> BytecodeBuilder<'a> {
                 operator,
                 left,
                 right,
+                ..
             } => {
                 if !need_value {
                     return self.error(TNMSERR_BS_NEED_REFERENCE, node);
@@ -649,7 +651,8 @@ impl<'a> BytecodeBuilder<'a> {
         if *element_type == self.codes.element_type.command && read_flag {
             self.push_i32(self.current_read_flag);
             self.current_read_flag += 1;
-            self.read_flag_list.push(node.line as i32);
+            self.read_flag_list
+                .push(elements.last().map_or(0, |element| element.line as i32));
         }
         if need_value {
             if self.is_value(node.form) {

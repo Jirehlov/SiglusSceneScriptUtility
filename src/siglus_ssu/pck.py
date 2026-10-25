@@ -1,6 +1,7 @@
 import csv
 import struct
 import io
+import ntpath
 from contextlib import redirect_stdout
 import os
 import sys
@@ -398,7 +399,7 @@ def _pck_original_source_entries(blob, h, only_name=""):
             raise ValueError(
                 f"original-source (OS) chunk {index:d} at {pos:#x} cannot be decoded: {exc}"
             ) from exc
-        if not only_name or is_named_filename(os.path.basename(nm), only_name):
+        if not only_name or is_named_filename(ntpath.basename(nm), only_name):
             out.append((nm, pos, pos + sz, raw))
         pos += sz
     return out
@@ -424,10 +425,10 @@ def _read_scene_script_id(raw):
 
 def _scene_script_id_keys(name):
     out = []
-    for item in (str(name or ""), os.path.basename(str(name or ""))):
+    for item in (str(name or ""), ntpath.basename(str(name or ""))):
         if not item:
             continue
-        _stem, ext = os.path.splitext(item)
+        _stem, ext = ntpath.splitext(item)
         if ext.casefold() == ".ss" and item not in out:
             out.append(item)
     return out
@@ -502,7 +503,7 @@ def iter_pck_angou_dat_items(blob: bytes, hdr=None, source_entries=None):
         cands = [
             {"name": name, "raw": raw}
             for name, _a, _b, raw in source_entries
-            if is_named_filename(os.path.basename(name), ANGOU_DAT_NAME)
+            if is_named_filename(ntpath.basename(name), ANGOU_DAT_NAME)
         ]
     cands.sort(key=lambda item: (len(item["name"]), item["name"].casefold()))
     yield from cands
@@ -1846,7 +1847,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
         raise ValueError("source_angou: truncated payload")
     if mapt * 2 != len(enc) - p:
         raise ValueError("source_angou: unexpected trailing data")
-    if only_name and not is_named_filename(os.path.basename(name), only_name):
+    if only_name and not is_named_filename(ntpath.basename(name), only_name):
         return (b"", name)
     if only_name:
         dec = bytearray(enc[p : p + mapt * 2])

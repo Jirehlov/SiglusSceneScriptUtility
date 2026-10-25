@@ -16,6 +16,7 @@ from .common import (
     build_operator_render_tables,
     empty_macro_stat_counts,
     format_scene_name,
+    iterative_method,
     log_stage,
     merge_macro_stat_counts,
     record_stage_time,
@@ -265,20 +266,28 @@ def merge_source_stat_counts(dst, src):
 
 
 def _exp_depth(node):
-    nt = node["node_type"]
-    if nt == C.NT_EXP_OPR1:
-        return 1 + _exp_depth(node["exp_1"])
-    if nt == C.NT_EXP_OPR2:
-        return 1 + max(_exp_depth(node["exp_1"]), _exp_depth(node["exp_2"]))
-    if nt == C.NT_EXP_SIMPLE:
-        return _exp_depth(node["smp_exp"])
-    if nt == C.NT_SMP_KAKKO:
-        return 1 + _exp_depth(node["exp"])
-    if nt == C.NT_SMP_EXP_LIST:
-        return 1 + max(_exp_depth(x) for x in node["exp_list"]["exp"])
-    if nt in (C.NT_SMP_GOTO, C.NT_SMP_ELM_EXP, C.NT_SMP_LITERAL):
-        return 1
-    return 0
+    pending = [(node, 0)]
+    result = 0
+    while pending:
+        node, depth = pending.pop()
+        nt = node["node_type"]
+        if nt == C.NT_EXP_SIMPLE:
+            pending.append((node["smp_exp"], depth))
+            continue
+        if nt == C.NT_EXP_OPR1:
+            pending.append((node["exp_1"], depth + 1))
+        elif nt == C.NT_EXP_OPR2:
+            pending.append((node["exp_1"], depth + 1))
+            pending.append((node["exp_2"], depth + 1))
+        elif nt == C.NT_SMP_KAKKO:
+            pending.append((node["exp"], depth + 1))
+        elif nt == C.NT_SMP_EXP_LIST:
+            pending.extend((child, depth + 1) for child in node["exp_list"]["exp"])
+        elif nt in (C.NT_SMP_GOTO, C.NT_SMP_ELM_EXP, C.NT_SMP_LITERAL):
+            result = max(result, depth + 1)
+            continue
+        result = max(result, depth)
+    return result
 
 
 def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables):
@@ -289,24 +298,27 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
     label_defs = set()
     z_defs = set()
 
-    def visit_block(block):
-        sentences = block["sentense_list"] if isinstance(block, dict) else block
-        for sen in sentences:
-            visit_sentence(sen)
+    pending = []
 
-    def visit_sentence(sen):
+    def queue_block(block):
+        sentences = block["sentense_list"] if isinstance(block, dict) else block
+        pending.extend(reversed(sentences))
+
+    queue_block(root)
+    while pending:
+        sen = pending.pop()
         nt = sen["node_type"]
         if nt == C.NT_S_LABEL:
             statements["label"] += 1
             label_defs.add(sen["label"]["label"]["atom"]["opt"])
-            return
+            continue
         if nt == C.NT_S_Z_LABEL:
             statements["z_label"] += 1
             z_defs.add(sen["z_label"]["z_label"]["atom"]["opt"])
-            return
+            continue
         if nt == C.NT_S_DEF_PROP:
             statements["property_def"] += 1
-            return
+            continue
         if nt == C.NT_S_DEF_CMD:
             statements["command_def"] += 1
             directives["command_definitions"] += 1
@@ -315,8 +327,8 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
                 directives["global_command_implementations"] += 1
             else:
                 directives["scene_command_definitions"] += 1
-            visit_block(node["block"])
-            return
+            queue_block(node["block"])
+            continue
         if nt == C.NT_S_GOTO:
             gnt = sen["Goto"]["node_type"]
             if gnt == C.NT_GOTO_GOSUB:
@@ -325,71 +337,70 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
                 statements["gosubstr"] += 1
             else:
                 statements["goto"] += 1
-            return
+            continue
         if nt == C.NT_S_RETURN:
             statements["return"] += 1
-            return
+            continue
         if nt == C.NT_S_IF:
             statements["if"] += 1
-            for sub in sen["If"]["sub"]:
+            for sub in reversed(sen["If"]["sub"]):
                 if sub["If"]["atom"]["type"] == C.LA_T["ELSEIF"]:
                     statements["elseif"] += 1
                 elif sub["If"]["atom"]["type"] == C.LA_T["ELSE"]:
                     statements["else"] += 1
-                visit_block(sub["block"])
-            return
+                queue_block(sub["block"])
+            continue
         if nt == C.NT_S_FOR:
             statements["for"] += 1
             node = sen["For"]
-            visit_block(node["init"])
-            visit_block(node["loop"])
-            visit_block(node["block"])
-            return
+            queue_block(node["block"])
+            queue_block(node["loop"])
+            queue_block(node["init"])
+            continue
         if nt == C.NT_S_WHILE:
             statements["while"] += 1
-            visit_block(sen["While"]["block"])
-            return
+            queue_block(sen["While"]["block"])
+            continue
         if nt == C.NT_S_CONTINUE:
             statements["continue"] += 1
-            return
+            continue
         if nt == C.NT_S_BREAK:
             statements["break"] += 1
-            return
+            continue
         if nt == C.NT_S_SWITCH:
             statements["switch"] += 1
             sw = sen["Switch"]
-            for cs in sw["case"]:
-                statements["case"] += 1
-                visit_block(cs["block"])
             if sw["Default"] is not None:
                 statements["default"] += 1
-                visit_block(sw["Default"]["block"])
-            return
+                queue_block(sw["Default"]["block"])
+            for cs in reversed(sw["case"]):
+                statements["case"] += 1
+                queue_block(cs["block"])
+            continue
         if nt == C.NT_S_ASSIGN:
             statements["assign"] += 1
             op = sen["assign"]["equal"]["atom"]["opt"]
             symbol = "=" if op == C.OP_NONE else operator_tables[3][op] + "="
             expressions["assign_ops"][symbol] += 1
-            return
+            continue
         if nt == C.NT_S_COMMAND:
             statements["command_call"] += 1
             expressions["max_depth"] = max(expressions["max_depth"], 1)
-            return
+            continue
         if nt == C.NT_S_TEXT:
             statements["text"] += 1
             strings["dialogue_text_lines"] += 1
-            return
+            continue
         if nt == C.NT_S_NAME:
             statements["name"] += 1
             name = plad["str_list"][sen["name"]["name"]["atom"]["opt"]]
             strings["speaker_names"] += 1
             if name:
                 stats["_unique_speakers"].add(name)
-            return
+            continue
         if nt == C.NT_S_EOF:
             statements["eof"] += 1
 
-    visit_block(root)
     return label_defs, z_defs
 
 
@@ -399,7 +410,9 @@ def _collect_tree_stats(root, stats, operator_tables):
     label_refs = set()
     z_refs = set()
 
-    def visit(node):
+    pending = [root]
+    while pending:
+        node = pending.pop()
         if isinstance(node, dict):
             nt = node.get("node_type")
             if nt in (C.NT_GOTO_GOTO, C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
@@ -431,15 +444,14 @@ def _collect_tree_stats(root, stats, operator_tables):
                 )
             if "named_arg_cnt" in node:
                 expressions["named_args"] += node["named_arg_cnt"]
-            for key, value in node.items():
+            for key, value in reversed(node.items()):
                 if key in ("atom", "_elm_chain"):
                     continue
-                visit(value)
+                pending.append(value)
         elif isinstance(node, list):
-            for value in node:
-                visit(value)
+            for value in reversed(node):
+                pending.append(value)
 
-    visit(root)
     return label_refs, z_refs
 
 
@@ -778,71 +790,64 @@ class BS:
         return False
 
     def _first_atom(s, node):
-        if isinstance(node, dict):
-            a = node.get("atom")
-            if isinstance(a, dict):
-                return a
-            for k in (
-                "Literal",
-                "label",
-                "z_label",
-                "Goto",
-                "name",
-                "opr",
-                "exp",
-                "exp_1",
-                "exp_2",
-                "smp_exp",
-                "elm_exp",
-                "elm_list",
-            ):
-                if k in node:
-                    r = s._first_atom(node.get(k))
-                    if isinstance(r, dict):
-                        return r
-            for v in node.values():
-                r = s._first_atom(v)
-                if isinstance(r, dict):
-                    return r
-        if isinstance(node, list):
-            for v in node:
-                r = s._first_atom(v)
-                if isinstance(r, dict):
-                    return r
+        pending = [node]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, dict):
+                a = node.get("atom")
+                if isinstance(a, dict):
+                    return a
+                keys = (
+                    "Literal",
+                    "label",
+                    "z_label",
+                    "Goto",
+                    "name",
+                    "opr",
+                    "exp",
+                    "exp_1",
+                    "exp_2",
+                    "smp_exp",
+                    "elm_exp",
+                    "elm_list",
+                )
+                pending.extend(reversed(node.values()))
+                pending.extend(node[key] for key in reversed(keys) if key in node)
+            elif isinstance(node, list):
+                pending.extend(reversed(node))
         return None
 
     def _last_atom(s, node):
-        if isinstance(node, dict):
-            a = node.get("atom")
-            if isinstance(a, dict):
-                return a
-            for v in reversed(list(node.values())):
-                r = s._last_atom(v)
-                if isinstance(r, dict):
-                    return r
-        if isinstance(node, list):
-            for v in reversed(node):
-                r = s._last_atom(v)
-                if isinstance(r, dict):
-                    return r
+        pending = [node]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, dict):
+                a = node.get("atom")
+                if isinstance(a, dict):
+                    return a
+                pending.extend(node.values())
+            elif isinstance(node, list):
+                pending.extend(node)
         return None
 
     def _bs_write_cd_nl(s, node_line):
         s.out_scn["scn"].push_u8(C.CD_NL)
         s.out_scn["scn"].push_i32(int(node_line or 0))
 
+    @iterative_method
     def bs_block(s, block):
         if block is None:
             return True
         if isinstance(block, dict) and "sentense_list" in block:
-            return s.bs_ss(block)
+            return (yield (s.bs_ss, block))
         if isinstance(block, list):
             for sn in block:
-                if not s.bs_sentence(sn):
+                if not (yield (s.bs_sentence, sn)):
                     return False
             return True
         return False
 
+    @iterative_method
     def bs_sentence(s, sentense):
         if sentense is None:
             return True
@@ -853,12 +858,13 @@ class BS:
         s._bs_write_cd_nl(node_line)
         if is_inc:
             s.out_scn["scn"].push_u8(C.CD_SEL_BLOCK_START)
-        if not s.bs_sentence_sub(sentense):
+        if not (yield (s.bs_sentence_sub, sentense)):
             return False
         if is_inc:
             s.out_scn["scn"].push_u8(C.CD_SEL_BLOCK_END)
         return True
 
+    @iterative_method
     def bs_sentence_sub(s, node):
         if node is None:
             return True
@@ -872,23 +878,23 @@ class BS:
         if nt == C.NT_S_DEF_PROP:
             return s.bs_def_prop(node.get("def_prop"))
         if nt == C.NT_S_DEF_CMD:
-            return s.bs_def_cmd(node.get("def_cmd"))
+            return (yield (s.bs_def_cmd, node.get("def_cmd")))
         if nt == C.NT_S_GOTO:
-            return s.bs_goto({"Goto": node.get("Goto")})
+            return (yield (s.bs_goto, {"Goto": node.get("Goto")}))
         if nt == C.NT_S_RETURN:
             return s.bs_return({"Return": node.get("Return")})
         if nt == C.NT_S_IF:
-            return s.bs_if(node.get("If"))
+            return (yield (s.bs_if, node.get("If")))
         if nt == C.NT_S_FOR:
-            return s.bs_for(node.get("For"))
+            return (yield (s.bs_for, node.get("For")))
         if nt == C.NT_S_WHILE:
-            return s.bs_while(node.get("While"))
+            return (yield (s.bs_while, node.get("While")))
         if nt == C.NT_S_CONTINUE:
             return s.bs_continue(node.get("Continue"))
         if nt == C.NT_S_BREAK:
             return s.bs_break(node.get("Break"))
         if nt == C.NT_S_SWITCH:
-            return s.bs_switch(node.get("Switch"))
+            return (yield (s.bs_switch, node.get("Switch")))
         if nt == C.NT_S_ASSIGN:
             return s.bs_assign(node.get("assign"))
         if nt == C.NT_S_COMMAND:
@@ -901,6 +907,7 @@ class BS:
             return s.bs_eof()
         return False
 
+    @iterative_method
     def bs_ss(s, ss):
         if ss is None:
             return True
@@ -909,7 +916,7 @@ class BS:
         sl = ss.get("sentense_list")
         if isinstance(sl, list):
             for sn in sl:
-                if not s.bs_sentence(sn):
+                if not (yield (s.bs_sentence, sn)):
                     return False
         return True
 
@@ -969,6 +976,7 @@ class BS:
         s.out_scn["scn"].push_i32(int(def_prop.get("prop_id", 0) or 0))
         return True
 
+    @iterative_method
     def bs_def_cmd(s, def_cmd):
         if def_cmd is None:
             return True
@@ -987,7 +995,7 @@ class BS:
             if not s.bs_def_prop(p):
                 return False
         s.out_scn["scn"].push_u8(C.CD_ARG)
-        if not s.bs_block(def_cmd.get("block")):
+        if not (yield (s.bs_block, def_cmd.get("block"))):
             return False
         s.out_scn["scn"].push_u8(C.CD_RETURN)
         s.out_scn["scn"].push_i32(0)
@@ -999,6 +1007,7 @@ class BS:
                 s.out_scn["scn_cmd_list"][idx] = cmd_label
         return True
 
+    @iterative_method
     def bs_goto(s, goto):
         if goto is None:
             return True
@@ -1028,7 +1037,7 @@ class BS:
             s.out_scn["scn"].push_i32(lid)
             return True
         if nt in (C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
-            if not s.bs_goto_exp(gt):
+            if not (yield (s.bs_goto_exp, gt)):
                 return False
             form = C.FM_INT if nt == C.NT_GOTO_GOSUB else C.FM_STR
             s.out_scn["scn"].push_u8(C.CD_POP)
@@ -1036,6 +1045,7 @@ class BS:
             return True
         return False
 
+    @iterative_method
     def bs_goto_exp(s, goto):
         if goto is None:
             return True
@@ -1043,8 +1053,8 @@ class BS:
             return False
         nt = int(goto.get("node_type", 0) or 0)
         if nt == C.NT_GOTO_GOTO:
-            return s.bs_goto({"Goto": goto})
-        if not s.bs_arg_list(goto.get("arg_list"), True):
+            return (yield (s.bs_goto, {"Goto": goto}))
+        if not (yield (s.bs_arg_list, goto.get("arg_list"), True)):
             return False
         label_no = int(
             ((goto.get("label") or {}).get("atom") or {}).get("opt", 0)
@@ -1089,6 +1099,7 @@ class BS:
             return True
         return False
 
+    @iterative_method
     def bs_if(s, if_):
         if if_ is None:
             return True
@@ -1105,21 +1116,22 @@ class BS:
             ):
                 label_no_if = len(s.out_scn["label_list"])
                 s.out_scn["label_list"].append(0)
-                if not s.bs_exp(sb.get("cond"), True):
+                if not (yield (s.bs_exp, sb.get("cond"), True)):
                     return False
                 s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
                 s.out_scn["scn"].push_i32(label_no_if)
-                if not s.bs_block(sb.get("block")):
+                if not (yield (s.bs_block, sb.get("block"))):
                     return False
                 s.out_scn["scn"].push_u8(C.CD_GOTO)
                 s.out_scn["scn"].push_i32(label_no_end)
                 s.out_scn["label_list"][label_no_if] = s.out_scn["scn"].size()
             else:
-                if not s.bs_block(sb.get("block")):
+                if not (yield (s.bs_block, sb.get("block"))):
                     return False
         s.out_scn["label_list"][label_no_end] = s.out_scn["scn"].size()
         return True
 
+    @iterative_method
     def bs_for(s, for_):
         if for_ is None:
             return True
@@ -1131,19 +1143,19 @@ class BS:
         label_no_out = label_size + 2
         s.out_scn["label_list"].extend([0, 0, 0])
         s.loop_label.append({"Continue": label_no_loop, "Break": label_no_out})
-        if not s.bs_block(for_.get("init")):
+        if not (yield (s.bs_block, for_.get("init"))):
             return False
         s.out_scn["scn"].push_u8(C.CD_GOTO)
         s.out_scn["scn"].push_i32(label_no_init)
         s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
-        if not s.bs_block(for_.get("loop")):
+        if not (yield (s.bs_block, for_.get("loop"))):
             return False
         s.out_scn["label_list"][label_no_init] = s.out_scn["scn"].size()
-        if not s.bs_exp(for_.get("cond"), True):
+        if not (yield (s.bs_exp, for_.get("cond"), True)):
             return False
         s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
         s.out_scn["scn"].push_i32(label_no_out)
-        if not s.bs_block(for_.get("block")):
+        if not (yield (s.bs_block, for_.get("block"))):
             return False
         s.out_scn["scn"].push_u8(C.CD_GOTO)
         s.out_scn["scn"].push_i32(label_no_loop)
@@ -1151,6 +1163,7 @@ class BS:
         s.loop_label.pop()
         return True
 
+    @iterative_method
     def bs_while(s, while_):
         if while_ is None:
             return True
@@ -1162,11 +1175,11 @@ class BS:
         s.out_scn["label_list"].extend([0, 0])
         s.loop_label.append({"Continue": label_no_loop, "Break": label_no_out})
         s.out_scn["label_list"][label_no_loop] = s.out_scn["scn"].size()
-        if not s.bs_exp(while_.get("cond"), True):
+        if not (yield (s.bs_exp, while_.get("cond"), True)):
             return False
         s.out_scn["scn"].push_u8(C.CD_GOTO_FALSE)
         s.out_scn["scn"].push_i32(label_no_out)
-        if not s.bs_block(while_.get("block")):
+        if not (yield (s.bs_block, while_.get("block"))):
             return False
         s.out_scn["scn"].push_u8(C.CD_GOTO)
         s.out_scn["scn"].push_i32(label_no_loop)
@@ -1198,6 +1211,7 @@ class BS:
         s.out_scn["scn"].push_i32(label_no)
         return True
 
+    @iterative_method
     def bs_switch(s, switch):
         if switch is None:
             return True
@@ -1212,13 +1226,13 @@ class BS:
         s.out_scn["label_list"].extend([0] * (len(cases) + 1))
         if switch.get("Default"):
             s.out_scn["label_list"].append(0)
-        if not s.bs_exp(switch.get("cond"), True):
+        if not (yield (s.bs_exp, switch.get("cond"), True)):
             return False
         for idx, cs in enumerate(cases):
             form_r = _fc(dereference((cs.get("value") or {}).get("node_form")))
             s.out_scn["scn"].push_u8(C.CD_COPY)
             s.out_scn["scn"].push_i32(form_l)
-            if not s.bs_exp(cs.get("value"), True):
+            if not (yield (s.bs_exp, cs.get("value"), True)):
                 return False
             s.out_scn["scn"].push_u8(C.CD_OPERATE_2)
             s.out_scn["scn"].push_i32(form_l)
@@ -1236,13 +1250,13 @@ class BS:
             s.out_scn["label_list"][label_no_case + idx] = s.out_scn["scn"].size()
             s.out_scn["scn"].push_u8(C.CD_POP)
             s.out_scn["scn"].push_i32(form_l)
-            if not s.bs_block(cs.get("block")):
+            if not (yield (s.bs_block, cs.get("block"))):
                 return False
             s.out_scn["scn"].push_u8(C.CD_GOTO)
             s.out_scn["scn"].push_i32(label_no_out)
         if switch.get("Default"):
             s.out_scn["label_list"][label_no_default] = s.out_scn["scn"].size()
-            if not s.bs_block((switch.get("Default") or {}).get("block")):
+            if not (yield (s.bs_block, (switch.get("Default") or {}).get("block"))):
                 return False
             s.out_scn["scn"].push_u8(C.CD_GOTO)
             s.out_scn["scn"].push_i32(label_no_out)
@@ -1331,38 +1345,43 @@ class BS:
         s.out_scn["scn"].push_u8(C.CD_EOF)
         return True
 
+    @iterative_method
     def bs_exp(s, exp, need_value):
-        if exp is None:
-            return True
-        if not isinstance(exp, dict):
-            return False
-        nt = int(exp.get("node_type", 0) or 0)
-        if nt == C.NT_EXP_SIMPLE:
-            return s.bs_smp_exp(exp.get("smp_exp"), bool(need_value))
-        if nt == C.NT_EXP_OPR1:
+        pending = [(exp, bool(need_value), False)]
+        while pending:
+            node, need_value, visited = pending.pop()
+            if node is None:
+                continue
+            if not isinstance(node, dict):
+                return False
+            nt = int(node.get("node_type", 0) or 0)
+            if nt == C.NT_EXP_SIMPLE:
+                if not (yield (s.bs_smp_exp, node.get("smp_exp"), need_value)):
+                    return False
+                continue
+            if nt not in (C.NT_EXP_OPR1, C.NT_EXP_OPR2):
+                return False
             if not need_value:
-                return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(exp))
-            if not s.bs_exp(exp.get("exp_1"), True):
-                return False
-            form = _fc(dereference((exp.get("exp_1") or {}).get("node_form")))
-            s.out_scn["scn"].push_u8(C.CD_OPERATE_1)
-            s.out_scn["scn"].push_i32(form)
-            return s.bs_operator_1(exp.get("opr"))
-        if nt == C.NT_EXP_OPR2:
-            if not need_value:
-                return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(exp))
-            if not s.bs_exp(exp.get("exp_1"), True):
-                return False
-            if not s.bs_exp(exp.get("exp_2"), True):
-                return False
-            form_l = _fc(dereference((exp.get("exp_1") or {}).get("node_form")))
-            form_r = _fc(dereference((exp.get("exp_2") or {}).get("node_form")))
-            s.out_scn["scn"].push_u8(C.CD_OPERATE_2)
+                return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(node))
+            if not visited:
+                pending.append((node, True, True))
+                if nt == C.NT_EXP_OPR2:
+                    pending.append((node.get("exp_2"), True, False))
+                pending.append((node.get("exp_1"), True, False))
+                continue
+            form_l = _fc(dereference((node.get("exp_1") or {}).get("node_form")))
+            s.out_scn["scn"].push_u8(
+                C.CD_OPERATE_1 if nt == C.NT_EXP_OPR1 else C.CD_OPERATE_2
+            )
             s.out_scn["scn"].push_i32(form_l)
-            s.out_scn["scn"].push_i32(form_r)
-            return s.bs_operator_1(exp.get("opr"))
-        return False
+            if nt == C.NT_EXP_OPR2:
+                form_r = _fc(dereference((node.get("exp_2") or {}).get("node_form")))
+                s.out_scn["scn"].push_i32(form_r)
+            if not s.bs_operator_1(node.get("opr")):
+                return False
+        return True
 
+    @iterative_method
     def bs_smp_exp(s, smp_exp, need_value):
         if smp_exp is None:
             return True
@@ -1370,33 +1389,35 @@ class BS:
             return False
         nt = int(smp_exp.get("node_type", 0) or 0)
         if nt == C.NT_SMP_KAKKO:
-            return s.bs_exp(smp_exp.get("exp"), bool(need_value))
+            return (yield (s.bs_exp, smp_exp.get("exp"), bool(need_value)))
         if nt == C.NT_SMP_GOTO:
             if not need_value:
                 return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(smp_exp))
-            return s.bs_goto_exp(smp_exp.get("Goto"))
+            return (yield (s.bs_goto_exp, smp_exp.get("Goto")))
         if nt == C.NT_SMP_ELM_EXP:
-            return s.bs_elm_exp(smp_exp.get("elm_exp"), bool(need_value))
+            return (yield (s.bs_elm_exp, smp_exp.get("elm_exp"), bool(need_value)))
         if nt == C.NT_SMP_EXP_LIST:
             if not need_value:
                 return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(smp_exp))
-            return s.bs_exp_list(smp_exp.get("exp_list"))
+            return (yield (s.bs_exp_list, smp_exp.get("exp_list")))
         if nt == C.NT_SMP_LITERAL:
             if not need_value:
                 return s.error(TNMSERR_BS_NEED_REFERENCE, s._first_atom(smp_exp))
             return s.bs_literal(smp_exp.get("Literal"))
         return False
 
+    @iterative_method
     def bs_exp_list(s, exp_list):
         if exp_list is None:
             return True
         if not isinstance(exp_list, dict):
             return False
         for e in exp_list.get("exp") or []:
-            if not s.bs_exp(e, True):
+            if not (yield (s.bs_exp, e, True)):
                 return False
         return True
 
+    @iterative_method
     def bs_arg_list(s, arg_list, need_value):
         if arg_list is None:
             return True
@@ -1410,10 +1431,11 @@ class BS:
                 "node_form"
             )
             need_val_arg = bool(need_value) or form in (C.FM_LIST,) or is_value(form)
-            if not s.bs_arg(a, need_val_arg):
+            if not (yield (s.bs_arg, a, need_val_arg)):
                 return False
         return True
 
+    @iterative_method
     def bs_element(s, element):
         if element is None:
             return True
@@ -1429,7 +1451,7 @@ class BS:
                 arg_cnt = (
                     len(arg_list.get("arg") or []) if isinstance(arg_list, dict) else 0
                 )
-                if not s.bs_arg_list(arg_list, False):
+                if not (yield (s.bs_arg_list, arg_list, False)):
                     return False
                 ft = s.m_piad["form_table"]
                 info = ft.get_element_by_code(
@@ -1498,10 +1520,10 @@ class BS:
             s.out_scn["scn"].push_u8(C.CD_PUSH)
             s.out_scn["scn"].push_i32(_fc(C.FM_INT))
             s.out_scn["scn"].push_i32(int(C.ELM_ARRAY))
-            s.bs_exp(element.get("exp"), True)
-            return True
+            return (yield (s.bs_exp, element.get("exp"), True))
         return False
 
+    @iterative_method
     def bs_elm_list(s, elm_list):
         if elm_list is None:
             return True
@@ -1516,7 +1538,7 @@ class BS:
             s.out_scn["scn"].push_i32(_fc(C.FM_INT))
             s.out_scn["scn"].push_i32(int(cur))
         for el in elm_list.get("element") or []:
-            if not s.bs_element(el):
+            if not (yield (s.bs_element, el)):
                 return False
             if (
                 (_to_int((el or {}).get("element_code", 0)) >> 24) & 0xFF
@@ -1529,6 +1551,7 @@ class BS:
             return False
         return s.bs_elm_list(left.get("elm_list"))
 
+    @iterative_method
     def bs_elm_exp(s, elm_exp, need_value):
         if not isinstance(elm_exp, dict):
             return False
@@ -1542,7 +1565,7 @@ class BS:
             element_code = _to_int((el[-1] or {}).get("element_code", 0) if el else 0)
             if (parent_form_code, element_code) in C.MESSAGE_BLOCK_COMMAND_CODES:
                 s.bs_push_msg_block()
-            if not s.bs_elm_list(elm_list):
+            if not (yield (s.bs_elm_list, elm_list)):
                 return False
             if (parent_form_code, element_code) in C.READ_FLAG_COMMAND_CODES:
                 s.out_scn["scn"].push_i32(s.cur_read_flag_no)
@@ -1551,7 +1574,7 @@ class BS:
                     {"line_no": int((el[-1] or {}).get("node_line", 0) if el else 0)}
                 )
         elif et == C.ET_PROPERTY:
-            if not s.bs_elm_list(elm_list):
+            if not (yield (s.bs_elm_list, elm_list)):
                 return False
         else:
             return True
@@ -1565,12 +1588,13 @@ class BS:
                 return s.error(TNMSERR_BS_NEED_VALUE, s._last_atom(elm_list))
         return True
 
+    @iterative_method
     def bs_arg(s, arg, need_value):
         if arg is None:
             return True
         if not isinstance(arg, dict):
             return False
-        if not s.bs_exp(arg.get("exp"), bool(need_value)):
+        if not (yield (s.bs_exp, arg.get("exp"), bool(need_value))):
             return False
         return True
 

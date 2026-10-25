@@ -12,7 +12,7 @@ from .path_policy import resolve_read_path
 
 def get_max_workers(max_workers: int | None = None) -> int:
     if max_workers is not None and max_workers > 0:
-        return max_workers
+        return min(max_workers, 61) if sys.platform == "win32" else max_workers
     try:
         cpu_count = os.process_cpu_count()
     except AttributeError:
@@ -49,6 +49,7 @@ def _init_process(
     initializer,
     initargs,
 ):
+    _runtime._configure_output_streams()
     _runtime._LEGACY_COMPILE = legacy_compile
     _runtime._LEGACY_FULL = legacy_full
     _runtime._SCENE_STRING_XOR_MULTIPLIER = multiplier
