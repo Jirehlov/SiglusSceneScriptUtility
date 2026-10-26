@@ -28,6 +28,46 @@ class SA:
         s.nesting = 0
         s.expression_heights = []
         s.warnings = {}
+        s._sentence_parsers = {
+            C.LA_T[tp]: (fn, nt, key)
+            for tp, fn, nt, key in (
+                ("LABEL", "sa_label", C.NT_S_LABEL, "label"),
+                ("Z_LABEL", "sa_z_label", C.NT_S_Z_LABEL, "z_label"),
+                ("COMMAND", "sa_def_cmd", C.NT_S_DEF_CMD, "def_cmd"),
+                ("PROPERTY", "sa_def_prop", C.NT_S_DEF_PROP, "def_prop"),
+                ("GOTO", "sa_goto", C.NT_S_GOTO, "Goto"),
+                ("GOSUB", "sa_goto", C.NT_S_GOTO, "Goto"),
+                ("GOSUBSTR", "sa_goto", C.NT_S_GOTO, "Goto"),
+                ("RETURN", "sa_return", C.NT_S_RETURN, "Return"),
+                ("IF", "sa_if", C.NT_S_IF, "If"),
+                ("FOR", "sa_for", C.NT_S_FOR, "For"),
+                ("WHILE", "sa_while", C.NT_S_WHILE, "While"),
+                ("CONTINUE", "sa_continue", C.NT_S_CONTINUE, "Continue"),
+                ("BREAK", "sa_break", C.NT_S_BREAK, "Break"),
+                ("SWITCH", "sa_switch", C.NT_S_SWITCH, "Switch"),
+            )
+        }
+        s._binary_operators = {
+            C.LA_T["LOGICAL_OR"]: (C.OP_LOGICAL_OR, 1),
+            C.LA_T["LOGICAL_AND"]: (C.OP_LOGICAL_AND, C.LOGICAL_AND_PRECEDENCE),
+            C.LA_T["OR"]: (C.OP_OR, 3),
+            C.LA_T["HAT"]: (C.OP_HAT, 4),
+            C.LA_T["AND"]: (C.OP_AND, 5),
+            C.LA_T["EQUAL"]: (C.OP_EQUAL, 6),
+            C.LA_T["NOT_EQUAL"]: (C.OP_NOT_EQUAL, 6),
+            C.LA_T["GREATER"]: (C.OP_GREATER, 7),
+            C.LA_T["GREATER_EQUAL"]: (C.OP_GREATER_EQUAL, 7),
+            C.LA_T["LESS"]: (C.OP_LESS, 7),
+            C.LA_T["LESS_EQUAL"]: (C.OP_LESS_EQUAL, 7),
+            C.LA_T["SL"]: (C.OP_SL, 8),
+            C.LA_T["SR"]: (C.OP_SR, 8),
+            C.LA_T["SR3"]: (C.OP_SR3, 8),
+            C.LA_T["PLUS"]: (C.OP_PLUS, 9),
+            C.LA_T["MINUS"]: (C.OP_MINUS, 9),
+            C.LA_T["MULTIPLE"]: (C.OP_MULTIPLE, 10),
+            C.LA_T["DIVIDE"]: (C.OP_DIVIDE, 10),
+            C.LA_T["PERCENT"]: (C.OP_AMARI, 10),
+        }
 
     def warn(s, message, i):
         s.warnings.setdefault(message, normalize_atom(s._a(i)))
@@ -133,21 +173,10 @@ class SA:
             eof=None,
             is_include_sel=False,
         )
-        for fn, nt, ky in (
-            (s.sa_label, C.NT_S_LABEL, "label"),
-            (s.sa_z_label, C.NT_S_Z_LABEL, "z_label"),
-            (s.sa_def_cmd, C.NT_S_DEF_CMD, "def_cmd"),
-            (s.sa_def_prop, C.NT_S_DEF_PROP, "def_prop"),
-            (s.sa_goto, C.NT_S_GOTO, "Goto"),
-            (s.sa_return, C.NT_S_RETURN, "Return"),
-            (s.sa_if, C.NT_S_IF, "If"),
-            (s.sa_for, C.NT_S_FOR, "For"),
-            (s.sa_while, C.NT_S_WHILE, "While"),
-            (s.sa_continue, C.NT_S_CONTINUE, "Continue"),
-            (s.sa_break, C.NT_S_BREAK, "Break"),
-            (s.sa_switch, C.NT_S_SWITCH, "Switch"),
-        ):
-            ok, p2, x = yield (fn, p)
+        parser = s._sentence_parsers.get(s._a(p).get("type"))
+        if parser is not None:
+            fn, nt, ky = parser
+            ok, p2, x = yield (getattr(s, fn), p)
             if ok:
                 sen[ky] = x
                 sen["node_type"] = nt
@@ -802,6 +831,8 @@ class SA:
         return 1, p, n
 
     def sa_command_or_assign(s, i):
+        if s._a(i).get("type") != C.LA_T["UNKNOWN"]:
+            return 0, i, None, None
         p = i
         err = s.last
         ok, p, el = s.sa_elm_exp(p)
@@ -955,30 +986,34 @@ class SA:
             n["node_type"] = C.NT_SMP_KAKKO
             s.last = err
             return 1, p, n
-        ok, p, x = yield (s.sa_exp_list, p)
-        if ok:
-            n["exp_list"] = x
-            n["node_type"] = C.NT_SMP_EXP_LIST
-            s.last = err
-            return 1, p, n
-        ok, p, x = yield (s.sa_goto, p)
-        if ok:
-            n["Goto"] = x
-            n["node_type"] = C.NT_SMP_GOTO
-            s.last = err
-            return 1, p, n
+        tp = s._a(p).get("type")
+        if tp == C.LA_T["OPEN_BRACKET"]:
+            ok, p, x = yield (s.sa_exp_list, p)
+            if ok:
+                n["exp_list"] = x
+                n["node_type"] = C.NT_SMP_EXP_LIST
+                s.last = err
+                return 1, p, n
+        if tp in (C.LA_T["GOTO"], C.LA_T["GOSUB"], C.LA_T["GOSUBSTR"]):
+            ok, p, x = yield (s.sa_goto, p)
+            if ok:
+                n["Goto"] = x
+                n["node_type"] = C.NT_SMP_GOTO
+                s.last = err
+                return 1, p, n
         ok, p, x = s.sa_literal(p)
         if ok:
             n["Literal"] = x
             n["node_type"] = C.NT_SMP_LITERAL
             s.last = err
             return 1, p, n
-        ok, p, x = yield (s.sa_elm_exp, p)
-        if ok:
-            n["elm_exp"] = x
-            n["node_type"] = C.NT_SMP_ELM_EXP
-            s.last = err
-            return 1, p, n
+        if tp == C.LA_T["UNKNOWN"]:
+            ok, p, x = yield (s.sa_elm_exp, p)
+            if ok:
+                n["elm_exp"] = x
+                n["node_type"] = C.NT_SMP_ELM_EXP
+                s.last = err
+                return 1, p, n
         return 0, i, None
 
     def sa_form(s, i):
@@ -1233,80 +1268,14 @@ class SA:
         return 0, i, None
 
     def sa_operator_2(s, i, lastp):
-        p = i
-        logical_and_precedence = C.LOGICAL_AND_PRECEDENCE
-
-        def ck(tp, op, np):
-            nonlocal p
-            ok, p2, x = s.sa_atom(p, tp)
-            if not ok:
-                return 0, p, None, None
-            x["atom"]["opt"] = op
-            return 1, p2, x, np
-
-        if lastp <= 0:
-            ok, p2, x, np = ck(C.LA_T["LOGICAL_OR"], C.OP_LOGICAL_OR, 1)
-            if ok:
-                return 1, p2, x, np
-        if lastp < logical_and_precedence:
-            ok, p2, x, np = ck(
-                C.LA_T["LOGICAL_AND"], C.OP_LOGICAL_AND, logical_and_precedence
-            )
-            if ok:
-                return 1, p2, x, np
-        if lastp <= 2:
-            ok, p2, x, np = ck(C.LA_T["OR"], C.OP_OR, 3)
-            if ok:
-                return 1, p2, x, np
-        if lastp <= 3:
-            ok, p2, x, np = ck(C.LA_T["HAT"], C.OP_HAT, 4)
-            if ok:
-                return 1, p2, x, np
-        if lastp <= 4:
-            ok, p2, x, np = ck(C.LA_T["AND"], C.OP_AND, 5)
-            if ok:
-                return 1, p2, x, np
-        if lastp <= 5:
-            ok, p2, x, np = ck(C.LA_T["EQUAL"], C.OP_EQUAL, 6)
-            if ok:
-                return 1, p2, x, np
-            ok, p2, x, np = ck(C.LA_T["NOT_EQUAL"], C.OP_NOT_EQUAL, 6)
-            if ok:
-                return 1, p2, x, np
-        if lastp <= 6:
-            for tp, op in (
-                (C.LA_T["GREATER"], C.OP_GREATER),
-                (C.LA_T["GREATER_EQUAL"], C.OP_GREATER_EQUAL),
-                (C.LA_T["LESS"], C.OP_LESS),
-                (C.LA_T["LESS_EQUAL"], C.OP_LESS_EQUAL),
-            ):
-                ok, p2, x, np = ck(tp, op, 7)
-                if ok:
-                    return 1, p2, x, np
-        if lastp <= 7:
-            for tp, op in (
-                (C.LA_T["SL"], C.OP_SL),
-                (C.LA_T["SR"], C.OP_SR),
-                (C.LA_T["SR3"], C.OP_SR3),
-            ):
-                ok, p2, x, np = ck(tp, op, 8)
-                if ok:
-                    return 1, p2, x, np
-        if lastp <= 8:
-            for tp, op in ((C.LA_T["PLUS"], C.OP_PLUS), (C.LA_T["MINUS"], C.OP_MINUS)):
-                ok, p2, x, np = ck(tp, op, 9)
-                if ok:
-                    return 1, p2, x, np
-        if lastp <= 9:
-            for tp, op in (
-                (C.LA_T["MULTIPLE"], C.OP_MULTIPLE),
-                (C.LA_T["DIVIDE"], C.OP_DIVIDE),
-                (C.LA_T["PERCENT"], C.OP_AMARI),
-            ):
-                ok, p2, x, np = ck(tp, op, 10)
-                if ok:
-                    return 1, p2, x, np
-        return 0, i, None, None
+        tp = s._a(i).get("type")
+        operator = s._binary_operators.get(tp)
+        if operator is None or operator[1] <= lastp:
+            return 0, i, None, None
+        op, precedence = operator
+        _, p, x = s.sa_atom(i, tp)
+        x["atom"]["opt"] = op
+        return 1, p, x, precedence
 
     def sa_assign_operator(s, i):
         for tp, op in (

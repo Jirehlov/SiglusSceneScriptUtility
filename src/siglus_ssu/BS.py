@@ -265,29 +265,57 @@ def merge_source_stat_counts(dst, src):
     dst["_unique_speakers"].update(src["_unique_speakers"])
 
 
-def _exp_depth(node):
-    pending = [(node, 0)]
-    result = 0
+def _exp_depth(node, cache):
+    if node["node_type"] == C.NT_EXP_SIMPLE:
+        simple = node["smp_exp"]
+        if simple["node_type"] in (
+            C.NT_SMP_GOTO,
+            C.NT_SMP_ELM_EXP,
+            C.NT_SMP_LITERAL,
+        ):
+            return 1
+    key = id(node)
+    depth = cache.get(key)
+    if depth is not None:
+        return depth
+    pending = [(node, False)]
     while pending:
-        node, depth = pending.pop()
-        nt = node["node_type"]
+        current, visited = pending.pop()
+        current_key = id(current)
+        if current_key in cache:
+            continue
+        nt = current["node_type"]
         if nt == C.NT_EXP_SIMPLE:
-            pending.append((node["smp_exp"], depth))
-            continue
-        if nt == C.NT_EXP_OPR1:
-            pending.append((node["exp_1"], depth + 1))
+            children = (current["smp_exp"],)
+            offset = 0
+        elif nt == C.NT_EXP_OPR1:
+            children = (current["exp_1"],)
+            offset = 1
         elif nt == C.NT_EXP_OPR2:
-            pending.append((node["exp_1"], depth + 1))
-            pending.append((node["exp_2"], depth + 1))
+            children = (current["exp_1"], current["exp_2"])
+            offset = 1
         elif nt == C.NT_SMP_KAKKO:
-            pending.append((node["exp"], depth + 1))
+            children = (current["exp"],)
+            offset = 1
         elif nt == C.NT_SMP_EXP_LIST:
-            pending.extend((child, depth + 1) for child in node["exp_list"]["exp"])
+            children = current["exp_list"]["exp"]
+            offset = 1
         elif nt in (C.NT_SMP_GOTO, C.NT_SMP_ELM_EXP, C.NT_SMP_LITERAL):
-            result = max(result, depth + 1)
+            cache[current_key] = 1
             continue
-        result = max(result, depth)
-    return result
+        else:
+            cache[current_key] = 0
+            continue
+        if visited:
+            cache[current_key] = offset + max(
+                (cache[id(child)] for child in children), default=-offset
+            )
+        else:
+            pending.append((current, True))
+            pending.extend(
+                (child, False) for child in children if id(child) not in cache
+            )
+    return cache[key]
 
 
 def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables):
@@ -409,6 +437,7 @@ def _collect_tree_stats(root, stats, operator_tables):
     labels = stats["labels"]
     label_refs = set()
     z_refs = set()
+    depth_cache = {}
 
     pending = [root]
     while pending:
@@ -440,7 +469,7 @@ def _collect_tree_stats(root, stats, operator_tables):
                 ] += 1
             if nt in (C.NT_EXP_SIMPLE, C.NT_EXP_OPR1, C.NT_EXP_OPR2):
                 expressions["max_depth"] = max(
-                    expressions["max_depth"], _exp_depth(node)
+                    expressions["max_depth"], _exp_depth(node, depth_cache)
                 )
             if "named_arg_cnt" in node:
                 expressions["named_args"] += node["named_arg_cnt"]
