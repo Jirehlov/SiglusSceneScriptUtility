@@ -1957,7 +1957,7 @@ def extract_pck(
     dat = read_bytes(input_pck)
     flix_info = _parse_flix_pck(dat)
     if flix_info and (not looks_like_siglus_pck(dat)):
-        if dat_txt:
+        if dat_txt or decompile:
             option = "--decompile" if decompile else "--disam"
             sys.stderr.write(f"{option} is not supported for Flix .pck containers\n")
             return 2
@@ -2028,7 +2028,7 @@ def extract_pck(
     D = None
     disam_stats = None
     disam_fail_cnt = 0
-    if dat_txt:
+    if dat_txt or decompile:
         from . import dat as D
 
         disam_stats = new_disam_stats()
@@ -2074,6 +2074,7 @@ def extract_pck(
             dat_items,
             stats=disam_stats,
             decompile=decompile,
+            emit_text=dat_txt,
         )
         failed_paths = result["failed_paths"]
         disam_fail_cnt = len(failed_paths)
@@ -2087,7 +2088,7 @@ def extract_pck(
         sys.stderr.write(f"Failed scenes: {fail_cnt:d}\n")
     if disam_fail_cnt:
         sys.stderr.write(f"Failed scene outputs: {disam_fail_cnt:d}\n")
-    if dat_txt:
+    if dat_txt or decompile:
         sys.stdout.write(
             f"Disassembly ended unexpectedly: {int(disam_stats.get('ended_unexpectedly', 0) or 0):d}\n"
         )

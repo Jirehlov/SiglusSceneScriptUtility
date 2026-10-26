@@ -279,7 +279,7 @@ def dat_disassembly_bundle(
         return None
 
 
-def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
+def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):
     h = bundle.get("header") or {}
     str_list = bundle.get("str_list") or []
     label_list = bundle.get("label_list") or []
@@ -291,6 +291,8 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     if ended_unexpectedly:
         stats["ended_unexpectedly"] += 1
         print(f"Disassembly of {os.path.basename(str(dat_path))} ended unexpectedly.")
+    if not emit_text:
+        return str(dat_path)
     out_name = os.path.basename(str(dat_path)) + ".txt"
     out_path = os.path.join(str(out_dir), out_name)
     os.makedirs(str(out_dir), exist_ok=True)
@@ -395,13 +397,15 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle):
     return out_path
 
 
-def _write_dat_txt(dat_path, blob, out_dir, stats, bundle):
+def _write_dat_txt(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):
     try:
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
             return None
         if bundle["decompiler_excluded"]:
             return None
-        return _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle)
+        return _write_dat_txt_prepared(
+            dat_path, blob, out_dir, stats, bundle, emit_text=emit_text
+        )
     except Exception:
         return None
 
@@ -420,7 +424,7 @@ def _write_dat_decompiled(dat_path, out_dir, bundle, decompile_hints, stats):
         return None
 
 
-def process_dat_output_items(items, stats, decompile=False):
+def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
     ready_items = []
     written_paths = []
     failed_paths = []
@@ -441,6 +445,7 @@ def process_dat_output_items(items, stats, decompile=False):
                 scene_name=item.get("scene_name"),
                 with_trace=decompile,
                 trace_profile="decompile" if decompile else None,
+                emit_text=emit_text,
             )
             add_elapsed_seconds(
                 stats, "disassembly_seconds", time.perf_counter() - started
@@ -455,6 +460,7 @@ def process_dat_output_items(items, stats, decompile=False):
                 out_dir,
                 stats,
                 bundle=bundle,
+                emit_text=emit_text,
             )
             add_elapsed_seconds(
                 stats, "disassembly_seconds", time.perf_counter() - started

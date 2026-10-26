@@ -426,7 +426,7 @@ def _decompile_payload(
         pck.extract_pck,
         original_pck,
         tmp_root,
-        dat_txt=True,
+        dat_txt=False,
         decompile=True,
     )
     extract_dir = _find_extract_dir(tmp_root)
