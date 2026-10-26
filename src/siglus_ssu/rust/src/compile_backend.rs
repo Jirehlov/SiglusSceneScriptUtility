@@ -19,6 +19,243 @@ mod sa;
 mod scene_dat;
 mod source_angou;
 
+pub(crate) struct DecompileStringPool {
+    pub(crate) strings: Vec<String>,
+    pub(crate) carrier: Option<(usize, usize)>,
+}
+
+pub(crate) struct DecompileFrontend {
+    constants: config::CompileConstants,
+    codes: codes::RuntimeCodes,
+}
+
+impl DecompileFrontend {
+    pub(crate) fn new(constants: Bound<'_, PyAny>) -> PyResult<Self> {
+        let constants = config::parse_compile_constants(constants)?;
+        let codes = codes::RuntimeCodes::from_constants(&constants)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+        Ok(Self { constants, codes })
+    }
+
+    pub(crate) fn label_refs(&self, text: &str) -> Vec<(usize, usize, String)> {
+        if !text.contains("#l") || (!text.contains("goto") && !text.contains("gosub")) {
+            return Vec::new();
+        }
+        if let Some(reference) = decompile_goto_reference(text) {
+            return vec![reference];
+        }
+        let Ok(lex) = la::lex_scene_text(text, &self.codes.la) else {
+            return Vec::new();
+        };
+        let chars: Vec<char> = text.chars().collect();
+        let mut starts = vec![0];
+        starts.extend(
+            chars
+                .iter()
+                .enumerate()
+                .filter_map(|(index, ch)| (*ch == '\n').then_some(index + 1)),
+        );
+        let codes = &self.codes.la;
+        let mut refs = Vec::new();
+        for (index, atom) in lex.atom_list.iter().enumerate() {
+            if ![codes.goto, codes.gosub, codes.gosubstr].contains(&atom.atom_type) {
+                continue;
+            }
+            let mut next = index + 1;
+            if atom.atom_type != codes.goto
+                && lex
+                    .atom_list
+                    .get(next)
+                    .is_some_and(|atom| atom.atom_type == codes.open_paren)
+            {
+                let mut depth = 1;
+                next += 1;
+                while next < lex.atom_list.len() && depth != 0 {
+                    if lex.atom_list[next].atom_type == codes.open_paren {
+                        depth += 1;
+                    } else if lex.atom_list[next].atom_type == codes.close_paren {
+                        depth -= 1;
+                    }
+                    next += 1;
+                }
+            }
+            if !lex
+                .atom_list
+                .get(next)
+                .is_some_and(|atom| atom.atom_type == codes.label)
+            {
+                continue;
+            }
+            let Some(span) = lex.atom_span_list.get(next) else {
+                continue;
+            };
+            let Some(base) = span.line.checked_sub(1).and_then(|line| starts.get(line)) else {
+                continue;
+            };
+            let start = base + span.start_char;
+            let end = base + span.end_char;
+            let Some(slice) = chars.get(start..end) else {
+                continue;
+            };
+            let label: String = slice.iter().collect();
+            if label.starts_with("#l") && label[2..].bytes().all(|byte| byte.is_ascii_digit()) {
+                refs.push((start, end, label));
+            }
+        }
+        refs.sort();
+        refs.dedup();
+        refs
+    }
+
+    pub(crate) fn string_pool(
+        &self,
+        declarations: &str,
+        text: &str,
+    ) -> Result<DecompileStringPool, String> {
+        let mut data = ia::IaData::new(
+            form_table::FormTable::from_constants(&self.constants)?,
+            self.codes.clone(),
+            std::iter::empty::<String>(),
+        );
+        data.selection_command_codes = self
+            .constants
+            .selection_command_codes
+            .iter()
+            .copied()
+            .collect();
+        data.message_block_command_codes = self
+            .constants
+            .message_block_command_codes
+            .iter()
+            .copied()
+            .collect();
+        data.read_flag_command_codes = self
+            .constants
+            .read_flag_command_codes
+            .iter()
+            .copied()
+            .collect();
+        let mut analyzer =
+            ia::IncAnalyzer::new(declarations, self.codes.forms.global.name.as_str());
+        let mut scratch = ia::IaScratch::default();
+        analyzer
+            .step1(&mut data, &mut scratch)
+            .map_err(|_| analyzer.error_str.clone())?;
+        analyzer
+            .step2(&mut data, &mut scratch)
+            .map_err(|_| analyzer.error_str.clone())?;
+        data.inc_property_cnt = data.property_cnt;
+        data.inc_command_cnt = data.command_cnt;
+        let mut ca = ca::CharacterAnalyzer::new();
+        let first = ca.analyze_file_1(text).map_err(|_| ca.error_str.clone())?;
+        let second = ca
+            .analyze_file_2(&first, &data.name_set)
+            .map_err(|_| ca.error_str.clone())?;
+        if !second.inc_text.is_empty() {
+            let mut analyzer =
+                ia::IncAnalyzer::new(&second.inc_text, self.codes.forms.scene.name.as_str());
+            let mut scratch = ia::IaScratch::default();
+            analyzer
+                .step1(&mut data, &mut scratch)
+                .map_err(|_| analyzer.error_str.clone())?;
+            analyzer
+                .step2(&mut data, &mut scratch)
+                .map_err(|_| analyzer.error_str.clone())?;
+        }
+        let expanded = ca
+            .analyze_line(&second.scene_text, &data.replace_tree)
+            .map_err(|_| ca.error_str.clone())?;
+        let mut lex = la::lex_scene_text(&expanded, &self.codes.la)
+            .map_err(|error| format!("lexer line {}", error.line))?;
+        let mut syntax = sa::SyntaxAnalyzer::new(&lex, self.codes.clone());
+        let root = syntax
+            .analyze(&mut data)
+            .map_err(|_| format!("{:?}", syntax.last))?;
+        let mut semantic = ma::SemanticAnalyzer::new(&mut data, &mut lex.str_list);
+        semantic
+            .analyze(root)
+            .map_err(|_| format!("{:?}", semantic.last))?;
+        let source = la::lex_scene_text(text, &self.codes.la)
+            .map_err(|error| format!("lexer line {}", error.line))?;
+        let mut in_command = false;
+        let mut bracket = None;
+        for (atom, span) in source.atom_list.iter().zip(&source.atom_span_list) {
+            if atom.atom_type == self.codes.la.command {
+                in_command = true;
+            } else if in_command && atom.atom_type == self.codes.la.open_bracket {
+                bracket = Some((span.line, span.end_char));
+            } else if in_command && atom.atom_type == self.codes.la.open_brace {
+                break;
+            }
+        }
+        Ok(DecompileStringPool {
+            strings: lex.str_list,
+            carrier: bracket,
+        })
+    }
+}
+
+pub(crate) fn decompiler_is_zen(ch: char) -> bool {
+    ca::is_zen(ch)
+}
+
+fn decompile_goto_reference(text: &str) -> Option<(usize, usize, String)> {
+    let bytes = text.as_bytes();
+    let mut position = 0;
+    while bytes
+        .get(position)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        position += 1;
+    }
+    if bytes.get(position) == Some(&b'#') {
+        position += 1;
+        if !matches!(bytes.get(position), Some(b'l' | b'z')) {
+            return None;
+        }
+        position += 1;
+        let start = position;
+        while bytes.get(position).is_some_and(u8::is_ascii_digit) {
+            position += 1;
+        }
+        if position == start || bytes.get(position) != Some(&b'\t') {
+            return None;
+        }
+        position += 1;
+    }
+    if bytes.get(position..position + 4) != Some(b"goto") {
+        return None;
+    }
+    position += 4;
+    let whitespace = position;
+    while bytes
+        .get(position)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        position += 1;
+    }
+    if position == whitespace || bytes.get(position..position + 2) != Some(b"#l") {
+        return None;
+    }
+    let start = position;
+    position += 2;
+    let digits = position;
+    while bytes.get(position).is_some_and(u8::is_ascii_digit) {
+        position += 1;
+    }
+    if position == digits {
+        return None;
+    }
+    let end = position;
+    while bytes
+        .get(position)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        position += 1;
+    }
+    (position == bytes.len()).then(|| (start, end, text[start..end].to_owned()))
+}
+
 fn usize_map_to_dict<'py>(
     py: Python<'py>,
     map: &std::collections::BTreeMap<String, usize>,

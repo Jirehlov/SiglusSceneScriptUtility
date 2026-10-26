@@ -53,102 +53,115 @@ def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False
     )
 
 
-@lru_cache(maxsize=8)
-def _payload_native_config_cached(_profile, scene_string_xor_multiplier):
+@lru_cache(maxsize=4)
+def _disam_native_config_cached(_profile, scene_string_xor_multiplier):
     from .common import scn_expression_tables
+    from .compiler import _native_compile_constants_config
 
-    fm = C._FORM_CODE
-
-    def form(name):
-        return int(fm[getattr(C, name)])
-
-    def code(name):
-        return int(getattr(C, name))
-
-    elements = []
-    for (parent, elem_code), entry in scn_expression_tables(_profile).elements.items():
-        for info in entry.get("alts") or (entry,):
-            arg_map = {
-                int(arg_id): [
-                    (
-                        fm.get(arg.get("form")),
-                        int(arg.get("id", 0)),
-                        arg.get("form") in (C.FM___ARGS, C.FM___ARGSREF),
-                        (info.get("parent"), info.get("name"), arg.get("name"))
-                        in C.NAMED_INT_REFERENCE_ARGUMENTS,
-                    )
-                    for arg in args["arg_list"]
-                ]
-                for arg_id, args in (info.get("arg_map") or {}).items()
-            }
-            elements.append(
-                (
-                    int(info["type"]),
-                    int(parent),
-                    info.get("ret"),
-                    int(elem_code),
-                    str(info["name"]),
-                    arg_map,
-                )
-            )
-    config = {
-        **{name: code(name) for name in C.SCN_OP_NAMES},
-        "OP_PLUS": code("OP_PLUS"),
-        "OP_MINUS": code("OP_MINUS"),
-        "OP_MULTIPLE": code("OP_MULTIPLE"),
-        "OP_TILDE": code("OP_TILDE"),
-        "string_cmp_ops": [
-            code("OP_EQUAL"),
-            code("OP_NOT_EQUAL"),
-            code("OP_GREATER"),
-            code("OP_GREATER_EQUAL"),
-            code("OP_LESS"),
-            code("OP_LESS_EQUAL"),
-        ],
-        "FM_VOID": form("FM_VOID"),
-        "FM_INT": form("FM_INT"),
-        "FM_STR": form("FM_STR"),
-        "FM_LABEL": form("FM_LABEL"),
-        "FM_LIST": form("FM_LIST"),
-        "FM_INTLIST": form("FM_INTLIST"),
-        "FM_STRLIST": form("FM_STRLIST"),
-        "FM_CALL": form("FM_CALL"),
-        "FM_GLOBAL": form("FM_GLOBAL"),
-        "FM_INTREF": form("FM_INTREF"),
-        "FM_STRREF": form("FM_STRREF"),
-        "FM_INTLISTREF": form("FM_INTLISTREF"),
-        "FM_STRLISTREF": form("FM_STRLISTREF"),
-        "ELM_ARRAY": code("ELM_ARRAY"),
-        "ELM_OWNER_USER_PROP": code("ELM_OWNER_USER_PROP"),
-        "ELM_OWNER_USER_CMD": code("ELM_OWNER_USER_CMD"),
-        "ELM_OWNER_CALL_PROP": code("ELM_OWNER_CALL_PROP"),
-        "ET_PROPERTY": code("ET_PROPERTY"),
-        "ET_COMMAND": code("ET_COMMAND"),
-        "SCN_HDR_FIELDS": list(C.SCN_HDR_FIELDS),
-        "SCN_HDR_SIZE": int(C.SCN_HDR_SIZE),
-        "SCENE_STRING_XOR_MULTIPLIER": int(scene_string_xor_multiplier),
-        "system_elements": elements,
-        "read_flag_commands": [
-            (int(parent), int(elem)) for parent, elem in C.READ_FLAG_COMMAND_CODES
-        ],
-    }
-    return native_accel.scn_payload_config(config)
+    names = (
+        "CD_ARG",
+        "CD_ASSIGN",
+        "CD_COMMAND",
+        "CD_COPY",
+        "CD_COPY_ELM",
+        "CD_DEC_PROP",
+        "CD_ELM_POINT",
+        "CD_EOF",
+        "CD_GOSUB",
+        "CD_GOSUBSTR",
+        "CD_GOTO",
+        "CD_GOTO_FALSE",
+        "CD_GOTO_TRUE",
+        "CD_NAME",
+        "CD_NL",
+        "CD_NONE",
+        "CD_OPERATE_1",
+        "CD_OPERATE_2",
+        "CD_POP",
+        "CD_PROPERTY",
+        "CD_PUSH",
+        "CD_RETURN",
+        "CD_SEL_BLOCK_END",
+        "CD_SEL_BLOCK_START",
+        "CD_TEXT",
+        "CONST_PROFILE",
+        "ELM_ARRAY",
+        "ELM_GLOBAL_MSG_BLOCK",
+        "ELM_OWNER_CALL_PROP",
+        "ELM_OWNER_USER_CMD",
+        "ELM_OWNER_USER_PROP",
+        "ET_COMMAND",
+        "ET_PROPERTY",
+        "FM_CALL",
+        "FM_GLOBAL",
+        "FM_INT",
+        "FM_INTLIST",
+        "FM_INTLISTREF",
+        "FM_INTREF",
+        "FM_LABEL",
+        "FM_LIST",
+        "FM_STR",
+        "FM_STRLIST",
+        "FM_STRLISTREF",
+        "FM_STRREF",
+        "FM_VOID",
+        "FM___ARGS",
+        "FM___ARGSREF",
+        "LA_T",
+        "NAMED_INT_REFERENCE_ARGUMENTS",
+        "OP_MULTIPLE",
+        "OP_PLUS",
+        "READ_FLAG_COMMAND_CODES",
+        "SCN_OP_NAMES",
+        "_FORM_CODE",
+    )
+    constants = {name: getattr(C, name) for name in names}
+    constants.update({name: getattr(C, name) for name in C.SCN_OP_NAMES})
+    return native_accel.disam_config(
+        {
+            "constants": constants,
+            "tables": scn_expression_tables(_profile),
+            "compiler": _native_compile_constants_config(),
+        }
+    )
 
 
-def scn_payload_hash_bundles_native(blob: bytes, pack_context=None, *, hashes=True):
-    if not _USE_NATIVE or _runtime._LEGACY_FULL:
+def _disam_native_config():
+    return _disam_native_config_cached(
+        C.CONST_PROFILE, _runtime._SCENE_STRING_XOR_MULTIPLIER
+    )
+
+
+def disassemble_scn_bytes_native(parameters):
+    if not is_native_available():
         return None
-    try:
-        return native_accel.scn_payload_hash_bundles(
-            bytes(blob),
-            _payload_native_config_cached(
-                C.CONST_PROFILE, _runtime._SCENE_STRING_XOR_MULTIPLIER
-            ),
-            pack_context,
-            hashes=hashes,
-        )
-    except Exception:
+    result = native_accel.disassemble_scn_bytes(_disam_native_config(), parameters)
+    parameters["parse_status"].update(result["status"])
+    return result["result"]
+
+
+def build_decompile_hints_native(bundles):
+    return native_accel.build_decompile_hints(_disam_native_config(), bundles)
+
+
+def decompile_source_native(bundle, hints):
+    return native_accel.decompile_source(
+        _disam_native_config(), bundle, hints["_native"]
+    )
+
+
+def complete_payload_trace_native(trace, meta, pack_context, str_list):
+    if not is_native_available():
         return None
+    return native_accel.complete_payload_trace(
+        _disam_native_config(), trace, meta, pack_context, str_list
+    )
+
+
+def scn_payload_hash_bundles_native(trace):
+    if not is_native_available():
+        return None
+    return native_accel.scn_payload_hash_bundles(_disam_native_config(), trace)
 
 
 class _LzssTree:

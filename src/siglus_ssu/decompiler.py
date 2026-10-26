@@ -717,6 +717,26 @@ def _support_inc_lines_from_hints(hints):
 
 
 def build_decompile_hints(bundles, status):
+    from .native_ops import build_decompile_hints_native, is_native_available
+
+    if is_native_available():
+        cached_bundles = {}
+        remaining_bytes = 256 * 1024 * 1024
+
+        def native_bundles():
+            nonlocal remaining_bytes
+            for bundle in bundles:
+                status(bundle)
+                retained_bytes = bundle["trace"].retained_bytes
+                if retained_bytes <= remaining_bytes:
+                    cached_bundles[bundle["dat_path"]] = bundle
+                    remaining_bytes -= retained_bytes
+                yield bundle
+
+        hints = build_decompile_hints_native(native_bundles())
+        if hints is not None:
+            hints["cached_bundles"] = cached_bundles
+        return hints
     seed = None
     slots = {}
     name_texts = set()
@@ -3278,8 +3298,13 @@ def write_decompiled_ss(dat_path, bundle, out_dir, hints):
         out_root = os.path.join(out_dir, "decompiled")
         stem = os.path.splitext(os.path.basename(str(dat_path)))[0]
         out_path = unique_out_path(os.path.join(out_root, stem + ".ss"))
-        dec = _Decompiler(bundle, hints=hints)
-        write_text(out_path, dec.decompile(), enc="utf-8")
+        if "_native" in hints:
+            from .native_ops import decompile_source_native
+
+            source = decompile_source_native(bundle, hints)
+        else:
+            source = _Decompiler(bundle, hints=hints).decompile()
+        write_text(out_path, source, enc="utf-8")
         return out_path
     except Exception as exc:
         sys.stderr.write(f"decompile: {dat_path}: {exc}\n")

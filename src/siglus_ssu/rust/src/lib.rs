@@ -1,8 +1,8 @@
 mod compile_backend;
+mod disam;
 mod lzss;
 mod lzss32;
 mod nwa;
-mod payload;
 mod smd5;
 mod tile;
 mod xor;
@@ -510,20 +510,59 @@ fn lsp_scan_document(
 }
 
 #[pyfunction]
-#[pyo3(signature = (blob, config, pack_context, *, hashes))]
-fn scn_payload_hash_bundles(
-    py: Python<'_>,
-    blob: &[u8],
-    config: Bound<'_, PyAny>,
-    pack_context: Option<Bound<'_, PyAny>>,
-    hashes: bool,
-) -> PyResult<Option<Py<PyDict>>> {
-    catch_native_panic(|| payload::scn_payload_hash_bundles(py, blob, config, pack_context, hashes))
+fn disam_config(config: Bound<'_, PyDict>) -> PyResult<disam::DisamConfig> {
+    catch_native_panic(|| disam::disam_config(config))
 }
 
 #[pyfunction]
-fn scn_payload_config(config: Bound<'_, PyDict>) -> PyResult<payload::PayloadConfig> {
-    catch_native_panic(|| payload::scn_payload_config(config))
+fn disassemble_scn_bytes(
+    py: Python<'_>,
+    config: PyRef<'_, disam::DisamConfig>,
+    parameters: Bound<'_, PyDict>,
+) -> PyResult<Py<PyDict>> {
+    catch_native_panic(|| disam::disassemble_scn_bytes(py, config, parameters))
+}
+
+#[pyfunction]
+fn build_decompile_hints(
+    py: Python<'_>,
+    config: PyRef<'_, disam::DisamConfig>,
+    bundles: Bound<'_, PyAny>,
+) -> PyResult<Py<PyAny>> {
+    catch_native_panic(|| disam::decompiler::build_decompile_hints(py, config, bundles))
+}
+
+#[pyfunction]
+fn decompile_source(
+    py: Python<'_>,
+    config: PyRef<'_, disam::DisamConfig>,
+    bundle: Bound<'_, PyAny>,
+    hints: PyRef<'_, disam::NativeValue>,
+) -> PyResult<Py<PyAny>> {
+    catch_native_panic(|| disam::decompiler::decompile_source(py, config, bundle, hints))
+}
+
+#[pyfunction]
+fn complete_payload_trace(
+    py: Python<'_>,
+    config: PyRef<'_, disam::DisamConfig>,
+    trace: PyRef<'_, disam::NativeValue>,
+    meta: Bound<'_, PyAny>,
+    pack_context: Bound<'_, PyAny>,
+    str_list: Bound<'_, PyAny>,
+) -> PyResult<disam::NativeValue> {
+    catch_native_panic(|| {
+        disam::dat::complete_payload_trace(py, config, trace, meta, pack_context, str_list)
+    })
+}
+
+#[pyfunction]
+fn scn_payload_hash_bundles(
+    py: Python<'_>,
+    config: PyRef<'_, disam::DisamConfig>,
+    trace: PyRef<'_, disam::NativeValue>,
+) -> PyResult<Py<PyDict>> {
+    catch_native_panic(|| disam::dat::scn_payload_hash_bundles(py, config, trace))
 }
 
 #[pymodule]
@@ -543,8 +582,11 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_build_project, m)?)?;
     m.add_function(wrap_pyfunction!(lsp_scan_document, m)?)?;
-    m.add_class::<payload::PayloadConfig>()?;
-    m.add_function(wrap_pyfunction!(scn_payload_config, m)?)?;
+    m.add_function(wrap_pyfunction!(disam_config, m)?)?;
+    m.add_function(wrap_pyfunction!(disassemble_scn_bytes, m)?)?;
+    m.add_function(wrap_pyfunction!(build_decompile_hints, m)?)?;
+    m.add_function(wrap_pyfunction!(decompile_source, m)?)?;
+    m.add_function(wrap_pyfunction!(complete_payload_trace, m)?)?;
     m.add_function(wrap_pyfunction!(scn_payload_hash_bundles, m)?)?;
     Ok(())
 }

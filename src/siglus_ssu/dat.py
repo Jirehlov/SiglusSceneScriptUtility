@@ -252,12 +252,18 @@ def dat_disassembly_bundle(
         )
         dis, trace = result if with_trace else (result, None)
         if payload_trace and with_trace:
-            runtime_trace = list(trace or [])
-            trace = (
-                _payload_metadata_trace(meta, pack_context)
-                + runtime_trace
-                + _payload_string_trace(str_list)
-            )
+            from .native_ops import complete_payload_trace_native
+
+            native = complete_payload_trace_native(trace, meta, pack_context, str_list)
+            if native is not None:
+                trace = native
+            else:
+                runtime_trace = list(trace or [])
+                trace = (
+                    _payload_metadata_trace(meta, pack_context)
+                    + runtime_trace
+                    + _payload_string_trace(str_list)
+                )
         return {
             "header": h,
             "sections": sections,
@@ -514,18 +520,22 @@ def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
             return {"written": written_paths, "failed_paths": failed_paths}
         for item in ready_items:
             started = time.perf_counter()
-            try:
-                bundle = dat_disassembly_bundle(
-                    read_bytes(item["dat_path"]),
-                    item["dat_path"],
-                    pack_context=item["pack_context"],
-                    scene_no=item["scene_no"],
-                    scene_name=item["scene_name"],
-                    emit_text=False,
-                    trace_profile="decompile",
-                )
-            except OSError:
-                bundle = None
+            bundle = decompile_hints.get("cached_bundles", {}).pop(
+                item["dat_path"], None
+            )
+            if bundle is None:
+                try:
+                    bundle = dat_disassembly_bundle(
+                        read_bytes(item["dat_path"]),
+                        item["dat_path"],
+                        pack_context=item["pack_context"],
+                        scene_no=item["scene_no"],
+                        scene_name=item["scene_name"],
+                        emit_text=False,
+                        trace_profile="decompile",
+                    )
+                except OSError:
+                    bundle = None
             add_elapsed_seconds(
                 stats, "disassembly_seconds", time.perf_counter() - started
             )
@@ -709,11 +719,6 @@ def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes
         payload_context["payload_scene_name"] = str(scene_name)
     if not scn_structure_valid(blob):
         return {"status": "INCOMPLETE"}
-    native = scn_payload_hash_bundles_native(
-        blob, pack_context=payload_context, hashes=hashes
-    )
-    if native is not None:
-        return native
     bundle = dat_disassembly_bundle(
         blob,
         pack_context=payload_context,
@@ -728,6 +733,9 @@ def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes
         return {"status": "INCOMPLETE"}
     if not hashes:
         return {"status": "COMPLETE"}
+    native = scn_payload_hash_bundles_native(bundle["trace"])
+    if native is not None:
+        return native
     return _payload_trace_hash_bundles(bundle["trace"])
 
 

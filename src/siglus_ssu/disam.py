@@ -49,6 +49,27 @@ def disassemble_scn_bytes(
     trace_profile,
     parse_status,
 ):
+    from .native_ops import disassemble_scn_bytes_native
+
+    native = disassemble_scn_bytes_native(
+        {
+            "scn": scn,
+            "str_list": str_list,
+            "label_list": label_list,
+            "z_label_list": z_label_list,
+            "cmd_label_list": cmd_label_list,
+            "scn_prop_defs": scn_prop_defs,
+            "scn_cmd_names": scn_cmd_names,
+            "call_prop_names": call_prop_names,
+            "pack_context": pack_context,
+            "with_trace": with_trace,
+            "emit_text": emit_text,
+            "trace_profile": trace_profile,
+            "parse_status": parse_status,
+        }
+    )
+    if native is not None:
+        return native
     pack_context = pack_context or {}
     inc_property_defs = pack_context.get("inc_property_defs")
     inc_command_defs = pack_context.get("inc_command_defs")
