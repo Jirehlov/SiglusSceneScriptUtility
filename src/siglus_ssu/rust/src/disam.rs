@@ -8302,7 +8302,7 @@ pub(crate) mod dat {
         let work = || -> R {
             let prefix = rt.call(
                 V::function(METADATA_ID, vec![]),
-                Args::plain(vec![from_py(&meta)?, from_py(&pack_context)?]),
+                Args::plain(vec![from_py(&meta)?, config.pack_context(&pack_context)?]),
             )?;
             let suffix = rt.call(
                 V::function(STRINGS_ID, vec![]),
@@ -9602,8 +9602,14 @@ impl Runtime<'_> {
     }
 }
 
+struct CachedContextField {
+    original: Py<PyAny>,
+    converted: V,
+}
+
 #[pyclass(unsendable, module = "siglus_ssu.native_accel")]
 pub struct DisamConfig {
+    context_fields: RefCell<HashMap<&'static str, Vec<CachedContextField>>>,
     native_tables: Rc<NativeTables>,
     globals: Rc<RefCell<HashMap<String, V>>>,
     literals: Rc<RefCell<HashMap<&'static str, V>>>,
@@ -9612,6 +9618,51 @@ pub struct DisamConfig {
 }
 
 impl DisamConfig {
+    fn context_field(&self, name: &'static str, value: &Bound<'_, PyAny>) -> PyResult<V> {
+        let mut fields = self.context_fields.borrow_mut();
+        let entries = fields.entry(name).or_default();
+        for cached in entries.iter() {
+            let original = cached.original.bind(value.py());
+            if original.is(value) || original.eq(value)? {
+                return Ok(cached.converted.clone());
+            }
+        }
+        let converted = from_py(value)?;
+        if entries.len() == 2 {
+            entries.remove(0);
+        }
+        entries.push(CachedContextField {
+            original: value.clone().unbind(),
+            converted: converted.clone(),
+        });
+        Ok(converted)
+    }
+    fn pack_context(&self, value: &Bound<'_, PyAny>) -> PyResult<V> {
+        let Ok(mapping) = value.cast::<PyDict>() else {
+            return from_py(value);
+        };
+        let mut output = OrderedMap::new();
+        for (key, value) in mapping.iter() {
+            let name = key
+                .cast::<PyString>()
+                .ok()
+                .and_then(|key| match key.to_str().ok()? {
+                    "scene_names" => Some("scene_names"),
+                    "inc_property_defs" => Some("inc_property_defs"),
+                    "inc_command_defs" => Some("inc_command_defs"),
+                    _ => None,
+                });
+            let converted = if let Some(name) = name {
+                self.context_field(name, &value)?
+            } else {
+                from_py(&value)?
+            };
+            output
+                .insert(from_py(&key)?, converted)
+                .map_err(|error| PyValueError::new_err(error.message()))?;
+        }
+        Ok(V::Dict(Rc::new(RefCell::new(output))))
+    }
     fn runtime<'py>(&self, py: Python<'py>) -> Runtime<'py> {
         Runtime {
             native_tables: self.native_tables.clone(),
@@ -9667,6 +9718,7 @@ pub fn disam_config(config: Bound<'_, PyDict>) -> PyResult<DisamConfig> {
     );
     globals.insert("_LINE_LABEL_RE".into(), V::Regex);
     let config = DisamConfig {
+        context_fields: RefCell::new(HashMap::new()),
         native_tables,
         globals: Rc::new(RefCell::new(globals)),
         literals: Rc::new(RefCell::new(HashMap::new())),
@@ -9682,10 +9734,21 @@ pub fn disassemble_scn_bytes(
     parameters: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyDict>> {
     let rt = config.runtime(py);
-    let input = from_py(parameters.as_any())?;
-    let mapping = input
-        .map()
-        .map_err(|error| PyValueError::new_err(error.message()))?;
+    let mut input = OrderedMap::new();
+    for (key, value) in parameters.iter() {
+        let converted = if key
+            .cast::<PyString>()
+            .is_ok_and(|key| matches!(key.to_str(), Ok("pack_context")))
+        {
+            config.pack_context(&value)?
+        } else {
+            from_py(&value)?
+        };
+        input
+            .insert(from_py(&key)?, converted)
+            .map_err(|error| PyValueError::new_err(error.message()))?;
+    }
+    let mapping = Rc::new(RefCell::new(input));
     let work = || -> Result<Py<PyDict>, Failure> {
         let mut args = Args::plain(vec![]);
         for (key, value) in &mapping.borrow().entries {
@@ -16171,7 +16234,24 @@ impl<'a, 'py> SourceParser<'a, 'py> {
             index = self.scene.next_nl.get(index + 1).copied().unwrap_or(stop);
         }
         let inline = if same {
-            self.inline_block(start, end, context)?
+            let mut texts = Vec::with_capacity(body.len());
+            let mut valid = true;
+            for line in &body {
+                let text = trim_source(&line.text);
+                if text.chars.is_empty() {
+                    continue;
+                }
+                if label_definition(&text).is_some()
+                    || text.has_line_feed
+                    || text.chars.starts_with(&source("switch(").chars)
+                    || text.chars.starts_with(&source("command ").chars)
+                {
+                    valid = false;
+                    break;
+                }
+                texts.push(text);
+            }
+            valid.then_some(texts)
         } else {
             None
         };
