@@ -110,6 +110,8 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 
 CLI text output uses the configured stream encoding and backslash-escapes characters that cannot be encoded, allowing file processing to continue.
 
+When the Rust extension is available and supports the selected operation, compilation, scene disassembly, decompilation, and payload comparison use native implementations. `--legacy` switches only compilation to Python and keeps native scene processing enabled. `--legacy-full` switches all of these operations to Python. The two decompilers target equal normalized payloads after recompilation; reconstructed source text need not match between backends.
+
 ### Global Options
 
 | Option | Description |
@@ -118,8 +120,10 @@ CLI text output uses the configured stream encoding and backslash-escapes charac
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. The `test` mode searches all profiles even when this option is supplied. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. Without `--decompile`, `test` searches all profiles even when this option is supplied. `test --decompile` requires an explicit profile and uses only that profile. |
 | `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profiles `3`, `5`, and `8`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+
+Global options may appear before or after the mode, but must precede `--`. The forms `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
 
 ### Const Profiles
 
@@ -151,7 +155,7 @@ Profile `8` defines its tables independently. It uses profile `5`'s command retu
 
 Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence than `||`, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
 
-Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions, and `test` automatically tries it after profile `9`. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
+Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions, and embedded-source `test` automatically tries it after profile `9`. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
 
 Validation using `--serial` covers six samples: LOOPERS, LUNARiA, Summer Pockets, Summer Pockets Starter, and the Android/iOS versions of Summer Pockets Reflection Blue. All `1364` scenes have matching payloads; the complete PCKs for LOOPERS, Summer Pockets and Starter are byte-identical. API and overload coverage is limited to what appears in these samples. The `mobile_*` type names and codes `1000001`-`1000024` are internal placeholders for member resolution; the official object type codes remain unknown and these names must not be treated as official declarable types. Uses that emit these objects as bytecode values have not been verified.
 
@@ -161,7 +165,7 @@ Each profile has a `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3`, `5`, `6`, `8
 
 `--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. Profiles `0`-`2`, `4`, `6`, `7`, `9`, and `10` default to `0x7087`; profiles `3`, `5`, and `8` default to `0`. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
 
-The multiplier is selected by the active profile or an explicit override and is not saved in an extracted working directory. Use the same profile and multiplier settings for every command that decodes, analyzes, compares, rewrites, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. Each compilation or comparison applies one multiplier to every scene; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. The `test` command tries profile defaults during fallback; an explicit multiplier applies to every attempt. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
+The multiplier is selected by the active profile or an explicit override and is not saved in an extracted working directory. Use the same profile and multiplier settings for every command that decodes, analyzes, compares, rewrites, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. Each compilation or comparison applies one multiplier to every scene; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. The embedded-source `test` command tries profile defaults during fallback; an explicit multiplier applies to every attempt. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
 
 Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested. When the option is explicitly supplied to one of these no-op operations, the program prints a warning and continues. Structural `-a` analysis, `-k --single`, and non-scene modes likewise do not use it.
 
@@ -236,7 +240,7 @@ siglus-ssu -lsp [--serial]
 - Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
 - The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
 - Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
-- Expansion in macro arguments, defaults, and bodies shares the compiler's scanning-step and macro nesting limits. Exceeding a limit stops the current analysis and returns a diagnostic; see [macro expansion](#macro).
+- Syntax analysis warns when analysis nesting exceeds `64` or expression-tree height exceeds `128`, then continues in both compile backends and LSP analysis; see [analysis depth warnings](#analysis-depth-warnings). Macro arguments, defaults, and bodies have separate hard scanning-step and macro-nesting limits; exceeding those limits stops the current analysis and reports an error. See [macro expansion](#macro).
 
 ---
 
@@ -361,6 +365,7 @@ siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
 - **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Each hash is calculated from the same raw bytes used to decode that file for compilation; a file saved after its snapshot was read is detected as changed on the next run. Cache compatibility includes the `siglus-ssu` version, source charset, the `--allow-invalid` setting, active `const.py` content/profile, and scene string XOR multiplier. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. Case-only source renames also remove conflicting old `.dat` files when recompilation is needed and invalidate the matching `.lzss` regardless of its filename case. If any `.inc` file is added, changed, or removed, or cache metadata is incompatible, a full recompile is triggered.
 - **Cache failure recovery:** Before updating an incremental cache, the previous `_source_hashes.json` validity marker is removed. A new marker is written only after linking and writing the final `.pck` succeeds. If compilation, linking, or cache-marker writing fails, or the process is interrupted during cache updates, the next run rebuilds all scenes rather than trusting partial output. Failure to delete stale `.lzss` files stops the build; release the file lock or correct the permissions before retrying. This protects cache reuse, not atomic replacement of all output files.
 - **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene and rebuilds every scene serially. A later mismatch still generates the requested output but returns a failure status; use `--set-shuffle` to rebuild with a known seed.
+- **Analysis depth warnings:** Crossing the syntax-analysis nesting threshold of `64` or expression-tree height threshold of `128` prints a warning and continues. These warnings alone do not fail compilation. They are separate from the hard [macro expansion limits](#macro).
 
 ---
 
@@ -389,7 +394,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
 | `<output_dir>` | Base output directory. A `.pck` extraction creates a timestamped subdirectory here. Optional for all `-x` modes. If omitted, the base directory defaults to the input file directory, or to the input directory itself when the input is a directory. |
 | `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
-| `--decompile` | With a complete Siglus scene `.pck` input, reuse the disassembly pipeline and emit `<scene>.dat.txt`, reconstructed `decompiled/<scene>.ss` files, and `decompiled/__decompiled.inc`. Package metadata is required; embedded original sources are not. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
+| `--decompile` | With a complete Siglus scene `.pck` input, reuse the disassembly pipeline and emit `<scene>.dat.txt` and reconstructed `decompiled/<scene>.ss` files. Write `decompiled/__decompiled.inc` only when shared declarations or name macros are needed. Package metadata is required; embedded original sources are not. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
 | `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
 | `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
 
@@ -397,7 +402,7 @@ With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_
 
 The actual extraction directory is printed after `Output:`. If original sources were restored, edit them in that directory and pass that directory to `-c`; the compiler does not scan subdirectories.
 
-`--decompile` reconstructs source from disassembly traces and package declarations without consulting embedded `.ss` / `.inc` sources. A `.pck` without an OS (Original Source) section is supported. Encrypted scenes still require a usable key source; use `--angou` with the matching engine executable or a raw key when necessary. Incomplete disassembly returns failure.
+`--decompile` reconstructs source from disassembly traces and package declarations without consulting embedded `.ss` / `.inc` sources. A missing, truncated, or undecodable OS (Original Source) section does not prevent reconstruction when the compiled scenes and required package metadata are usable. Encrypted scenes require a usable key source; use `--angou` with the matching engine executable or a raw key when necessary. Incomplete disassembly returns failure.
 
 The reconstruction target is equality of normalized scene payloads after recompiling with `-c`. Compile the `decompiled/` directory using the same `--const-profile` and scene-string multiplier as the original, then verify the result with `-a --payload`. Disassembly and decompilation use the selected profile to interpret forms and built-in elements; they do not automatically detect the profile. Stored command and property names are reused where available; absent names receive generated names. Original macros, comments, and source formatting cannot be recovered from compiled data, and the rebuilt whole `.pck` need not be byte-identical.
 
@@ -489,17 +494,39 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `--readall` | Only valid for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
 | `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
 | `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. Can be combined with `--angou`. Encrypted scene data without a valid key source fails before writing CSV. |
-| `--payload` | **(Compare mode only)** Additionally compare decoded/decompressed scene payloads for `.pck` and `.dat`, including every bytecode operand, label tables, scene property layouts, the complete string pool (including unreferenced strings), read-flag tables, and pack-level property/command routing metadata. `same` ignores scene string-pool storage order, the corresponding string-index shuffle, unused trailing zero entries in the Z-label table, and the debug-only `namae_list`; `text_only` means unchanged non-string structure with changes only to resolved string contents, for identifying translation edits; other differences are `real_diff`. Z-label numbers, interior empty entries, and nonzero jump offsets remain part of the comparison. Internal label renumbering, argument-list IDs, and other table entry counts and ordering are preserved. Scene identifier name tables retain index offsets and lengths, empty entries, NULs, and the original UTF-16 code units; changes to these tables are classified as `real_diff`. Pack-level names also preserve empty entries, NULs, and the original UTF-16 code units. Raw `namae_list` entries remain in disassembly and are checked for out-of-range indices, but do not enter payload hashes: the official engine uses this table for its debugger name database. Strings can also be resource or scene names, so `text_only` does not guarantee unchanged runtime behavior. The `.pck` payload column reports scenes with byte differences as `same`, `text_only`, `real_diff`, or `-` when parsing is unavailable; `.dat` uses `identical`, `text_only`, `real_diff`, or `unavailable`, respectively. Truncated bytecode, a missing final `CD_EOF`, bytecode after `CD_EOF`, negative argument counts, out-of-range string indices, undefined branch labels, or branch targets that do not point to instruction starts produce `INCOMPLETE` and return failure. Payload comparison fails when encrypted scenes cannot be decoded with an available key source. The Rust native payload scanner is used when available, with Python as the fallback. |
-| `--angou <path\|angou=text\|key=bytes>` | Explicit key source for `.pck`/`.dat` analysis, `.pck` word count, `Gameexe.dat` analysis, or standalone key derivation. `--angou` must be the final option in the command, must use the separated form `--angou VALUE`, and its value cannot be empty. A bare value is always treated as a path to a file or directory. Use `angou=text` for a literal `暗号.dat` first line, and `key=bytes` for a literal 16-byte `exe_el` key such as `key=0xA9,0x86,...`. During decryption, candidates are tried in order: explicit `--angou`; embedded `暗号.dat` inside the input `.pck`; current directory; parent directory. Lower-priority candidates are used only after a higher-priority source produced a key and that key failed validation; a missing, malformed, or keyless explicit source is reported as an input error. If `--angou` is a bare path, parent-directory probing is disabled for that request, so fallback stops after the current directory. Directory probing is not recursive. Inside each probed directory, the order is `Scene.pck`, then `Scene*.pck`, then `暗号.dat`, then `key.txt`, then `SiglusEngine*.exe`. |
+| `--payload` | **(Compare mode only)** Add normalized scene runtime payload comparison for `.pck` and `.dat`. See [Payload Comparison Results](#payload-comparison-results) for the compared data, result labels, and equality criteria. Uses Rust scene disassembly when native acceleration is available, or Python when unavailable or disabled with `--legacy-full`. |
+| `--angou <path\|angou=text\|key=bytes>` | Explicit key source for `.pck`/`.dat` analysis, `.pck` word count, `Gameexe.dat` analysis, or standalone key derivation. `--angou` must be the final mode-specific option in the command, must use the separated form `--angou VALUE`, and its value cannot be empty. A bare value is always treated as a path to a file or directory. Use `angou=text` for a literal `暗号.dat` first line, and `key=bytes` for a literal 16-byte `exe_el` key such as `key=0xA9,0x86,...`. During decryption, candidates are tried in order: explicit `--angou`; embedded `暗号.dat` inside the input `.pck`; current directory; parent directory. Lower-priority candidates are used only after a higher-priority source produced a key and that key failed validation; a missing, malformed, or keyless explicit source is reported as an input error. If `--angou` is a bare path, parent-directory probing is disabled for that request, so fallback stops after the current directory. Directory probing is not recursive. Inside each probed directory, the order is `Scene.pck`, then `Scene*.pck`, then `暗号.dat`, then `key.txt`, then `SiglusEngine*.exe`. |
 | `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode can use `--angou`, but rejects other analyze modifiers such as `--disam`, `--readall`, `--apply`, `--payload`, and `--word`. |
 
-For `.pck` and `.dat` comparisons, differences such as `text_only` and `real_diff` are reported results, not command errors; exit status `0` alone does not mean the inputs are equal. `INCOMPLETE` returns `1` even if both inputs contain the same incomplete data, and is never treated as payload equality. The `.pck` check also covers byte-identical scenes and scenes present on only one side.
+For `.pck` and `.dat` comparisons, `text_only`, `real_diff`, missing scenes, and unavailable payloads are reported comparison results; exit status `0` alone does not establish equality. `INCOMPLETE` returns `1` even when both inputs contain the same incomplete data. The `.pck` check covers byte-identical scenes and scenes present on only one side. Input, key-source, and original-source decoding errors can also make the command fail.
 
 Keys derived from `暗号.dat` or `angou=text` use the same fixed CP932 rules described in the compilation notes and can differ from official Windows conversion. To match existing files exactly, supply the raw 16-byte `key=bytes` or the matching `SiglusEngine.exe` directly.
 
 Text keys in `key.txt` and `key=bytes` are parsed in this order: `0xNN` tokens, two-digit hexadecimal tokens, then one-to-three-digit decimal tokens. The first format with at least 16 matching tokens supplies its first 16 bytes. Thus sixteen `10` tokens mean sixteen `0x10` bytes, not decimal 10. Use explicit `0xNN` tokens to avoid ambiguity. An exactly 16-byte `key.txt` is read as raw binary.
 
 Key-source diagnostics are printed to stderr whenever a decryption candidate is tried: each line includes the source, kind, path or inner file when applicable, the concrete `exe_el` value, and whether that candidate was accepted or rejected before falling back.
+
+#### Payload Comparison Results
+
+The comparison covers every bytecode operand, label tables, scene property layouts, the complete string pool (including unreferenced strings), read-flag tables, and pack-level property/command routing metadata.
+
+Normalization ignores string-pool storage order and the corresponding string-index shuffle, unused trailing zero entries in the Z-label table, and the debug-only `namae_list`. Z-label numbers, interior empty entries, nonzero jump offsets, internal label numbers, argument-list IDs, and other table entry counts and ordering remain significant. Scene identifier name tables preserve index offsets and lengths, empty entries, NULs, and the original UTF-16 code units; pack-level names also preserve empty entries, NULs, and UTF-16 code units. Changes to identifier name tables are `real_diff`. Raw `namae_list` entries remain in disassembly and are checked for out-of-range indices, but do not enter payload hashes.
+
+| `.pck` scene `PAYLOAD` column | `.dat` payload result | Meaning |
+|---|---|---|
+| `same` | `identical` | Full normalized payloads match. |
+| `text_only` | `text_only` | Non-string structure matches, but resolved string contents differ. This is a difference, and strings may name resources or scenes, so runtime behavior may change. |
+| `real_diff` | `real_diff` | Other normalized payload data differs. |
+| `-` | `unavailable` | A scene is missing on one side, or decoding/parsing is unavailable. Equality is not established. |
+| `INCOMPLETE` | `INCOMPLETE` | A scene cannot be completely disassembled or validated. Equality is not established, even for byte-identical inputs. |
+
+Truncated bytecode, a missing final `CD_EOF`, bytecode after `CD_EOF`, negative argument counts, out-of-range string indices, undefined branch labels, or branch targets outside instruction starts produce `INCOMPLETE`. Encrypted scene data also needs a usable key source.
+
+In `.pck` output, successfully validated scenes with identical stored bytes, source IDs, and package context are omitted from the differences table. The `scene_data payload:` summary counts only retained scene rows, not all scenes in the package; it may be absent when no scene rows remain. Original-source rows use `-` in the payload column and are not part of that summary.
+
+Payload equality for a whole `.pck` requires no missing or extra scenes and no `text_only`, `real_diff`, unavailable, or `INCOMPLETE` results. Header and embedded-source differences are reported separately. A visible `same` row describes one scene, not the whole file.
+
+`PAYLOAD_SAME` is a round-trip `test` result, not another `-a --payload` category. The lowercase `payload_same` in the test summary is the number of files with that result. A scene classified as `text_only` fails the round-trip test.
 
 #### Examples
 
@@ -1202,7 +1229,7 @@ When the input is a directory, the player recursively scans `.nwa`/`.owp`/`.ogg`
 
 The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.ovk`.
 
-Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output. Existing output files are overwritten without confirmation. If multiple inputs or OVK entries in one extraction map to the same output path, the tool prints a warning and continues; the later write wins. A collision warning alone does not make the command fail.
+Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output. Existing output files are overwritten without confirmation. If multiple inputs or OVK entries in one batch map to the same output path under Windows filename case rules, the colliding write is rejected and reported as a failure. Other inputs continue processing, and the command returns failure if any input fails.
 
 ---
 
@@ -1395,21 +1422,22 @@ LOC   : enabled (original function, func=0x22BF20)
 
 Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical `.pck` rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
 
-By default, this mode uses embedded original-source data. If a `.pck` has no OS section, it is skipped because there is no original `.ss` source to recompile.
+By default, this mode recompiles embedded original `.ss` sources. A `.pck` that does not declare an OS section is skipped. A declared OS section that is missing, unreadable, or contains no `.ss` files fails the test.
 
-With `--decompile`, the command reconstructs scripts from the compiled scenes and package metadata, recompiles only `decompiled/`, and compares normalized payloads. An explicit global `--const-profile N` is required and applies to decompilation, compilation, and comparison. This path tests only that profile, with strict UTF-8 source decoding and no profile or invalid-charset fallback. Embedded original sources are not required or used to reconstruct scripts.
+With `--decompile`, the command reconstructs scripts from compiled scenes and package metadata, recompiles only `decompiled/`, and compares normalized payloads. An explicit global `--const-profile N` is required and applies to decompilation, compilation, and comparison. Only that profile is tested, with strict UTF-8 source decoding and no profile retry or `--charset utf8 --allow-invalid` fallback. Embedded original sources are not required or used to reconstruct scripts.
 
 #### Syntax
 
 ```bash
-siglus-ssu [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu test [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
 `--serial` disables parallel compilation during the rebuild step. Rebuilds are parallel by default.
 
-Directory inputs are processed one `.pck` at a time. Without `--decompile`, global `--const-profile` does not restrict profile search, which starts at `0`. With `--decompile`, every input uses the explicitly selected profile.
+Directory tests process all `.pck` files sequentially and collect results after individual failures. Without `--decompile`, global `--const-profile` does not restrict the search, which starts at profile `0`. With `--decompile`, every input uses the explicitly selected profile.
 
-`--report-json FILE` writes per-file results, timings, and the successful `profile` (`null` for failed or skipped files). The sample runner accepts an embedded-source report through `--profiles-from FILE` and invokes `test --decompile` separately for each sample with its recorded successful profile. Missing or unsuccessful profile records fail the run.
+`--report-json FILE` writes a top-level `decompile` flag and a `results` list. Each result contains `path`, `status`, `detail`, `elapsed`, `timings`, and `profile`. The `profile` field is `null` for failed or skipped files. The report path must not refer to an input `.pck`.
 
 #### Workflow
 
@@ -1969,6 +1997,12 @@ If a simple expression satisfies all of the following:
 then the compiler rewrites it to a string literal of the same spelling instead of reporting an unknown element. This rule is part of the language definition, not an error-recovery heuristic.
 
 ### Types and static constraints
+
+#### Analysis depth warnings
+
+Both syntax analyzers issue `analysis nesting depth exceeds 64; continuing` when internal analysis nesting exceeds `64`, and `expression tree height exceeds 128; continuing` when an expression tree exceeds height `128`. Each message is reported once per scene analysis, at its first recorded location. Compilation and LSP analysis continue; a warning alone does not reject the source.
+
+These warning thresholds are separate from the hard macro-nesting and scanning-step limits described under [macro expansion](#macro).
 
 #### Unary and binary operators
 

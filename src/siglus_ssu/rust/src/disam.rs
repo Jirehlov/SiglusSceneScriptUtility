@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 use pyo3::types::{
     PyAny, PyBool, PyBytes, PyDict, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple,
 };
-use sha2::{Digest, Sha256};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -669,23 +668,31 @@ fn command_source(
     source_concat(&parts)
 }
 fn format_argument_layout(rt: &Runtime, layout: &[Argument]) -> SourceText {
-    let parts = layout
-        .iter()
-        .map(|arg| {
-            if arg.form == rt.native_tables.list {
-                stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                    source_concat(&[
-                        &source("list[").chars,
-                        &format_argument_layout(rt, &arg.sub).chars,
-                        &[93],
-                    ])
-                })
+    let mut frames = vec![(layout, 0, Vec::new())];
+    loop {
+        let (layout, index, parts) = frames.last_mut().unwrap();
+        if *index == layout.len() {
+            let value = source_join(parts, ", ");
+            frames.pop();
+            if let Some((_, _, parts)) = frames.last_mut() {
+                parts.push(source_concat(&[
+                    &source("list[").chars,
+                    &value.chars,
+                    &[93],
+                ]));
             } else {
-                declaration_form_source(rt, arg.form, None)
+                return value;
             }
-        })
-        .collect::<Vec<_>>();
-    source_join(&parts, ", ")
+        } else {
+            let arg = &layout[*index];
+            *index += 1;
+            if arg.form == rt.native_tables.list {
+                frames.push((&arg.sub, 0, Vec::new()));
+            } else {
+                parts.push(declaration_form_source(rt, arg.form, None));
+            }
+        }
+    }
 }
 fn merge_source_head(head: SourceText, mut body: Vec<SourceLine>) -> Vec<SourceLine> {
     if body.is_empty() {
@@ -1101,7 +1108,11 @@ pub(crate) mod decompiler {
             .last()
             .and_then(|event| event.line)
             .unwrap_or(0);
-        let mut body = parser.block(0, 1 << 30, &ParserContext::default())?;
+        let executor = crate::compile_backend::Executor::new();
+        let mut body =
+            executor
+                .clone()
+                .run(parser.block(executor, 0, 1 << 30, ParserContext::default()))?;
         for pass in [LinePass::RestoreLabels, LinePass::DedupeLabels] {
             body = native_line_postprocess(rt, instance, pass, body)?;
         }
@@ -1882,10 +1893,81 @@ fn optional_text(value: Option<SourceText>) -> V {
     value.map(V::Str).unwrap_or(V::None)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 struct Argument {
     form: i64,
     sub: Vec<Argument>,
+}
+
+impl Clone for Argument {
+    fn clone(&self) -> Self {
+        let mut output = Self {
+            form: self.form,
+            sub: Vec::new(),
+        };
+        if self.sub.is_empty() {
+            return output;
+        }
+        let mut pending = vec![(self, &mut output)];
+        while let Some((source, target)) = pending.pop() {
+            target.sub = source
+                .sub
+                .iter()
+                .map(|arg| Self {
+                    form: arg.form,
+                    sub: Vec::new(),
+                })
+                .collect();
+            pending.extend(source.sub.iter().zip(target.sub.iter_mut()));
+        }
+        output
+    }
+}
+
+impl Drop for Argument {
+    fn drop(&mut self) {
+        if self.sub.is_empty() {
+            return;
+        }
+        let mut pending = std::mem::take(&mut self.sub);
+        while let Some(mut arg) = pending.pop() {
+            pending.append(&mut arg.sub);
+        }
+    }
+}
+
+impl PartialEq for Argument {
+    fn eq(&self, other: &Self) -> bool {
+        if self.sub.is_empty() {
+            return self.form == other.form && other.sub.is_empty();
+        }
+        let mut pending = vec![(self, other)];
+        while let Some((left, right)) = pending.pop() {
+            if left.form != right.form || left.sub.len() != right.sub.len() {
+                return false;
+            }
+            pending.extend(left.sub.iter().zip(&right.sub));
+        }
+        true
+    }
+}
+
+impl Eq for Argument {}
+
+impl Hash for Argument {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if self.sub.is_empty() {
+            self.form.hash(state);
+            0usize.hash(state);
+            return;
+        }
+        let mut pending = vec![self];
+        while let Some(arg) = pending.pop() {
+            arg.form.hash(state);
+            arg.sub.len().hash(state);
+            pending.extend(arg.sub.iter().rev());
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2601,99 +2683,112 @@ impl ExpressionState {
     fn scan_path(
         &self,
         items: &[StackValue],
-        mut index: usize,
-        mut parent: i64,
+        index: usize,
+        parent: i64,
         command: Option<&Instruction>,
     ) -> Option<ResolvedPath> {
-        while index < items.len() {
-            let item = &items[index];
-            let Some(code) = self.int_value(item) else {
-                if !item.receiver {
-                    return None;
-                }
-                let form = item.form?;
-                parent = form;
-                if command.is_none() && index == items.len() - 1 {
-                    return Some(ResolvedPath {
-                        ret: self.tables.receiver_value(Some(parent)),
-                        code: None,
-                        info: None,
-                        path: vec![None; items.len()],
-                        start: 0,
-                        end: items.len(),
-                    });
-                }
-                index += 1;
-                continue;
-            };
-            if code == self.tables.array {
-                let ret = self.tables.array_returns.get(&parent).copied()?;
-                if index + 1 >= items.len() || items[index + 1].form != Some(self.tables.int) {
-                    return None;
-                }
-                if command.is_none() && index + 1 == items.len() - 1 {
-                    return Some(ResolvedPath {
-                        ret: Some(ret),
-                        code: None,
-                        info: None,
-                        path: vec![None; items.len()],
-                        start: 0,
-                        end: items.len(),
-                    });
-                }
-                parent = ret;
-                index += 2;
-                continue;
-            }
-            for info in self.resolver.variants(parent, code) {
-                if info.kind == self.tables.property_kind {
-                    if command.is_none() && index == items.len() - 1 {
-                        let mut path = vec![None; items.len()];
-                        path[index] = Some(info.clone());
-                        return Some(ResolvedPath {
-                            ret: info.ret,
-                            code: None,
-                            info: None,
-                            path,
-                            start: 0,
-                            end: items.len(),
-                        });
+        enum Step {
+            Scan(usize, i64),
+            Choose(usize, i64, Rc<Element>),
+        }
+        let mut pending = vec![Step::Scan(index, parent)];
+        let mut path = vec![None; items.len()];
+        while let Some(step) = pending.pop() {
+            match step {
+                Step::Scan(mut index, mut parent) => {
+                    while index < items.len() {
+                        let item = &items[index];
+                        let Some(code) = self.int_value(item) else {
+                            if !item.receiver {
+                                break;
+                            }
+                            let Some(form) = item.form else {
+                                break;
+                            };
+                            parent = form;
+                            if command.is_none() && index == items.len() - 1 {
+                                return Some(ResolvedPath {
+                                    ret: self.tables.receiver_value(Some(parent)),
+                                    code: None,
+                                    info: None,
+                                    path,
+                                    start: 0,
+                                    end: items.len(),
+                                });
+                            }
+                            index += 1;
+                            continue;
+                        };
+                        if code == self.tables.array {
+                            let Some(ret) = self.tables.array_returns.get(&parent).copied() else {
+                                break;
+                            };
+                            if index + 1 >= items.len()
+                                || items[index + 1].form != Some(self.tables.int)
+                            {
+                                break;
+                            }
+                            if command.is_none() && index + 1 == items.len() - 1 {
+                                return Some(ResolvedPath {
+                                    ret: Some(ret),
+                                    code: None,
+                                    info: None,
+                                    path,
+                                    start: 0,
+                                    end: items.len(),
+                                });
+                            }
+                            parent = ret;
+                            index += 2;
+                            continue;
+                        }
+                        for info in self.resolver.variants(parent, code).into_iter().rev() {
+                            pending.push(Step::Choose(index, code, info));
+                        }
+                        break;
                     }
-                    if let Some(ret) = info.ret {
-                        let sub = stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                            self.scan_path(items, index + 1, ret, command)
-                        });
-                        if let Some(mut sub) = sub {
-                            sub.path[index] = Some(info);
-                            return Some(sub);
+                }
+                Step::Choose(index, code, info) => {
+                    path[index..].fill(None);
+                    if info.kind == self.tables.property_kind {
+                        path[index] = Some(info.clone());
+                        if command.is_none() && index == items.len() - 1 {
+                            return Some(ResolvedPath {
+                                ret: info.ret,
+                                code: None,
+                                info: None,
+                                path,
+                                start: 0,
+                                end: items.len(),
+                            });
+                        }
+                        if let Some(ret) = info.ret {
+                            pending.push(Step::Scan(index + 1, ret));
+                        }
+                    } else if info.kind == self.tables.command_kind
+                        && index == items.len() - 1
+                        && let Some(command) = command
+                    {
+                        if info.ret.is_some_and(|ret| ret != command.ret) {
+                            continue;
+                        }
+                        if self.signature_matches(&info, command) {
+                            path[index] = Some(info.clone());
+                            return Some(ResolvedPath {
+                                ret: None,
+                                code: Some(code),
+                                info: Some(info),
+                                path,
+                                start: 0,
+                                end: items.len(),
+                            });
                         }
                     }
-                } else if info.kind == self.tables.command_kind
-                    && index == items.len() - 1
-                    && let Some(command) = command
-                {
-                    if info.ret.is_some_and(|ret| ret != command.ret) {
-                        continue;
-                    }
-                    if self.signature_matches(&info, command) {
-                        let mut path = vec![None; items.len()];
-                        path[index] = Some(info.clone());
-                        return Some(ResolvedPath {
-                            ret: None,
-                            code: Some(code),
-                            info: Some(info),
-                            path,
-                            start: 0,
-                            end: items.len(),
-                        });
-                    }
                 }
             }
-            return None;
         }
         None
     }
-
     fn resolve(&self, end: usize, command: Option<&Instruction>) -> Option<Rc<ResolvedPath>> {
         for start in self.points.iter().rev().copied() {
             if start >= end {
@@ -2902,36 +2997,62 @@ impl ExpressionState {
         }
     }
     fn consume_cursor(&self, arg: &Argument, cursor: &mut StackCursor) {
-        if arg.form == self.tables.list {
-            for sub in arg.sub.iter().rev() {
-                stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                    self.consume_cursor(sub, cursor)
-                });
+        if arg.form != self.tables.list {
+            if self.tables.scalar.contains(&arg.form) {
+                self.scalar_cursor(cursor);
+            } else {
+                self.element_cursor(cursor);
             }
-        } else if self.tables.scalar.contains(&arg.form) {
-            self.scalar_cursor(cursor);
-        } else {
-            self.element_cursor(cursor);
+            return;
+        }
+        let mut pending = vec![arg];
+        while let Some(arg) = pending.pop() {
+            if arg.form == self.tables.list {
+                pending.extend(arg.sub.iter());
+            } else if self.tables.scalar.contains(&arg.form) {
+                self.scalar_cursor(cursor);
+            } else {
+                self.element_cursor(cursor);
+            }
         }
     }
     fn expression_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> SourceText {
-        if arg.form == self.tables.list {
-            let mut values = vec![];
-            for sub in arg.sub.iter().rev() {
-                values.push(stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                    self.expression_cursor(sub, cursor)
-                }));
+        if arg.form != self.tables.list {
+            return if self.tables.scalar.contains(&arg.form) {
+                self.scalar_cursor(cursor)
+                    .map(|item| self.formatter.item(item, Some(arg.form)))
+                    .unwrap_or_else(|| source("<?>"))
+            } else {
+                self.element_expression_cursor(cursor)
+            };
+        }
+        let mut pending = vec![(arg, false)];
+        let mut values = Vec::new();
+        while let Some((arg, visited)) = pending.pop() {
+            if arg.form == self.tables.list {
+                if visited {
+                    let mut parts = values.split_off(values.len() - arg.sub.len());
+                    parts.reverse();
+                    values.push(source_concat(&[
+                        &[91],
+                        &source_join(&parts, ", ").chars,
+                        &[93],
+                    ]));
+                } else {
+                    pending.push((arg, true));
+                    pending.extend(arg.sub.iter().map(|arg| (arg, false)));
+                }
+            } else if self.tables.scalar.contains(&arg.form) {
+                values.push(
+                    self.scalar_cursor(cursor)
+                        .map(|item| self.formatter.item(item, Some(arg.form)))
+                        .unwrap_or_else(|| source("<?>")),
+                );
+            } else {
+                values.push(self.element_expression_cursor(cursor));
             }
-            values.reverse();
-            return source_concat(&[&[91], &source_join(&values, ", ").chars, &[93]]);
         }
-        if self.tables.scalar.contains(&arg.form) {
-            return self
-                .scalar_cursor(cursor)
-                .map(|item| self.formatter.item(item, Some(arg.form)))
-                .unwrap_or_else(|| source("<?>"));
-        }
-        self.element_expression_cursor(cursor)
+        values.pop().unwrap()
     }
 
     fn element_expression_cursor(&self, cursor: &mut StackCursor) -> SourceText {
@@ -2945,17 +3066,7 @@ impl ExpressionState {
             .unwrap_or_else(|| source("<?>"))
     }
 
-    fn value_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> V {
-        if arg.form == self.tables.list {
-            let mut values = vec![];
-            for sub in arg.sub.iter().rev() {
-                values.push(stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                    self.value_cursor(sub, cursor)
-                }));
-            }
-            values.reverse();
-            return V::list(values);
-        }
+    fn scalar_value_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> V {
         if !self.tables.scalar.contains(&arg.form) {
             self.element_cursor(cursor);
             return V::None;
@@ -2976,6 +3087,29 @@ impl ExpressionState {
                 }
             })
             .unwrap_or(V::None)
+    }
+
+    fn value_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> V {
+        if arg.form != self.tables.list {
+            return self.scalar_value_cursor(arg, cursor);
+        }
+        let mut pending = vec![(arg, false)];
+        let mut values = Vec::new();
+        while let Some((arg, visited)) = pending.pop() {
+            if arg.form == self.tables.list {
+                if visited {
+                    let mut parts = values.split_off(values.len() - arg.sub.len());
+                    parts.reverse();
+                    values.push(V::list(parts));
+                } else {
+                    pending.push((arg, true));
+                    pending.extend(arg.sub.iter().map(|arg| (arg, false)));
+                }
+            } else {
+                values.push(self.scalar_value_cursor(arg, cursor));
+            }
+        }
+        values.pop().unwrap()
     }
 
     fn step(
@@ -3367,18 +3501,29 @@ impl Bytecode<'_> {
         if count > (self.bytes.len() - self.position) / 4 {
             return None;
         }
-        let mut args = Vec::with_capacity(count);
-        for _ in 0..count {
-            let form = self.integer()?;
-            let sub = if form == list {
-                stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || self.arguments(list))?
+        let mut frames = vec![(count, Vec::<Argument>::with_capacity(count))];
+        loop {
+            let (count, args) = frames.last_mut().unwrap();
+            if args.len() == *count {
+                let (_, mut args) = frames.pop().unwrap();
+                args.reverse();
+                if let Some((_, parent)) = frames.last_mut() {
+                    parent.last_mut().unwrap().sub = args;
+                } else {
+                    return Some(args);
+                }
             } else {
-                vec![]
-            };
-            args.push(Argument { form, sub });
+                let form = self.integer()?;
+                args.push(Argument { form, sub: vec![] });
+                if form == list {
+                    let count = usize::try_from(self.integer()?).ok()?;
+                    if count > (self.bytes.len() - self.position) / 4 {
+                        return None;
+                    }
+                    frames.push((count, Vec::with_capacity(count)));
+                }
+            }
         }
-        args.reverse();
-        Some(args)
     }
 }
 
@@ -3398,33 +3543,57 @@ fn fast_record(rt: &Runtime, fields: Vec<(&'static str, V)>) -> R {
     Ok(V::Dict(Rc::new(RefCell::new(mapping))))
 }
 fn argument_values(tables: &NativeTables, args: &[Argument]) -> Result<V, Failure> {
-    Ok(V::list(
-        args.iter()
-            .map(|arg| {
-                let mut fields = vec![("form", V::Int(arg.form))];
-                if arg.form == tables.list {
-                    fields.push(("sub", argument_values(tables, &arg.sub)?));
-                }
-                native_record(fields)
-            })
-            .collect::<Result<_, _>>()?,
-    ))
+    let mut frames = vec![(args, 0, Vec::new())];
+    loop {
+        let (args, index, values) = frames.last_mut().unwrap();
+        if *index == args.len() {
+            let (_, _, values) = frames.pop().unwrap();
+            let value = V::list(values);
+            if let Some((args, index, values)) = frames.last_mut() {
+                values.push(native_record(vec![
+                    ("form", V::Int(args[*index - 1].form)),
+                    ("sub", value),
+                ])?);
+            } else {
+                return Ok(value);
+            }
+        } else {
+            let arg = &args[*index];
+            *index += 1;
+            if arg.form == tables.list {
+                frames.push((&arg.sub, 0, Vec::new()));
+            } else {
+                values.push(native_record(vec![("form", V::Int(arg.form))])?);
+            }
+        }
+    }
 }
 fn argument_source(tables: &NativeTables, args: &[Argument]) -> SourceText {
-    source_join(
-        &args
-            .iter()
-            .map(|arg| {
-                if arg.form == tables.list {
-                    let sub = argument_source(tables, &arg.sub);
-                    source_concat(&[&source("list[").chars, &sub.chars, &[93]])
-                } else {
-                    tables.format_form(Some(arg.form), true)
-                }
-            })
-            .collect::<Vec<_>>(),
-        ", ",
-    )
+    let mut frames = vec![(args, 0, Vec::new())];
+    loop {
+        let (args, index, parts) = frames.last_mut().unwrap();
+        if *index == args.len() {
+            let value = source_join(parts, ", ");
+            frames.pop();
+            if let Some((_, _, parts)) = frames.last_mut() {
+                parts.push(source_concat(&[
+                    &source("list[").chars,
+                    &value.chars,
+                    &[93],
+                ]));
+            } else {
+                return value;
+            }
+        } else {
+            let arg = &args[*index];
+            *index += 1;
+            if arg.form == tables.list {
+                frames.push((&arg.sub, 0, Vec::new()));
+            } else {
+                parts.push(tables.format_form(Some(arg.form), true));
+            }
+        }
+    }
 }
 struct TraceContext<'a> {
     mode: &'a TraceMode,
@@ -6290,79 +6459,119 @@ impl PayloadJson<'_> {
     }
 }
 fn write_payload_arguments(output: &mut Vec<u8>, args: &[Argument], tables: &NativeTables) {
-    output.push(b'[');
-    for (index, arg) in args.iter().enumerate() {
-        if index > 0 {
-            output.extend_from_slice(b", ");
+    if args.iter().all(|arg| arg.form != tables.list) {
+        output.push(b'[');
+        for (index, arg) in args.iter().enumerate() {
+            if index > 0 {
+                output.extend_from_slice(b", ");
+            }
+            output.extend_from_slice(b"{\"form\": ");
+            write_payload_integer(output, arg.form);
+            output.push(b'}');
         }
-        output.extend_from_slice(b"{\"form\": ");
-        write_payload_integer(output, arg.form);
-        if arg.form == tables.list {
-            output.extend_from_slice(b", \"sub\": ");
-            stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-                write_payload_arguments(output, &arg.sub, tables)
-            });
-        }
-        output.push(b'}');
+        output.push(b']');
+        return;
     }
-    output.push(b']');
+    enum Step<'a> {
+        Arguments(&'a [Argument]),
+        Argument(&'a Argument),
+        Bytes(&'static [u8]),
+    }
+    let mut pending = vec![Step::Arguments(args)];
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Arguments(args) => {
+                output.push(b'[');
+                pending.push(Step::Bytes(b"]"));
+                for (index, arg) in args.iter().enumerate().rev() {
+                    pending.push(Step::Argument(arg));
+                    if index > 0 {
+                        pending.push(Step::Bytes(b", "));
+                    }
+                }
+            }
+            Step::Argument(arg) => {
+                output.extend_from_slice(b"{\"form\": ");
+                write_payload_integer(output, arg.form);
+                if arg.form == tables.list {
+                    output.extend_from_slice(b", \"sub\": ");
+                    pending.push(Step::Bytes(b"}"));
+                    pending.push(Step::Arguments(&arg.sub));
+                } else {
+                    output.push(b'}');
+                }
+            }
+            Step::Bytes(bytes) => output.extend_from_slice(bytes),
+        }
+    }
 }
 
-struct PayloadHashes {
-    hashers: [Sha256; 2],
+struct PayloadHashes<'py> {
+    hashers: [Bound<'py, PyAny>; 2],
     sizes: [usize; 2],
+    pending: [Vec<u8>; 2],
     buffer: Vec<u8>,
 }
-impl PayloadHashes {
-    fn new() -> Self {
-        Self {
-            hashers: [Sha256::new(), Sha256::new()],
+impl<'py> PayloadHashes<'py> {
+    fn new(py: Python<'py>) -> PyResult<Self> {
+        let sha256 = py.import("hashlib")?.getattr("sha256")?;
+        Ok(Self {
+            hashers: [sha256.call0()?, sha256.call0()?],
             sizes: [0; 2],
+            pending: [Vec::new(), Vec::new()],
             buffer: Vec::with_capacity(256),
-        }
+        })
     }
-    fn commit(&mut self, index: usize) {
+    fn flush(&mut self, index: usize) -> PyResult<()> {
+        if !self.pending[index].is_empty() {
+            self.hashers[index].call_method1(
+                "update",
+                (PyBytes::new(self.hashers[index].py(), &self.pending[index]),),
+            )?;
+            self.pending[index].clear();
+        }
+        Ok(())
+    }
+    fn commit(&mut self, index: usize) -> PyResult<()> {
         if self.sizes[index] > 0 {
-            self.hashers[index].update(b"\n");
+            self.pending[index].push(b'\n');
             self.sizes[index] += 1;
         }
-        self.hashers[index].update(&self.buffer);
+        self.pending[index].extend_from_slice(&self.buffer);
         self.sizes[index] += self.buffer.len();
+        if self.pending[index].len() >= 64 * 1024 {
+            self.flush(index)?;
+        }
+        Ok(())
     }
     fn metadata(&mut self, event: &V) -> Result<(), Failure> {
         let map = event.map()?;
         for index in 0..2 {
             self.buffer.clear();
             dat::metadata_bytes(&map, index == 1, &mut self.buffer)?;
-            self.commit(index);
+            self.commit(index)?;
         }
         Ok(())
     }
 
-    fn runtime(&mut self, event: &PayloadEvent, tables: &NativeTables) {
+    fn runtime(&mut self, event: &PayloadEvent, tables: &NativeTables) -> PyResult<()> {
         self.buffer.clear();
         event.write(tables, false, &mut self.buffer);
-        self.commit(0);
+        self.commit(0)?;
         if event.has_text() {
             self.buffer.clear();
             event.write(tables, true, &mut self.buffer);
         }
-        self.commit(1);
+        self.commit(1)
     }
 
-    fn result(self, py: Python<'_>) -> PyResult<Py<PyDict>> {
+    fn result(mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         let output = PyDict::new(py);
-        for (index, hasher) in self.hashers.into_iter().enumerate() {
+        for index in 0..2 {
+            self.flush(index)?;
             let part = PyDict::new(py);
             part.set_item("size", self.sizes[index])?;
-            part.set_item(
-                "sha256",
-                hasher
-                    .finalize()
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>(),
-            )?;
+            part.set_item("sha256", self.hashers[index].call_method0("hexdigest")?)?;
             output.set_item(if index == 0 { "full" } else { "no_text" }, part)?;
         }
         Ok(output.unbind())
@@ -6374,12 +6583,12 @@ fn hash_payload_trace(
     tables: &NativeTables,
 ) -> PyResult<Py<PyDict>> {
     let work = || -> Result<Py<PyDict>, Failure> {
-        let mut hashes = PayloadHashes::new();
+        let mut hashes = PayloadHashes::new(py)?;
         for event in &trace.prefix {
             hashes.metadata(event)?;
         }
         for event in trace.events.iter() {
-            hashes.runtime(event, tables);
+            hashes.runtime(event, tables)?;
         }
         for event in &trace.suffix {
             hashes.metadata(event)?;
@@ -7108,7 +7317,7 @@ fn native_build_hints(
     Ok(Some(hints))
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct ParserContext {
     render: RenderContext,
 }
@@ -7172,32 +7381,33 @@ impl<'a> SourceParser<'a> {
         out.extend(attach_source_labels(&labels, lines, event.line));
         Ok(out)
     }
-    fn block(
-        &self,
+    async fn block<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Vec<SourceLine>, Failure> {
-        stacker::maybe_grow(64 * 1024, 2 * 1024 * 1024, || {
-            let stop = self.scene.end(end);
-            let mut index = start;
-            let mut lines = vec![];
-            while index < stop {
-                let (next_lines, next) = if self.scene.events[index].op == Opcode::Nl {
-                    self.statement(index, end, context)?
-                } else {
-                    self.raw(index, context)?
-                };
-                if next <= index {
-                    break;
-                }
-                lines.extend(next_lines);
-                index = next;
+        let stop = self.scene.end(end);
+        let mut index = start;
+        let mut lines = vec![];
+        while index < stop {
+            let (next_lines, next) = if self.scene.events[index].op == Opcode::Nl {
+                executor
+                    .call(self.statement(executor.clone(), index, end, context))
+                    .await?
+            } else {
+                self.raw(index, context)?
+            };
+            if next <= index {
+                break;
             }
-            Ok(lines)
-        })
+            lines.extend(next_lines);
+            index = next;
+        }
+        Ok(lines)
     }
-    fn expression(&self, index: usize, context: &ParserContext, condition: bool) -> SourceText {
+    fn expression(&self, index: usize, context: ParserContext, condition: bool) -> SourceText {
         let annotations = self.scene.annotations.borrow();
         let expression = if condition {
             annotations[index].condition.clone()
@@ -7208,7 +7418,7 @@ impl<'a> SourceParser<'a> {
         native_expression_source(self.rt, &expression, context.render.compound, condition)
     }
 
-    fn raw(&self, index: usize, context: &ParserContext) -> Result<SourceStatement, Failure> {
+    fn raw(&self, index: usize, context: ParserContext) -> Result<SourceStatement, Failure> {
         let event = &self.scene.events[index];
         let text = match event.op {
             Opcode::Goto => native_render_goto(&self.scene, index, Some(context.render))?,
@@ -7263,7 +7473,7 @@ impl<'a> SourceParser<'a> {
         &self,
         start: usize,
         end: usize,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<(bool, SourceText), Failure> {
         let key = RenderKey {
             start,
@@ -7299,7 +7509,7 @@ impl<'a> SourceParser<'a> {
         &self,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
         inline: bool,
     ) -> Result<(Option<SourceText>, Vec<SourceLine>, usize), Failure> {
         let has_nl = self.scene.events[start].op == Opcode::Nl;
@@ -7352,11 +7562,12 @@ impl<'a> SourceParser<'a> {
         };
         Ok((None, lines, next))
     }
-    fn inline_statement(
-        &self,
+    async fn inline_statement<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<(Option<SourceText>, usize), Failure> {
         let (line, _, next) = self.simple(start, end, context, true)?;
         if line.is_some() && next > start {
@@ -7365,7 +7576,9 @@ impl<'a> SourceParser<'a> {
         if self.scene.events[start].op != Opcode::Nl {
             return Ok((None, start));
         }
-        let (lines, next) = self.statement(start, end, context)?;
+        let (lines, next) = executor
+            .call(self.statement(executor.clone(), start, end, context))
+            .await?;
         if next <= start {
             return Ok((None, start));
         }
@@ -7407,17 +7620,20 @@ impl<'a> SourceParser<'a> {
         }
         Ok((None, start))
     }
-    fn inline_block(
-        &self,
+    async fn inline_block<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<Vec<SourceText>>, Failure> {
         let mut lines = vec![];
         let mut index = start;
         let stop = self.scene.end(end);
         while index < stop {
-            let (line, next) = self.inline_statement(index, end, context)?;
+            let (line, next) = self
+                .inline_statement(executor.clone(), index, end, context)
+                .await?;
             let Some(line) = line else {
                 return Ok(None);
             };
@@ -7431,14 +7647,15 @@ impl<'a> SourceParser<'a> {
         }
         Ok(Some(lines))
     }
-    fn body(
-        &self,
+    async fn body<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
         line: Option<i64>,
     ) -> Result<ParsedBody, Failure> {
-        let body = self.block(start, end, context)?;
+        let body = self.block(executor.clone(), start, end, context).await?;
         let stop = self.scene.end(end);
         let mut same = false;
         let mut index = self.scene.next_nl.get(start).copied().unwrap_or(stop);
@@ -7480,12 +7697,13 @@ impl<'a> SourceParser<'a> {
         (event.op == Opcode::Goto && target.is_none_or(|target| event.target == Some(target)))
             .then_some(tail)
     }
-    fn guarded_body(
-        &self,
+    async fn guarded_body<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         guard: usize,
         exit: i64,
         continue_offset: i64,
-        context: &ParserContext,
+        context: ParserContext,
         line: Option<i64>,
     ) -> Result<Option<GuardedBody>, Failure> {
         let out = *self
@@ -7506,8 +7724,15 @@ impl<'a> SourceParser<'a> {
                 ..context.render
             },
         };
-        let (body, mut inline, _) =
-            self.body(guard + 1, self.scene.events[tail].offset, &context, line)?;
+        let (body, mut inline, _) = self
+            .body(
+                executor.clone(),
+                guard + 1,
+                self.scene.events[tail].offset,
+                context,
+                line,
+            )
+            .await?;
         if !self.scene.active_labels(self.instance, tail)?.is_empty() {
             inline = None;
         }
@@ -7518,7 +7743,7 @@ impl<'a> SourceParser<'a> {
         &self,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
         line: Option<i64>,
     ) -> Result<Option<SplitRegion>, Failure> {
         let mut prefix = vec![];
@@ -7552,17 +7777,25 @@ impl<'a> SourceParser<'a> {
         }
         Ok(Some((prefix, inline, inline_start)))
     }
-    fn match_command(
-        &self,
+    async fn match_command<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<SourceStatement>, Failure> {
         let Some(parsed) = native_read_command(self.instance, start, end)? else {
             return Ok(None);
         };
         let finish = parsed.end;
-        let mut body = self.block(parsed.body_start, parsed.trim_end, context)?;
+        let mut body = self
+            .block(
+                executor.clone(),
+                parsed.body_start,
+                parsed.trim_end,
+                context,
+            )
+            .await?;
         let ret = decompiler::pick_return_form(
             self.rt,
             self.instance,
@@ -7615,11 +7848,12 @@ impl<'a> SourceParser<'a> {
         Ok(Some((self.with_event(start, out)?, finish)))
     }
 
-    fn match_while(
-        &self,
+    async fn match_while<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<SourceStatement>, Failure> {
         let first = self.scene.skip_selection(start + 1, end);
         if self.scene.events[first].op == Opcode::Nl {
@@ -7632,13 +7866,16 @@ impl<'a> SourceParser<'a> {
             .target
             .ok_or_else(|| Failure("loop target missing".into()))?;
         let loop_offset = self.scene.events[first].offset;
-        let Some((out_index, body, inline)) = self.guarded_body(
-            guard,
-            exit,
-            loop_offset,
-            context,
-            self.scene.events[start].line,
-        )?
+        let Some((out_index, body, inline)) = self
+            .guarded_body(
+                executor.clone(),
+                guard,
+                exit,
+                loop_offset,
+                context,
+                self.scene.events[start].line,
+            )
+            .await?
         else {
             return Ok(None);
         };
@@ -7666,11 +7903,12 @@ impl<'a> SourceParser<'a> {
         let (out, next) = self.append_trampolines(out, out_index, end, context)?;
         Ok(Some((self.with_event(start, out)?, next)))
     }
-    fn match_for(
-        &self,
+    async fn match_for<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<SourceStatement>, Failure> {
         let first = self.scene.skip_selection(start + 1, end);
         let stop = self.scene.end(end);
@@ -7698,13 +7936,16 @@ impl<'a> SourceParser<'a> {
         let exit = self.scene.events[guard]
             .target
             .ok_or_else(|| Failure("for target missing".into()))?;
-        let Some((out_index, body, inline)) = self.guarded_body(
-            guard,
-            exit,
-            loop_offset,
-            context,
-            self.scene.events[start].line,
-        )?
+        let Some((out_index, body, inline)) = self
+            .guarded_body(
+                executor.clone(),
+                guard,
+                exit,
+                loop_offset,
+                context,
+                self.scene.events[start].line,
+            )
+            .await?
         else {
             return Ok(None);
         };
@@ -7764,7 +8005,10 @@ impl<'a> SourceParser<'a> {
             if added {
                 self.suppress(loop_offset);
             }
-            let Some(lines) = self.inline_block(loop_index, condition_offset, context)? else {
+            let Some(lines) = self
+                .inline_block(executor.clone(), loop_index, condition_offset, context)
+                .await?
+            else {
                 if added {
                     self.instance.suppressed.borrow_mut().remove(&loop_offset);
                 }
@@ -7814,11 +8058,12 @@ impl<'a> SourceParser<'a> {
         Ok(Some((out, next)))
     }
 
-    fn match_switch(
-        &self,
+    async fn match_switch<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<SourceStatement>, Failure> {
         struct Case {
             value: Option<SourceText>,
@@ -7931,7 +8176,14 @@ impl<'a> SourceParser<'a> {
                 return Ok(None);
             }
             out_offset = Some(target);
-            let body = self.block(index + 1, self.scene.events[tail].offset, context)?;
+            let body = self
+                .block(
+                    executor.clone(),
+                    index + 1,
+                    self.scene.events[tail].offset,
+                    context,
+                )
+                .await?;
             let sort_line = body
                 .iter()
                 .find_map(|line| line.target)
@@ -8027,7 +8279,14 @@ impl<'a> SourceParser<'a> {
             let Some(tail) = self.tail_goto(out_index, Some(out_offset)) else {
                 return Ok(None);
             };
-            let body = self.block(default_index, self.scene.events[tail].offset, context)?;
+            let body = self
+                .block(
+                    executor.clone(),
+                    default_index,
+                    self.scene.events[tail].offset,
+                    context,
+                )
+                .await?;
             let first_line = body.iter().find_map(|line| line.target);
             let sort_line = first_line.or(self.scene.events[default_index].line);
             blocks.push(Case {
@@ -8106,11 +8365,12 @@ impl<'a> SourceParser<'a> {
         Ok(Some((self.with_event(start, out)?, next)))
     }
 
-    fn statement(
-        &self,
+    async fn statement<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<SourceStatement, Failure> {
         let first = start + 1;
         let stop = self.scene.end(end);
@@ -8136,7 +8396,9 @@ impl<'a> SourceParser<'a> {
             if self.scene.events.get(start).map(|event| event.line)
                 == self.scene.events.get(first).map(|event| event.line)
                 && possible_for
-                && let Some(value) = self.match_for(start, end, context)?
+                && let Some(value) = self
+                    .match_for(executor.clone(), start, end, context)
+                    .await?
             {
                 return Ok(value);
             }
@@ -8148,11 +8410,17 @@ impl<'a> SourceParser<'a> {
             .events
             .get(position)
             .is_some_and(|event| event.op == Opcode::Goto)
-            && let Some(value) = self.match_command(start, end, context)?
+            && let Some(value) = self
+                .match_command(executor.clone(), start, end, context)
+                .await?
         {
             return Ok(value);
         }
-        if possible_for && let Some(value) = self.match_for(start, end, context)? {
+        if possible_for
+            && let Some(value) = self
+                .match_for(executor.clone(), start, end, context)
+                .await?
+        {
             return Ok(value);
         }
         let conditional = self.scene.scan(position, end, &self.scene.next_false);
@@ -8167,7 +8435,9 @@ impl<'a> SourceParser<'a> {
             && out > guard
             && self.scene.events[out - 1].op == Opcode::Goto
             && self.scene.events[out - 1].target == Some(self.scene.events[position].offset)
-            && let Some(value) = self.match_while(start, end, context)?
+            && let Some(value) = self
+                .match_while(executor.clone(), start, end, context)
+                .await?
         {
             return Ok(value);
         }
@@ -8200,11 +8470,15 @@ impl<'a> SourceParser<'a> {
                 _ => (),
             }
         }
-        if possible_switch && let Some(value) = self.match_switch(start, end, context)? {
+        if possible_switch
+            && let Some(value) = self
+                .match_switch(executor.clone(), start, end, context)
+                .await?
+        {
             return Ok(value);
         }
         if conditional.is_some()
-            && let Some(value) = self.match_if(start, end, context)?
+            && let Some(value) = self.match_if(executor.clone(), start, end, context).await?
         {
             return Ok(value);
         }
@@ -8217,7 +8491,7 @@ impl<'a> SourceParser<'a> {
         mut lines: Vec<SourceLine>,
         mut index: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<SourceStatement, Failure> {
         while index < self.scene.events.len()
             && self.scene.events[index].offset < end
@@ -8237,11 +8511,12 @@ impl<'a> SourceParser<'a> {
         }
         Ok((lines, index))
     }
-    fn match_if(
-        &self,
+    async fn match_if<'s>(
+        &'s self,
+        executor: crate::compile_backend::Executor<'s>,
         start: usize,
         end: i64,
-        context: &ParserContext,
+        context: ParserContext,
     ) -> Result<Option<SourceStatement>, Failure> {
         let mut current = self.scene.skip_selection(start + 1, end);
         let mut clauses: Vec<IfClause> = vec![];
@@ -8274,12 +8549,15 @@ impl<'a> SourceParser<'a> {
                 return Ok(None);
             }
             end_target = Some(clause_end);
-            let (body, inline, same) = self.body(
-                guard + 1,
-                tail_event.offset,
-                context,
-                self.scene.events[current].line,
-            )?;
+            let (body, inline, same) = self
+                .body(
+                    executor.clone(),
+                    guard + 1,
+                    tail_event.offset,
+                    context,
+                    self.scene.events[current].line,
+                )
+                .await?;
             let same = same && self.scene.active_labels(self.instance, tail)?.is_empty();
             clauses.push(IfClause {
                 tail: Some(tail),
@@ -8295,12 +8573,15 @@ impl<'a> SourceParser<'a> {
             }
             current = false_index;
             if self.scene.events[current].op == Opcode::Nl {
-                let (body, inline, same) = self.body(
-                    current,
-                    clause_end,
-                    context,
-                    self.scene.events[current].line,
-                )?;
+                let (body, inline, same) = self
+                    .body(
+                        executor.clone(),
+                        current,
+                        clause_end,
+                        context,
+                        self.scene.events[current].line,
+                    )
+                    .await?;
                 clauses.push(IfClause {
                     tail: None,
                     condition: None,

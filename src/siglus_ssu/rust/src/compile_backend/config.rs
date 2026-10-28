@@ -3,7 +3,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
 pub struct SystemArgConfig {
     pub id: i32,
     pub name: String,
@@ -13,13 +12,11 @@ pub struct SystemArgConfig {
     pub preserve_int_reference: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct SystemArgListConfig {
     pub id: i32,
     pub args: Vec<SystemArgConfig>,
 }
 
-#[derive(Debug, Clone)]
 pub struct SystemElementConfig {
     pub parent: String,
     pub kind: i32,
@@ -30,7 +27,6 @@ pub struct SystemElementConfig {
     pub origin: String,
 }
 
-#[derive(Debug, Clone)]
 pub struct SourceAngouConfig {
     pub easy_code: Vec<u8>,
     pub easy_index: usize,
@@ -59,7 +55,6 @@ pub struct SourceAngouConfig {
     pub header_size: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileConstants {
     pub form_code: HashMap<String, i32>,
     pub form_ids: HashMap<String, i32>,
@@ -131,10 +126,8 @@ impl CompileConstants {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileOptions {
     pub dat_repack: bool,
-    pub serial: bool,
     pub max_workers: Option<usize>,
     pub set_shuffle: Option<String>,
     pub gei: bool,
@@ -142,7 +135,6 @@ pub struct CompileOptions {
     pub force_serial_compile: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileContext {
     pub gameexe_ini: String,
     pub angou_path: String,
@@ -163,7 +155,6 @@ pub struct CompileContext {
     pub easy_link: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileCache {
     pub digest_path: String,
     pub pending_digests_json: String,
@@ -175,7 +166,6 @@ pub struct CompileCache {
     pub full_compile_stats: bool,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileConfig {
     pub input_dir: String,
     pub output_dir: String,
@@ -391,6 +381,7 @@ fn get_source_angou(dict: &Bound<'_, PyDict>) -> PyResult<SourceAngouConfig> {
 }
 
 pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileConstants> {
+    super::ca::initialize_cp932(constants.py())?;
     let constants_dict = constants.cast_into::<PyDict>()?;
     let source_angou_dict = get_dict(&constants_dict, "source_angou")?;
     let form_code = get_i32_map(&constants_dict, "form_code")?;
@@ -456,7 +447,6 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
     let constants = parse_compile_constants(constants_dict.into_any())?;
     let options = CompileOptions {
         dat_repack: get_bool(&options_dict, "dat_repack")?,
-        serial: get_bool(&options_dict, "serial")?,
         max_workers: get_option_usize(&options_dict, "max_workers")?,
         set_shuffle: get_option_string(&options_dict, "set_shuffle")?,
         gei: get_bool(&options_dict, "gei")?,

@@ -491,14 +491,17 @@ fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDi
 }
 
 #[pyfunction]
-fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+fn lsp_build_project(
+    py: Python<'_>,
+    config: Bound<'_, PyAny>,
+) -> PyResult<Py<compile_backend::NativeLspProject>> {
     catch_native_panic(|| compile_backend::lsp_build_project(py, config))
 }
 
 #[pyfunction]
 fn lsp_scan_document(
     py: Python<'_>,
-    project: Bound<'_, PyAny>,
+    project: PyRef<'_, compile_backend::NativeLspProject>,
     path: String,
     path_identity: String,
     text: String,

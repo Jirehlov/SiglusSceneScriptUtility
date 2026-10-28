@@ -1,26 +1,19 @@
 use super::la::Atom;
 
-pub fn grow_stack<T>(callback: impl FnOnce() -> T) -> T {
-    stacker::maybe_grow(64 * 1024, 1024 * 1024, callback)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum GotoKind {
-    #[default]
-    None,
     Goto,
     Gosub,
     GosubStr,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct FormSpec {
     pub name: String,
     pub index: Option<Box<AstNode>>,
     pub open_bracket_line: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct Parameter {
     pub line: usize,
     pub name: String,
@@ -29,20 +22,19 @@ pub struct Parameter {
     pub property_id: i32,
 }
 
-#[derive(Debug, Clone)]
 pub struct Argument {
     pub name: Option<String>,
     pub value: AstNode,
     pub name_id: i32,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct ArgumentList {
     pub args: Vec<Argument>,
     pub named_count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct ElementPart {
     pub line: usize,
     pub name: Option<String>,
@@ -56,21 +48,18 @@ pub struct ElementPart {
     pub arg_list_id: i32,
 }
 
-#[derive(Debug, Clone)]
 pub struct IfBranch {
     pub line: usize,
     pub condition: Option<AstNode>,
     pub body: Vec<AstNode>,
 }
 
-#[derive(Debug, Clone)]
 pub struct SwitchCase {
     pub line: usize,
     pub value: AstNode,
     pub body: Vec<AstNode>,
 }
 
-#[derive(Debug, Clone)]
 pub enum AstPayload {
     Root(Vec<AstNode>),
     Label {
@@ -168,7 +157,6 @@ pub enum AstPayload {
     },
 }
 
-#[derive(Debug)]
 pub struct AstNode {
     pub line: usize,
     pub form: i32,
@@ -178,23 +166,27 @@ pub struct AstNode {
     pub payload: AstPayload,
 }
 
-impl Clone for AstNode {
-    fn clone(&self) -> Self {
-        grow_stack(|| Self {
-            line: self.line,
-            form: self.form,
-            temp_form: self.temp_form,
-            include_selection: self.include_selection,
-            first_atom: self.first_atom.clone(),
-            payload: self.payload.clone(),
-        })
-    }
-}
-
 impl Drop for AstNode {
     fn drop(&mut self) {
-        let payload = std::mem::replace(&mut self.payload, AstPayload::Eof);
-        grow_stack(|| drop(payload));
+        if matches!(
+            self.payload,
+            AstPayload::Eof
+                | AstPayload::Literal { .. }
+                | AstPayload::Label { .. }
+                | AstPayload::ZLabel { .. }
+                | AstPayload::Text { .. }
+                | AstPayload::Name { .. }
+                | AstPayload::Continue
+                | AstPayload::Break
+        ) {
+            return;
+        }
+        let mut pending = vec![std::mem::replace(&mut self.payload, AstPayload::Eof)];
+        while let Some(mut payload) = pending.pop() {
+            payload.visit_children_mut(|child| {
+                pending.push(std::mem::replace(&mut child.payload, AstPayload::Eof));
+            });
+        }
     }
 }
 
@@ -212,5 +204,264 @@ impl AstNode {
 
     pub fn first_atom(&self) -> Option<&Atom> {
         self.first_atom.as_ref()
+    }
+}
+
+impl AstPayload {
+    pub(super) fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a AstNode)) {
+        match self {
+            AstPayload::Root(values) | AstPayload::ExpressionList { values, .. } => {
+                for child in values.iter() {
+                    visit(child);
+                }
+            }
+            AstPayload::DefProperty { form, .. } => {
+                if let Some(child) = form.index.as_deref() {
+                    visit(child);
+                }
+            }
+            AstPayload::DefCommand {
+                form,
+                parameters,
+                body,
+                ..
+            } => {
+                if let Some(child) = form.index.as_deref() {
+                    visit(child);
+                }
+                for parameter in parameters {
+                    if let Some(child) = parameter.form.index.as_deref() {
+                        visit(child);
+                    }
+                }
+                for child in body.iter() {
+                    visit(child);
+                }
+            }
+            AstPayload::Goto { args, .. } => {
+                for child in args.args.iter().map(|value| &value.value) {
+                    visit(child);
+                }
+            }
+            AstPayload::Return { value } => {
+                if let Some(child) = value.as_deref() {
+                    visit(child);
+                }
+            }
+            AstPayload::If { branches } => {
+                for branch in branches {
+                    if let Some(child) = branch.condition.as_ref() {
+                        visit(child);
+                    }
+                    for child in branch.body.iter() {
+                        visit(child);
+                    }
+                }
+            }
+            AstPayload::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                for child in init.iter() {
+                    visit(child);
+                }
+                visit(condition);
+                for child in update.iter() {
+                    visit(child);
+                }
+                for child in body.iter() {
+                    visit(child);
+                }
+            }
+            AstPayload::While { condition, body } => {
+                visit(condition);
+                for child in body.iter() {
+                    visit(child);
+                }
+            }
+            AstPayload::Switch {
+                condition,
+                cases,
+                default_body,
+            } => {
+                visit(condition);
+                for case in cases {
+                    visit(&case.value);
+                    for child in case.body.iter() {
+                        visit(child);
+                    }
+                }
+                if let Some(body) = default_body {
+                    for child in body.iter() {
+                        visit(child);
+                    }
+                }
+            }
+            AstPayload::Assign { left, right, .. } | AstPayload::Binary { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            AstPayload::Command { expression, .. } | AstPayload::Paren { expression } => {
+                visit(expression);
+            }
+            AstPayload::Unary { value, .. } => visit(value),
+            AstPayload::ElementExpression { elements, .. } => {
+                for element in elements {
+                    for child in element.args.args.iter().map(|value| &value.value) {
+                        visit(child);
+                    }
+                    if let Some(child) = element.array_index.as_deref() {
+                        visit(child);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_children_mut<'a>(&'a mut self, mut visit: impl FnMut(&'a mut AstNode)) {
+        match self {
+            AstPayload::Root(values) | AstPayload::ExpressionList { values, .. } => {
+                for child in values.iter_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::DefProperty { form, .. } => {
+                if let Some(child) = form.index.as_deref_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::DefCommand {
+                form,
+                parameters,
+                body,
+                ..
+            } => {
+                if let Some(child) = form.index.as_deref_mut() {
+                    visit(child);
+                }
+                for parameter in parameters {
+                    if let Some(child) = parameter.form.index.as_deref_mut() {
+                        visit(child);
+                    }
+                }
+                for child in body.iter_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::Goto { args, .. } => {
+                for child in args.args.iter_mut().map(|value| &mut value.value) {
+                    visit(child);
+                }
+            }
+            AstPayload::Return { value } => {
+                if let Some(child) = value.as_deref_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::If { branches } => {
+                for branch in branches {
+                    if let Some(child) = branch.condition.as_mut() {
+                        visit(child);
+                    }
+                    for child in branch.body.iter_mut() {
+                        visit(child);
+                    }
+                }
+            }
+            AstPayload::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                for child in init.iter_mut() {
+                    visit(child);
+                }
+                visit(condition);
+                for child in update.iter_mut() {
+                    visit(child);
+                }
+                for child in body.iter_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::While { condition, body } => {
+                visit(condition);
+                for child in body.iter_mut() {
+                    visit(child);
+                }
+            }
+            AstPayload::Switch {
+                condition,
+                cases,
+                default_body,
+            } => {
+                visit(condition);
+                for case in cases {
+                    visit(&mut case.value);
+                    for child in case.body.iter_mut() {
+                        visit(child);
+                    }
+                }
+                if let Some(body) = default_body {
+                    for child in body.iter_mut() {
+                        visit(child);
+                    }
+                }
+            }
+            AstPayload::Assign { left, right, .. } | AstPayload::Binary { left, right, .. } => {
+                visit(left);
+                visit(right);
+            }
+            AstPayload::Command { expression, .. } | AstPayload::Paren { expression } => {
+                visit(expression);
+            }
+            AstPayload::Unary { value, .. } => visit(value),
+            AstPayload::ElementExpression { elements, .. } => {
+                for element in elements {
+                    for child in element.args.args.iter_mut().map(|value| &mut value.value) {
+                        visit(child);
+                    }
+                    if let Some(child) = element.array_index.as_deref_mut() {
+                        visit(child);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Default for AstNode {
+    fn default() -> Self {
+        Self {
+            line: 0,
+            form: 0,
+            temp_form: 0,
+            include_selection: false,
+            first_atom: None,
+            payload: AstPayload::Eof,
+        }
+    }
+}
+
+impl Default for Parameter {
+    fn default() -> Self {
+        Self {
+            line: 0,
+            name: String::new(),
+            name_atom: Atom {
+                id: 0,
+                line: 0,
+                atom_type: 0,
+                opt: 0,
+                subopt: 0,
+            },
+            form: FormSpec::default(),
+            property_id: 0,
+        }
     }
 }

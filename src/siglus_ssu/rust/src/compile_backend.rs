@@ -19,6 +19,131 @@ mod sa;
 mod scene_dat;
 mod source_angou;
 
+pub use lsp_scan::{NativeLspProject, lsp_build_project, lsp_scan_document};
+
+use std::cell::Cell;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
+use std::task::{Context, Poll, Waker};
+
+thread_local! {
+    static CALL_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+trait Job {
+    fn poll(&mut self, context: &mut Context<'_>) -> Poll<()>;
+}
+
+struct FutureJob<F: Future> {
+    future: Pin<Box<F>>,
+    output: Rc<std::cell::RefCell<Option<F::Output>>>,
+}
+
+impl<F: Future> Job for FutureJob<F> {
+    fn poll(&mut self, context: &mut Context<'_>) -> Poll<()> {
+        match self.future.as_mut().poll(context) {
+            Poll::Ready(output) => {
+                *self.output.borrow_mut() = Some(output);
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct Executor<'a> {
+    pending: Rc<std::cell::RefCell<Vec<Box<dyn Job + 'a>>>>,
+}
+
+pub(crate) enum StepResult<T> {
+    Ready(Option<T>),
+    Pending(Rc<std::cell::RefCell<Option<T>>>),
+}
+
+impl<T: Unpin> Future for StepResult<T> {
+    type Output = T;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<T> {
+        let output = match self.get_mut() {
+            Self::Ready(value) => value.take(),
+            Self::Pending(value) => value.borrow_mut().take(),
+        };
+        output.map_or(Poll::Pending, Poll::Ready)
+    }
+}
+
+impl<'a> Executor<'a> {
+    pub(crate) fn new() -> Self {
+        Self {
+            pending: Rc::new(std::cell::RefCell::new(Vec::new())),
+        }
+    }
+
+    pub(crate) fn call<F>(&self, future: F) -> StepResult<F::Output>
+    where
+        F: Future + 'a,
+        F::Output: Unpin + 'a,
+    {
+        let mut future = Box::pin(future);
+        let start = self.pending.borrow().len();
+        let depth = CALL_DEPTH.with(Cell::get);
+        if depth < 8 {
+            struct Depth(usize);
+            impl Drop for Depth {
+                fn drop(&mut self) {
+                    CALL_DEPTH.with(|depth| depth.set(self.0));
+                }
+            }
+            CALL_DEPTH.with(|value| value.set(depth + 1));
+            let _depth = Depth(depth);
+            if let Poll::Ready(output) = future
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+            {
+                return StepResult::Ready(Some(output));
+            }
+        }
+        let output = Rc::new(std::cell::RefCell::new(None));
+        self.pending.borrow_mut().insert(
+            start,
+            Box::new(FutureJob {
+                future,
+                output: output.clone(),
+            }),
+        );
+        StepResult::Pending(output)
+    }
+
+    pub(crate) fn run<F>(self, future: F) -> F::Output
+    where
+        F: Future + 'a,
+        F::Output: Unpin + 'a,
+    {
+        struct Pending<'a>(Rc<std::cell::RefCell<Vec<Box<dyn Job + 'a>>>>);
+        impl Drop for Pending<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().clear();
+            }
+        }
+        let _pending = Pending(self.pending.clone());
+        let mut result = self.call(future);
+        let mut tasks: Vec<Box<dyn Job + 'a>> = Vec::new();
+        let mut context = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(output) = Pin::new(&mut result).poll(&mut context) {
+                return output;
+            }
+            tasks.append(&mut self.pending.borrow_mut());
+            let mut task = tasks.pop().expect("analysis task");
+            if task.poll(&mut context).is_pending() {
+                tasks.push(task);
+            }
+        }
+    }
+}
+
 pub(crate) struct DecompileStringPool {
     pub(crate) strings: Vec<String>,
     pub(crate) carrier: Option<(usize, usize)>,
@@ -383,8 +508,20 @@ fn set_extra_stats(
     Ok(())
 }
 
-pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
-    let parsed = config::parse_compile_config(_config)?;
+fn stage_time_dict<'py>(py: Python<'py>, times: &[(String, f64)]) -> PyResult<Bound<'py, PyDict>> {
+    let mut totals = HashMap::<&str, f64>::new();
+    for (stage, elapsed) in times {
+        *totals.entry(stage).or_default() += *elapsed;
+    }
+    let output = PyDict::new(py);
+    for (stage, elapsed) in totals {
+        output.set_item(stage, elapsed)?;
+    }
+    Ok(output)
+}
+
+pub fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
+    let parsed = config::parse_compile_config(config)?;
     let out = PyDict::new(py);
     if !project::supported(&parsed) {
         out.set_item("handled", false)?;
@@ -420,15 +557,7 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
             stats.set_item("scene_files", result.scene_count)?;
             stats.set_item("compiled_scene_files", result.compiled_scene_count)?;
             stats.set_item("full_compile_stats", result.full_compile_stats)?;
-            let mut timings = HashMap::<String, f64>::new();
-            for (stage, elapsed) in &result.stage_times {
-                *timings.entry(stage.clone()).or_default() += *elapsed;
-            }
-            let stage_time = PyDict::new(py);
-            for (stage, elapsed) in timings {
-                stage_time.set_item(stage, elapsed)?;
-            }
-            stats.set_item("stage_time", stage_time)?;
+            stats.set_item("stage_time", stage_time_dict(py, &result.stage_times)?)?;
             set_extra_stats(py, &stats, &result)?;
             out.set_item("stats", stats)?;
             out.set_item("stderr", "")?;
@@ -442,34 +571,10 @@ pub fn compile_project(py: Python<'_>, _config: Bound<'_, PyAny>) -> PyResult<Py
                 stats.set_item("compiled_scene_files", parsed.cache.compiled_scene_files)?;
                 stats.set_item("full_compile_stats", false)?;
             }
-            let mut timings = HashMap::<String, f64>::new();
-            for (stage, elapsed) in &failure.stage_times {
-                *timings.entry(stage.clone()).or_default() += *elapsed;
-            }
-            let stage_time = PyDict::new(py);
-            for (stage, elapsed) in timings {
-                stage_time.set_item(stage, elapsed)?;
-            }
-            stats.set_item("stage_time", stage_time)?;
+            stats.set_item("stage_time", stage_time_dict(py, &failure.stage_times)?)?;
             out.set_item("stats", stats)?;
             out.set_item("stderr", failure.stderr)?;
         }
     }
     Ok(out.unbind())
-}
-
-pub fn lsp_build_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    Ok(lsp_scan::lsp_build_project(py, config)?.into_any())
-}
-
-pub fn lsp_scan_document(
-    py: Python<'_>,
-    project: Bound<'_, PyAny>,
-    path: String,
-    path_identity: String,
-    text: String,
-    run_bs: bool,
-) -> PyResult<Py<PyDict>> {
-    let project = project.extract::<PyRef<'_, lsp_scan::NativeLspProject>>()?;
-    lsp_scan::lsp_scan_document(py, project, path, path_identity, text, run_bs)
 }

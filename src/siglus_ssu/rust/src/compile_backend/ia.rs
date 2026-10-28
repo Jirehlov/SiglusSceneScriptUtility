@@ -11,14 +11,14 @@ use super::frontend_common::{
 };
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IncProperty {
     pub form: String,
     pub size: i32,
     pub name: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CommandArg {
     pub id: i32,
     pub name: String,
@@ -27,7 +27,7 @@ pub struct CommandArg {
     pub def_exist: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IncCommand {
     pub id: i32,
     pub form: String,
@@ -36,7 +36,7 @@ pub struct IncCommand {
     pub is_defined: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct IaData {
     pub replace_tree: ReplaceTree,
     pub name_set: HashSet<String>,
@@ -55,7 +55,7 @@ pub struct IaData {
     pub read_flag_command_codes: HashSet<(i32, i32)>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct IaScratch {
     pub property_text: Vec<String>,
     pub property_lines: Vec<usize>,
@@ -67,7 +67,7 @@ pub struct IaScratch {
     pub command_source_maps: Vec<Vec<Option<SourcePoint>>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct NameSpan {
     pub source_id: isize,
     pub line: usize,
@@ -75,7 +75,6 @@ pub struct NameSpan {
     pub end_char: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct IncDeclaration {
     pub source_id: isize,
     pub kind: String,
@@ -85,13 +84,12 @@ pub struct IncDeclaration {
     pub end_char: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct IncSidecar {
     pub decls: Vec<IncDeclaration>,
     pub replace_uses: Vec<ReplaceUse>,
 }
 
-#[derive(Debug, Clone)]
 pub struct IncAnalyzer {
     text: Vec<char>,
     pub parent_form: String,

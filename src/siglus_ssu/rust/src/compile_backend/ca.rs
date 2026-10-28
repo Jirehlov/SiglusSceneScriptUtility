@@ -2,24 +2,25 @@ use super::frontend_common::{
     CaseMode, SingleQuoteMode, SourcePoint, TextCommentOptions, next_else_ifdef_state,
     next_elseif_ifdef_state, scan_text_comments,
 };
-use encoding_rs::SHIFT_JIS;
+use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyString};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ReplaceKind {
     Replace,
     Define,
     Macro,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MacroArg {
     pub name: String,
     pub default_value: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Replacement {
     pub kind: ReplaceKind,
     pub name: String,
@@ -30,14 +31,13 @@ pub struct Replacement {
     pub source: Option<Arc<ReplacementSource>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct ReplacementSource {
     pub map: Vec<Option<SourcePoint>>,
     pub defaults: Vec<Vec<Option<SourcePoint>>>,
     pub declaration: Option<(String, usize)>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ReplaceTree {
     children: Arc<BTreeMap<char, ReplaceTree>>,
     replacement: Option<Replacement>,
@@ -95,7 +95,7 @@ impl ReplaceTree {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct PreprocessStats {
     pub ifdef: usize,
     pub elseifdef: usize,
@@ -108,13 +108,11 @@ pub struct PreprocessStats {
     pub inc_lines: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct File1Result {
     pub text: String,
     pub source_map: Vec<Option<SourcePoint>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct File2Result {
     pub scene_text: String,
     pub inc_text: String,
@@ -123,7 +121,6 @@ pub struct File2Result {
     pub inc_source_map: Vec<Option<SourcePoint>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct ReplaceUse {
     pub name: String,
     pub line: usize,
@@ -133,7 +130,6 @@ pub struct ReplaceUse {
     pub declaration: (String, usize),
 }
 
-#[derive(Debug, Clone)]
 pub struct SceneExpansion {
     pub text: String,
     pub source_map: Vec<Option<SourcePoint>>,
@@ -150,7 +146,6 @@ struct MappedText {
     map: Option<Vec<Option<SourcePoint>>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct CharacterAnalyzer {
     pub error_line: usize,
     pub error_str: String,
@@ -939,48 +934,40 @@ impl CharacterAnalyzer {
 
 static CP932_ENCODE_MAP: OnceLock<HashMap<char, u16>> = OnceLock::new();
 
-fn insert_cp932_decoded(map: &mut HashMap<char, u16>, bytes: &[u8], encoded: u16) {
-    let Some(text) = SHIFT_JIS.decode_without_bom_handling_and_without_replacement(bytes) else {
-        return;
-    };
-    let mut chars = text.chars();
-    let Some(ch) = chars.next() else {
-        return;
-    };
-    if chars.next().is_none() {
-        map.entry(ch).or_insert(encoded);
+pub(super) fn initialize_cp932(py: Python<'_>) -> PyResult<()> {
+    if CP932_ENCODE_MAP.get().is_some() {
+        return Ok(());
     }
-}
-
-fn build_cp932_encode_map() -> HashMap<char, u16> {
+    let text: String = (1..=0xFFFF)
+        .filter_map(char::from_u32)
+        .flat_map(|ch| [ch, '\0'])
+        .collect();
+    let data = PyString::new(py, &text).call_method1("encode", ("cp932", "replace"))?;
+    let bytes = data.cast::<PyBytes>()?.as_bytes();
     let mut map = HashMap::new();
-    for byte in 0u16..=0xFF {
-        insert_cp932_decoded(&mut map, &[byte as u8], byte);
+    map.insert('\0', 0);
+    for (ch, encoded) in (1..=0xFFFF)
+        .filter_map(char::from_u32)
+        .zip(bytes.split(|byte| *byte == 0))
+    {
+        match encoded {
+            [byte] if *byte != b'?' || ch == '?' => {
+                map.insert(ch, u16::from(*byte));
+            }
+            [high, low] => {
+                map.insert(ch, u16::from_be_bytes([*high, *low]));
+            }
+            _ => {}
+        }
     }
-    for encoded in 0u32..=0xFFFF {
-        let bytes = [(encoded >> 8) as u8, encoded as u8];
-        insert_cp932_decoded(&mut map, &bytes, encoded as u16);
-    }
-    for (ch, encoded) in [
-        ('\u{00A2}', 0x8191),
-        ('\u{00A3}', 0x8192),
-        ('\u{00AC}', 0x81CA),
-        ('\u{2016}', 0x8161),
-        ('\u{2212}', 0x817C),
-        ('\u{301C}', 0x8160),
-        ('\u{F8F0}', 0x00A0),
-        ('\u{F8F1}', 0x00FD),
-        ('\u{F8F2}', 0x00FE),
-        ('\u{F8F3}', 0x00FF),
-    ] {
-        map.insert(ch, encoded);
-    }
-    map
+    let _ = CP932_ENCODE_MAP.set(map);
+    Ok(())
 }
 
 pub(crate) fn cp932_code(ch: char) -> Option<u16> {
     CP932_ENCODE_MAP
-        .get_or_init(build_cp932_encode_map)
+        .get()
+        .expect("CP932 map must be initialized before compilation")
         .get(&ch)
         .copied()
 }

@@ -1,5 +1,5 @@
 use super::ast::{AstNode, AstPayload};
-use super::bs::BytecodeBuilder;
+use super::bs::compile_root;
 use super::ca::{CharacterAnalyzer, ReplaceUse};
 use super::codes::RuntimeCodes;
 use super::config::{CompileConstants, parse_compile_constants};
@@ -13,7 +13,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct LspDefinition {
     name: String,
     path: String,
@@ -28,7 +28,6 @@ struct LspDefinition {
     end_char: isize,
 }
 
-#[derive(Debug, Clone)]
 struct LspOccurrence {
     symbol_id: String,
     path: String,
@@ -42,7 +41,6 @@ struct LspOccurrence {
     renamable: bool,
 }
 
-#[derive(Debug, Clone)]
 struct SourceToken {
     text: String,
     line: usize,
@@ -290,202 +288,166 @@ fn collect_definitions_node(
     defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
 ) {
-    super::ast::grow_stack(|| {
-        collect_definitions_node_with_stack(
-            node,
-            lex,
-            path,
-            current_command,
-            defs,
-            document_symbols,
-        )
-    });
-}
-
-fn collect_definitions_node_with_stack(
-    node: &AstNode,
-    lex: &LexResult,
-    path: &str,
-    current_command: &str,
-    defs: &mut HashMap<String, Vec<LspDefinition>>,
-    document_symbols: &mut Vec<LspDefinition>,
-) {
-    match &node.payload {
-        AstPayload::Root(items) => {
-            for item in items {
-                collect_definitions_node(item, lex, path, current_command, defs, document_symbols);
+    let mut pending = vec![(node, current_command)];
+    while let Some((node, current_command)) = pending.pop() {
+        let mut children = Vec::new();
+        match &node.payload {
+            AstPayload::Root(items) => {
+                for item in items {
+                    children.push((item, current_command));
+                }
             }
-        }
-        AstPayload::Label { index } => {
-            let name = label_name(lex, *index);
-            let record = LspDefinition {
-                name: name.clone(),
-                path: path.to_string(),
-                line: node.line.max(1),
-                kind: "label".to_string(),
-                symbol_id: String::new(),
-                atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
-                detail: "normal label".to_string(),
-                scope: String::new(),
-                signature: String::new(),
-                start_char: -1,
-                end_char: -1,
-            };
-            append_document_definition(defs, document_symbols, record);
-        }
-        AstPayload::ZLabel { z_index, .. } => {
-            let name = format!("#z{z_index}");
-            let record = LspDefinition {
-                name: name.clone(),
-                path: path.to_string(),
-                line: node.line.max(1),
-                kind: "z_label".to_string(),
-                symbol_id: String::new(),
-                atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
-                detail: "z label".to_string(),
-                scope: String::new(),
-                signature: String::new(),
-                start_char: -1,
-                end_char: -1,
-            };
-            append_document_definition(defs, document_symbols, record);
-        }
-        AstPayload::DefCommand {
-            name,
-            name_atom,
-            form,
-            parameters,
-            body,
-            ..
-        } => {
-            let args = parameters
-                .iter()
-                .map(|parameter| (parameter.name.clone(), parameter.form.name.clone()))
-                .collect::<Vec<_>>();
-            let signature = format!("{}{} -> {}", name, format_arg_list(args), form.name);
-            let record = LspDefinition {
-                name: name.clone(),
-                path: path.to_string(),
-                line: name_atom.line.max(1),
-                kind: "command".to_string(),
-                symbol_id: String::new(),
-                atom_id: name_atom.id,
-                detail: format!("command {signature}"),
-                scope: "scene".to_string(),
-                signature,
-                start_char: -1,
-                end_char: -1,
-            };
-            append_document_definition(defs, document_symbols, record);
-            for parameter in parameters {
+            AstPayload::Label { index } => {
+                let name = label_name(lex, *index);
                 let record = LspDefinition {
-                    name: parameter.name.clone(),
+                    name: name.clone(),
                     path: path.to_string(),
-                    line: parameter.name_atom.line.max(1),
-                    kind: "property".to_string(),
+                    line: node.line.max(1),
+                    kind: "label".to_string(),
                     symbol_id: String::new(),
-                    atom_id: parameter.name_atom.id,
-                    detail: format!("property {}: {}", parameter.name, parameter.form.name),
-                    scope: format!("command {name}"),
+                    atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
+                    detail: "normal label".to_string(),
+                    scope: String::new(),
                     signature: String::new(),
                     start_char: -1,
                     end_char: -1,
                 };
                 append_document_definition(defs, document_symbols, record);
             }
-            for item in body {
-                collect_definitions_node(item, lex, path, name, defs, document_symbols);
+            AstPayload::ZLabel { z_index, .. } => {
+                let name = format!("#z{z_index}");
+                let record = LspDefinition {
+                    name: name.clone(),
+                    path: path.to_string(),
+                    line: node.line.max(1),
+                    kind: "z_label".to_string(),
+                    symbol_id: String::new(),
+                    atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
+                    detail: "z label".to_string(),
+                    scope: String::new(),
+                    signature: String::new(),
+                    start_char: -1,
+                    end_char: -1,
+                };
+                append_document_definition(defs, document_symbols, record);
             }
-        }
-        AstPayload::DefProperty {
-            name,
-            name_atom,
-            form,
-            ..
-        } => {
-            let scope = if current_command.is_empty() {
-                "scene".to_string()
-            } else {
-                format!("command {current_command}")
-            };
-            let record = LspDefinition {
-                name: name.clone(),
-                path: path.to_string(),
-                line: name_atom.line.max(1),
-                kind: "property".to_string(),
-                symbol_id: String::new(),
-                atom_id: name_atom.id,
-                detail: format!("property {name}: {}", form.name),
-                scope,
-                signature: String::new(),
-                start_char: -1,
-                end_char: -1,
-            };
-            append_document_definition(defs, document_symbols, record);
-        }
-        AstPayload::If { branches } => {
-            for branch in branches {
-                for item in &branch.body {
-                    collect_definitions_node(
-                        item,
-                        lex,
-                        path,
-                        current_command,
-                        defs,
-                        document_symbols,
-                    );
+            AstPayload::DefCommand {
+                name,
+                name_atom,
+                form,
+                parameters,
+                body,
+                ..
+            } => {
+                let args = parameters
+                    .iter()
+                    .map(|parameter| (parameter.name.clone(), parameter.form.name.clone()))
+                    .collect::<Vec<_>>();
+                let signature = format!("{}{} -> {}", name, format_arg_list(args), form.name);
+                let record = LspDefinition {
+                    name: name.clone(),
+                    path: path.to_string(),
+                    line: name_atom.line.max(1),
+                    kind: "command".to_string(),
+                    symbol_id: String::new(),
+                    atom_id: name_atom.id,
+                    detail: format!("command {signature}"),
+                    scope: "scene".to_string(),
+                    signature,
+                    start_char: -1,
+                    end_char: -1,
+                };
+                append_document_definition(defs, document_symbols, record);
+                for parameter in parameters {
+                    let record = LspDefinition {
+                        name: parameter.name.clone(),
+                        path: path.to_string(),
+                        line: parameter.name_atom.line.max(1),
+                        kind: "property".to_string(),
+                        symbol_id: String::new(),
+                        atom_id: parameter.name_atom.id,
+                        detail: format!("property {}: {}", parameter.name, parameter.form.name),
+                        scope: format!("command {name}"),
+                        signature: String::new(),
+                        start_char: -1,
+                        end_char: -1,
+                    };
+                    append_document_definition(defs, document_symbols, record);
                 }
-            }
-        }
-        AstPayload::For {
-            init, update, body, ..
-        } => {
-            for item in init {
-                collect_definitions_node(item, lex, path, current_command, defs, document_symbols);
-            }
-            for item in update {
-                collect_definitions_node(item, lex, path, current_command, defs, document_symbols);
-            }
-            for item in body {
-                collect_definitions_node(item, lex, path, current_command, defs, document_symbols);
-            }
-        }
-        AstPayload::While { body, .. } => {
-            for item in body {
-                collect_definitions_node(item, lex, path, current_command, defs, document_symbols);
-            }
-        }
-        AstPayload::Switch {
-            cases,
-            default_body,
-            ..
-        } => {
-            for case in cases {
-                for item in &case.body {
-                    collect_definitions_node(
-                        item,
-                        lex,
-                        path,
-                        current_command,
-                        defs,
-                        document_symbols,
-                    );
-                }
-            }
-            if let Some(body) = default_body {
                 for item in body {
-                    collect_definitions_node(
-                        item,
-                        lex,
-                        path,
-                        current_command,
-                        defs,
-                        document_symbols,
-                    );
+                    children.push((item, name.as_str()));
                 }
             }
+            AstPayload::DefProperty {
+                name,
+                name_atom,
+                form,
+                ..
+            } => {
+                let scope = if current_command.is_empty() {
+                    "scene".to_string()
+                } else {
+                    format!("command {current_command}")
+                };
+                let record = LspDefinition {
+                    name: name.clone(),
+                    path: path.to_string(),
+                    line: name_atom.line.max(1),
+                    kind: "property".to_string(),
+                    symbol_id: String::new(),
+                    atom_id: name_atom.id,
+                    detail: format!("property {name}: {}", form.name),
+                    scope,
+                    signature: String::new(),
+                    start_char: -1,
+                    end_char: -1,
+                };
+                append_document_definition(defs, document_symbols, record);
+            }
+            AstPayload::If { branches } => {
+                for branch in branches {
+                    for item in &branch.body {
+                        children.push((item, current_command));
+                    }
+                }
+            }
+            AstPayload::For {
+                init, update, body, ..
+            } => {
+                for item in init {
+                    children.push((item, current_command));
+                }
+                for item in update {
+                    children.push((item, current_command));
+                }
+                for item in body {
+                    children.push((item, current_command));
+                }
+            }
+            AstPayload::While { body, .. } => {
+                for item in body {
+                    children.push((item, current_command));
+                }
+            }
+            AstPayload::Switch {
+                cases,
+                default_body,
+                ..
+            } => {
+                for case in cases {
+                    for item in &case.body {
+                        children.push((item, current_command));
+                    }
+                }
+                if let Some(body) = default_body {
+                    for item in body {
+                        children.push((item, current_command));
+                    }
+                }
+            }
+            _ => {}
         }
-        _ => {}
+        pending.extend(children.into_iter().rev());
     }
 }
 
@@ -817,20 +779,17 @@ pub fn lsp_scan_document(
             Err(()) => return diagnostic_result(py),
         }
     };
-    if run_bs {
-        let mut bytecode = BytecodeBuilder::new(ia_data.codes.clone());
-        if bytecode
-            .compile_root(
-                &root,
-                &ia_data,
-                &lex.str_list,
-                lex.label_list.len(),
-                &call_property_names,
-            )
-            .is_err()
-        {
-            return diagnostic_result(py);
-        }
+    if run_bs
+        && compile_root(
+            &root,
+            &ia_data,
+            &lex.str_list,
+            lex.label_list.len(),
+            &call_property_names,
+        )
+        .is_err()
+    {
+        return diagnostic_result(py);
     }
     let mut local_defs = HashMap::new();
     let mut document_symbols = Vec::new();

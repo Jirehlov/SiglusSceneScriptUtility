@@ -1,5 +1,5 @@
 use super::ast::{AstNode, AstPayload, GotoKind};
-use super::bs::BytecodeBuilder;
+use super::bs::compile_root;
 use super::ca::{CharacterAnalyzer, PreprocessStats, cp932_code};
 use super::codes::RuntimeCodes;
 use super::config::CompileConfig;
@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 use std::time::Instant;
 
-#[derive(Debug, Clone)]
 pub struct ProjectOutput {
     pub scene_count: usize,
     pub compiled_scene_count: usize,
@@ -31,7 +30,6 @@ pub struct ProjectOutput {
     pub binary_size_stats: Option<BinarySizeStats>,
 }
 
-#[derive(Debug, Clone)]
 pub struct CompileFailure {
     pub stderr: String,
     pub stage_times: Vec<(String, f64)>,
@@ -57,9 +55,6 @@ impl<'a> OutputLog<'a> {
     }
 }
 
-type CompiledScene = (Vec<u8>, Vec<(i32, i32)>);
-
-#[derive(Debug)]
 struct SceneTask {
     name: String,
     display_name: String,
@@ -67,7 +62,6 @@ struct SceneTask {
     path: PathBuf,
 }
 
-#[derive(Debug)]
 struct PreparedScene {
     stem: String,
     scene: SceneDatInput,
@@ -76,7 +70,6 @@ struct PreparedScene {
     global_macro_usage_delta: BTreeMap<(String, String), usize>,
 }
 
-#[derive(Debug)]
 struct FinalizedScene {
     stem: String,
     dat: Vec<u8>,
@@ -87,7 +80,6 @@ struct FinalizedScene {
     global_macro_usage_delta: BTreeMap<(String, String), usize>,
 }
 
-#[derive(Debug)]
 struct SceneData {
     stem: String,
     dat: Vec<u8>,
@@ -96,32 +88,32 @@ struct SceneData {
     compiled: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct MacroBucket {
     pub total: usize,
     pub unused: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct MacroStats {
     pub buckets: BTreeMap<String, MacroBucket>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct TopCount {
     pub name: String,
     pub value: usize,
     pub entries: usize,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct ReadFlagStats {
     pub total: usize,
     pub scenes: usize,
     pub top_scenes: Vec<TopCount>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct SourceStats {
     pub scene_count: usize,
     pub preprocess: BTreeMap<String, usize>,
@@ -139,7 +131,7 @@ pub struct SourceStats {
     pub top_string_scenes: Vec<TopCount>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct BinarySizeStats {
     pub lzss_mode: bool,
     pub dat_bytes: usize,
@@ -170,7 +162,7 @@ struct SceneSourceInputs<'a> {
 }
 
 fn worker_count(config: &CompileConfig, item_count: usize) -> usize {
-    if item_count <= 1 || config.options.force_serial_compile || config.options.serial {
+    if item_count <= 1 || config.options.force_serial_compile {
         return 1;
     }
     config
@@ -780,131 +772,117 @@ fn visit_statement_stats(
     stats: &mut SourceStats,
     ctx: &mut StatementStatContext<'_>,
 ) {
-    super::ast::grow_stack(|| visit_statement_stats_with_stack(node, stats, ctx));
-}
-
-fn visit_statement_stats_with_stack(
-    node: &AstNode,
-    stats: &mut SourceStats,
-    ctx: &mut StatementStatContext<'_>,
-) {
-    match &node.payload {
-        AstPayload::Root(items) => {
-            for item in items {
-                visit_statement_stats(item, stats, ctx);
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        let mut children = Vec::new();
+        match &node.payload {
+            AstPayload::Root(items) => {
+                for item in items {
+                    children.push(item);
+                }
             }
-        }
-        AstPayload::Label { index } => {
-            inc_counter(&mut stats.statements, "label", 1);
-            ctx.label_defs.insert(*index as i32);
-        }
-        AstPayload::ZLabel { z_index, .. } => {
-            inc_counter(&mut stats.statements, "z_label", 1);
-            ctx.z_defs.insert(*z_index as i32);
-        }
-        AstPayload::DefProperty { .. } => {
-            inc_counter(&mut stats.statements, "property_def", 1);
-        }
-        AstPayload::DefCommand {
-            command_id, body, ..
-        } => {
-            inc_counter(&mut stats.statements, "command_def", 1);
-            inc_counter(&mut stats.directives, "command_definitions", 1);
-            if *command_id >= 0 && *command_id < ctx.inc_command_cnt {
-                inc_counter(&mut stats.directives, "global_command_implementations", 1);
-            } else {
-                inc_counter(&mut stats.directives, "scene_command_definitions", 1);
+            AstPayload::Label { index } => {
+                inc_counter(&mut stats.statements, "label", 1);
+                ctx.label_defs.insert(*index as i32);
             }
-            for item in body {
-                visit_statement_stats(item, stats, ctx);
+            AstPayload::ZLabel { z_index, .. } => {
+                inc_counter(&mut stats.statements, "z_label", 1);
+                ctx.z_defs.insert(*z_index as i32);
             }
-        }
-        AstPayload::Goto { kind, .. } => match kind {
-            GotoKind::Gosub => inc_counter(&mut stats.statements, "gosub", 1),
-            GotoKind::GosubStr => inc_counter(&mut stats.statements, "gosubstr", 1),
-            _ => inc_counter(&mut stats.statements, "goto", 1),
-        },
-        AstPayload::Return { .. } => inc_counter(&mut stats.statements, "return", 1),
-        AstPayload::If { branches } => {
-            inc_counter(&mut stats.statements, "if", 1);
-            for (index, branch) in branches.iter().enumerate() {
-                if index > 0 {
-                    if branch.condition.is_some() {
-                        inc_counter(&mut stats.statements, "elseif", 1);
-                    } else {
-                        inc_counter(&mut stats.statements, "else", 1);
+            AstPayload::DefProperty { .. } => {
+                inc_counter(&mut stats.statements, "property_def", 1);
+            }
+            AstPayload::DefCommand {
+                command_id, body, ..
+            } => {
+                inc_counter(&mut stats.statements, "command_def", 1);
+                inc_counter(&mut stats.directives, "command_definitions", 1);
+                if *command_id >= 0 && *command_id < ctx.inc_command_cnt {
+                    inc_counter(&mut stats.directives, "global_command_implementations", 1);
+                } else {
+                    inc_counter(&mut stats.directives, "scene_command_definitions", 1);
+                }
+                for item in body {
+                    children.push(item);
+                }
+            }
+            AstPayload::Goto { kind, .. } => match kind {
+                GotoKind::Gosub => inc_counter(&mut stats.statements, "gosub", 1),
+                GotoKind::GosubStr => inc_counter(&mut stats.statements, "gosubstr", 1),
+                _ => inc_counter(&mut stats.statements, "goto", 1),
+            },
+            AstPayload::Return { .. } => inc_counter(&mut stats.statements, "return", 1),
+            AstPayload::If { branches } => {
+                inc_counter(&mut stats.statements, "if", 1);
+                for (index, branch) in branches.iter().enumerate() {
+                    if index > 0 {
+                        if branch.condition.is_some() {
+                            inc_counter(&mut stats.statements, "elseif", 1);
+                        } else {
+                            inc_counter(&mut stats.statements, "else", 1);
+                        }
+                    }
+                    for item in &branch.body {
+                        children.push(item);
                     }
                 }
-                for item in &branch.body {
-                    visit_statement_stats(item, stats, ctx);
+            }
+            AstPayload::For {
+                init, update, body, ..
+            } => {
+                inc_counter(&mut stats.statements, "for", 1);
+                for item in init.iter().chain(update.iter()).chain(body.iter()) {
+                    children.push(item);
                 }
             }
-        }
-        AstPayload::For {
-            init, update, body, ..
-        } => {
-            inc_counter(&mut stats.statements, "for", 1);
-            for item in init.iter().chain(update.iter()).chain(body.iter()) {
-                visit_statement_stats(item, stats, ctx);
-            }
-        }
-        AstPayload::While { body, .. } => {
-            inc_counter(&mut stats.statements, "while", 1);
-            for item in body {
-                visit_statement_stats(item, stats, ctx);
-            }
-        }
-        AstPayload::Continue => inc_counter(&mut stats.statements, "continue", 1),
-        AstPayload::Break => inc_counter(&mut stats.statements, "break", 1),
-        AstPayload::Switch {
-            cases,
-            default_body,
-            ..
-        } => {
-            inc_counter(&mut stats.statements, "switch", 1);
-            for case in cases {
-                inc_counter(&mut stats.statements, "case", 1);
-                for item in &case.body {
-                    visit_statement_stats(item, stats, ctx);
-                }
-            }
-            if let Some(body) = default_body {
-                inc_counter(&mut stats.statements, "default", 1);
+            AstPayload::While { body, .. } => {
+                inc_counter(&mut stats.statements, "while", 1);
                 for item in body {
-                    visit_statement_stats(item, stats, ctx);
+                    children.push(item);
                 }
             }
-        }
-        AstPayload::Assign { .. } => inc_counter(&mut stats.statements, "assign", 1),
-        AstPayload::Command { .. } => inc_counter(&mut stats.statements, "command_call", 1),
-        AstPayload::Text { .. } => {
-            inc_counter(&mut stats.statements, "text", 1);
-            inc_counter(&mut stats.strings, "dialogue_text_lines", 1);
-        }
-        AstPayload::Name { string_index } => {
-            inc_counter(&mut stats.statements, "name", 1);
-            inc_counter(&mut stats.strings, "speaker_names", 1);
-            if let Some(name) = ctx
-                .strings
-                .get(*string_index)
-                .filter(|value| !value.is_empty())
-            {
-                stats.unique_speakers.insert(name.clone());
+            AstPayload::Continue => inc_counter(&mut stats.statements, "continue", 1),
+            AstPayload::Break => inc_counter(&mut stats.statements, "break", 1),
+            AstPayload::Switch {
+                cases,
+                default_body,
+                ..
+            } => {
+                inc_counter(&mut stats.statements, "switch", 1);
+                for case in cases {
+                    inc_counter(&mut stats.statements, "case", 1);
+                    for item in &case.body {
+                        children.push(item);
+                    }
+                }
+                if let Some(body) = default_body {
+                    inc_counter(&mut stats.statements, "default", 1);
+                    for item in body {
+                        children.push(item);
+                    }
+                }
             }
+            AstPayload::Assign { .. } => inc_counter(&mut stats.statements, "assign", 1),
+            AstPayload::Command { .. } => inc_counter(&mut stats.statements, "command_call", 1),
+            AstPayload::Text { .. } => {
+                inc_counter(&mut stats.statements, "text", 1);
+                inc_counter(&mut stats.strings, "dialogue_text_lines", 1);
+            }
+            AstPayload::Name { string_index } => {
+                inc_counter(&mut stats.statements, "name", 1);
+                inc_counter(&mut stats.strings, "speaker_names", 1);
+                if let Some(name) = ctx
+                    .strings
+                    .get(*string_index)
+                    .filter(|value| !value.is_empty())
+                {
+                    stats.unique_speakers.insert(name.clone());
+                }
+            }
+            AstPayload::Eof => inc_counter(&mut stats.statements, "eof", 1),
+            _ => {}
         }
-        AstPayload::Eof => inc_counter(&mut stats.statements, "eof", 1),
-        _ => {}
-    }
-}
-
-fn visit_argument_list_label_refs(
-    args: &super::ast::ArgumentList,
-    ctx: &StatementStatContext<'_>,
-    label_refs: &mut Vec<i32>,
-    z_refs: &mut Vec<i32>,
-) {
-    for arg in &args.args {
-        visit_label_refs(&arg.value, ctx, label_refs, z_refs);
+        pending.extend(children.into_iter().rev());
     }
 }
 
@@ -914,326 +892,219 @@ fn visit_label_refs(
     label_refs: &mut Vec<i32>,
     z_refs: &mut Vec<i32>,
 ) {
-    super::ast::grow_stack(|| visit_label_refs_with_stack(node, ctx, label_refs, z_refs));
-}
-
-fn visit_label_refs_with_stack(
-    node: &AstNode,
-    ctx: &StatementStatContext<'_>,
-    label_refs: &mut Vec<i32>,
-    z_refs: &mut Vec<i32>,
-) {
-    match &node.payload {
-        AstPayload::Root(items) => {
-            for item in items {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-        }
-        AstPayload::DefProperty { form, .. } => {
-            if let Some(index) = &form.index {
-                visit_label_refs(index, ctx, label_refs, z_refs);
-            }
-        }
-        AstPayload::DefCommand {
-            parameters, body, ..
-        } => {
-            for parameter in parameters {
-                if let Some(index) = &parameter.form.index {
-                    visit_label_refs(index, ctx, label_refs, z_refs);
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        let mut children = Vec::new();
+        match &node.payload {
+            AstPayload::Root(items) => {
+                for item in items {
+                    children.push(item);
                 }
             }
-            for item in body {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-        }
-        AstPayload::Goto { target, args, .. } => {
-            if target.atom_type == ctx.codes.la.z_label {
-                z_refs.push(target.opt);
-            } else if target.atom_type == ctx.codes.la.label {
-                label_refs.push(target.opt);
-            }
-            visit_argument_list_label_refs(args, ctx, label_refs, z_refs);
-        }
-        AstPayload::Return { value: Some(value) } => {
-            visit_label_refs(value, ctx, label_refs, z_refs);
-        }
-        AstPayload::Return { value: None } => {}
-        AstPayload::If { branches } => {
-            for branch in branches {
-                if let Some(condition) = &branch.condition {
-                    visit_label_refs(condition, ctx, label_refs, z_refs);
-                }
-                for item in &branch.body {
-                    visit_label_refs(item, ctx, label_refs, z_refs);
+            AstPayload::DefProperty { form, .. } => {
+                if let Some(index) = &form.index {
+                    children.push(index);
                 }
             }
-        }
-        AstPayload::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            for item in init {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-            visit_label_refs(condition, ctx, label_refs, z_refs);
-            for item in update {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-            for item in body {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-        }
-        AstPayload::While { condition, body } => {
-            visit_label_refs(condition, ctx, label_refs, z_refs);
-            for item in body {
-                visit_label_refs(item, ctx, label_refs, z_refs);
-            }
-        }
-        AstPayload::Switch {
-            condition,
-            cases,
-            default_body,
-        } => {
-            visit_label_refs(condition, ctx, label_refs, z_refs);
-            for case in cases {
-                visit_label_refs(&case.value, ctx, label_refs, z_refs);
-                for item in &case.body {
-                    visit_label_refs(item, ctx, label_refs, z_refs);
+            AstPayload::DefCommand {
+                parameters, body, ..
+            } => {
+                for parameter in parameters {
+                    if let Some(index) = &parameter.form.index {
+                        children.push(index);
+                    }
                 }
-            }
-            if let Some(body) = default_body {
                 for item in body {
-                    visit_label_refs(item, ctx, label_refs, z_refs);
+                    children.push(item);
                 }
             }
-        }
-        AstPayload::Assign { left, right, .. } => {
-            visit_label_refs(left, ctx, label_refs, z_refs);
-            visit_label_refs(right, ctx, label_refs, z_refs);
-        }
-        AstPayload::Command { expression, .. } => {
-            visit_label_refs(expression, ctx, label_refs, z_refs);
-        }
-        AstPayload::Paren { expression } => {
-            visit_label_refs(expression, ctx, label_refs, z_refs);
-        }
-        AstPayload::ExpressionList { values, .. } => {
-            for value in values {
-                visit_label_refs(value, ctx, label_refs, z_refs);
+            AstPayload::Goto { target, args, .. } => {
+                if target.atom_type == ctx.codes.la.z_label {
+                    z_refs.push(target.opt);
+                } else if target.atom_type == ctx.codes.la.label {
+                    label_refs.push(target.opt);
+                }
+                children.extend(args.args.iter().map(|arg| &arg.value));
             }
-        }
-        AstPayload::Literal { atom } => {
-            if atom.atom_type == ctx.codes.la.label {
-                label_refs.push(atom.opt);
+            AstPayload::Return { value: Some(value) } => {
+                children.push(value);
             }
-        }
-        AstPayload::Unary { value, .. } => {
-            visit_label_refs(value, ctx, label_refs, z_refs);
-        }
-        AstPayload::Binary { left, right, .. } => {
-            visit_label_refs(left, ctx, label_refs, z_refs);
-            visit_label_refs(right, ctx, label_refs, z_refs);
-        }
-        AstPayload::ElementExpression { elements, .. } => {
-            for element in elements {
-                visit_argument_list_label_refs(&element.args, ctx, label_refs, z_refs);
-                if let Some(index) = &element.array_index {
-                    visit_label_refs(index, ctx, label_refs, z_refs);
+            AstPayload::Return { value: None } => {}
+            AstPayload::If { branches } => {
+                for branch in branches {
+                    if let Some(condition) = &branch.condition {
+                        children.push(condition);
+                    }
+                    for item in &branch.body {
+                        children.push(item);
+                    }
                 }
             }
+            AstPayload::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
+                for item in init {
+                    children.push(item);
+                }
+                children.push(condition);
+                for item in update {
+                    children.push(item);
+                }
+                for item in body {
+                    children.push(item);
+                }
+            }
+            AstPayload::While { condition, body } => {
+                children.push(condition);
+                for item in body {
+                    children.push(item);
+                }
+            }
+            AstPayload::Switch {
+                condition,
+                cases,
+                default_body,
+            } => {
+                children.push(condition);
+                for case in cases {
+                    children.push(&case.value);
+                    for item in &case.body {
+                        children.push(item);
+                    }
+                }
+                if let Some(body) = default_body {
+                    for item in body {
+                        children.push(item);
+                    }
+                }
+            }
+            AstPayload::Assign { left, right, .. } => {
+                children.push(left);
+                children.push(right);
+            }
+            AstPayload::Command { expression, .. } => {
+                children.push(expression);
+            }
+            AstPayload::Paren { expression } => {
+                children.push(expression);
+            }
+            AstPayload::ExpressionList { values, .. } => {
+                for value in values {
+                    children.push(value);
+                }
+            }
+            AstPayload::Literal { atom } => {
+                if atom.atom_type == ctx.codes.la.label {
+                    label_refs.push(atom.opt);
+                }
+            }
+            AstPayload::Unary { value, .. } => {
+                children.push(value);
+            }
+            AstPayload::Binary { left, right, .. } => {
+                children.push(left);
+                children.push(right);
+            }
+            AstPayload::ElementExpression { elements, .. } => {
+                for element in elements {
+                    children.extend(element.args.args.iter().map(|arg| &arg.value));
+                    if let Some(index) = &element.array_index {
+                        children.push(index);
+                    }
+                }
+            }
+            AstPayload::Label { .. }
+            | AstPayload::ZLabel { .. }
+            | AstPayload::Continue
+            | AstPayload::Break
+            | AstPayload::Text { .. }
+            | AstPayload::Name { .. }
+            | AstPayload::Eof => {}
         }
-        AstPayload::Label { .. }
-        | AstPayload::ZLabel { .. }
-        | AstPayload::Continue
-        | AstPayload::Break
-        | AstPayload::Text { .. }
-        | AstPayload::Name { .. }
-        | AstPayload::Eof => {}
+        pending.extend(children.into_iter().rev());
     }
 }
 
-fn visit_expression_stats(node: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) -> usize {
-    super::ast::grow_stack(|| visit_expression_stats_with_stack(node, stats, codes))
-}
-
-fn visit_expression_stats_with_stack(
-    node: &AstNode,
-    stats: &mut SourceStats,
-    codes: &RuntimeCodes,
-) -> usize {
-    let depth = match &node.payload {
-        AstPayload::Root(items) => {
-            for item in items {
-                visit_expression_stats(item, stats, codes);
-            }
-            0
-        }
-        AstPayload::DefProperty { form, .. } => {
-            if let Some(index) = &form.index {
-                visit_expression_stats(index, stats, codes);
-            }
-            0
-        }
-        AstPayload::DefCommand {
-            parameters, body, ..
-        } => {
-            for parameter in parameters {
-                if let Some(index) = &parameter.form.index {
-                    visit_expression_stats(index, stats, codes);
-                }
-            }
-            for item in body {
-                visit_expression_stats(item, stats, codes);
-            }
-            0
-        }
-        AstPayload::Goto { args, .. } => {
-            inc_counter(
-                &mut stats.expressions,
-                "named_args",
-                argument_named_count(args),
-            );
-            for arg in &args.args {
-                visit_expression_stats(&arg.value, stats, codes);
-            }
-            1
-        }
-        AstPayload::Return { value: Some(value) } => {
-            visit_expression_stats(value, stats, codes);
-            0
-        }
-        AstPayload::Return { value: None } => 0,
-        AstPayload::If { branches } => {
-            for branch in branches {
-                if let Some(condition) = &branch.condition {
-                    visit_expression_stats(condition, stats, codes);
-                }
-                for item in &branch.body {
-                    visit_expression_stats(item, stats, codes);
-                }
-            }
-            0
-        }
-        AstPayload::For {
-            init,
-            condition,
-            update,
-            body,
-        } => {
-            for item in init {
-                visit_expression_stats(item, stats, codes);
-            }
-            visit_expression_stats(condition, stats, codes);
-            for item in update {
-                visit_expression_stats(item, stats, codes);
-            }
-            for item in body {
-                visit_expression_stats(item, stats, codes);
-            }
-            0
-        }
-        AstPayload::While { condition, body } => {
-            visit_expression_stats(condition, stats, codes);
-            for item in body {
-                visit_expression_stats(item, stats, codes);
-            }
-            0
-        }
-        AstPayload::Switch {
-            condition,
-            cases,
-            default_body,
-        } => {
-            visit_expression_stats(condition, stats, codes);
-            for case in cases {
-                visit_expression_stats(&case.value, stats, codes);
-                for item in &case.body {
-                    visit_expression_stats(item, stats, codes);
-                }
-            }
-            if let Some(body) = default_body {
-                for item in body {
-                    visit_expression_stats(item, stats, codes);
-                }
-            }
-            0
-        }
-        AstPayload::Assign {
-            left,
-            operator,
-            right,
-            ..
-        } => {
-            inc_counter(
-                &mut stats.assign_ops,
-                assign_operator_symbol(codes, *operator),
-                1,
-            );
-            visit_expression_stats(left, stats, codes);
-            visit_expression_stats(right, stats, codes);
-            0
-        }
-        AstPayload::Command { expression, .. } => {
-            visit_expression_stats(expression, stats, codes);
-            0
-        }
-        AstPayload::Paren { expression } => 1 + visit_expression_stats(expression, stats, codes),
-        AstPayload::ExpressionList { values, .. } => {
-            let mut max_depth = 0;
-            for value in values {
-                max_depth = max_depth.max(visit_expression_stats(value, stats, codes));
-            }
-            1 + max_depth
-        }
-        AstPayload::Unary { operators, value } => {
-            inc_counter(&mut stats.expressions, "unary_ops", operators.len());
-            for (operator, _) in operators {
+fn visit_expression_stats(root: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) {
+    let mut pending = vec![(root, 0usize)];
+    let mut max_depth = 0usize;
+    while let Some((node, depth)) = pending.pop() {
+        match &node.payload {
+            AstPayload::Assign { operator, .. } => {
                 inc_counter(
-                    &mut stats.unary_op_kinds,
-                    operator_symbol(codes, *operator, true),
+                    &mut stats.assign_ops,
+                    assign_operator_symbol(codes, *operator),
                     1,
                 );
             }
-            operators.len() + visit_expression_stats(value, stats, codes)
-        }
-        AstPayload::Binary {
-            operator,
-            left,
-            right,
-            ..
-        } => {
-            inc_counter(&mut stats.expressions, "binary_ops", 1);
-            inc_counter(
-                &mut stats.binary_op_kinds,
-                operator_symbol(codes, *operator, false),
-                1,
-            );
-            1 + visit_expression_stats(left, stats, codes)
-                .max(visit_expression_stats(right, stats, codes))
-        }
-        AstPayload::ElementExpression { elements, .. } => {
-            for element in elements {
+            AstPayload::Unary { operators, .. } => {
+                inc_counter(&mut stats.expressions, "unary_ops", operators.len());
+                for (operator, _) in operators {
+                    inc_counter(
+                        &mut stats.unary_op_kinds,
+                        operator_symbol(codes, *operator, true),
+                        1,
+                    );
+                }
+            }
+            AstPayload::Binary { operator, .. } => {
+                inc_counter(&mut stats.expressions, "binary_ops", 1);
+                inc_counter(
+                    &mut stats.binary_op_kinds,
+                    operator_symbol(codes, *operator, false),
+                    1,
+                );
+            }
+            AstPayload::Goto { args, .. } => {
                 inc_counter(
                     &mut stats.expressions,
                     "named_args",
-                    argument_named_count(&element.args),
+                    argument_named_count(args),
                 );
-                if let Some(array_index) = &element.array_index {
-                    visit_expression_stats(array_index, stats, codes);
-                }
-                for arg in &element.args.args {
-                    visit_expression_stats(&arg.value, stats, codes);
+            }
+            AstPayload::ElementExpression { elements, .. } => {
+                for element in elements {
+                    inc_counter(
+                        &mut stats.expressions,
+                        "named_args",
+                        argument_named_count(&element.args),
+                    );
                 }
             }
-            1
+            _ => {}
         }
-        AstPayload::Literal { .. } => 1,
-        _ => 0,
-    };
-    max_counter(&mut stats.expressions, "max_depth", depth);
-    depth
+        let (height, child_depth) = match &node.payload {
+            AstPayload::Paren { .. }
+            | AstPayload::ExpressionList { .. }
+            | AstPayload::Binary { .. } => (depth + 1, depth + 1),
+            AstPayload::Unary { operators, .. } => {
+                (depth + operators.len(), depth + operators.len())
+            }
+            AstPayload::Goto { .. }
+            | AstPayload::ElementExpression { .. }
+            | AstPayload::Literal { .. } => (depth + 1, 0),
+            _ => (depth, 0),
+        };
+        max_depth = max_depth.max(height);
+        if let AstPayload::DefCommand {
+            parameters, body, ..
+        } = &node.payload
+        {
+            for parameter in parameters {
+                if let Some(index) = parameter.form.index.as_deref() {
+                    pending.push((index, child_depth));
+                }
+            }
+            pending.extend(body.iter().map(|node| (node, child_depth)));
+        } else {
+            node.payload
+                .visit_children(|child| pending.push((child, child_depth)));
+        }
+    }
+    max_counter(&mut stats.expressions, "max_depth", max_depth);
 }
 
 fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
@@ -1794,22 +1665,14 @@ fn prepare_scene(
         log_stage(log, "BS", display_name)?;
     }
     let stage_start = Instant::now();
-    let mut bytecode = BytecodeBuilder::new(ia_data.codes.clone());
-    let bs_output = bytecode
-        .compile_root(
-            &root,
-            &ia_data,
-            &lex.str_list,
-            lex.label_list.len(),
-            &call_property_names,
-        )
-        .map_err(|_| {
-            scene_error(
-                bytecode.last_error.code(),
-                display_name,
-                bytecode.last_error.line,
-            )
-        })?;
+    let bs_output = compile_root(
+        &root,
+        &ia_data,
+        &lex.str_list,
+        lex.label_list.len(),
+        &call_property_names,
+    )
+    .map_err(|error| scene_error(error.code, display_name, error.line))?;
     let (scene_macro_counts, global_macro_usage_delta, source_stats) =
         if config.cache.full_compile_stats {
             let (scene_macro_counts, global_macro_usage_delta) =
@@ -1858,7 +1721,7 @@ fn finalize_scene(
     config: &CompileConfig,
     mut prepared: PreparedScene,
     rand: &mut MsvcRand,
-) -> CompiledScene {
+) -> FinalizedScene {
     let layout = ScnHeaderLayout {
         fields: config.constants.scn_header_fields.clone(),
         header_size: config.constants.scn_header_size,
@@ -1891,13 +1754,20 @@ fn finalize_scene(
     }
     prepared.scene.namae_list = namae_list;
     prepared.scene.str_sort_index = string_order;
-    let command_labels = prepared.scene.cmd_label_list.clone();
     let dat = build_scn_dat(
         &layout,
         &prepared.scene,
         config.constants.scene_string_xor_multiplier,
     );
-    (dat, command_labels)
+    FinalizedScene {
+        stem: prepared.stem,
+        dat,
+        command_labels: prepared.scene.cmd_label_list,
+        read_flag_count: prepared.scene.read_flag_list.len(),
+        source_stats: prepared.source_stats,
+        scene_macro_counts: prepared.scene_macro_counts,
+        global_macro_usage_delta: prepared.global_macro_usage_delta,
+    }
 }
 
 fn write_digest_cache(config: &CompileConfig) -> Result<(), String> {
@@ -2061,21 +1931,7 @@ fn compile_project_inner(
                         if scene.stem.is_empty() {
                             scene.stem = scene_stem(&task.name);
                         }
-                        let read_flag_count = scene.scene.read_flag_list.len();
-                        let source_stats = scene.source_stats.clone();
-                        let scene_macro_counts = scene.scene_macro_counts.clone();
-                        let global_macro_usage_delta = scene.global_macro_usage_delta.clone();
-                        let stem = scene.stem.clone();
-                        let (dat, command_labels) = finalize_scene(config, scene, worker_rand);
-                        Ok(FinalizedScene {
-                            stem,
-                            dat,
-                            command_labels,
-                            read_flag_count,
-                            source_stats,
-                            scene_macro_counts,
-                            global_macro_usage_delta,
-                        })
+                        Ok(finalize_scene(config, scene, worker_rand))
                     }
                     Err(message) => Err(message),
                 };
@@ -2133,23 +1989,9 @@ fn compile_project_inner(
             if scene.stem.is_empty() {
                 scene.stem = scene_stem(&task.name);
             }
-            let read_flag_count = scene.scene.read_flag_list.len();
-            let source_stats = scene.source_stats.clone();
-            let scene_macro_counts = scene.scene_macro_counts.clone();
-            let global_macro_usage_delta = scene.global_macro_usage_delta.clone();
-            let stem = scene.stem.clone();
-            let (dat, command_labels) = finalize_scene(config, scene, &mut rand);
             compiled.push((
                 lower_file_name(&task.name),
-                FinalizedScene {
-                    stem,
-                    dat,
-                    command_labels,
-                    read_flag_count,
-                    source_stats,
-                    scene_macro_counts,
-                    global_macro_usage_delta,
-                },
+                finalize_scene(config, scene, &mut rand),
             ));
         }
     }

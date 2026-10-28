@@ -968,7 +968,6 @@ def _native_compile_config(
         ),
         "options": {
             "dat_repack": bool(args.dat_repack),
-            "serial": bool(args.serial),
             "max_workers": args.max_workers,
             "set_shuffle": args.set_shuffle,
             "gei": bool(args.gei),

@@ -5,8 +5,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Test JSON reports record successful profiles for reuse by the sample runner.
-- Extended PCK Samples CI with decompile checks for sample folders `0`, `1`, and `2`, requiring `PAYLOAD_SAME` throughout. Folders `0` and `1` reuse ordinary round-trip profiles; folder `2` explicitly uses profile `0`.
+- Added Rust implementations of scene disassembly and decompilation, used automatically when the native extension is available. Payload comparison now reuses the native disassembly pipeline; `--legacy-full` selects the Python implementations.
+- Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Successful decompile tests report `PAYLOAD_SAME`; JSON reports record the successful profile.
+- Changed syntax-analysis nesting beyond 64 levels and expression-tree height beyond 128 from errors to warnings, allowing compilation and LSP analysis to continue in both backends.
+- Improved Python/Rust alignment for deeply nested source, argument and bytecode metadata, malformed scene data, and LSP diagnostics. Reworked recursive Python analysis and bytecode generation to handle deep inputs.
+- Reduced native dependencies to PyO3 by reusing Python's CP932 codec and batched hashlib SHA-256 hashing, and replacing stack growth with safe Rust task stacks. Updated PyO3 to 0.30.1.
+- Reduced compilation overhead by sharing immutable element definitions, processing small expression trees directly, and using iterative bytecode generation and source-statistics traversal.
 
 
 ## [v0.5.7] - 2026-10-14

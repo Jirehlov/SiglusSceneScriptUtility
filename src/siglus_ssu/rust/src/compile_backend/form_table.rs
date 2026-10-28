@@ -9,7 +9,7 @@ pub enum ElementKind {
     Command,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ArgInfo {
     pub id: i32,
     pub name: String,
@@ -19,12 +19,12 @@ pub struct ArgInfo {
     pub preserve_int_reference: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct ArgList {
     pub arg_list: Vec<ArgInfo>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ElementInfo {
     pub kind: ElementKind,
     pub code: i32,
@@ -36,8 +36,8 @@ pub struct ElementInfo {
 
 #[derive(Debug, Clone, Default)]
 pub struct FormInfo {
-    pub element_map_by_name: HashMap<String, ElementInfo>,
-    pub element_map_by_code: HashMap<i32, ElementInfo>,
+    pub element_map_by_name: HashMap<String, Arc<ElementInfo>>,
+    pub element_map_by_code: HashMap<i32, Arc<ElementInfo>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -99,6 +99,7 @@ impl FormTable {
         if is_call_origin && info.element_map_by_name.contains_key(&element.name) {
             return;
         }
+        let element = Arc::new(element);
         info.element_map_by_code
             .entry(element.code)
             .or_insert_with(|| element.clone());
@@ -107,20 +108,20 @@ impl FormTable {
             .or_insert(element);
     }
 
-    pub fn get(&self, form: &str, name: &str) -> Option<&ElementInfo> {
+    pub fn get(&self, form: &str, name: &str) -> Option<&Arc<ElementInfo>> {
         self.form_map_by_name
             .get(form)
             .and_then(|info| info.element_map_by_name.get(name))
     }
 
-    pub fn get_element_by_code(&self, form_code: i32, code: i32) -> Option<&ElementInfo> {
+    pub fn get_element_by_code(&self, form_code: i32, code: i32) -> Option<&Arc<ElementInfo>> {
         let form_name = self.code_form.get(&form_code)?;
         self.form_map_by_name
             .get(form_name)
             .and_then(|info| info.element_map_by_code.get(&code))
     }
 
-    pub fn find(&self, name: &str) -> Option<(&ElementInfo, &str)> {
+    pub fn find(&self, name: &str) -> Option<(&Arc<ElementInfo>, &str)> {
         for form in [&self.call_form, &self.scene_form, &self.global_form] {
             if let Some(element) = self.get(form, name) {
                 return Some((element, form));
