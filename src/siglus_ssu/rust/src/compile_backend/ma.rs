@@ -15,7 +15,7 @@ pub struct SemanticErrorInfo {
     pub qname: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum SourceBindingKind {
     Command,
     LocalCommand,
@@ -453,11 +453,7 @@ impl<'a> SemanticAnalyzer<'a> {
             .code_form
             .get(&form)
             .cloned()
-            .unwrap_or_else(|| {
-                self.ia_data
-                    .form_table
-                    .form_name(&self.codes.forms.void.name)
-            })
+            .unwrap_or_else(|| self.codes.forms.void.name.clone())
     }
 
     fn prepare_named_element(

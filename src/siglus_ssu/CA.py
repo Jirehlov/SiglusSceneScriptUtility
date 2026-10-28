@@ -71,6 +71,13 @@ def add_replace_tree(rt, name, rep):
     n["r"] = rep
 
 
+def build_replace_tree(replacements):
+    tree = new_replace_tree()
+    for replacement in replacements:
+        add_replace_tree(tree, replacement["name"], replacement)
+    return tree
+
+
 def search_replace_tree(rt, text, pos):
     n = rt
     best = None

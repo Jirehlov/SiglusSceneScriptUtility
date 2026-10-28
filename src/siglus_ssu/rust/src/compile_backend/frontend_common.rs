@@ -1,17 +1,16 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum CaseMode {
     Lower,
     Upper,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum SingleQuoteMode {
     None,
     Char,
     String,
 }
 
-#[derive(Debug, Clone)]
 pub struct TextCommentOptions {
     pub case_mode: CaseMode,
     pub single_quote_mode: SingleQuoteMode,
@@ -48,7 +47,7 @@ impl Default for TextCommentOptions {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct SourcePoint {
     pub line: usize,
     pub column: usize,
@@ -56,13 +55,11 @@ pub struct SourcePoint {
     pub source_id: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct TextCommentResult {
     pub text: String,
     pub source_map: Option<Vec<Option<SourcePoint>>>,
 }
 
-#[derive(Debug, Clone)]
 pub struct TextCommentError {
     pub line: usize,
     pub message: String,

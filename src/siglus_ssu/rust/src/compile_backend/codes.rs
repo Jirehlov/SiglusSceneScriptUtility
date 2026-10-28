@@ -1,13 +1,13 @@
 use super::config::CompileConstants;
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FormValue {
     pub name: String,
     pub code: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FormCodes {
     pub argsref: FormValue,
     pub args: FormValue,
@@ -27,7 +27,7 @@ pub struct FormCodes {
     pub strref: FormValue,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LexCodes {
     pub z_label_count: usize,
     pub none: i32,
@@ -98,7 +98,7 @@ pub struct LexCodes {
     pub sr3_assign: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OperatorCodes {
     pub none: i32,
     pub plus: i32,
@@ -123,7 +123,7 @@ pub struct OperatorCodes {
     pub sr3: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct BytecodeCodes {
     pub nl: i32,
     pub push: i32,
@@ -151,7 +151,7 @@ pub struct BytecodeCodes {
     pub sel_block_end: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ElementCodes {
     pub array: i32,
     pub global_cur_call: i32,
@@ -161,13 +161,13 @@ pub struct ElementCodes {
     pub owner_user_prop: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ElementTypeCodes {
     pub property: i32,
     pub command: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RuntimeCodes {
     pub forms: FormCodes,
     pub form_bytecode: HashMap<i32, i32>,

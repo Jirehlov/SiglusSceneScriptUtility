@@ -128,6 +128,32 @@ impl OrderedMap {
     }
 }
 
+impl Drop for OrderedMap {
+    fn drop(&mut self) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let mut pending = Vec::with_capacity(self.entries.len() * 2);
+        for (key, value) in self.entries.drain(..) {
+            pending.push(key);
+            pending.push(value);
+        }
+        drop_values(pending);
+    }
+}
+
+struct ValueList {
+    items: Vec<V>,
+}
+
+impl Drop for ValueList {
+    fn drop(&mut self) {
+        if !self.items.is_empty() {
+            drop_values(std::mem::take(&mut self.items));
+        }
+    }
+}
+
 #[derive(Clone)]
 enum V {
     Native(Rc<NativeObject>),
@@ -136,10 +162,32 @@ enum V {
     Int(i64),
     Str(Rc<Text>),
     Bytes(Rc<Vec<u8>>),
-    List(Rc<RefCell<Vec<V>>>),
-    Tuple(Rc<Vec<V>>),
+    List(Rc<ValueList>),
+    Tuple(Rc<ValueList>),
     Dict(MapRef),
     Set(MapRef),
+}
+
+fn drop_values(mut pending: Vec<V>) {
+    while let Some(value) = pending.pop() {
+        match value {
+            V::List(items) | V::Tuple(items) => {
+                if let Ok(mut items) = Rc::try_unwrap(items) {
+                    pending.append(&mut items.items);
+                }
+            }
+            V::Dict(map) | V::Set(map) => {
+                if let Ok(map) = Rc::try_unwrap(map) {
+                    let mut map = map.into_inner();
+                    for (key, value) in map.entries.drain(..) {
+                        pending.push(key);
+                        pending.push(value);
+                    }
+                }
+            }
+            _ => (),
+        }
+    }
 }
 
 thread_local! { static BYTE_CHARACTERS:Vec<Rc<Text>>=(0..256).map(|code|Rc::new(Text::new(vec![code]))).collect(); }
@@ -154,10 +202,10 @@ impl V {
     }
 
     fn list(items: Vec<V>) -> Self {
-        Self::List(Rc::new(RefCell::new(items)))
+        Self::List(Rc::new(ValueList { items }))
     }
     fn tuple(items: Vec<V>) -> Self {
-        Self::Tuple(Rc::new(items))
+        Self::Tuple(Rc::new(ValueList { items }))
     }
     fn dictionary() -> Self {
         Self::Dict(Rc::new(RefCell::new(OrderedMap::new())))
@@ -172,7 +220,9 @@ impl V {
             Self::Int(value) => Key::Int(*value),
             Self::Bool(value) => Key::Int(i64::from(*value)),
             Self::Str(value) => Key::Text(value.clone()),
-            Self::Tuple(items) => Key::Tuple(items.iter().map(V::key).collect::<Result<_, _>>()?),
+            Self::Tuple(items) => {
+                Key::Tuple(items.items.iter().map(V::key).collect::<Result<_, _>>()?)
+            }
             _ => return Err(Failure("unhashable native value".into())),
         })
     }
@@ -193,8 +243,7 @@ impl V {
 
 fn values(value: &V) -> Result<Vec<V>, Failure> {
     match value.clone() {
-        V::List(value) => Ok(value.borrow().clone()),
-        V::Tuple(value) => Ok(value.as_ref().clone()),
+        V::List(value) | V::Tuple(value) => Ok(value.items.clone()),
         V::Dict(value) | V::Set(value) => Ok(value
             .borrow()
             .entries
@@ -330,7 +379,6 @@ struct SceneAnalysis {
     definitions: HashMap<i64, CommandDefinition>,
     calls: HashMap<i64, CommandCall>,
 }
-#[derive(Clone, Copy)]
 struct ForCandidate {
     guard: usize,
     loop_offset: i64,
@@ -582,45 +630,123 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
 }
 
 fn to_py(py: Python<'_>, value: &V) -> PyResult<Py<PyAny>> {
-    Ok(match value.clone() {
-        V::None => py.None(),
-        V::Bool(value) => value.into_pyobject(py)?.to_owned().unbind().into_any(),
-        V::Int(value) => value.into_pyobject(py)?.unbind().into_any(),
-        V::Str(value) => {
-            if let Some(text) = value
-                .chars
-                .iter()
-                .map(|code| char::from_u32(*code))
-                .collect::<Option<String>>()
-            {
-                PyString::new(py, &text).unbind().into_any()
-            } else {
-                let bytes = value
+    enum Frame<'py> {
+        List {
+            items: Rc<ValueList>,
+            index: usize,
+            target: Bound<'py, PyList>,
+        },
+        Dict {
+            items: MapRef,
+            index: usize,
+            key: Option<Py<PyAny>>,
+            target: Bound<'py, PyDict>,
+        },
+    }
+    let mut pending = Vec::new();
+    let mut current = value.clone();
+    'values: loop {
+        let mut output = match current {
+            V::None => py.None(),
+            V::Bool(value) => value.into_pyobject(py)?.to_owned().unbind().into_any(),
+            V::Int(value) => value.into_pyobject(py)?.unbind().into_any(),
+            V::Str(value) => {
+                if let Some(text) = value
                     .chars
                     .iter()
-                    .flat_map(|code| code.to_le_bytes())
-                    .collect::<Vec<_>>();
-                py.get_type::<PyString>()
-                    .call1((PyBytes::new(py, &bytes), "utf-32-le", "surrogatepass"))?
-                    .unbind()
+                    .map(|code| char::from_u32(*code))
+                    .collect::<Option<String>>()
+                {
+                    PyString::new(py, &text).unbind().into_any()
+                } else {
+                    let bytes = value
+                        .chars
+                        .iter()
+                        .flat_map(|code| code.to_le_bytes())
+                        .collect::<Vec<_>>();
+                    py.get_type::<PyString>()
+                        .call1((PyBytes::new(py, &bytes), "utf-32-le", "surrogatepass"))?
+                        .unbind()
+                }
             }
-        }
-        V::List(items) => {
-            let list = PyList::empty(py);
-            for value in items.borrow().iter() {
-                list.append(to_py(py, value)?)?;
+            V::List(items) => {
+                let target = PyList::empty(py);
+                if let Some(first) = items.items.first() {
+                    current = first.clone();
+                    pending.push(Frame::List {
+                        items,
+                        index: 0,
+                        target,
+                    });
+                    continue;
+                }
+                target.into_any().unbind()
             }
-            list.unbind().into_any()
-        }
-        V::Dict(map) => {
-            let dict = PyDict::new(py);
-            for (key, value) in &map.borrow().entries {
-                dict.set_item(to_py(py, key)?, to_py(py, value)?)?;
+            V::Dict(items) => {
+                let target = PyDict::new(py);
+                let first = items.borrow().entries.first().map(|(key, _)| key.clone());
+                if let Some(first) = first {
+                    current = first;
+                    pending.push(Frame::Dict {
+                        items,
+                        index: 0,
+                        key: None,
+                        target,
+                    });
+                    continue;
+                }
+                target.into_any().unbind()
             }
-            dict.unbind().into_any()
+            _ => return Err(PyValueError::new_err("cannot export native value")),
+        };
+        loop {
+            let Some(frame) = pending.last_mut() else {
+                return Ok(output);
+            };
+            match frame {
+                Frame::List {
+                    items,
+                    index,
+                    target,
+                } => {
+                    target.append(output.bind(py))?;
+                    *index += 1;
+                    if let Some(next) = items.items.get(*index) {
+                        current = next.clone();
+                        continue 'values;
+                    }
+                }
+                Frame::Dict {
+                    items,
+                    index,
+                    key,
+                    target,
+                } => {
+                    if let Some(key) = key.take() {
+                        target.set_item(key.bind(py), output.bind(py))?;
+                        *index += 1;
+                        let next = items
+                            .borrow()
+                            .entries
+                            .get(*index)
+                            .map(|(key, _)| key.clone());
+                        if let Some(next) = next {
+                            current = next;
+                            continue 'values;
+                        }
+                    } else {
+                        *key = Some(output);
+                        current = items.borrow().entries[*index].1.clone();
+                        continue 'values;
+                    }
+                }
+            }
+            output = match pending.pop().unwrap() {
+                Frame::List { target, .. } => target.into_any().unbind(),
+                Frame::Dict { target, .. } => target.into_any().unbind(),
+            };
         }
-        _ => return Err(PyValueError::new_err("cannot export native value")),
-    })
+    }
 }
 
 fn declaration_form_source(rt: &Runtime, form: i64, size: Option<i64>) -> SourceText {
@@ -1272,7 +1398,7 @@ pub(crate) mod dat {
                 V::Str(value) => json_string(value, output),
                 V::List(values) => {
                     output.push(b'[');
-                    for (index, value) in values.borrow().iter().enumerate() {
+                    for (index, value) in values.items.iter().enumerate() {
                         if index > 0 {
                             output.extend_from_slice(b", ");
                         }
@@ -1709,7 +1835,7 @@ pub fn disassemble_scn_bytes(
     work().map_err(|error| PyValueError::new_err(error.message()))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq)]
 enum Opcode {
     None,
     Nl,
@@ -1893,7 +2019,6 @@ fn optional_text(value: Option<SourceText>) -> V {
     value.map(V::Str).unwrap_or(V::None)
 }
 
-#[derive(Debug)]
 struct Argument {
     form: i64,
     sub: Vec<Argument>,
@@ -1970,7 +2095,6 @@ impl Hash for Argument {
     }
 }
 
-#[derive(Clone)]
 struct ArgumentSpec {
     form: Option<i64>,
     variadic: bool,
@@ -1978,7 +2102,6 @@ struct ArgumentSpec {
     name: SourceText,
     int_reference: bool,
 }
-#[derive(Clone)]
 struct Element {
     kind: i64,
     parent_code: Option<i64>,
@@ -2242,7 +2365,6 @@ impl NativeTables {
     }
 }
 
-#[derive(Clone)]
 struct ScopeFrame {
     end: i64,
     slots: Vec<Rc<Element>>,
@@ -2469,7 +2591,6 @@ struct StackValue {
     receiver: bool,
     expr: Option<SourceText>,
 }
-#[derive(Clone)]
 struct ResolvedPath {
     ret: Option<i64>,
     code: Option<i64>,
@@ -2478,13 +2599,12 @@ struct ResolvedPath {
     start: usize,
     end: usize,
 }
-#[derive(Clone)]
 struct CommandPlan {
     resolved: Option<Rc<ResolvedPath>>,
     start: Option<usize>,
     info: Option<Rc<Element>>,
 }
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 struct CommandKey {
     ret: i64,
     arg_id: i64,
@@ -2494,7 +2614,6 @@ struct CommandKey {
     points: Vec<usize>,
 }
 
-#[derive(Clone)]
 struct Instruction {
     op: Opcode,
     offset: i64,
@@ -2608,9 +2727,13 @@ impl ExpressionState {
     }
     fn consume_argument(&mut self, arg: &Argument) {
         if arg.form == self.tables.list {
-            for sub in arg.sub.iter().rev() {
-                self.consume_argument(sub);
-            }
+            let mut cursor = StackCursor {
+                end: self.stack.len(),
+                points: self.points.len(),
+            };
+            self.consume_cursor(arg, &mut cursor);
+            self.stack.truncate(cursor.end);
+            self.points.truncate(cursor.points);
         } else if self.tables.scalar.contains(&arg.form) {
             self.pop();
         } else {
@@ -5021,7 +5144,6 @@ fn attach_source_labels(
     }
     lines
 }
-#[derive(Clone)]
 struct LabelReference {
     start: usize,
     end: usize,
@@ -5196,7 +5318,6 @@ enum LinePass<'a> {
     RestoreLabels,
     MergeTargets,
 }
-#[derive(Clone, Copy)]
 enum LateLinePass {
     RestoreEof(i64),
     SyntheticGaps,
@@ -6605,7 +6726,7 @@ struct RenderContext {
     continue_offset: Option<i64>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 struct RenderKey {
     start: usize,
     end: usize,

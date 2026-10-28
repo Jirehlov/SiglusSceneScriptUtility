@@ -218,7 +218,6 @@ fn palette_bgra(py: Python<'_>, palette: Vec<u32>, indices: &[u8]) -> PyResult<P
     Ok(PyBytes::new(py, &result).into())
 }
 
-#[derive(Clone, Copy)]
 struct ShuffleParam {
     iu: u32,
     chunks: u32,

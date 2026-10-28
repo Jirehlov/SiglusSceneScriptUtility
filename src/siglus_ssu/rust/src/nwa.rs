@@ -1,4 +1,3 @@
-#[derive(Clone, Copy, Debug)]
 pub struct NwaHeader {
     pub channels: u16,
     pub bits_per_sample: u16,
@@ -64,7 +63,6 @@ pub fn parse_header(b: &[u8]) -> Result<NwaHeader, String> {
     })
 }
 
-#[derive(Clone, Copy)]
 struct BitReader<'a> {
     data: &'a [u8],
     bp: usize,

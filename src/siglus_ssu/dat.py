@@ -650,21 +650,58 @@ def scn_structure_valid(blob):
 def _payload_trace_normalize_value(ev, key, value):
     if key == "value" and ev.get("text") is not None:
         return None
-    if isinstance(value, dict):
-        out = {}
-        for sub_key in sorted(value):
-            sub_val = _payload_trace_normalize_value(ev, sub_key, value[sub_key])
-            if sub_val is not None:
-                out[sub_key] = sub_val
-        return out
-    if isinstance(value, list):
-        out = []
-        for item in value:
-            sub_val = _payload_trace_normalize_value(ev, key, item)
-            if sub_val is not None:
-                out.append(sub_val)
-        return out
-    return value
+    if not isinstance(value, (dict, list)):
+        return value
+    out = []
+    pending = [(key, value, out)]
+    while pending:
+        name, item, target = pending.pop()
+        if item is None or (name == "value" and ev.get("text") is not None):
+            continue
+        if isinstance(item, dict):
+            result = {}
+            pending.extend((k, item[k], result) for k in sorted(item, reverse=True))
+        elif isinstance(item, list):
+            result = []
+            pending.extend((name, child, result) for child in reversed(item))
+        else:
+            result = item
+        if isinstance(target, dict):
+            target[name] = result
+        else:
+            target.append(result)
+    return out[0]
+
+
+def _payload_trace_json(value):
+    try:
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except RecursionError:
+        parts = []
+        pending = [(False, value)]
+        while pending:
+            literal, item = pending.pop()
+            if literal:
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append("{")
+                pending.append((True, "}"))
+                for index, key in reversed(list(enumerate(sorted(item)))):
+                    pending.append((False, item[key]))
+                    pending.append((True, json.dumps(key, ensure_ascii=False) + ": "))
+                    if index:
+                        pending.append((True, ", "))
+            elif isinstance(item, list):
+                parts.append("[")
+                pending.append((True, "]"))
+                for index, child in reversed(list(enumerate(item))):
+                    pending.append((False, child))
+                    if index:
+                        pending.append((True, ", "))
+            else:
+                parts.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
+        text = "".join(parts)
+    return text.encode("utf-8", "surrogatepass")
 
 
 def _payload_trace_hash_bundles(trace):
@@ -678,9 +715,7 @@ def _payload_trace_hash_bundles(trace):
     def _update(hasher, size, wrote_line, norm):
         if not norm:
             return size, wrote_line
-        data = json.dumps(norm, ensure_ascii=False, sort_keys=True).encode(
-            "utf-8", "surrogatepass"
-        )
+        data = _payload_trace_json(norm)
         if wrote_line:
             hasher.update(b"\n")
             size += 1

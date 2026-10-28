@@ -1,16 +1,13 @@
-#[derive(Debug, Clone)]
 pub struct PackHeaderLayout {
     pub fields: Vec<String>,
     pub header_size: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct IncPropertyPack {
     pub form: i32,
     pub size: i32,
 }
 
-#[derive(Debug, Clone)]
 pub struct PackInput {
     pub inc_prop_list: Vec<IncPropertyPack>,
     pub inc_cmd_name_list: Vec<String>,

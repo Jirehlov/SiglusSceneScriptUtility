@@ -699,11 +699,25 @@ def format_arg_layout(layout, format_form):
     out = []
     for arg in layout:
         form = arg["form"]
-        if form == fm_list:
-            sub = format_arg_layout(arg.get("sub") or [], format_form)
-            out.append("list[" + ", ".join(sub) + "]")
-        else:
+        if form != fm_list:
             out.append(format_form(form))
+            continue
+        parts = []
+        pending = [arg]
+        while pending:
+            item = pending.pop()
+            if isinstance(item, str):
+                parts.append(item)
+            elif item["form"] == fm_list:
+                parts.append("list[")
+                pending.append("]")
+                for index, sub in reversed(list(enumerate(item.get("sub") or []))):
+                    pending.append(sub)
+                    if index:
+                        pending.append(", ")
+            else:
+                parts.append(format_form(item["form"]))
+        out.append("".join(parts))
     return out
 
 
@@ -828,15 +842,16 @@ def new_expression_state(
         _drop_stack_tail(stack_start)
 
     def _consume_arg_value(arg_info):
-        form = arg_info["form"]
-        if form == fm_list:
-            for sub in reversed(arg_info.get("sub") or []):
-                _consume_arg_value(sub)
-            return
-        if form in scalar_forms:
-            _pop_stack_top()
-            return
-        _consume_element()
+        pending = [arg_info]
+        while pending:
+            item = pending.pop()
+            form = item["form"]
+            if form == fm_list:
+                pending.extend(item.get("sub") or [])
+            elif form in scalar_forms:
+                _pop_stack_top()
+            else:
+                _consume_element()
 
     def _pop_scalar_expr(expect_form=None):
         if not stack:
@@ -915,9 +930,24 @@ def new_expression_state(
 
     def _pop_arg_list(arg_forms, pop_arg):
         vals = []
-        for arg_info in reversed(arg_forms):
-            vals.append(pop_arg(arg_info))
-        vals.reverse()
+        pending = [(iter(reversed(arg_forms)), vals)]
+        expressions = pop_arg is _pop_arg_expr
+        while pending:
+            args, target = pending[-1]
+            try:
+                arg_info = next(args)
+            except StopIteration:
+                target.reverse()
+                pending.pop()
+                if pending and expressions:
+                    pending[-1][1][-1] = "[" + ", ".join(target) + "]"
+                continue
+            if arg_info["form"] == fm_list:
+                sub = []
+                target.append(sub)
+                pending.append((iter(reversed(arg_info.get("sub") or [])), sub))
+            else:
+                target.append(pop_arg(arg_info))
         return vals
 
     def _snapshot_state():
@@ -955,67 +985,76 @@ def new_expression_state(
             return None
         return _peek_arg_expr(fm_int)
 
-    def _scan_element_path(
-        items, idx=0, parent_form=None, *, command_matches=None, expected_ret=None
-    ):
-        parent_form = fm_global if parent_form is None else parent_form
-        while idx < len(items):
-            it = items[idx]
-            code = _stack_int_value(it)
-            if code is None:
-                if not bool(it.get("receiver")):
-                    return None
-                parent_form = int(it["form"])
-                if command_matches is None and idx == len(items) - 1:
-                    return {"ret_form": _receiver_value_form(parent_form), "path": {}}
-                idx += 1
-                continue
-            if int(code) == C.ELM_ARRAY:
-                ret_form = array_result_form(parent_form)
-                if ret_form is None or idx + 1 >= len(items):
-                    return None
-                if int(items[idx + 1].get("form", -1)) != int(fm_int):
-                    return None
-                if command_matches is None and idx + 1 == len(items) - 1:
-                    return {"ret_form": ret_form, "path": {}}
-                parent_form = ret_form
-                idx += 2
-                continue
-            for info in _info_variants(element_info(parent_form, code)):
+    def _scan_element_path(items, *, command_matches=None, expected_ret=None):
+        pending = [(0, fm_global, None)]
+        path = []
+        while pending:
+            idx, parent_form, info = pending.pop()
+            while idx < len(items):
+                if info is None:
+                    it = items[idx]
+                    code = _stack_int_value(it)
+                    if code is None:
+                        if not bool(it.get("receiver")):
+                            break
+                        parent_form = int(it["form"])
+                        if command_matches is None and idx == len(items) - 1:
+                            return {
+                                "ret_form": _receiver_value_form(parent_form),
+                                "path": dict(reversed(path)),
+                            }
+                        idx += 1
+                        continue
+                    if int(code) == C.ELM_ARRAY:
+                        ret_form = array_result_form(parent_form)
+                        if ret_form is None or idx + 1 >= len(items):
+                            break
+                        if int(items[idx + 1].get("form", -1)) != int(fm_int):
+                            break
+                        if command_matches is None and idx + 1 == len(items) - 1:
+                            return {"ret_form": ret_form, "path": dict(reversed(path))}
+                        parent_form = ret_form
+                        idx += 2
+                        continue
+                    candidates = _info_variants(element_info(parent_form, code))
+                    if not candidates:
+                        break
+                    info = candidates[0]
+                    if len(candidates) > 1:
+                        pending.extend(
+                            (idx, None, candidate)
+                            for candidate in reversed(candidates[1:])
+                        )
+                while path and path[-1][0] >= idx:
+                    path.pop()
                 tp = int(info.get("type", -1))
                 ret_form = info.get("ret")
                 if tp == C.ET_PROPERTY:
+                    path.append((idx, info))
                     if command_matches is None and idx == len(items) - 1:
-                        return {"ret_form": ret_form, "path": {idx: info}}
+                        return {"ret_form": ret_form, "path": dict(reversed(path))}
                     if isinstance(ret_form, int):
-                        sub = _scan_element_path(
-                            items,
-                            idx + 1,
-                            int(ret_form),
-                            command_matches=command_matches,
-                            expected_ret=expected_ret,
-                        )
-                        if sub is not None:
-                            sub["path"][idx] = info
-                            return sub
+                        idx += 1
+                        parent_form = int(ret_form)
+                        info = None
+                        continue
                 elif (
                     command_matches is not None
                     and tp == C.ET_COMMAND
                     and idx == len(items) - 1
                 ):
                     if (
-                        expected_ret is not None
-                        and isinstance(ret_form, int)
-                        and ret_form != int(expected_ret)
-                    ):
-                        continue
-                    if command_matches(info):
+                        expected_ret is None
+                        or not isinstance(ret_form, int)
+                        or ret_form == int(expected_ret)
+                    ) and command_matches(info):
+                        path.append((idx, info))
                         return {
-                            "element_code": int(code),
+                            "element_code": int(items[idx]["val"]),
                             "info": info,
-                            "path": {idx: info},
+                            "path": dict(reversed(path)),
                         }
-            return None
+                break
         return None
 
     def _resolve_element_path(
@@ -1380,7 +1419,6 @@ def new_expression_state(
 
     state.pop_stack_top = _pop_stack_top
     state.consume_element = _consume_element
-    state.pop_arg_list = _pop_arg_list
     state.peek_arg_list = _peek_arg_list
     state.prepare_command = _prepare_command
     state.apply_event = _apply_event

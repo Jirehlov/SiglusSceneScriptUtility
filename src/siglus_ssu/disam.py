@@ -152,8 +152,6 @@ def disassemble_scn_bytes(
 
     def _pop_arg_value(arg_info):
         form = arg_info["form"]
-        if form == fm_list:
-            return expr_state.pop_arg_list(arg_info["sub"], _pop_arg_value)
         if form in expr_state.scalar_forms:
             if not stack:
                 return None
@@ -197,18 +195,34 @@ def disassemble_scn_bytes(
         if fm_list not in forms:
             return (p + argc_i * 4, [{"form": form} for form in reversed(forms)])
         args = [None] * argc_i
-        for idx in range(argc_i - 1, -1, -1):
+        pending = [(args, argc_i - 1)]
+        while pending:
+            target, idx = pending[-1]
+            if idx < 0:
+                pending.pop()
+                continue
+            pending[-1] = (target, idx - 1)
             form = read_i32(p)
             if form is None:
                 return (None, None)
             p += 4
             info = {"form": form}
+            target[idx] = info
             if form == fm_list:
-                p, sub = _read_arg_layout(p)
-                if p is None:
+                count = read_i32(p)
+                if count is None or count < 0:
                     return (None, None)
+                p += 4
+                if count > (scn_len - p) // 4:
+                    return (None, None)
+                forms = struct.unpack_from(f"<{count}i", scn, p)
+                if fm_list in forms:
+                    sub = [None] * count
+                    pending.append((sub, count - 1))
+                else:
+                    sub = [{"form": value} for value in reversed(forms)]
+                    p += count * 4
                 info["sub"] = sub
-            args[idx] = info
         return (p, args)
 
     out = []

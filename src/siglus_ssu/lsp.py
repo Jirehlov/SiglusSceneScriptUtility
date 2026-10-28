@@ -15,6 +15,7 @@ from . import const as C, package_version
 from .BS import BS, copy_ia_data
 from .CA import (
     CharacterAnalizer,
+    build_replace_tree,
     new_replace_tree,
 )
 from .IA import IncAnalyzer
@@ -1289,6 +1290,8 @@ def _init_scan_worker(
     project: ProjectContext, native_config: dict[str, Any] | None = None
 ) -> None:
     global _SCAN_WORKER_PROJECT, _SCAN_WORKER_NATIVE_PROJECT
+    if project.iad is not None:
+        project.iad["replace_tree"] = build_replace_tree(project.iad["macro_defs"])
     _SCAN_WORKER_PROJECT = project
     _SCAN_WORKER_NATIVE_PROJECT = _build_native_lsp_project(native_config)
 
@@ -3644,6 +3647,11 @@ class SSLanguageServer:
             from concurrent.futures.process import BrokenProcessPool
             from .parallel import parallel_process_completed_map
 
+            project = project_entry.project
+            if project.iad is not None:
+                iad = project.iad.copy()
+                del iad["replace_tree"]
+                project = replace(project, iad=iad)
             jobs = [(doc.path, doc.text) for _, doc in docs]
             try:
                 results = parallel_process_completed_map(
@@ -3651,7 +3659,7 @@ class SSLanguageServer:
                     jobs,
                     max_workers=worker_count,
                     initializer=_init_scan_worker,
-                    initargs=(project_entry.project, native_config),
+                    initargs=(project, native_config),
                     on_result=lambda _job, _result: self.report_scan_progress(progress),
                     on_poll=self.raise_if_request_cancelled,
                 )

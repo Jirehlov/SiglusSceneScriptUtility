@@ -11,6 +11,7 @@ from .common import (
     append_element_member,
     new_expression_item_formatter,
     int_or_none as _int_or_none,
+    iterative_method,
     new_call_scope,
     new_expression_state,
     new_scene_element_resolver,
@@ -290,11 +291,20 @@ def _write_support_inc_lines(root, lines):
 
 def _copy_arg_layout(layout):
     out = []
-    for item in layout or []:
+    pending = [(iter(layout or []), out)]
+    while pending:
+        source, target = pending[-1]
+        try:
+            item = next(source)
+        except StopIteration:
+            pending.pop()
+            continue
         arg = {"form": int(item["form"])}
+        target.append(arg)
         if "sub" in item:
-            arg["sub"] = _copy_arg_layout(item["sub"])
-        out.append(arg)
+            sub = []
+            arg["sub"] = sub
+            pending.append((iter(item["sub"] or []), sub))
     return out
 
 
@@ -2418,13 +2428,14 @@ class _Decompiler:
         out = [line] if line else []
         return (self._with_event(start_idx, out) if has_nl else out), next_idx
 
+    @iterative_method
     def _parse_inline_block(self, start_idx, end_ofs, ctx):
         out = []
         idx = start_idx
         while idx < len(self.events):
             if self.event_offsets[idx] >= end_ofs:
                 break
-            line, idx2 = self._parse_statement_inline(idx, end_ofs, ctx)
+            line, idx2 = yield (self._parse_statement_inline, idx, end_ofs, ctx)
             if line is None or idx2 <= idx:
                 return None
             if line:
@@ -2432,13 +2443,14 @@ class _Decompiler:
             idx = idx2
         return out
 
+    @iterative_method
     def _parse_statement_inline(self, start_idx, end_ofs, ctx):
         line, idx2 = self._render_simple(start_idx, end_ofs, ctx, inline=True)
         if line is not None and idx2 > start_idx:
             return line, idx2
         if self.event_ops[start_idx] != "CD_NL":
             return None, start_idx
-        stmt_lines, idx2 = self._parse_statement(start_idx, end_ofs, ctx)
+        stmt_lines, idx2 = yield (self._parse_statement, start_idx, end_ofs, ctx)
         if idx2 <= start_idx:
             return None, start_idx
         texts = []
@@ -2529,12 +2541,13 @@ class _Decompiler:
             return None
         return hit
 
+    @iterative_method
     def _parse_body_with_inline(self, start_idx, end_ofs, ctx, source_line):
-        body_lines = self._parse_block(start_idx, end_ofs, ctx)
+        body_lines = yield (self._parse_block, start_idx, end_ofs, ctx)
         inline_same_line = self._range_is_inline(start_idx, end_ofs, source_line)
         inline_body = None
         if inline_same_line:
-            inline_body = self._parse_inline_block(start_idx, end_ofs, ctx)
+            inline_body = yield (self._parse_inline_block, start_idx, end_ofs, ctx)
         return body_lines, inline_body, inline_same_line
 
     def _first_target_line(self, lines, fallback=None):
@@ -2567,6 +2580,7 @@ class _Decompiler:
         out.extend(tramp_lines)
         return out, next_idx
 
+    @iterative_method
     def _parse_guarded_block(self, guard_idx, exit_ofs, continue_ofs, ctx, source_line):
         out_idx = self.offset_to_index[exit_ofs]
         if out_idx <= guard_idx:
@@ -2574,7 +2588,8 @@ class _Decompiler:
         tail = self._tail_goto(out_idx, continue_ofs)
         if tail is None:
             return None
-        body_lines, inline_body, _ = self._parse_body_with_inline(
+        body_lines, inline_body, _ = yield (
+            self._parse_body_with_inline,
             guard_idx + 1,
             tail["ofs"],
             self._merge_ctx(
@@ -2588,6 +2603,7 @@ class _Decompiler:
             inline_body = None
         return out_idx, body_lines, inline_body
 
+    @iterative_method
     def _parse_block(self, start_idx, end_ofs, ctx):
         lines = []
         idx = start_idx
@@ -2598,7 +2614,7 @@ class _Decompiler:
                 lines.extend(raw_lines)
                 idx = idx2
                 continue
-            stmt_lines, idx2 = self._parse_statement(idx, end_ofs, ctx)
+            stmt_lines, idx2 = yield (self._parse_statement, idx, end_ofs, ctx)
             if idx2 <= idx:
                 break
             lines.extend(stmt_lines)
@@ -2629,30 +2645,32 @@ class _Decompiler:
             return self._with_event(idx, lines), idx + 1
         return self._with_event(idx, lines), idx + 1
 
+    @iterative_method
     def _parse_statement(self, start_idx, end_ofs, ctx):
         if self._next_stmt_idx(start_idx + 1, end_ofs) == start_idx + 1:
             if self.event_lines[start_idx] == self.event_lines[start_idx + 1]:
-                res = self._match_for(start_idx, end_ofs, ctx)
+                res = yield (self._match_for, start_idx, end_ofs, ctx)
                 if res is not None:
                     return res
             return self._render_simple(start_idx, end_ofs, ctx, inline=False)
-        res = self._match_command_def(start_idx, end_ofs, ctx)
+        res = yield (self._match_command_def, start_idx, end_ofs, ctx)
         if res is not None:
             return res
-        res = self._match_for(start_idx, end_ofs, ctx)
+        res = yield (self._match_for, start_idx, end_ofs, ctx)
         if res is not None:
             return res
-        res = self._match_while(start_idx, end_ofs, ctx)
+        res = yield (self._match_while, start_idx, end_ofs, ctx)
         if res is not None:
             return res
-        res = self._match_switch(start_idx, end_ofs, ctx)
+        res = yield (self._match_switch, start_idx, end_ofs, ctx)
         if res is not None:
             return res
-        res = self._match_if(start_idx, end_ofs, ctx)
+        res = yield (self._match_if, start_idx, end_ofs, ctx)
         if res is not None:
             return res
         return self._render_simple(start_idx, end_ofs, ctx, inline=False)
 
+    @iterative_method
     def _match_command_def(self, start_idx, end_ofs, ctx):
         parsed = self._read_command_def(start_idx, end_ofs)
         if parsed is None:
@@ -2666,7 +2684,7 @@ class _Decompiler:
         tail_is_terminal_return = parsed["tail_is_terminal_return"]
         params = parsed["params"]
         info = parsed["info"]
-        body_lines = self._parse_block(body_start_idx, trim_end_ofs, ctx)
+        body_lines = yield (self._parse_block, body_start_idx, trim_end_ofs, ctx)
         ret_form = self._pick_return_form(info["cmd_id"], (body_ofs, trim_end_ofs))
         if tail_is_terminal_return:
             tail_labels = self._event_labels(tail)
@@ -2700,6 +2718,7 @@ class _Decompiler:
             out[-1] = _line_item("}", tail.get("line"))
         return self._with_event(start_idx, out), end_idx
 
+    @iterative_method
     def _match_if(self, start_idx, end_ofs, ctx):
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         clauses = []
@@ -2726,7 +2745,8 @@ class _Decompiler:
                 end_target = clause_end
             elif int(end_target) != clause_end:
                 return None
-            body_lines, inline_body, inline_same_line = self._parse_body_with_inline(
+            body_lines, inline_body, inline_same_line = yield (
+                self._parse_body_with_inline,
                 gf_idx + 1,
                 tail_ofs,
                 ctx,
@@ -2748,13 +2768,12 @@ class _Decompiler:
                 break
             cur_idx = false_idx
             if self.event_ops[cur_idx] == "CD_NL":
-                else_lines, inline_else, inline_else_same_line = (
-                    self._parse_body_with_inline(
-                        cur_idx,
-                        end_target,
-                        ctx,
-                        self.event_lines[cur_idx],
-                    )
+                else_lines, inline_else, inline_else_same_line = yield (
+                    self._parse_body_with_inline,
+                    cur_idx,
+                    end_target,
+                    ctx,
+                    self.event_lines[cur_idx],
                 )
                 clauses.append(
                     {
@@ -2856,6 +2875,7 @@ class _Decompiler:
         out, tramp_idx = self._append_trampolines(out, end_idx, end_ofs, ctx)
         return self._with_event(start_idx, out), tramp_idx
 
+    @iterative_method
     def _match_while(self, start_idx, end_ofs, ctx):
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if self.event_ops[j] == "CD_NL":
@@ -2864,7 +2884,8 @@ class _Decompiler:
         if gf_idx is None:
             return None
         out_ofs = self.event_targets[gf_idx]
-        parsed = self._parse_guarded_block(
+        parsed = yield (
+            self._parse_guarded_block,
             gf_idx,
             out_ofs,
             self.event_offsets[j],
@@ -2885,6 +2906,7 @@ class _Decompiler:
         out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
         return self._with_event(start_idx, out), tramp_idx
 
+    @iterative_method
     def _match_for(self, start_idx, end_ofs, ctx):
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         stop_idx = self._end_index_for_ofs(end_ofs)
@@ -2899,7 +2921,8 @@ class _Decompiler:
             return None
         ofs = self.event_offsets[g_idx]
         out_ofs = self.event_targets[gf_idx]
-        parsed = self._parse_guarded_block(
+        parsed = yield (
+            self._parse_guarded_block,
             gf_idx,
             out_ofs,
             loop_ofs,
@@ -2961,7 +2984,8 @@ class _Decompiler:
             if int(loop_ofs) not in self.suppressed_label_offsets:
                 self.suppressed_label_offsets.add(int(loop_ofs))
                 added_loop_label = True
-            loop_lines = self._parse_inline_block(
+            loop_lines = yield (
+                self._parse_inline_block,
                 loop_idx,
                 cond_ofs,
                 ctx,
@@ -2994,6 +3018,7 @@ class _Decompiler:
         self.for_header_offsets.add(self.event_offsets[head_event_idx])
         return out, tramp_idx
 
+    @iterative_method
     def _match_switch(self, start_idx, end_ofs, ctx):
         j = self._skip_sel_start(start_idx + 1, end_ofs)
         if self.event_ops[j] == "CD_NL":
@@ -3072,7 +3097,8 @@ class _Decompiler:
                 out_ofs = tgt
             elif out_ofs != tgt:
                 return None
-            body_lines = self._parse_block(
+            body_lines = yield (
+                self._parse_block,
                 start_idx2 + 1,
                 tail["ofs"],
                 ctx,
@@ -3129,7 +3155,8 @@ class _Decompiler:
             tail = self._tail_goto(out_idx, out_ofs)
             if tail is None:
                 return None
-            default_lines = self._parse_block(
+            default_lines = yield (
+                self._parse_block,
                 default_idx,
                 tail["ofs"],
                 ctx,

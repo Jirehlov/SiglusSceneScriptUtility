@@ -157,16 +157,15 @@ def _collect_compiled_string_kinds(root, atom_type_map):
         out[aid] = _merge_textmap_kind(out.get(aid), kind)
 
     def _mark_string_atoms(node, kind):
-        if isinstance(node, list):
-            for item in node:
-                _mark_string_atoms(item, kind)
-            return
-        if not isinstance(node, dict):
-            return
-        if _int_value(node.get("type")) == int(C.LA_T["VAL_STR"]):
-            _add(node, kind)
-        for value in node.values():
-            _mark_string_atoms(value, kind)
+        pending = [node]
+        while pending:
+            node = pending.pop()
+            if isinstance(node, list):
+                pending.extend(reversed(node))
+            elif isinstance(node, dict):
+                if _int_value(node.get("type")) == int(C.LA_T["VAL_STR"]):
+                    _add(node, kind)
+                pending.extend(reversed(node.values()))
 
     def _command_name(node):
         name_node = node.get("name")
@@ -176,13 +175,14 @@ def _collect_compiled_string_kinds(root, atom_type_map):
             return str(unknown_list[opt] or "")
         return ""
 
-    def _walk(node):
+    pending = [root]
+    while pending:
+        node = pending.pop()
         if isinstance(node, list):
-            for item in node:
-                _walk(item)
-            return
+            pending.extend(reversed(node))
+            continue
         if not isinstance(node, dict):
-            return
+            continue
         nt = node.get("node_type")
         if nt == C.NT_S_TEXT:
             _add(
@@ -215,10 +215,7 @@ def _collect_compiled_string_kinds(root, atom_type_map):
                             else TEXTMAP_KIND_NAME
                         ),
                     )
-        for value in node.values():
-            _walk(value)
-
-    _walk(root)
+        pending.extend(reversed(node.values()))
     return out
 
 

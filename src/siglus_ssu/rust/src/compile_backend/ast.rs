@@ -1,6 +1,6 @@
 use super::la::Atom;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum GotoKind {
     Goto,
     Gosub,

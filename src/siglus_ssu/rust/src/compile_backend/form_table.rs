@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use super::config::CompileConstants;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq)]
 pub enum ElementKind {
     Property,
     Command,
 }
 
-#[derive(Debug)]
 pub struct ArgInfo {
     pub id: i32,
     pub name: String,
@@ -19,12 +18,10 @@ pub struct ArgInfo {
     pub preserve_int_reference: bool,
 }
 
-#[derive(Debug, Default)]
 pub struct ArgList {
     pub arg_list: Vec<ArgInfo>,
 }
 
-#[derive(Debug)]
 pub struct ElementInfo {
     pub kind: ElementKind,
     pub code: i32,
@@ -34,13 +31,13 @@ pub struct ElementInfo {
     pub origin: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct FormInfo {
     pub element_map_by_name: HashMap<String, Arc<ElementInfo>>,
     pub element_map_by_code: HashMap<i32, Arc<ElementInfo>>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct FormTable {
     pub form_map_by_name: HashMap<String, Arc<FormInfo>>,
     pub call_base: Option<Arc<FormInfo>>,
@@ -68,10 +65,6 @@ impl FormTable {
             command_element_type: constants.element_type("ET_COMMAND")?,
             ..Self::default()
         })
-    }
-
-    pub fn form_name(&self, form: &str) -> String {
-        form.to_string()
     }
 
     pub fn form_code_of(&self, form: &str) -> Option<i32> {

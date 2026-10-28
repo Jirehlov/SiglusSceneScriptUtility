@@ -7,7 +7,7 @@ use pyo3::types::{PyBytes, PyString};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 pub enum ReplaceKind {
     Replace,
     Define,

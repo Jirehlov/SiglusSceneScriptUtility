@@ -1,12 +1,10 @@
 use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
 pub struct ScnHeaderLayout {
     pub fields: Vec<String>,
     pub header_size: usize,
 }
 
-#[derive(Debug, Clone)]
 pub struct MsvcRand {
     state: u32,
 }
@@ -54,7 +52,7 @@ impl MsvcRand {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct SceneDatInput {
     pub str_list: Vec<String>,
     pub str_sort_index: Vec<usize>,

@@ -49,7 +49,7 @@ fn symbols(codes: &LexCodes) -> Vec<(&'static str, i32)> {
     ]
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Atom {
     pub id: i32,
     pub line: usize,
@@ -58,13 +58,11 @@ pub struct Atom {
     pub subopt: i32,
 }
 
-#[derive(Debug, Clone)]
 pub struct LabelDef {
     pub name: String,
     pub line: usize,
 }
 
-#[derive(Debug, Clone, Default)]
 pub struct AtomSpan {
     pub line: usize,
     pub start_char: usize,
@@ -72,7 +70,6 @@ pub struct AtomSpan {
     pub source_id: isize,
 }
 
-#[derive(Debug, Clone, Default)]
 pub struct LexResult {
     pub atom_list: Vec<Atom>,
     pub str_list: Vec<String>,
@@ -81,7 +78,6 @@ pub struct LexResult {
     pub atom_span_list: Vec<AtomSpan>,
 }
 
-#[derive(Debug, Clone)]
 pub struct LexError {
     pub line: usize,
 }

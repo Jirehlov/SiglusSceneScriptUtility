@@ -194,6 +194,9 @@ def _init_compile_worker(
     full_compile_stats: bool,
 ) -> None:
     global _COMPILE_WORKER_STATE
+    from .CA import build_replace_tree
+
+    ia_data["replace_tree"] = build_replace_tree(ia_data["macro_defs"])
     _COMPILE_WORKER_STATE = (
         tmp_path,
         ia_data,
@@ -263,7 +266,8 @@ def parallel_compile(
 
     workers = get_max_workers(max_workers)
     tmp_path = ctx.get("tmp_path") or "."
-    ia_data = ctx.get("ia_data")
+    ia_data = ctx["ia_data"].copy()
+    del ia_data["replace_tree"]
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
     source_texts = ctx["source_texts"]
