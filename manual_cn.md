@@ -1449,7 +1449,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 4. 先检查回编 `.pck` 是否与原始 `.pck` 字节完全一致；若不一致，再采用规范化的 `-a --payload` 语义比较；
 5. 删除所有测试产生的临时文件。
 
-带 `--decompile` 的测试会分析 PCK，按指定 profile 重建源码，再按同一 profile 回编和比较 payload，最后删除临时文件。反编译测试始终执行 payload 比较，在回编字节完全一致时也不省略比较，成功结果统一为 `PAYLOAD_SAME`。缺失场景、`text_only`、`real_diff`、无法解析的 payload 和不完整反汇编均算失败。没有 OS 区段的 PCK 也会进入反编译测试。
+带 `--decompile` 的测试会分析 PCK，按指定 profile 重建源码，再按同一 profile 回编和比较 payload，最后删除临时文件。回编使用 `--charset utf8 --no-lzss`，省略场景压缩和原始源码区段生成。反编译测试始终执行 payload 比较，在回编字节完全一致时也不省略比较，成功结果统一为 `PAYLOAD_SAME`。缺失场景、`text_only`、`real_diff`、无法解析的 payload 和不完整反汇编均算失败。没有 OS 区段的 PCK 也会进入反编译测试。
 
 #### 输出
 

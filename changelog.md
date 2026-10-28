@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 - Added Rust implementations of scene disassembly and decompilation, used automatically when the native extension is available. Payload comparison now reuses the native disassembly pipeline; `--legacy-full` selects the Python implementations.
-- Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Successful decompile tests report `PAYLOAD_SAME`; JSON reports record the successful profile.
+- Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Successful decompile tests report `PAYLOAD_SAME`; JSON reports record the successful profile. Recompilation uses `--no-lzss` to skip scene compression and original-source generation.
 - Changed syntax-analysis nesting beyond 64 levels and expression-tree height beyond 128 from errors to warnings, allowing compilation and LSP analysis to continue in both backends.
 - Improved Python/Rust alignment for deeply nested source, argument and bytecode metadata, malformed scene data, and LSP diagnostics. Reworked recursive Python analysis and bytecode generation to handle deep inputs.
 - Reduced native dependencies to PyO3 by reusing Python's CP932 codec and batched hashlib SHA-256 hashing, and replacing stack growth with safe Rust task stacks. Updated PyO3 to 0.30.1.

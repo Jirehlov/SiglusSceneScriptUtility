@@ -1449,7 +1449,7 @@ For each `.pck`, the default embedded-source test:
 4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
 5. removes all temporary test files.
 
-With `--decompile`, the command analyzes the PCK, reconstructs scripts under the required profile, recompiles them under the same profile, compares payloads even when the rebuilt bytes are identical, and removes temporary files. Success is always `PAYLOAD_SAME`. Missing scenes, `text_only`, `real_diff`, unavailable payloads, and incomplete disassembly fail the test. A missing OS section does not cause a skip.
+With `--decompile`, the command analyzes the PCK, reconstructs scripts under the required profile, recompiles them under the same profile, compares payloads even when the rebuilt bytes are identical, and removes temporary files. Recompilation uses `--charset utf8 --no-lzss` to skip scene compression and original-source generation. Success is always `PAYLOAD_SAME`. Missing scenes, `text_only`, `real_diff`, unavailable payloads, and incomplete disassembly fail the test. A missing OS section does not cause a skip.
 
 #### Output
 

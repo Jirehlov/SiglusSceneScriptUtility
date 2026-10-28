@@ -326,7 +326,7 @@ def _compile_payload_attempt(
     if allow_invalid:
         compile_args.extend(["--charset", "utf8", "--allow-invalid"])
     elif decompile:
-        compile_args.extend(["--charset", "utf8"])
+        compile_args.extend(["--charset", "utf8", "--no-lzss"])
     compile_args.extend([extract_dir, rebuilt_pck])
     rc, out, err = _capture(compiler.main, compile_args)
     elapsed = max(0.0, time.perf_counter() - started)
@@ -340,7 +340,7 @@ def _compile_payload_attempt(
     attempt = {
         "profile": profile,
         "allow_invalid": allow_invalid,
-        "charset_utf8": decompile,
+        "decompile": decompile,
         "rc": rc,
         "ok": ok,
         "stdout": out,
@@ -476,8 +476,8 @@ def _format_compile_attempts(attempts) -> str:
         text = f"profile={profile:d} {stage}={rc:d}"
         if (attempt or {}).get("allow_invalid"):
             text += " --charset utf8 --allow-invalid"
-        elif (attempt or {}).get("charset_utf8"):
-            text += " --charset utf8"
+        elif (attempt or {}).get("decompile"):
+            text += " --charset utf8 --no-lzss"
         if bool((attempt or {}).get("payload_compared")):
             result = str((attempt or {}).get("result") or "FAIL")
             detail = str((attempt or {}).get("payload_detail") or "")
@@ -497,8 +497,8 @@ def _print_compile_errors(attempts) -> None:
         stage = f"{operation} profile={profile:d}"
         if (attempt or {}).get("allow_invalid"):
             stage += " --charset utf8 --allow-invalid"
-        elif (attempt or {}).get("charset_utf8"):
-            stage += " --charset utf8"
+        elif (attempt or {}).get("decompile"):
+            stage += " --charset utf8 --no-lzss"
         _print_tail(
             stage,
             str((attempt or {}).get("stdout") or ""),
