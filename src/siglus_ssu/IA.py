@@ -874,21 +874,10 @@ class IncAnalyzer:
                 }
             )
             ft = self.iad["form_table"]
-            al0 = []
-            for ii, a in enumerate((arg_list or {}).get("arg_list", [])):
-                al0.append(
-                    {
-                        "id": int(a.get("id", ii) or ii),
-                        "name": a.get("name", "") or "",
-                        "form": a.get("form", C.FM_INT),
-                        "def_int": int(a.get("def_int", 0) or 0),
-                        "def_str": a.get("def_str", "") or "",
-                        "def_exist": bool(a.get("def_exist", False)),
-                    }
-                )
-            am = {0: {"arg_list": al0}}
-            if any(x.get("name") for x in al0):
-                am[-1] = {"arg_list": [x for x in al0 if x.get("name")]}
+            arg_defs = [
+                {"id": index, "name": "", **arg}
+                for index, arg in enumerate(arg_list["arg_list"])
+            ]
             ft.add(
                 self.pf,
                 {
@@ -897,7 +886,7 @@ class IncAnalyzer:
                     "name": name,
                     "form": form,
                     "size": 0,
-                    "arg_map": am,
+                    "arg_map": {0: {"arg_list": arg_defs}},
                     "origin": "inc",
                 },
             )

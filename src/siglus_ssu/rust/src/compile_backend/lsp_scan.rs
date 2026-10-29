@@ -5,7 +5,7 @@ use super::codes::RuntimeCodes;
 use super::config::{CompileConstants, extract_item, parse_compile_constants};
 use super::form_table::FormTable;
 use super::ia::{IaData, IaScratch, IncAnalyzer, IncSidecar};
-use super::la::{Atom, LexResult, lex_scene_text_with_source_map};
+use super::la::{Atom, LexResult, lex_scene_text};
 use super::ma::{SemanticAnalyzer, SourceBindingKind};
 use super::sa::SyntaxAnalyzer;
 use pyo3::exceptions::PyRuntimeError;
@@ -53,10 +53,6 @@ struct SourceToken {
 pub struct NativeLspProject {
     base_ia: IaData,
     source_files: Vec<(String, String)>,
-}
-
-fn key(text: &str) -> String {
-    text.to_ascii_lowercase()
 }
 
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
@@ -178,7 +174,7 @@ fn token_matches_text(source_lines: &[Vec<char>], token: &SourceToken) -> bool {
     let text = line[token.start_char..token.end_char]
         .iter()
         .collect::<String>();
-    key(&text) == key(&token.text)
+    text.eq_ignore_ascii_case(&token.text)
 }
 
 fn token_span_from_atom(lex: &LexResult, atom: &Atom, name: &str) -> Option<SourceToken> {
@@ -210,26 +206,31 @@ fn binding_symbol_id(path_identity: &str, kind: &SourceBindingKind, identity: &s
             | SourceBindingKind::LocalProperty
             | SourceBindingKind::CallProperty
     ) {
-        format!("{prefix}{path_identity}:{}", key(identity))
+        format!("{prefix}{path_identity}:{}", identity.to_ascii_lowercase())
     } else {
-        format!("{prefix}{}", key(identity))
+        format!("{prefix}{}", identity.to_ascii_lowercase())
     }
 }
 
 fn macro_symbol_id(kind: &str, name: &str) -> String {
-    format!("macro:{kind}:{}", key(name))
+    format!("macro:{kind}:{}", name.to_ascii_lowercase())
 }
 
 fn local_macro_symbol_id(kind: &str, path_identity: &str, name: &str) -> String {
-    format!("macrolocal:{kind}:{path_identity}:{}", key(name))
+    format!(
+        "macrolocal:{kind}:{path_identity}:{}",
+        name.to_ascii_lowercase()
+    )
 }
 
 fn label_symbol_id(path_identity: &str, name: &str) -> String {
-    format!("label:{path_identity}:{}", key(name))
+    format!("label:{path_identity}:{}", name.to_ascii_lowercase())
 }
 
 fn append_definition(defs: &mut HashMap<String, Vec<LspDefinition>>, record: LspDefinition) {
-    defs.entry(key(&record.name)).or_default().push(record);
+    defs.entry(record.name.to_ascii_lowercase())
+        .or_default()
+        .push(record);
 }
 
 fn append_document_definition(
@@ -677,13 +678,13 @@ fn scene_commands(local_defs: &HashMap<String, Vec<LspDefinition>>) -> Vec<LspDe
             left.path.clone(),
             left.line,
             left.start_char,
-            key(&left.name),
+            left.name.to_ascii_lowercase(),
         )
             .cmp(&(
                 right.path.clone(),
                 right.line,
                 right.start_char,
-                key(&right.name),
+                right.name.to_ascii_lowercase(),
             ))
     });
     out
@@ -699,7 +700,7 @@ pub fn lsp_scan_document(
 ) -> PyResult<Py<PyDict>> {
     let source_text = text.replace('\r', "");
     let mut ia_data = project.base_ia.clone();
-    let mut ca = CharacterAnalyzer::new_with_sidecar(true);
+    let mut ca = CharacterAnalyzer::new(true);
     let file1 = match ca.analyze_file_1(&source_text) {
         Ok(value) => value,
         Err(()) => {
@@ -739,11 +740,7 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let mut lex = match lex_scene_text_with_source_map(
-        &scene.text,
-        &ia_data.codes.la,
-        Some(&scene.source_map),
-    ) {
+    let mut lex = match lex_scene_text(&scene.text, &ia_data.codes.la, Some(&scene.source_map)) {
         Ok(value) => value,
         Err(_) => {
             return diagnostic_result(py);

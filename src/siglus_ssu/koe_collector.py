@@ -80,13 +80,9 @@ def _safe_role_dir_name(value) -> str:
     return name
 
 
-def _progress(msg: str):
-    eprint(str(msg or ""))
-
-
 def _progress_koe(count: int, koe_no: int):
     if count == 1 or count % 100 == 0:
-        _progress(f"koe: processing {count}: KOE({int(koe_no):09d})")
+        eprint(f"koe: processing {count}: KOE({int(koe_no):09d})")
 
 
 def _try_int(value):
@@ -505,7 +501,7 @@ def _scan_calls(scene_root: str, explicit_angou: str = ""):
         scene_root,
         explicit_angou=explicit_angou,
     ):
-        _progress(
+        eprint(
             f"koe: scanning scene {scene_files + 1}: {_bundle_relpath(bundle, scene_root)}"
         )
         scene_files += 1
@@ -532,7 +528,7 @@ def _index_ovk(voice_dir: str):
     ovk_paths.sort(key=lambda x: os.path.basename(x).lower())
     for ovk_idx, full in enumerate(ovk_paths, 1):
         fn = os.path.basename(full)
-        _progress(f"koe: indexing ovk {ovk_idx}/{len(ovk_paths)}: {fn}")
+        eprint(f"koe: indexing ovk {ovk_idx}/{len(ovk_paths)}: {fn}")
         ovk_files += 1
         m = _Z_OVK_RE.match(fn)
         if not m:

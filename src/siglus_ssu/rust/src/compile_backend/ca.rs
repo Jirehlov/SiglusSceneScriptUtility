@@ -61,10 +61,6 @@ impl Drop for ReplaceTree {
 }
 
 impl ReplaceTree {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn add(&mut self, name: &str, replacement: Replacement) {
         let mut node = self;
         for ch in name.chars() {
@@ -157,11 +153,7 @@ pub struct CharacterAnalyzer {
 }
 
 impl CharacterAnalyzer {
-    pub fn new() -> Self {
-        Self::new_with_sidecar(false)
-    }
-
-    pub fn new_with_sidecar(sidecar: bool) -> Self {
+    pub fn new(sidecar: bool) -> Self {
         Self {
             error_line: 0,
             error_str: String::new(),
@@ -656,7 +648,7 @@ impl CharacterAnalyzer {
         }
         arg_replacements.sort_by_key(|item| item.name.len());
         arg_replacements.reverse();
-        let mut arg_tree = ReplaceTree::new();
+        let mut arg_tree = ReplaceTree::default();
         for replacement in arg_replacements {
             arg_tree.add(&replacement.name.clone(), replacement);
         }
@@ -778,6 +770,7 @@ impl CharacterAnalyzer {
                     replacement
                         .source
                         .as_ref()
+                        .filter(|source| !source.map.is_empty())
                         .map(|source| source.map.clone())
                         .unwrap_or_else(|| vec![None; replacement.after.chars().count()])
                 });
@@ -868,7 +861,7 @@ impl CharacterAnalyzer {
 
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {
         self.current_line = 1;
-        let empty_tree = ReplaceTree::new();
+        let empty_tree = ReplaceTree::default();
         self.expand_all(input, replace_tree, &empty_tree)
     }
 
@@ -886,7 +879,7 @@ impl CharacterAnalyzer {
         let mut pos = 0usize;
         let mut loop_count = 0usize;
         let mut rest_min = text.len();
-        let empty_tree = ReplaceTree::new();
+        let empty_tree = ReplaceTree::default();
         while text.get(pos) != Some(&'\0') {
             if text[pos] == '\n' {
                 self.current_line += 1;

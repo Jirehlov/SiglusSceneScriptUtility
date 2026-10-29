@@ -12,7 +12,7 @@ import siglus_ssu as _runtime
 from . import const as C, package_version
 from .BS import (
     compile_all,
-    compile_one,
+    compile_one_pipeline,
     set_shuffle_seed,
     get_shuffle_seed,
     build_ia_data,
@@ -1508,7 +1508,9 @@ def main(argv):
                     except (FileNotFoundError, NotADirectoryError):
                         raise FileNotFoundError(f"expected dat not found: {exp_first}")
                     set_shuffle_seed(0)
-                    compile_one(ctx, first_ss)
+                    compile_one_pipeline(
+                        ctx, first_ss, debug_outputs=True, record_time=True
+                    )
                     my_first = os.path.join(bs_dir, first_nm + ".dat")
                     try:
                         my_first = resolve_read_path(my_first, kind="file")
@@ -1569,7 +1571,9 @@ def main(argv):
                     seed_rows = []
                     for i, ss_path in enumerate(compile_list):
                         initial_seed = get_shuffle_seed()
-                        compile_one(ctx, ss_path)
+                        compile_one_pipeline(
+                            ctx, ss_path, debug_outputs=True, record_time=True
+                        )
                         final_seed = get_shuffle_seed()
                         nm = os.path.splitext(os.path.basename(ss_path))[0]
                         my_dat = os.path.join(bs_dir, nm + ".dat")

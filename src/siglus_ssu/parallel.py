@@ -4,6 +4,7 @@ import os
 import sys
 from contextlib import contextmanager, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from itertools import islice
 import siglus_ssu as _runtime
 from . import const as C
 from .native_ops import find_shuffle_seed_first, is_native_available
@@ -272,7 +273,6 @@ def parallel_compile(
     debug_outputs = bool(ctx.get("debug_outputs"))
     source_texts = ctx["source_texts"]
     os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
-    errors = []
     completed = 0
     total = len(ss_files)
     scene_macro_counts = empty_macro_stat_counts()
@@ -290,7 +290,7 @@ def parallel_compile(
             ctx["stats"]["full_compile_stats"],
         ),
     ) as executor:
-        futures = [
+        tasks = (
             executor.submit(
                 _compile_one_process,
                 ss_path,
@@ -298,23 +298,28 @@ def parallel_compile(
                 source_texts[os.path.basename(ss_path)],
             )
             for ss_path in ss_files
-        ]
-        for future in as_completed(futures):
-            (
-                display_name,
-                error,
-                macro_counts,
-                usage_delta,
-                scene_source_stats,
-                warnings,
-            ) = future.result()
-            for warning in warnings:
-                sys.stderr.write(warning)
-            completed += 1
-            if error is not None:
-                errors.append((display_name, error))
-                print(f"  [{completed}/{total}] FAIL: {display_name}")
-            else:
+        )
+        futures = set(islice(tasks, workers))
+        while futures:
+            done, futures = wait(futures, return_when=FIRST_COMPLETED)
+            for future in done:
+                (
+                    display_name,
+                    error,
+                    macro_counts,
+                    usage_delta,
+                    scene_source_stats,
+                    warnings,
+                ) = future.result()
+                for warning in warnings:
+                    sys.stderr.write(warning)
+                completed += 1
+                if error is not None:
+                    for pending in futures:
+                        pending.cancel()
+                    print(f"  [{completed}/{total}] FAIL: {display_name}")
+                    print(f"  ERROR in {display_name}: {error}")
+                    raise RuntimeError(str(error))
                 merge_macro_stat_counts(scene_macro_counts, macro_counts)
                 merge_source_stat_counts(source_stats, scene_source_stats)
                 for key, value in usage_delta.items():
@@ -322,10 +327,7 @@ def parallel_compile(
                         global_macro_usage_delta.get(key, 0) + value
                     )
                 print(f"  [{completed}/{total}] OK: {display_name}")
-    if errors:
-        for display_name, err in errors:
-            print(f"  ERROR in {display_name}: {err}")
-        raise RuntimeError(str(errors[0][1]))
+            futures.update(islice(tasks, len(done)))
     print(f"[PARALLEL] Compilation complete: {total} files")
     return {
         "parallel": True,

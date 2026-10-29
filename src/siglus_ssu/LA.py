@@ -108,9 +108,6 @@ def la_analize(pcad):
                 continue
             return i, 1
 
-    def find_label(name):
-        return label_map.get(name, -1)
-
     def fallback_span(start, end, line):
         line_index = max(0, min(int(line or 1) - 1, len(line_starts) - 1))
         line_start = line_starts[line_index]
@@ -241,7 +238,7 @@ def la_analize(pcad):
             ):
                 a["type"] = C.LA_T["Z_LABEL"]
                 a["opt"] = int(name[1:])
-                idx = find_label(name)
+                idx = label_map.get(name, -1)
                 if idx < 0:
                     a["subopt"] = len(label_list)
                     label_list.append({"name": name, "line": cur_line})
@@ -250,7 +247,7 @@ def la_analize(pcad):
                     a["subopt"] = idx
             else:
                 a["type"] = C.LA_T["LABEL"]
-                idx = find_label(name)
+                idx = label_map.get(name, -1)
                 if idx < 0:
                     a["opt"] = len(label_list)
                     label_list.append({"name": name, "line": cur_line})

@@ -40,10 +40,6 @@ TNMSERR_BS_NEED_REFERENCE = 4
 TNMSERR_BS_NEED_VALUE = 5
 
 
-def _form_code(name):
-    return C._FORM_CODE.get(name)
-
-
 def is_value(form):
     try:
         if isinstance(form, str):
@@ -54,11 +50,11 @@ def is_value(form):
     return any(
         isinstance(fc, int) and code == fc
         for fc in (
-            _form_code(C.FM_VOID),
-            _form_code(C.FM_INT),
-            _form_code(C.FM_STR),
-            _form_code(C.FM_INTLIST),
-            _form_code(C.FM_STRLIST),
+            C._FORM_CODE.get(C.FM_VOID),
+            C._FORM_CODE.get(C.FM_INT),
+            C._FORM_CODE.get(C.FM_STR),
+            C._FORM_CODE.get(C.FM_INTLIST),
+            C._FORM_CODE.get(C.FM_STRLIST),
         )
     )
 
@@ -78,14 +74,14 @@ def dereference(form):
         code = int(form)
     except (TypeError, ValueError):
         return form
-    if code == _form_code(C.FM_INTREF):
-        return _form_code(C.FM_INT)
-    if code == _form_code(C.FM_STRREF):
-        return _form_code(C.FM_STR)
-    if code == _form_code(C.FM_INTLISTREF):
-        return _form_code(C.FM_INTLIST)
-    if code == _form_code(C.FM_STRLISTREF):
-        return _form_code(C.FM_STRLIST)
+    if code == C._FORM_CODE.get(C.FM_INTREF):
+        return C._FORM_CODE.get(C.FM_INT)
+    if code == C._FORM_CODE.get(C.FM_STRREF):
+        return C._FORM_CODE.get(C.FM_STR)
+    if code == C._FORM_CODE.get(C.FM_INTLISTREF):
+        return C._FORM_CODE.get(C.FM_INTLIST)
+    if code == C._FORM_CODE.get(C.FM_STRLISTREF):
+        return C._FORM_CODE.get(C.FM_STRLIST)
     return code
 
 
@@ -93,7 +89,7 @@ def _fc(x):
     if isinstance(x, int):
         return int(x)
     if isinstance(x, str):
-        fc = _form_code(x)
+        fc = C._FORM_CODE.get(x)
         return int(fc) if isinstance(fc, int) else -1
     return -1
 
@@ -103,7 +99,7 @@ def _to_int(v):
         return int(v)
     except (TypeError, ValueError):
         if isinstance(v, str):
-            fc = _form_code(v)
+            fc = C._FORM_CODE.get(v)
             return int(fc) if isinstance(fc, int) else 0
         return 0
 
@@ -900,9 +896,9 @@ class BS:
         if nt == C.NT_S_DEF_CMD:
             return (yield (s.bs_def_cmd, node.get("def_cmd")))
         if nt == C.NT_S_GOTO:
-            return (yield (s.bs_goto, {"Goto": node.get("Goto")}))
+            return (yield (s.bs_goto, node.get("Goto")))
         if nt == C.NT_S_RETURN:
-            return s.bs_return({"Return": node.get("Return")})
+            return s.bs_return(node.get("Return"))
         if nt == C.NT_S_IF:
             return (yield (s.bs_if, node.get("If")))
         if nt == C.NT_S_FOR:
@@ -1033,31 +1029,28 @@ class BS:
             return True
         if not isinstance(goto, dict):
             return False
-        gt = goto.get("Goto")
-        if not isinstance(gt, dict):
-            return False
-        nt = int(gt.get("node_type", 0) or 0)
+        nt = int(goto.get("node_type", 0) or 0)
         if nt == C.NT_GOTO_GOTO:
             if (
-                int(gt.get("node_sub_type", gt.get("node_type", 0)) or 0)
+                int(goto.get("node_sub_type", goto.get("node_type", 0)) or 0)
                 == C.NT_GOTO_LABEL
             ):
                 lid = int(
-                    ((gt.get("label") or {}).get("atom") or {}).get("opt", 0)
-                    or (gt.get("label") or {}).get("label_id", 0)
+                    ((goto.get("label") or {}).get("atom") or {}).get("opt", 0)
+                    or (goto.get("label") or {}).get("label_id", 0)
                     or 0
                 )
             else:
                 lid = int(
-                    ((gt.get("z_label") or {}).get("atom") or {}).get("subopt", 0)
-                    or (gt.get("z_label") or {}).get("opt", 0)
+                    ((goto.get("z_label") or {}).get("atom") or {}).get("subopt", 0)
+                    or (goto.get("z_label") or {}).get("opt", 0)
                     or 0
                 )
             s.out_scn["scn"].push_u8(C.CD_GOTO)
             s.out_scn["scn"].push_i32(lid)
             return True
         if nt in (C.NT_GOTO_GOSUB, C.NT_GOTO_GOSUBSTR):
-            if not (yield (s.bs_goto_exp, gt)):
+            if not (yield (s.bs_goto_exp, goto)):
                 return False
             form = C.FM_INT if nt == C.NT_GOTO_GOSUB else C.FM_STR
             s.out_scn["scn"].push_u8(C.CD_POP)
@@ -1073,7 +1066,7 @@ class BS:
             return False
         nt = int(goto.get("node_type", 0) or 0)
         if nt == C.NT_GOTO_GOTO:
-            return (yield (s.bs_goto, {"Goto": goto}))
+            return (yield (s.bs_goto, goto))
         if not (yield (s.bs_arg_list, goto.get("arg_list"), True)):
             return False
         label_no = int(
@@ -1101,16 +1094,13 @@ class BS:
             return True
         if not isinstance(ret, dict):
             return False
-        rt = ret.get("Return")
-        if not isinstance(rt, dict):
-            return False
-        nt = int(rt.get("node_type", 0) or 0)
+        nt = int(ret.get("node_type", 0) or 0)
         if nt == C.NT_RETURN_WITH_ARG:
-            if not s.bs_exp(rt.get("exp"), True):
+            if not s.bs_exp(ret.get("exp"), True):
                 return False
             s.out_scn["scn"].push_u8(C.CD_RETURN)
             s.out_scn["scn"].push_i32(1)
-            form = _fc(dereference((rt.get("exp") or {}).get("node_form")))
+            form = _fc(dereference((ret.get("exp") or {}).get("node_form")))
             s.out_scn["scn"].push_i32(form)
             return True
         if nt == C.NT_RETURN_WITHOUT_ARG:
@@ -1867,18 +1857,6 @@ def compile_one_pipeline(
     }
 
 
-def compile_one(ctx, ss_path):
-    return compile_one_pipeline(
-        ctx,
-        ss_path,
-        ia_data=None,
-        debug_outputs=True,
-        tmp_path=None,
-        log=True,
-        record_time=True,
-    )
-
-
 def compile_all(ctx, only, max_workers=None, parallel=True):
     if ctx.get("ia_data") is None:
         ctx["ia_data"] = build_ia_data(ctx)
@@ -1893,7 +1871,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
     scene_macro_counts = empty_macro_stat_counts()
     source_stats = empty_source_stat_counts()
     for p in ss_files:
-        res = compile_one(ctx, p)
+        res = compile_one_pipeline(ctx, p, debug_outputs=True, record_time=True)
         merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
         merge_source_stat_counts(source_stats, res["source_stats"])
     return {

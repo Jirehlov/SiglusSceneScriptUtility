@@ -170,7 +170,7 @@ impl DecompileFrontend {
         if let Some(reference) = decompile_goto_reference(text) {
             return vec![reference];
         }
-        let Ok(lex) = la::lex_scene_text(text, &self.codes.la) else {
+        let Ok(lex) = la::lex_scene_text(text, &self.codes.la, None) else {
             return Vec::new();
         };
         let chars: Vec<char> = text.chars().collect();
@@ -272,7 +272,7 @@ impl DecompileFrontend {
             .map_err(|_| analyzer.error_str.clone())?;
         data.inc_property_cnt = data.property_cnt;
         data.inc_command_cnt = data.command_cnt;
-        let mut ca = ca::CharacterAnalyzer::new();
+        let mut ca = ca::CharacterAnalyzer::new(false);
         let first = ca.analyze_file_1(text).map_err(|_| ca.error_str.clone())?;
         let second = ca
             .analyze_file_2(&first, &data.name_set)
@@ -291,7 +291,7 @@ impl DecompileFrontend {
         let expanded = ca
             .analyze_line(&second.scene_text, &data.replace_tree)
             .map_err(|_| ca.error_str.clone())?;
-        let mut lex = la::lex_scene_text(&expanded, &self.codes.la)
+        let mut lex = la::lex_scene_text(&expanded, &self.codes.la, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
         let mut syntax = sa::SyntaxAnalyzer::new(&lex, self.codes.clone());
         let root = syntax
@@ -301,7 +301,7 @@ impl DecompileFrontend {
         semantic
             .analyze(root)
             .map_err(|_| format!("{:?}", semantic.last))?;
-        let source = la::lex_scene_text(text, &self.codes.la)
+        let source = la::lex_scene_text(text, &self.codes.la, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
         let mut in_command = false;
         let mut bracket = None;

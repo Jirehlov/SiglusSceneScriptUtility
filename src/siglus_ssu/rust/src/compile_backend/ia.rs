@@ -112,7 +112,7 @@ impl IaData {
         defined_names: impl IntoIterator<Item = String>,
     ) -> Self {
         Self {
-            replace_tree: ReplaceTree::new(),
+            replace_tree: ReplaceTree::default(),
             name_set: defined_names.into_iter().collect(),
             macro_defs: Vec::new(),
             macro_map: HashMap::new(),
@@ -160,7 +160,7 @@ impl IncAnalyzer {
             parent_form: parent_form.into(),
             error_line: 0,
             error_str: String::new(),
-            ca: super::ca::CharacterAnalyzer::new(),
+            ca: super::ca::CharacterAnalyzer::new(false),
             sidecar: false,
             source_id: 0,
             default_maps: Vec::new(),
@@ -660,6 +660,7 @@ impl IncAnalyzer {
         mut line: usize,
         iad: &mut IaData,
     ) -> Result<(String, usize, usize), ()> {
+        self.last_after_source_map.clear();
         let (i, line2, ok) = self.skip(pos, line);
         pos = i;
         line = line2;
@@ -670,7 +671,6 @@ impl IncAnalyzer {
         let mut out_source_map = Vec::new();
         let mut ifs = [0i32; 16];
         let mut depth = 0usize;
-        self.last_after_source_map.clear();
         let source_at =
             |source_map: &[Option<SourcePoint>], pos: usize| source_map.get(pos).copied().flatten();
         while pos < self.text.len() {
@@ -760,11 +760,12 @@ impl IncAnalyzer {
             }
             pos += 1;
         }
-        while out.ends_with([' ', '\t']) {
-            out.pop();
-            if self.sidecar {
-                out_source_map.pop();
-            }
+        let trimmed_len = out.trim_end_matches([' ', '\t']).len();
+        if trimmed_len == 0 {
+            out_source_map.clear();
+        } else {
+            out_source_map.truncate(out_source_map.len().saturating_sub(out.len() - trimmed_len));
+            out.truncate(trimmed_len);
         }
         self.last_after_source_map = out_source_map;
         Ok((out, pos, line))

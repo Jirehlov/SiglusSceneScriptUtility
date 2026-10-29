@@ -90,12 +90,8 @@ fn push_i32_pairs(out: &mut Vec<u8>, values: &[(i32, i32)]) {
     }
 }
 
-fn utf16_units(text: &str) -> Vec<u16> {
-    text.encode_utf16().collect()
-}
-
 fn push_utf16_raw(out: &mut Vec<u8>, text: &str) {
-    for unit in utf16_units(text) {
+    for unit in text.encode_utf16() {
         push_u16(out, unit);
     }
 }
@@ -104,7 +100,7 @@ fn make_index_list(strings: &[String]) -> Vec<(i32, i32)> {
     let mut out = Vec::with_capacity(strings.len());
     let mut ofs = 0i32;
     for text in strings {
-        let len = utf16_units(text).len() as i32;
+        let len = text.encode_utf16().count() as i32;
         out.push((ofs, len));
         ofs = ofs.wrapping_add(len);
     }
@@ -138,7 +134,7 @@ pub fn build_scn_dat(
     let mut units: Vec<Vec<u16>> = vec![Vec::new(); n];
     let mut ofs = 0i32;
     for &orig in order {
-        let u = utf16_units(&strings[orig]);
+        let u: Vec<u16> = strings[orig].encode_utf16().collect();
         idx[orig] = (ofs, u.len() as i32);
         ofs = ofs.wrapping_add(u.len() as i32);
         units[orig] = u;

@@ -42,12 +42,8 @@ struct OutputLog<'a> {
 }
 
 impl<'a> OutputLog<'a> {
-    fn streaming(streamer: &'a mut LogStreamer<'a>) -> Self {
-        Self { streamer }
-    }
-
-    fn push_line(&mut self, line: &str) -> Result<(), String> {
-        (self.streamer)("stdout", line)
+    fn push_line(&mut self, line: impl AsRef<str>) -> Result<(), String> {
+        (self.streamer)("stdout", line.as_ref())
     }
 
     fn push_warning(&mut self, line: &str) -> Result<(), String> {
@@ -211,7 +207,7 @@ where
     }
 
     let item_count = items.len();
-    let queue = Mutex::new(items.into_iter().enumerate());
+    let queue = Mutex::new(Some(items.into_iter().enumerate()));
     let (tx, rx) = mpsc::channel();
     let error = std::thread::scope(|scope| {
         for _ in 0..workers.min(item_count) {
@@ -222,7 +218,11 @@ where
             scope.spawn(move || {
                 let mut state = initialize();
                 loop {
-                    let Some((index, item)) = queue.lock().expect("scene queue poisoned").next()
+                    let Some((index, item)) = queue
+                        .lock()
+                        .expect("scene queue poisoned")
+                        .as_mut()
+                        .and_then(Iterator::next)
                     else {
                         break;
                     };
@@ -234,11 +234,11 @@ where
         }
         drop(tx);
         let mut first_error = None;
-        for _ in 0..item_count {
-            let (index, result) = rx.recv().expect("scene worker did not produce a result");
+        for (index, result) in rx {
             if first_error.is_none()
                 && let Err(error) = visit(index, result)
             {
+                *queue.lock().expect("scene queue poisoned") = None;
                 first_error = Some(error);
             }
         }
@@ -342,10 +342,6 @@ fn utf16le(text: &str) -> Vec<u8> {
     out
 }
 
-fn ascii_lowercase(text: &str) -> String {
-    text.chars().map(|ch| ch.to_ascii_lowercase()).collect()
-}
-
 fn source_path(base: &Path, name: &str) -> PathBuf {
     let path = Path::new(name);
     if path.is_absolute() {
@@ -391,12 +387,11 @@ fn file_name(path: &Path) -> String {
 }
 
 fn lower_file_name(name: &str) -> String {
-    ascii_lowercase(
-        Path::new(name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(name),
-    )
+    Path::new(name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(name)
+        .to_ascii_lowercase()
 }
 
 fn scene_stem(name: &str) -> String {
@@ -407,12 +402,8 @@ fn scene_stem(name: &str) -> String {
         .to_string()
 }
 
-fn push_log_line(log: &mut OutputLog<'_>, line: impl AsRef<str>) -> Result<(), String> {
-    log.push_line(line.as_ref())
-}
-
 fn log_stage(log: &mut OutputLog<'_>, stage: &str, display_name: &str) -> Result<(), String> {
-    push_log_line(log, format!("{stage}: {display_name}"))
+    log.push_line(format!("{stage}: {display_name}"))
 }
 
 fn record_stage_time(stage_times: &mut Vec<(String, f64)>, stage: &str, start: Instant) {
@@ -1258,14 +1249,11 @@ fn build_original_source_chunks(
     let workers = default_parallel_worker_count(sources.len());
     let encrypted_sources = if workers > 1 && sources.len() > 1 {
         let stage_start = Instant::now();
-        push_log_line(
-            log,
-            format!(
-                "[PARALLEL] Encrypting {} source files with {} workers...",
-                sources.len(),
-                workers
-            ),
-        )?;
+        log.push_line(format!(
+            "[PARALLEL] Encrypting {} source files with {} workers...",
+            sources.len(),
+            workers
+        ))?;
         let tmp_dir = config.tmp_dir.clone();
         let source_count = sources.len();
         let mut results = std::iter::repeat_with(|| None)
@@ -1298,7 +1286,7 @@ fn build_original_source_chunks(
             |index, result| {
                 let item = result?;
                 if let Some((name, _)) = &item {
-                    push_log_line(log, format!("  OS: {name}"))?;
+                    log.push_line(format!("  OS: {name}"))?;
                 }
                 results[index] = Some(item);
                 Ok(())
@@ -1311,10 +1299,10 @@ fn build_original_source_chunks(
         {
             out.push(item.1);
         }
-        push_log_line(
-            log,
-            format!("[PARALLEL] Source encryption complete: {} files", out.len()),
-        )?;
+        log.push_line(format!(
+            "[PARALLEL] Source encryption complete: {} files",
+            out.len()
+        ))?;
         record_stage_time(stage_times, "OS", stage_start);
         out
     } else {
@@ -1430,7 +1418,7 @@ fn prepare_scene(
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
     let mut ia_data = base_ia.clone();
-    let mut ca = CharacterAnalyzer::new();
+    let mut ca = CharacterAnalyzer::new(false);
     if let Some(log) = log.as_mut() {
         log_stage(log, "CA", display_name)?;
     }
@@ -1482,7 +1470,7 @@ fn prepare_scene(
         log_stage(log, "LA", display_name)?;
     }
     let stage_start = Instant::now();
-    let lex_result = lex_scene_text(&scene_text, &ia_data.codes.la);
+    let lex_result = lex_scene_text(&scene_text, &ia_data.codes.la, None);
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "LA", stage_start);
     }
@@ -1784,16 +1772,12 @@ fn compile_project_inner(
                 path: task.path.clone(),
             })
             .collect::<Vec<_>>();
-        push_log_line(
-            stdout,
-            format!(
-                "[PARALLEL] Compiling {} files with {} processes...",
-                compile_tasks.len(),
-                compile_workers
-            ),
-        )?;
+        stdout.push_line(format!(
+            "[PARALLEL] Compiling {} files with {} processes...",
+            compile_tasks.len(),
+            compile_workers
+        ))?;
         let total = compile_tasks.len();
-        let mut errors = Vec::new();
         let mut completed_count = 0usize;
         parallel_visit_unordered_with_state(
             compile_tasks,
@@ -1829,33 +1813,25 @@ fn compile_project_inner(
                 completed_count += 1;
                 match result {
                     Ok(scene) => {
-                        push_log_line(
-                            stdout,
-                            format!("  [{}/{}] OK: {}", completed_count, total, status),
-                        )?;
+                        stdout.push_line(format!(
+                            "  [{}/{}] OK: {}",
+                            completed_count, total, status
+                        ))?;
                         compiled.push((key, scene));
                     }
                     Err(message) => {
-                        push_log_line(
-                            stdout,
-                            format!("  [{}/{}] FAIL: {}", completed_count, total, status),
-                        )?;
-                        errors.push((status, message));
+                        stdout.push_line(format!(
+                            "  [{}/{}] FAIL: {}",
+                            completed_count, total, status
+                        ))?;
+                        stdout.push_line(format!("  ERROR in {status}: {message}"))?;
+                        return Err(message);
                     }
                 }
                 Ok(())
             },
         )?;
-        if !errors.is_empty() {
-            for (status, message) in &errors {
-                push_log_line(stdout, format!("  ERROR in {status}: {message}"))?;
-            }
-            return Err(errors[0].1.clone());
-        }
-        push_log_line(
-            stdout,
-            format!("[PARALLEL] Compilation complete: {} files", total),
-        )?;
+        stdout.push_line(format!("[PARALLEL] Compilation complete: {} files", total))?;
         record_stage_time(stage_times, "Compiling", stage_start);
     } else {
         for task in tasks
@@ -1909,7 +1885,7 @@ fn compile_project_inner(
                 compiled: true,
             }
         } else {
-            let key = ascii_lowercase(&stem);
+            let key = stem.to_ascii_lowercase();
             let dat_path = config
                 .cache
                 .dat_paths
@@ -1955,7 +1931,11 @@ fn compile_project_inner(
         right
             .value
             .cmp(&left.value)
-            .then_with(|| ascii_lowercase(&left.name).cmp(&ascii_lowercase(&right.name)))
+            .then_with(|| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            })
             .then_with(|| left.name.cmp(&right.name))
     });
     read_flag_stats.top_scenes.truncate(5);
@@ -2001,8 +1981,10 @@ fn compile_project_inner(
         for record in &scene_records {
             let path = bs_dir.join(format!("{}.lzss", record.stem));
             if !record.compiled
-                && let Some(cached_path) =
-                    config.cache.lzss_paths.get(&ascii_lowercase(&record.stem))
+                && let Some(cached_path) = config
+                    .cache
+                    .lzss_paths
+                    .get(&record.stem.to_ascii_lowercase())
             {
                 let cached_path = Path::new(cached_path);
                 let lz =
@@ -2022,14 +2004,11 @@ fn compile_project_inner(
     if use_lzss && !lzss_tasks.is_empty() {
         if link_workers > 1 && scene_records.len() > 1 {
             let stage_start = lzss_parallel_stage_start.unwrap_or_else(Instant::now);
-            push_log_line(
-                stdout,
-                format!(
-                    "[PARALLEL] LZSS compressing {} scenes with {} workers...",
-                    lzss_tasks.len(),
-                    link_workers
-                ),
-            )?;
+            stdout.push_line(format!(
+                "[PARALLEL] LZSS compressing {} scenes with {} workers...",
+                lzss_tasks.len(),
+                link_workers
+            ))?;
             parallel_visit_unordered_with_state(
                 lzss_tasks,
                 link_workers,
@@ -2048,18 +2027,15 @@ fn compile_project_inner(
                 },
                 |_, result| {
                     let (stem, lz) = result?;
-                    push_log_line(
-                        stdout,
-                        format!(
-                            "  LZSS: {}",
-                            scene_display_name(config, &(stem.clone() + ".ss"))
-                        ),
-                    )?;
+                    stdout.push_line(format!(
+                        "  LZSS: {}",
+                        scene_display_name(config, &(stem.clone() + ".ss"))
+                    ))?;
                     lzss_results.insert(stem, lz);
                     Ok(())
                 },
             )?;
-            push_log_line(stdout, "[PARALLEL] LZSS compression complete")?;
+            stdout.push_line("[PARALLEL] LZSS compression complete")?;
             record_stage_time(stage_times, "LZSS", stage_start);
         } else {
             for (stem, dat, path) in lzss_tasks {
@@ -2111,7 +2087,11 @@ fn compile_project_inner(
         right
             .value
             .cmp(&left.value)
-            .then_with(|| ascii_lowercase(&left.name).cmp(&ascii_lowercase(&right.name)))
+            .then_with(|| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            })
             .then_with(|| left.name.cmp(&right.name))
     });
     binary_size_stats.top_dat_scenes.truncate(5);
@@ -2124,7 +2104,7 @@ fn compile_project_inner(
         if let Some(key) = exe_key.as_deref() {
             crate::xor::cycle_inplace(&mut encoded, key, 0);
         }
-        (ascii_lowercase(&scene.stem), encoded)
+        (scene.stem.to_ascii_lowercase(), encoded)
     });
     let (scene_names, scene_data): (Vec<_>, Vec<_>) = encoded_scenes.into_iter().unzip();
     let (original_source_header_size, original_source_chunks) =
@@ -2199,10 +2179,14 @@ fn compile_project_inner(
     })
 }
 
-fn compile_project_with_log(
+pub fn compile_project_streaming<F>(
     config: &CompileConfig,
-    mut stdout: OutputLog<'_>,
-) -> Result<ProjectOutput, CompileFailure> {
+    streamer: &mut F,
+) -> Result<ProjectOutput, CompileFailure>
+where
+    F: FnMut(&str, &str) -> Result<(), String>,
+{
+    let mut stdout = OutputLog { streamer };
     let mut stage_times = Vec::new();
     match compile_project_inner(config, &mut stdout, &mut stage_times) {
         Ok(output) => Ok(output),
@@ -2211,14 +2195,4 @@ fn compile_project_with_log(
             stage_times,
         }),
     }
-}
-
-pub fn compile_project_streaming<F>(
-    config: &CompileConfig,
-    streamer: &mut F,
-) -> Result<ProjectOutput, CompileFailure>
-where
-    F: FnMut(&str, &str) -> Result<(), String>,
-{
-    compile_project_with_log(config, OutputLog::streaming(streamer))
 }

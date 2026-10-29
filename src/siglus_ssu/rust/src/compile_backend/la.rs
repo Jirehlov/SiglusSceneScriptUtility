@@ -174,11 +174,7 @@ fn token_span(
     span
 }
 
-pub fn lex_scene_text(text: &str, codes: &LexCodes) -> Result<LexResult, LexError> {
-    lex_scene_text_with_source_map(text, codes, None)
-}
-
-pub fn lex_scene_text_with_source_map(
+pub fn lex_scene_text(
     text: &str,
     codes: &LexCodes,
     source_map: Option<&[Option<SourcePoint>]>,

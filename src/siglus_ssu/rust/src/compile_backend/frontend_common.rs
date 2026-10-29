@@ -65,26 +65,6 @@ pub struct TextCommentError {
     pub message: String,
 }
 
-fn contains_char(text: &str, ch: char) -> bool {
-    text.chars().any(|candidate| candidate == ch)
-}
-
-fn lower_ascii(ch: char) -> char {
-    if ch.is_ascii_uppercase() {
-        ((ch as u8) + 32) as char
-    } else {
-        ch
-    }
-}
-
-fn upper_ascii(ch: char) -> char {
-    if ch.is_ascii_lowercase() {
-        ((ch as u8) - 32) as char
-    } else {
-        ch
-    }
-}
-
 pub fn next_elseif_ifdef_state(state: i32, matched: bool) -> i32 {
     if state == 3 {
         return 3;
@@ -164,7 +144,7 @@ pub fn scan_text_comments(
                 state = 3;
             }
         } else if state == 2 {
-            if contains_char(&options.single_escape_chars, ch) {
+            if options.single_escape_chars.contains(ch) {
                 state = if options.single_quote_mode == SingleQuoteMode::String {
                     1
                 } else {
@@ -192,7 +172,7 @@ pub fn scan_text_comments(
                 state = 0;
             }
         } else if state == 5 {
-            if contains_char(&options.double_escape_chars, ch) {
+            if options.double_escape_chars.contains(ch) {
                 state = 4;
             } else {
                 return Err(TextCommentError {
@@ -235,9 +215,9 @@ pub fn scan_text_comments(
             column += 1;
             continue;
         } else if options.case_mode == CaseMode::Lower {
-            out_ch = lower_ascii(ch);
+            out_ch = ch.to_ascii_lowercase();
         } else if options.case_mode == CaseMode::Upper {
-            out_ch = upper_ascii(ch);
+            out_ch = ch.to_ascii_uppercase();
         }
         if let Some(source_map) = source_map.as_mut() {
             source_map.push(Some(SourcePoint {

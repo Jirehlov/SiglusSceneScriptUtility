@@ -84,10 +84,6 @@ impl SyntaxAnalyzer {
         candidates.contains(&self.atom_type(index))
     }
 
-    fn is_any(&self, atom_type: i32, candidates: &[i32]) -> bool {
-        candidates.contains(&atom_type)
-    }
-
     fn set_error(&mut self, kind: impl Into<String>, atom: Atom) {
         let replace = self
             .last
@@ -224,14 +220,12 @@ impl SyntaxAnalyzer {
 
     fn parse_literal(&self, index: usize) -> Option<(usize, Atom)> {
         let atom = self.atom(index);
-        self.is_any(
-            atom.atom_type,
-            &[
-                self.codes.la.val_int,
-                self.codes.la.val_str,
-                self.codes.la.label,
-            ],
-        )
+        [
+            self.codes.la.val_int,
+            self.codes.la.val_str,
+            self.codes.la.label,
+        ]
+        .contains(&atom.atom_type)
         .then_some((index + 1, atom))
     }
 
@@ -546,14 +540,13 @@ impl<'a> SyntaxSession<'a> {
                 parse_step!(self, executor, parse_def_property(index = index))
             } else if atom_type == self.syntax.codes.la.command {
                 parse_step!(self, executor, parse_def_command(index = index))
-            } else if self.syntax.is_any(
-                atom_type,
-                &[
-                    self.syntax.codes.la.goto,
-                    self.syntax.codes.la.gosub,
-                    self.syntax.codes.la.gosubstr,
-                ],
-            ) {
+            } else if [
+                self.syntax.codes.la.goto,
+                self.syntax.codes.la.gosub,
+                self.syntax.codes.la.gosubstr,
+            ]
+            .contains(&atom_type)
+            {
                 parse_step!(self, executor, parse_goto(index = index))
             } else if atom_type == self.syntax.codes.la.return_ {
                 parse_step!(self, executor, parse_return(index = index))
