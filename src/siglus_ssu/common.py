@@ -956,8 +956,7 @@ def new_expression_state(
     def _pop_arg_expr(arg_info):
         form = arg_info["form"]
         if form == fm_list:
-            vals = _pop_arg_list(arg_info.get("sub") or [], _pop_arg_expr)
-            return "[" + ", ".join(vals) + "]"
+            return "[]"
         if form == fm_label:
             return _pop_scalar_expr(fm_label)
         if form in scalar_forms:

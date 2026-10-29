@@ -115,7 +115,6 @@ class _ExpansionBuffer:
                 value, start, end = self.pieces[-1]
                 if 0 <= index < end - start:
                     return value[start + index]
-            index = index + self.size if index < 0 else index
             if not 0 <= index < self.size:
                 raise IndexError(index)
             reverse = self.size - index - 1
@@ -123,9 +122,8 @@ class _ExpansionBuffer:
             value, start, end = self.pieces[part]
             previous = self.ends[part - 1] if part else 0
             return value[end - 1 - (reverse - previous)]
-        start, end, step = index.indices(self.size)
-        if step != 1:
-            raise ValueError("contiguous expansion slice required")
+        start = index.start or 0
+        end = min(index.stop, self.size)
         if self.pieces:
             value, low, high = self.pieces[-1]
             if end <= high - low:
@@ -474,15 +472,15 @@ class CharacterAnalizer:
             )
         return "".join(out), "".join(inc), stats
 
-    def _std_replace(self, text, pos, default_rt, added_rt, source_map=None):
-        r1 = search_replace_tree(default_rt, text, pos) if default_rt else None
+    def _replace_head(self, text, default_rt, added_rt, source_map=None):
+        r1 = search_replace_tree(default_rt, text, 0) if default_rt else None
         r2 = (
-            search_replace_tree(added_rt, text, pos)
+            search_replace_tree(added_rt, text, 0)
             if added_rt and added_rt.get("c")
             else None
         )
         if not r1 and not r2:
-            return text, pos + 1, 1, source_map
+            return 1
         rep = (r1 if r1["name"] > r2["name"] else r2) if (r1 and r2) else (r1 or r2)
         if "used_count" in rep:
             rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
@@ -490,9 +488,7 @@ class CharacterAnalizer:
         nl = len(nm)
         source = rep.get("source") or {}
         if source_map is not None and source.get("declaration") is not None:
-            points = [
-                point for point in source_map[pos : pos + nl] if point is not None
-            ]
+            points = [point for point in source_map[:nl] if point is not None]
             mapped = (
                 points
                 and len(
@@ -513,31 +509,32 @@ class CharacterAnalizer:
                 }
             )
         if tp in ("replace", "define"):
-            end = pos + nl
+            end = nl
             inserted_map = (
                 source.get("map") or [None] * len(after)
                 if source_map is not None
                 else None
             )
-            next_pos = pos + len(after) if tp == "replace" else pos
+            consumed = len(after) if tp == "replace" else 0
         else:
             if self.macro_depth >= 128:
                 self.error(self.m_line, "Macro expansion nesting limit reached.")
-                return text, pos, 0, source_map
+                return None
             self.macro_depth += 1
             try:
-                ok, end, after, inserted_map = self._analize_macro(
-                    text, pos + nl, rep, default_rt, added_rt, source_map
+                expanded = self._analize_macro(
+                    text, nl, rep, default_rt, added_rt, source_map
                 )
             finally:
                 self.macro_depth -= 1
-            if not ok:
-                return text, pos, 0, source_map
-            next_pos = pos + len(after)
+            if expanded is None:
+                return None
+            end, after, inserted_map = expanded
+            consumed = len(after)
         if source_map is not None:
             source_map.replace(end, inserted_map)
         text.replace(end, after)
-        return text, next_pos, 1, source_map
+        return consumed
 
     def _analize_macro(self, text, p, macro, default_rt, added_rt, source_map):
         real = []
@@ -549,22 +546,12 @@ class CharacterAnalizer:
             while 1:
                 if p >= len(text) or text[p] == "\0":
                     self.error(self.m_line, "Reached end of file while parsing macro.")
-                    return 0, p, "", None
+                    return None
                 c = text[p]
-                if c == "'":
+                if c in "'\"":
                     p += 1
                     while 1:
-                        if text[p] == "'":
-                            p += 1
-                            break
-                        if text[p] == "\\":
-                            p += 2
-                        else:
-                            p += 1
-                elif c == '"':
-                    p += 1
-                    while 1:
-                        if text[p] == '"':
+                        if text[p] == c:
                             p += 1
                             break
                         if text[p] == "\\":
@@ -581,7 +568,7 @@ class CharacterAnalizer:
                                 self.m_line,
                                 f"The {len(real)}-th macro argument is empty.",
                             )
-                            return 0, p, "", None
+                            return None
                         real.append(text[st:p])
                         real_maps.append(
                             source_map[st:p] if source_map is not None else None
@@ -599,7 +586,7 @@ class CharacterAnalizer:
                                 self.m_line,
                                 f"The {len(real)}-th macro argument is empty.",
                             )
-                            return 0, p, "", None
+                            return None
                         else:
                             real.append(text[st:p])
                             real_maps.append(
@@ -615,16 +602,44 @@ class CharacterAnalizer:
             self.error(
                 self.m_line, "Macros without arguments do not require parentheses."
             )
-            return 0, p, "", None
+            return None
         if len(macro["args"]) < len(real):
             self.error(self.m_line, "Too many macro arguments.")
-            return 0, p, "", None
+            return None
         res = self._analize_macro_replace(
             macro, real, real_maps, default_rt, added_rt, source_map is not None
         )
         if res is None:
-            return 0, p, "", None
-        return 1, p, res[0], res[1]
+            return None
+        return p, res[0], res[1]
+
+    def _expand_macro_text(self, text, points, default_rt, added_rt, context):
+        text = _ExpansionBuffer(text + "\0" * 256)
+        points = _ExpansionBuffer(points + [None] * 256) if points is not None else None
+        loop = 0
+        rest_min = len(text)
+        while text[0] != "\0":
+            consumed = self._replace_head(text, default_rt, added_rt, points)
+            if consumed is None:
+                return None
+            text.advance(consumed)
+            if points is not None:
+                points.advance(consumed)
+            rest = len(text)
+            if rest >= rest_min:
+                loop += 1
+                if loop > 10000:
+                    self.error(
+                        self.m_line,
+                        f"Macro {context} expansion exceeded 10000 consecutive steps "
+                        "without a new minimum remaining-text length; "
+                        "check for cyclic #define references.",
+                    )
+                    return None
+            else:
+                rest_min = rest
+                loop = 0
+        return text.result(256), points.result(256) if points is not None else None
 
     def _analize_macro_replace(
         self, macro, real, real_maps, default_rt, added_rt, mapped
@@ -644,43 +659,20 @@ class CharacterAnalizer:
                     if i < len(real)
                     else (defaults[i] if i < len(defaults) else [])
                 )
-                points = _ExpansionBuffer(
-                    list(points or [None] * len(after)) + [None] * 256
-                )
-            t = _ExpansionBuffer(after + "\0" * 256)
-            p = 0
-            loop = 0
-            rest_min = len(t)
-            while t[p] != "\0":
-                t, p, ok, points = self._std_replace(t, p, default_rt, added_rt, points)
-                if not ok:
-                    return None
-                t.advance(p)
-                if points is not None:
-                    points.advance(p)
-                p = 0
-                rest = len(t)
-                if rest >= rest_min:
-                    loop += 1
-                    if loop > 10000:
-                        self.error(
-                            self.m_line,
-                            "Macro argument expansion exceeded 10000 consecutive steps "
-                            "without a new minimum remaining-text length; "
-                            "check for cyclic #define references.",
-                        )
-                        return None
-                else:
-                    rest_min = rest
-                    loop = 0
+                points = list(points or [None] * len(after))
+            expanded = self._expand_macro_text(
+                after, points, default_rt, added_rt, "argument"
+            )
+            if expanded is None:
+                return None
             rep = {
                 "type": "replace",
                 "name": arg["name"],
-                "after": t.result(256),
+                "after": expanded[0],
                 "args": [],
             }
             if mapped:
-                rep["source"] = {"map": points.result(256)}
+                rep["source"] = {"map": expanded[1]}
             reps.append(rep)
         reps.sort(key=lambda rep: len(rep["name"]))
         reps.reverse()
@@ -688,40 +680,8 @@ class CharacterAnalizer:
         for rep in reps:
             add_replace_tree(arg_tree, rep["name"], rep)
         src = macro["after"]
-        t = _ExpansionBuffer(src + "\0" * 256)
-        points = (
-            _ExpansionBuffer(
-                list(source.get("map") or [None] * len(src)) + [None] * 256
-            )
-            if mapped
-            else None
-        )
-        p = 0
-        loop = 0
-        rest_min = len(t)
-        while t[p] != "\0":
-            t, p, ok, points = self._std_replace(t, p, default_rt, arg_tree, points)
-            if not ok:
-                return None
-            t.advance(p)
-            if points is not None:
-                points.advance(p)
-            p = 0
-            rest = len(t)
-            if rest >= rest_min:
-                loop += 1
-                if loop > 10000:
-                    self.error(
-                        self.m_line,
-                        "Macro body expansion exceeded 10000 consecutive steps "
-                        "without a new minimum remaining-text length; "
-                        "check for cyclic #define references.",
-                    )
-                    return None
-            else:
-                rest_min = rest
-                loop = 0
-        return t.result(256), points.result(256) if mapped else None
+        points = list(source.get("map") or [None] * len(src)) if mapped else None
+        return self._expand_macro_text(src, points, default_rt, arg_tree, "body")
 
     def analize_line(self, in_text, piad, source_map=None):
         self.iad = piad
@@ -732,31 +692,30 @@ class CharacterAnalizer:
         self.m_line = 1
         loop = 0
         rest_min = len(t)
-        p = 0
         stops = re.compile(
             "[" + re.escape("".join(self.iad["replace_tree"]["c"])) + "\0]"
         )
-        while t[p] != "\0":
+        while t[0] != "\0":
+            consumed = 0
             if len(t) <= rest_min:
                 value, start, end = t.pieces[-1]
                 match = stops.search(value, start, end)
-                p = (match.start() if match else end) - start
-                if p:
-                    self.m_line += value.count("\n", start, start + p)
-            if not p:
-                if t[p] == "\n":
+                consumed = (match.start() if match else end) - start
+                if consumed:
+                    self.m_line += value.count("\n", start, start + consumed)
+            if not consumed:
+                if t[0] == "\n":
                     self.m_line += 1
-                    p += 1
+                    consumed = 1
                 else:
-                    t, p, ok, source_map = self._std_replace(
-                        t, p, self.iad["replace_tree"], None, source_map
+                    consumed = self._replace_head(
+                        t, self.iad["replace_tree"], None, source_map
                     )
-                    if not ok:
+                    if consumed is None:
                         return None
-            t.advance(p)
+            t.advance(consumed)
             if source_map is not None:
-                source_map.advance(p)
-            p = 0
+                source_map.advance(consumed)
             rest = len(t)
             if rest >= rest_min:
                 loop += 1

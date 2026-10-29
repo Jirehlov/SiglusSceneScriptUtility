@@ -56,10 +56,6 @@ def _materialize_lines(lines):
     return out
 
 
-def _copy_lines(lines):
-    return list(lines or [])
-
-
 def _line_insertion_targets(lines):
     targets = []
     greatest = float("-inf")
@@ -406,7 +402,7 @@ def _merge_head_with_first_line(head, body_lines):
 
 def _merge_same_target_lines(lines):
     out = []
-    kept = _copy_lines(lines)
+    kept = list(lines)
     next_targets = [None] * len(kept)
     next_target = None
     for idx in range(len(kept) - 1, -1, -1):
@@ -517,7 +513,7 @@ def _drop_terminal_l_before_eof(lines, eof_line):
     refs = _line_label_refs(lines)
     out = []
     last_target_idx = -1
-    kept = _copy_lines(lines)
+    kept = list(lines)
     for idx, line in enumerate(kept):
         if _line_target(line) is not None:
             last_target_idx = idx
@@ -1253,7 +1249,7 @@ class _Decompiler:
 
     def _with_labels(self, labels, lines, target_line):
         labs = self._label_lines(labels)
-        out = _copy_lines(lines)
+        out = list(lines)
         if labs and out:
             first_target = _line_target(out[0])
             if first_target is None and target_line is not None:
@@ -1363,7 +1359,7 @@ class _Decompiler:
         return out, cur
 
     def _restore_missing_l_labels(self, lines):
-        out = _copy_lines(lines)
+        out = list(lines)
         insertions = _LineInsertions(out)
         label_events = {}
         for ev in self.events:
@@ -1394,7 +1390,7 @@ class _Decompiler:
         return insertions.finish(out)
 
     def _dedupe_l_label_defs(self, lines):
-        kept = _copy_lines(lines)
+        kept = list(lines)
         best = {}
         drop = set()
         for idx, line in enumerate(kept):
@@ -1444,7 +1440,7 @@ class _Decompiler:
 
     def _split_standalone_l_labels(self, lines, standalone, *, unreferenced):
         if not standalone:
-            return _copy_lines(lines), set()
+            return list(lines), set()
         refs = _line_label_refs(lines) if unreferenced else None
         out = []
         keep = set()
@@ -1509,7 +1505,7 @@ class _Decompiler:
     def _restore_synthetic_gap_labels(self, lines):
         specs = self._synthetic_gap_label_specs()
         if not specs:
-            return _copy_lines(lines)
+            return list(lines)
         label_to_spec = {}
         ref_map = {}
         for spec in specs:
@@ -1542,7 +1538,7 @@ class _Decompiler:
         return out
 
     def _restore_empty_cd_nl_sentences(self, lines):
-        out = _copy_lines(lines)
+        out = list(lines)
         refs = _line_label_refs(out)
         keep = set()
         by_target = {}
@@ -1719,7 +1715,7 @@ class _Decompiler:
                         inherited.add((line_no, _label_token(lid)))
         refs = _line_label_refs(lines)
         out = []
-        kept = _copy_lines(lines)
+        kept = list(lines)
         idx = 0
         while idx < len(kept):
             line = kept[idx]
@@ -1770,9 +1766,9 @@ class _Decompiler:
 
     def _normalize_label_clusters(self, lines):
         refs = _line_label_refs(lines)
-        kept = _copy_lines(lines)
+        kept = list(lines)
         idx = 0
-        out = _copy_lines(kept)
+        out = list(kept)
         while idx < len(kept):
             text = _line_text(kept[idx])
             target = _line_target(kept[idx])
@@ -1798,7 +1794,7 @@ class _Decompiler:
                             out[idx] = _line_item(next_text, target)
                             out[j] = _line_item("", next_target)
             idx += 1
-        kept = _copy_lines(out)
+        kept = list(out)
         out = []
         idx = 0
         while idx < len(kept):
@@ -1852,7 +1848,7 @@ class _Decompiler:
 
     def _normalize_inline_l_after_z(self, lines):
         refs = _line_label_refs(lines)
-        kept = _copy_lines(lines)
+        kept = list(lines)
         mapping = {}
         rewrites = {}
         idx = 0
@@ -1902,7 +1898,7 @@ class _Decompiler:
             rewrites[j] = indent + l_tail
             idx += 1
         if (not mapping) and (not rewrites):
-            return _copy_lines(lines)
+            return list(lines)
         out = []
         for idx, line in enumerate(kept):
             text = rewrites.get(idx, _line_text(line))
@@ -1916,7 +1912,7 @@ class _Decompiler:
 
     def _rewrite_explicit_l_refs_to_explicit_z(self, lines):
         alias_map = {}
-        kept = _copy_lines(lines)
+        kept = list(lines)
         refs = _line_label_refs(kept)
         z_by_ofs = {}
         z_targets = {}
@@ -1980,7 +1976,7 @@ class _Decompiler:
         return out
 
     def _rewrite_l_refs_to_existing_label_heads(self, lines):
-        kept = _copy_lines(lines)
+        kept = list(lines)
         refs = _line_label_refs(kept)
         if not refs:
             return kept
@@ -2014,7 +2010,7 @@ class _Decompiler:
         ]
 
     def _collapse_explicit_l_goto_trampolines(self, lines):
-        kept = _copy_lines(lines)
+        kept = list(lines)
         out = []
         ref_counts = {}
         for line in kept:
@@ -2082,7 +2078,7 @@ class _Decompiler:
 
     def _move_referenced_l_to_standalone_slot_after_z(self, lines):
         refs = _line_label_refs(lines)
-        kept = _copy_lines(lines)
+        kept = list(lines)
         out = []
         idx = 0
         while idx < len(kept):
@@ -2143,7 +2139,7 @@ class _Decompiler:
 
     def _drop_unreferenced_l_after_z_before_l_tail(self, lines):
         refs = _line_label_refs(lines)
-        kept = _copy_lines(lines)
+        kept = list(lines)
         out = []
         idx = 0
         while idx < len(kept):
@@ -2229,7 +2225,7 @@ class _Decompiler:
         return out
 
     def _restore_terminal_eof_line(self, lines, eof_line):
-        out = _copy_lines(lines)
+        out = list(lines)
         target_line = eof_line - 1
         if target_line <= 0:
             return out

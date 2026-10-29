@@ -1290,7 +1290,7 @@ pub(crate) mod dat {
             let context = config.pack_context(&pack_context)?;
             let pack = rt.pack_state(&context)?;
             let commands = match record_get(&context, "payload_scene_name")? {
-                V::None => pack.all_commands.clone(),
+                V::None => pack.empty_commands.clone(),
                 V::Str(name) => pack
                     .scene_commands
                     .get(&name)
@@ -2369,13 +2369,37 @@ fn resolver_properties(
         })
         .collect()
 }
+fn property_elements(
+    tables: &NativeTables,
+    definitions: Vec<ResolverProperty>,
+) -> HashMap<i64, Rc<Element>> {
+    definitions
+        .into_iter()
+        .map(|info| {
+            let qualified = if info.name.chars.is_empty() {
+                source(&format!("$prop_{}", info.code))
+            } else {
+                info.name.clone()
+            };
+            (
+                info.code,
+                Element::dynamic(
+                    tables.property_kind,
+                    tables.global,
+                    info.name,
+                    qualified,
+                    info.form,
+                ),
+            )
+        })
+        .collect()
+}
 struct PackState {
     keys: [V; 3],
     counts: (i64, i64),
     properties: Rc<HashMap<i64, Rc<Element>>>,
     commands: Rc<HashMap<i64, SourceText>>,
     metadata: Vec<V>,
-    all_commands: Rc<Vec<V>>,
     empty_commands: Rc<Vec<V>>,
     scene_commands: HashMap<SourceText, Rc<Vec<V>>>,
     matches: RefCell<Option<(Weak<PackState>, bool)>>,
@@ -2426,7 +2450,6 @@ impl Runtime {
         )?);
         let names = native_optional_values(&keys[2])?;
         let mut commands = HashMap::new();
-        let mut all = vec![];
         let mut grouped: HashMap<SourceText, Vec<V>> = HashMap::new();
         for (index, item) in native_optional_values(&keys[1])?.into_iter().enumerate() {
             commands.insert(
@@ -2457,8 +2480,7 @@ impl Runtime {
             fields.retain(|(_, value)| !matches!(value, V::None));
             let row = fast_record(self, fields)?;
             if let V::Str(name) = scene {
-                grouped.entry(name).or_default().push(row.clone());
-                all.push(row);
+                grouped.entry(name).or_default().push(row);
             } else {
                 metadata.push(row);
             }
@@ -2467,31 +2489,14 @@ impl Runtime {
             .into_iter()
             .map(|(name, rows)| (name, Rc::new(rows)))
             .collect();
-        let scope = Rc::new(RefCell::new(CallScope {
-            ranges: vec![],
-            range_cursor: 0,
-            slots: vec![],
-            declarations: vec![],
-            frames: vec![],
-            version: 0,
-        }));
-        let resolver = ElementResolver::new(
-            self,
-            scope,
-            ResolverInput {
-                properties: resolver_properties(&keys[0], "id", 0)?,
-                commands: HashMap::new(),
-                global_properties: None,
-                global_commands: None,
-            },
-        );
+        let properties =
+            property_elements(&self.native_tables, resolver_properties(&keys[0], "id", 0)?);
         let pack = Rc::new(PackState {
             keys,
             counts,
-            properties: Rc::new(resolver.properties),
+            properties: Rc::new(properties),
             commands: Rc::new(commands),
             metadata,
-            all_commands: Rc::new(all),
             empty_commands: Rc::new(vec![]),
             scene_commands,
             matches: RefCell::new(None),
@@ -2521,27 +2526,7 @@ struct ElementResolver {
 impl ElementResolver {
     fn new(rt: &Runtime, scope: ScopeRef, input: ResolverInput) -> Self {
         let tables = rt.native_tables.clone();
-        let properties = input
-            .properties
-            .into_iter()
-            .map(|info| {
-                let qualified = if info.name.chars.is_empty() {
-                    source(&format!("$prop_{}", info.code))
-                } else {
-                    info.name.clone()
-                };
-                (
-                    info.code,
-                    Element::dynamic(
-                        tables.property_kind,
-                        tables.global,
-                        info.name,
-                        qualified,
-                        info.form,
-                    ),
-                )
-            })
-            .collect();
+        let properties = property_elements(&tables, input.properties);
         Self {
             tables,
             scope,

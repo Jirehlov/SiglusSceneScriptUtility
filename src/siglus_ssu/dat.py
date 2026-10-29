@@ -186,7 +186,6 @@ def _payload_pack_trace(pack_context):
         )
 
     scene_names = list(context.get("scene_names") or [])
-    current_scene = context.get("payload_scene_name")
     emit(
         "meta_pack_command_count",
         value=int(context.get("inc_command_cnt", 0) or 0),
@@ -194,8 +193,6 @@ def _payload_pack_trace(pack_context):
     for item in context.get("inc_command_defs") or []:
         scene_no = item["scn_no"]
         scene = str(scene_names[scene_no]) if 0 <= scene_no < len(scene_names) else None
-        if current_scene is not None and scene is not None and scene != current_scene:
-            continue
         emit(
             "meta_pack_command",
             id=item["id"],
@@ -211,11 +208,10 @@ def prepare_payload_context(context):
     from .common import scene_global_elements
 
     common = []
-    commands = {None: []}
+    commands = {}
     for event in _payload_pack_trace(context):
         if event["op"] == "meta_pack_command" and "scene" in event:
             commands.setdefault(event["scene"], []).append(event)
-            commands[None].append(event)
         else:
             common.append(event)
     prepared = dict(context or {})

@@ -69,10 +69,10 @@ impl ReplaceTree {
         node.replacement = Some(replacement);
     }
 
-    fn search(&self, text: &ExpansionText, pos: usize) -> Option<&Replacement> {
+    fn search(&self, text: &ExpansionText) -> Option<&Replacement> {
         let mut node = self;
         let mut best = node.replacement.as_ref();
-        let mut i = pos;
+        let mut i = 0;
         while i < text.len() {
             let ch = *text.get(i).unwrap();
             if ch == '\0' {
@@ -523,10 +523,9 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
         text: &ExpansionText,
-        pos: usize,
     ) -> Option<Replacement> {
-        let default = default_tree.search(text, pos);
-        let added = added_tree.search(text, pos);
+        let default = default_tree.search(text);
+        let added = added_tree.search(text);
         match (default, added) {
             (Some(left), Some(right)) => {
                 Some(if left.name > right.name { left } else { right }.clone())
@@ -774,9 +773,8 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
     ) -> Result<usize, ()> {
-        let pos = 0;
-        let Some(replacement) = Self::replacement_at(default_tree, added_tree, text, pos) else {
-            return Ok(pos + 1);
+        let Some(replacement) = Self::replacement_at(default_tree, added_tree, text) else {
+            return Ok(1);
         };
         if replacement.decl_type != "parameter" {
             self.used_replacements.push(replacement.name.clone());
@@ -827,11 +825,11 @@ impl CharacterAnalyzer {
                         .map(|source| source.map.clone())
                         .unwrap_or_else(|| vec![None; replacement.after.chars().count()])
                 });
-                let end = pos + name_len;
+                let end = name_len;
                 let next = if replacement.kind == ReplaceKind::Replace {
-                    pos + replacement.after.chars().count()
+                    replacement.after.chars().count()
                 } else {
-                    pos
+                    0
                 };
                 (end, replacement.after, map, next)
             }
@@ -841,10 +839,10 @@ impl CharacterAnalyzer {
                 }
                 self.macro_depth += 1;
                 let expanded =
-                    self.expand_macro(text, pos + name_len, &replacement, default_tree, added_tree);
+                    self.expand_macro(text, name_len, &replacement, default_tree, added_tree);
                 self.macro_depth -= 1;
                 let (end, expanded) = expanded?;
-                let next = pos + expanded.text.chars().count();
+                let next = expanded.text.chars().count();
                 (end, expanded.text, expanded.map, next)
             }
         };
