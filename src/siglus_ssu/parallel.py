@@ -161,7 +161,8 @@ def parallel_process_completed_map(
     return results
 
 
-def parallel_process_map(process_fn, items):
+def parallel_process_map(process_fn, items, *, initializer, initargs):
+    initializer(*initargs)
     item_list = list(items)
     if not item_list:
         return []
@@ -172,7 +173,9 @@ def parallel_process_map(process_fn, items):
     results = []
     try:
         workers = min(get_max_workers(None), len(item_list))
-        with process_pool(workers) as executor:
+        with process_pool(
+            workers, initializer=initializer, initargs=initargs
+        ) as executor:
             for result in executor.map(process_fn, item_list):
                 results.append(result)
     except (OSError, BrokenProcessPool) as exc:

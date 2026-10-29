@@ -12,6 +12,9 @@ def N(ln, **k):
 class SA:
     def __init__(s, piad, plad):
         s.piad = piad
+        s.command_by_name = {}
+        for command in piad.get("command_list", []):
+            s.command_by_name.setdefault(command.get("name"), command)
         s.plad = plad
         s.atom_list = s.plad["atom_list"]
         s.label_list = [
@@ -272,11 +275,6 @@ class SA:
         s.last = err
         return 1, p, n
 
-    def _find_cmd(s, name):
-        for c in s.piad.get("command_list", []):
-            if c.get("name") == name:
-                return c
-
     @iterative_method
     def _def_cmd_common(s, i, p, kw):
         err = s.last
@@ -336,7 +334,7 @@ class SA:
             if nm["atom"].get("opt", 0) < len(s.plad.get("unknown_list", []))
             else ""
         )
-        cmd = s._find_cmd(name)
+        cmd = s.command_by_name.get(name)
         if cmd is None:
             cid = s.piad.get("command_cnt", len(s.piad.get("command_list", [])))
             s.piad["command_cnt"] = cid + 1
@@ -361,6 +359,7 @@ class SA:
                     "is_defined": True,
                 }
             )
+            s.command_by_name[name] = s.piad["command_list"][-1]
             s.piad["name_set"].add(name)
             ft = s.piad["form_table"]
             al0 = []

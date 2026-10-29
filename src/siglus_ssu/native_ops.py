@@ -158,10 +158,18 @@ def complete_payload_trace_native(trace, meta, pack_context, str_list):
     )
 
 
-def scn_payload_hash_bundles_native(trace):
+def decode_payload_strings_native(blob, indices, blob_ofs, blob_end):
     if not is_native_available():
         return None
-    return native_accel.scn_payload_hash_bundles(_disam_native_config(), trace)
+    return native_accel.decode_payload_strings(
+        blob, indices, blob_ofs, blob_end, _runtime._SCENE_STRING_XOR_MULTIPLIER
+    )
+
+
+def compare_payload_traces_native(left, right):
+    if not is_native_available():
+        return None
+    return native_accel.compare_payload_traces(left, right)
 
 
 class _LzssTree:

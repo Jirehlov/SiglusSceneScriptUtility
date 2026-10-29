@@ -716,7 +716,7 @@ def _official_type2_group_chips(tiles):
                     rx = tx
                     this_w = 0
                     this_n = 0
-                    while rx < nx and tiles[y][rx]["type"] == want:
+                    while rx < nx and this_w <= row_w and tiles[y][rx]["type"] == want:
                         this_w += tiles[y][rx]["w"]
                         tiles[y][rx]["type"] = 2
                         rx += 1

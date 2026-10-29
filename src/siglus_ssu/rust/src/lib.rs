@@ -558,12 +558,26 @@ fn complete_payload_trace(
 }
 
 #[pyfunction]
-fn scn_payload_hash_bundles(
-    py: Python<'_>,
-    config: PyRef<'_, disam::DisamConfig>,
-    trace: PyRef<'_, disam::NativeValue>,
-) -> PyResult<Py<PyDict>> {
-    catch_native_panic(|| disam::dat::scn_payload_hash_bundles(py, config, trace))
+fn decode_payload_strings(
+    data: &[u8],
+    pairs: Vec<(i64, i64)>,
+    blob_ofs: i64,
+    blob_end: i64,
+    multiplier: u16,
+) -> PyResult<disam::NativeValue> {
+    catch_native_panic(|| {
+        Ok(disam::dat::decode_payload_strings(
+            data, pairs, blob_ofs, blob_end, multiplier,
+        ))
+    })
+}
+
+#[pyfunction]
+fn compare_payload_traces(
+    left: PyRef<'_, disam::NativeValue>,
+    right: PyRef<'_, disam::NativeValue>,
+) -> PyResult<&'static str> {
+    catch_native_panic(|| disam::dat::compare_payload_traces(left, right))
 }
 
 #[pymodule]
@@ -588,6 +602,7 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(build_decompile_hints, m)?)?;
     m.add_function(wrap_pyfunction!(decompile_source, m)?)?;
     m.add_function(wrap_pyfunction!(complete_payload_trace, m)?)?;
-    m.add_function(wrap_pyfunction!(scn_payload_hash_bundles, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_payload_strings, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_payload_traces, m)?)?;
     Ok(())
 }

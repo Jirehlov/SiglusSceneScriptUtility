@@ -1029,7 +1029,7 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
     return 0 if ok else 1
 
 
-def main(argv):
+def main(argv, *, collect_statistics=True):
     import argparse
 
     prog = "siglus-ssu -c"
@@ -1382,21 +1382,24 @@ def main(argv):
     native_rc = None
     if is_native_available() and not _runtime._LEGACY_COMPILE:
         try:
+            native_config = _native_compile_config(
+                args=a,
+                ctx=ctx,
+                input_dir=inp,
+                output_dir=out,
+                scene_pck=scene_pck,
+                tmp_dir=tmp,
+                ss=ss,
+                enc=enc,
+                charset_force=charset,
+                test_shuffle=test_shuffle,
+                force_serial_compile=force_serial_compile,
+                angou_content=angou_content,
+            )
+            if not collect_statistics:
+                native_config["cache"]["full_compile_stats"] = False
             native_rc = _try_native_compile(
-                _native_compile_config(
-                    args=a,
-                    ctx=ctx,
-                    input_dir=inp,
-                    output_dir=out,
-                    scene_pck=scene_pck,
-                    tmp_dir=tmp,
-                    ss=ss,
-                    enc=enc,
-                    charset_force=charset,
-                    test_shuffle=test_shuffle,
-                    force_serial_compile=force_serial_compile,
-                    angou_content=angou_content,
-                ),
+                native_config,
                 ctx,
                 tmp=tmp,
                 tmp_auto=tmp_auto,
@@ -1483,7 +1486,8 @@ def main(argv):
                 ctx["scn_list"] = [os.path.basename(x) for x in dats]
                 compile_list = []
             full_compile_stats = (
-                (not a.dat_repack)
+                collect_statistics
+                and (not a.dat_repack)
                 and not a.tmp_dir
                 and (not test_shuffle)
                 and bool(ss)

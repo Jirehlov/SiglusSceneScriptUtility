@@ -1,5 +1,6 @@
 from __future__ import annotations
 from bisect import bisect_left, bisect_right
+from itertools import groupby
 from contextlib import redirect_stdout
 from functools import lru_cache
 import io
@@ -1972,7 +1973,13 @@ def semantic_tokens_for_result(
         elif token.kind == "type":
             add_token(token.line, token.start_char, token.end_char, "type", 0, 10)
     selected: dict[tuple[int, int, int], tuple[int, int]] = {}
-    occupied: dict[int, list[tuple[int, int]]] = {}
+    starts: dict[int, list[int]] = {}
+    for _, _, line, start_char, _, _, _ in candidates:
+        starts.setdefault(line, []).append(start_char)
+    starts = {line: sorted(set(values)) for line, values in starts.items()}
+    occupied: dict[int, list[int | None]] = {
+        line: [None] * (len(values) + 1) for line, values in starts.items()
+    }
     for (
         _priority,
         _order,
@@ -1982,32 +1989,60 @@ def semantic_tokens_for_result(
         token_type_id,
         modifiers,
     ) in sorted(candidates, key=lambda item: (-item[0], item[2], item[3], item[1])):
-        ranges = occupied.setdefault(line, [])
-        if any(
-            start_char < used_end and end_char > used_start
-            for used_start, used_end in ranges
-        ):
+        coordinates = starts[line]
+        ranges = occupied[line]
+        index = bisect_left(coordinates, end_char)
+        while index > 0:
+            if ranges[index] is not None and ranges[index] > start_char:
+                break
+            index -= index & -index
+        if index:
             continue
-        ranges.append((start_char, end_char))
+        index = bisect_left(coordinates, start_char) + 1
+        while index < len(ranges):
+            if ranges[index] is None or ranges[index] < end_char:
+                ranges[index] = end_char
+            index += index & -index
         selected[(line, start_char, end_char)] = (token_type_id, modifiers)
     data: list[int] = []
     prev_line = 0
     prev_start = 0
     lines = _split_lines_cached(result.text)
-    for line, start_char, end_char in sorted(selected):
-        token_type_id, modifiers = selected[(line, start_char, end_char)]
+    for line, group in groupby(sorted(selected), key=lambda item: item[0]):
+        tokens = list(group)
         line_text = lines[line] if 0 <= line < len(lines) else ""
-        start_char = _char_to_lsp_character(line_text, start_char, position_encoding)
-        end_char = _char_to_lsp_character(line_text, end_char, position_encoding)
-        if end_char <= start_char:
-            continue
-        delta_line = line - prev_line
-        delta_start = start_char if delta_line else start_char - prev_start
-        data.extend(
-            [delta_line, delta_start, end_char - start_char, token_type_id, modifiers]
+        points = sorted(
+            {
+                max(0, min(len(line_text), point))
+                for _, start, end in tokens
+                for point in (start, end)
+            }
         )
-        prev_line = line
-        prev_start = start_char
+        positions = {}
+        previous = units = 0
+        for point in points:
+            units += _encoding_units(line_text[previous:point], position_encoding)
+            positions[point] = units
+            previous = point
+        for _, start_char, end_char in tokens:
+            token_type_id, modifiers = selected[(line, start_char, end_char)]
+            start_char = positions[max(0, min(len(line_text), start_char))]
+            end_char = positions[max(0, min(len(line_text), end_char))]
+            if end_char <= start_char:
+                continue
+            delta_line = line - prev_line
+            delta_start = start_char if delta_line else start_char - prev_start
+            data.extend(
+                [
+                    delta_line,
+                    delta_start,
+                    end_char - start_char,
+                    token_type_id,
+                    modifiers,
+                ]
+            )
+            prev_line = line
+            prev_start = start_char
     return data
 
 

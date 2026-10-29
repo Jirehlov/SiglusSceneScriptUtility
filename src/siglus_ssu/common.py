@@ -587,6 +587,37 @@ def append_element_member(base, info, *, qualified_root):
     return name if name and not qualified_root else info["q"]
 
 
+def _scene_properties(definitions, field, offset):
+    fm_global = C.resolve_form_code(C.FM_GLOBAL)
+    out = {}
+    entries = (
+        definitions.items()
+        if isinstance(definitions, dict)
+        else enumerate(definitions or [])
+    )
+    for idx, info in entries:
+        code = offset + info.get(field, idx)
+        form = info["form"]
+        name = info["name"]
+        out[code] = {
+            "type": C.ET_PROPERTY,
+            "parent": "",
+            "parent_code": fm_global,
+            "name": name,
+            "ret": form,
+            "q": name or f"$prop_{code:d}",
+        }
+    return out
+
+
+def scene_global_elements(properties, commands):
+    entries = (
+        commands.items() if isinstance(commands, dict) else enumerate(commands or [])
+    )
+    names = {info.get("id", index): info["name"] for index, info in entries}
+    return _scene_properties(properties, "id", 0), names
+
+
 def new_scene_element_resolver(
     *,
     call_scope,
@@ -596,44 +627,21 @@ def new_scene_element_resolver(
     global_command_defs,
     global_command_count,
     scene_command_names,
+    global_elements=None,
 ):
     tables = scn_expression_tables(C.CONST_PROFILE)
     fm_global = C.resolve_form_code(C.FM_GLOBAL)
     fm_call = C.resolve_form_code(C.FM_CALL)
 
-    def _properties(definitions, field, offset):
-        out = {}
-        entries = (
-            definitions.items()
-            if isinstance(definitions, dict)
-            else enumerate(definitions or [])
+    if global_elements is None:
+        global_elements = scene_global_elements(
+            global_property_defs, global_command_defs
         )
-        for idx, info in entries:
-            code = offset + info.get(field, idx)
-            form = info["form"]
-            name = info["name"]
-            out[code] = {
-                "type": C.ET_PROPERTY,
-                "parent": "",
-                "parent_code": fm_global,
-                "name": name,
-                "ret": form,
-                "q": name or f"$prop_{code:d}",
-            }
-        return out
-
-    properties = _properties(global_property_defs, "id", 0)
-    properties.update(
-        _properties(scene_property_defs, "code", int(global_property_count))
-    )
-    entries = (
-        global_command_defs.items()
-        if isinstance(global_command_defs, dict)
-        else enumerate(global_command_defs or [])
+    global_properties, global_commands = global_elements
+    properties = _scene_properties(
+        scene_property_defs, "code", int(global_property_count)
     )
     command_names = {}
-    for idx, info in entries:
-        command_names[info.get("id", idx)] = info["name"]
     local_names = (
         scene_command_names.items()
         if isinstance(scene_command_names, dict)
@@ -643,7 +651,7 @@ def new_scene_element_resolver(
         )
     )
     for code, name in local_names:
-        if not command_names.get(code):
+        if not global_commands.get(code):
             command_names[code] = str(name or "")
 
     def _element_info(parent_form, code):
@@ -654,9 +662,9 @@ def new_scene_element_resolver(
         if parent_form == fm_call and owner == C.ELM_OWNER_CALL_PROP:
             return call_scope.slots.get(idx)
         if parent_form == fm_global and owner == C.ELM_OWNER_USER_PROP:
-            return properties.get(idx)
+            return properties.get(idx, global_properties.get(idx))
         if parent_form == fm_global and owner == C.ELM_OWNER_USER_CMD:
-            name = command_names.get(idx, "")
+            name = command_names.get(idx, global_commands.get(idx, ""))
             return {
                 "type": C.ET_COMMAND,
                 "parent": "",
@@ -668,6 +676,34 @@ def new_scene_element_resolver(
         return None
 
     return _element_info
+
+
+class _Expression:
+    __slots__ = ("parts", "size")
+
+    def __init__(self, parts, size):
+        self.parts = parts
+        self.size = size
+
+    def __str__(self):
+        output = []
+        pending = list(reversed(self.parts))
+        while pending:
+            part = pending.pop()
+            if isinstance(part, _Expression):
+                pending.extend(reversed(part.parts))
+            else:
+                output.append(part)
+        return "".join(output)
+
+
+def _expression(*parts):
+    size = sum(
+        part.size if isinstance(part, _Expression) else len(part) for part in parts
+    )
+    if size <= 128:
+        return "".join(map(str, parts))
+    return _Expression(parts, size)
 
 
 def new_expression_item_formatter(*, str_list, string_literal, format_form):
@@ -862,13 +898,13 @@ def new_expression_state(
         op_txt = unary_text.get(opr)
         if not op_txt:
             return None
-        return f"({op_txt}{rhs})"
+        return _expression("(", op_txt, rhs, ")")
 
     def _format_binary_expr(opr, lhs, rhs):
         op_txt = binary_text.get(opr)
         if not op_txt:
             return None
-        return f"({lhs} {op_txt} {rhs})"
+        return _expression("(", lhs, " ", op_txt, " ", rhs, ")")
 
     def _render_element_path(items, resolved, *, command=False):
         if resolved is None:
@@ -940,7 +976,7 @@ def new_expression_state(
                 target.reverse()
                 pending.pop()
                 if pending and expressions:
-                    pending[-1][1][-1] = "[" + ", ".join(target) + "]"
+                    pending[-1][1][-1] = "[" + ", ".join(map(str, target)) + "]"
                 continue
             if arg_info["form"] == fm_list:
                 sub = []
@@ -1306,7 +1342,7 @@ def new_expression_state(
                     result["_expr"] = args[0]
             else:
                 expression = (
-                    gosub_expression(event, args)
+                    gosub_expression(event, list(map(str, args)))
                     if render_expressions and gosub_expression is not None
                     else None
                 )
@@ -2982,7 +3018,7 @@ def iter_named_command_args(info, args, named_ids):
 
 
 def format_named_command_args(info, arg_exprs, named_ids):
-    args = list(arg_exprs)
+    args = [str(value) for value in arg_exprs]
     for idx, (name, expr) in enumerate(
         iter_named_command_args(info, args, named_ids), len(args) - len(named_ids)
     ):

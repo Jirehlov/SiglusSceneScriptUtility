@@ -4,122 +4,111 @@ const BREAK_EVEN: usize = 1;
 const LOOK_AHEAD: usize = (1 << LENGTH_BITS) + BREAK_EVEN;
 const WINDOW_SIZE: usize = 1 << INDEX_BITS;
 
+const ROOT_NODE: usize = WINDOW_SIZE;
+const UNUSED_NODE: usize = WINDOW_SIZE + 1;
+
+#[derive(Clone, Copy)]
+struct LzssNode {
+    parent: usize,
+    sml: usize,
+    big: usize,
+}
+
 struct LzssTree {
-    root: usize,
-    unused: usize,
-    parent: Vec<usize>,
-    sml: Vec<usize>,
-    big: Vec<usize>,
+    nodes: Vec<LzssNode>,
 }
 
 impl LzssTree {
-    fn new(tree_size: usize) -> Self {
-        let n = tree_size + 2;
-        let unused = tree_size + 1;
-        let root = tree_size;
-
-        let mut parent = vec![unused; n];
-        let sml = vec![unused; n];
-        let mut big = vec![unused; n];
-
-        parent[0] = root;
-        parent[root] = 0;
-        big[root] = 0;
-
-        Self {
-            root,
-            unused,
-            parent,
-            sml,
-            big,
-        }
+    fn new() -> Self {
+        let mut nodes = vec![
+            LzssNode {
+                parent: UNUSED_NODE,
+                sml: UNUSED_NODE,
+                big: UNUSED_NODE,
+            };
+            WINDOW_SIZE + 2
+        ];
+        nodes[0].parent = ROOT_NODE;
+        nodes[ROOT_NODE].parent = 0;
+        nodes[ROOT_NODE].big = 0;
+        Self { nodes }
     }
 
     fn connect(&mut self, target: usize) {
-        if self.parent[target] == self.unused {
+        let node = self.nodes[target];
+        if node.parent == UNUSED_NODE {
             return;
         }
-
-        let parent = self.parent[target];
-
-        if self.big[target] == self.unused {
-            let nxt = self.sml[target];
-            self.parent[nxt] = parent;
-            if self.big[parent] == target {
-                self.big[parent] = nxt;
+        let parent = node.parent;
+        if node.big == UNUSED_NODE {
+            let next = node.sml;
+            self.nodes[next].parent = parent;
+            if self.nodes[parent].big == target {
+                self.nodes[parent].big = next;
             } else {
-                self.sml[parent] = nxt;
+                self.nodes[parent].sml = next;
             }
-            self.parent[target] = self.unused;
-        } else if self.sml[target] == self.unused {
-            let nxt = self.big[target];
-            self.parent[nxt] = parent;
-            if self.big[parent] == target {
-                self.big[parent] = nxt;
+            self.nodes[target].parent = UNUSED_NODE;
+        } else if node.sml == UNUSED_NODE {
+            let next = node.big;
+            self.nodes[next].parent = parent;
+            if self.nodes[parent].big == target {
+                self.nodes[parent].big = next;
             } else {
-                self.sml[parent] = nxt;
+                self.nodes[parent].sml = next;
             }
-            self.parent[target] = self.unused;
+            self.nodes[target].parent = UNUSED_NODE;
         } else {
-            let mut nxt = self.sml[target];
-            while self.big[nxt] != self.unused {
-                nxt = self.big[nxt];
+            let mut next = node.sml;
+            while self.nodes[next].big != UNUSED_NODE {
+                next = self.nodes[next].big;
             }
-            self.connect(nxt);
-            self.replace(target, nxt);
+            self.connect(next);
+            self.replace(target, next);
         }
     }
 
-    fn replace(&mut self, target: usize, nxt: usize) {
-        let parent = self.parent[target];
-        if self.sml[parent] == target {
-            self.sml[parent] = nxt;
+    fn replace(&mut self, target: usize, next: usize) {
+        let node = self.nodes[target];
+        let parent = node.parent;
+        if self.nodes[parent].sml == target {
+            self.nodes[parent].sml = next;
         } else {
-            self.big[parent] = nxt;
+            self.nodes[parent].big = next;
         }
-        self.parent[nxt] = self.parent[target];
-        self.sml[nxt] = self.sml[target];
-        self.big[nxt] = self.big[target];
-        self.parent[self.sml[target]] = nxt;
-        self.parent[self.big[target]] = nxt;
-        self.parent[target] = self.unused;
+        self.nodes[next] = node;
+        self.nodes[node.sml].parent = next;
+        self.nodes[node.big].parent = next;
+        self.nodes[target].parent = UNUSED_NODE;
     }
 
     fn additional_connect(
         &mut self,
         target: usize,
-        nxt: usize,
+        next: usize,
         matching_result: i32,
     ) -> (bool, usize) {
         let child = if matching_result >= 0 {
-            &mut self.big
+            &mut self.nodes[target].big
         } else {
-            &mut self.sml
+            &mut self.nodes[target].sml
         };
-
-        let child_idx = child[target];
-        if child_idx != self.unused {
-            return (false, child_idx);
+        if *child != UNUSED_NODE {
+            return (false, *child);
         }
-
-        child[target] = nxt;
-        self.parent[nxt] = target;
-        self.big[nxt] = self.unused;
-        self.sml[nxt] = self.unused;
+        *child = next;
+        self.nodes[next] = LzssNode {
+            parent: target,
+            sml: UNUSED_NODE,
+            big: UNUSED_NODE,
+        };
         (true, target)
-    }
-
-    #[inline]
-    fn get_root_big(&self) -> usize {
-        self.big[self.root]
     }
 }
 
 struct LzssTreeFind<'a> {
     src: &'a [u8],
     src_cnt: usize,
-    window_size: usize,
-    max_match_len: usize,
     src_index: usize,
     match_target: usize,
     match_size: usize,
@@ -128,28 +117,26 @@ struct LzssTreeFind<'a> {
 }
 
 impl<'a> LzssTreeFind<'a> {
-    fn new(src: &'a [u8], window_size: usize, look_ahead_size: usize) -> Self {
+    fn new(src: &'a [u8]) -> Self {
         Self {
             src,
             src_cnt: src.len(),
-            window_size,
-            max_match_len: look_ahead_size,
             src_index: 0,
             match_target: 0,
             match_size: 0,
             window_top: 0,
-            tree: LzssTree::new(window_size),
+            tree: LzssTree::new(),
         }
     }
 
     fn proc(&mut self, replace_cnt: usize) {
         for _ in 0..replace_cnt {
             self.src_index += 1;
-            let src_page = self.src_index / self.window_size;
-            self.window_top = (self.window_top + 1) % self.window_size;
+            let src_page = self.src_index / WINDOW_SIZE;
+            self.window_top = (self.window_top + 1) % WINDOW_SIZE;
             self.tree.connect(self.window_top);
 
-            let mut target = self.tree.get_root_big();
+            let mut target = self.tree.nodes[ROOT_NODE].big;
             self.match_size = 0;
 
             let src_left = self.src_cnt.saturating_sub(self.src_index);
@@ -157,13 +144,13 @@ impl<'a> LzssTreeFind<'a> {
                 return;
             }
 
-            let matching_loop_cnt = self.max_match_len.min(src_left);
+            let matching_loop_cnt = LOOK_AHEAD.min(src_left);
 
             loop {
                 let p1 = self.src_index;
-                let mut p2 = src_page * self.window_size + target;
-                if target > self.src_index % self.window_size {
-                    p2 = p2.wrapping_sub(self.window_size);
+                let mut p2 = src_page * WINDOW_SIZE + target;
+                if target > self.src_index % WINDOW_SIZE {
+                    p2 = p2.wrapping_sub(WINDOW_SIZE);
                 }
 
                 let mut matching_counter = 0;
@@ -204,7 +191,7 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
         return Vec::new();
     }
 
-    let mut tree_find = LzssTreeFind::new(src, WINDOW_SIZE, LOOK_AHEAD);
+    let mut tree_find = LzssTreeFind::new(src);
 
     let mut pack_buf = vec![0u8; 8];
     let mut pack_data = [0u8; 1 + 2 * 8];

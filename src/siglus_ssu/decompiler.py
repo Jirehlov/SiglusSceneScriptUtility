@@ -71,6 +71,36 @@ def _line_insertion_targets(lines):
     return targets
 
 
+class _LineInsertions:
+    def __init__(self, lines):
+        self.targets = _line_insertion_targets(lines)
+        self.greatest = self.targets[-1] if self.targets else float("-inf")
+        self.additions = {}
+
+    def add(self, text, target):
+        appended = target is None
+        if appended:
+            position = len(self.targets)
+            effective = self.greatest
+        else:
+            position = bisect.bisect_left(self.targets, target)
+            effective = target
+            self.greatest = max(self.greatest, target)
+        self.additions.setdefault((position, effective, appended), []).append(
+            _line_item(text, target)
+        )
+
+    def finish(self, lines):
+        output = []
+        previous = 0
+        for (position, _, appended), additions in sorted(self.additions.items()):
+            output.extend(lines[previous:position])
+            output.extend(additions if appended else reversed(additions))
+            previous = position
+        output.extend(lines[previous:])
+        return output
+
+
 def _scene_inc_block_lines(scene_prop_lines):
     if not scene_prop_lines:
         return []
@@ -1334,7 +1364,7 @@ class _Decompiler:
 
     def _restore_missing_l_labels(self, lines):
         out = _copy_lines(lines)
-        targets = _line_insertion_targets(out)
+        insertions = _LineInsertions(out)
         label_events = {}
         for ev in self.events:
             for label in self._event_labels(ev):
@@ -1346,16 +1376,10 @@ class _Decompiler:
             if m and m.group(2).startswith("#l"):
                 defs.add(m.group(2))
         refs = _line_label_refs(out)
-        while True:
-            missing = [
-                label
-                for label in sorted(refs, key=lambda label: int(label[2:]))
-                if label not in defs
-            ]
-            if not missing:
-                break
-            added = False
-            for label in missing:
+        missing = refs - defs
+        while missing:
+            pending = set()
+            for label in sorted(missing, key=lambda label: int(label[2:])):
                 ev = label_events.get(label)
                 if ev is None:
                     continue
@@ -1363,19 +1387,11 @@ class _Decompiler:
                 text = label
                 if ev["op"] == "CD_GOTO":
                     text = label + "\t" + self._goto_stmt(ev, None)
-                if insert_target is None:
-                    pos = len(out)
-                    targets.append(targets[-1] if targets else float("-inf"))
-                else:
-                    pos = bisect.bisect_left(targets, insert_target)
-                    targets.insert(pos, insert_target)
-                out.insert(pos, _line_item(text, insert_target))
+                insertions.add(text, insert_target)
                 defs.add(label)
-                refs.update(ref for _, _, ref in _label_ref_spans(text))
-                added = True
-            if not added:
-                break
-        return out
+                pending.update(ref for _, _, ref in _label_ref_spans(text))
+            missing = pending - defs
+        return insertions.finish(out)
 
     def _dedupe_l_label_defs(self, lines):
         kept = _copy_lines(lines)
@@ -1529,11 +1545,45 @@ class _Decompiler:
         out = _copy_lines(lines)
         refs = _line_label_refs(out)
         keep = set()
-        seen_targets = set()
-        for line in out:
+        by_target = {}
+        by_label = {}
+        statements = set()
+        for position, line in enumerate(out):
             target = _line_target(line)
+            text = _line_text(line)
+            match = _LINE_LABEL_RE.match(text)
             if target is not None:
-                seen_targets.add(int(target))
+                by_target.setdefault(int(target), []).append(position)
+                stripped = str(text or "").strip()
+                definition = _LINE_LABEL_RE.match(stripped)
+                if stripped and (not definition or definition.group(3)):
+                    statements.add(int(target))
+            if match:
+                by_label.setdefault(match.group(2), []).append(position)
+        seen_targets = set(by_target)
+
+        def replace(position, text, target):
+            match = _LINE_LABEL_RE.match(text)
+            if match:
+                by_label.setdefault(match.group(2), []).append(position)
+            out[position] = _line_item(text, target)
+
+        def find_label(name, bare, excluded=None):
+            found = []
+            for position in by_label.get(name, []):
+                line = out[position]
+                if line is None:
+                    continue
+                match = _LINE_LABEL_RE.match(_line_text(line))
+                if (
+                    match
+                    and match.group(2) == name
+                    and bool(match.group(3)) != bare
+                    and (excluded is None or _line_target(line) != excluded)
+                ):
+                    found.append(position)
+            return min(found, default=None)
+
         gap_lines = []
         for idx, ev in enumerate(self.events):
             if self.event_ops[idx] != "CD_NL":
@@ -1561,7 +1611,10 @@ class _Decompiler:
                     for lab in self.events[idx + 1]["labels"]
                     if lab.startswith("L")
                 } & refs
-                for pos, line in enumerate(out):
+                for pos in by_target.get(line_no, []):
+                    line = out[pos]
+                    if line is None:
+                        continue
                     match = _LINE_LABEL_RE.match(_line_text(line))
                     if (
                         _line_target(line) != line_no
@@ -1571,39 +1624,32 @@ class _Decompiler:
                         or match.group(2) in refs
                     ):
                         continue
-                    for next_pos, next_line in enumerate(out):
-                        next_match = _LINE_LABEL_RE.match(_line_text(next_line))
-                        if (
-                            next_match
-                            and not next_match.group(3)
-                            and next_match.group(2) in next_labels
-                            and _line_target(next_line) != line_no
-                        ):
-                            name = next_match.group(2)
-                            out[pos] = _line_item(match.group(1) + name, line_no)
-                            del out[next_pos]
-                            keep.add(name)
-                            break
+                    next_pos = min(
+                        (
+                            position
+                            for name in next_labels
+                            if (position := find_label(name, True, line_no)) is not None
+                        ),
+                        default=None,
+                    )
+                    if next_pos is not None:
+                        next_match = _LINE_LABEL_RE.match(_line_text(out[next_pos]))
+                        name = next_match.group(2)
+                        replace(pos, match.group(1) + name, line_no)
+                        out[next_pos] = None
+                        keep.add(name)
                     break
             if line_no in seen_targets:
-                same_target_has_stmt = False
-                for line in out:
-                    target = _line_target(line)
-                    if target is None or int(target) != int(line_no):
-                        continue
-                    text = str(_line_text(line) or "").strip()
-                    if not text:
-                        continue
-                    m = _LINE_LABEL_RE.match(text)
-                    if not m or m.group(3):
-                        same_target_has_stmt = True
-                        break
+                same_target_has_stmt = line_no in statements
                 if (
                     has_z_label
                     and len(l_labels) == 1
                     and (l_labels[0] in refs or not same_target_has_stmt)
                 ):
-                    for pos, line in enumerate(out):
+                    for pos in by_target.get(line_no, []):
+                        line = out[pos]
+                        if line is None:
+                            continue
                         target = _line_target(line)
                         if target is None or int(target) != int(line_no):
                             continue
@@ -1613,7 +1659,7 @@ class _Decompiler:
                             break
                         if text:
                             continue
-                        out[pos] = _line_item(l_labels[0], line_no)
+                        replace(pos, l_labels[0], line_no)
                         keep.add(l_labels[0])
                         break
                 continue
@@ -1626,21 +1672,22 @@ class _Decompiler:
                     name = _label_token(int(lab[1:]))
                     if name not in refs:
                         continue
-                    for pos, line in enumerate(out):
-                        match = _LINE_LABEL_RE.match(_line_text(line))
-                        if match and match.group(2) == name and match.group(3):
-                            indent, _, tail = match.groups()
-                            out[pos] = _line_item(indent + tail, _line_target(line))
-                            l_labels.append(name)
-                            break
-                    if l_labels:
+                    pos = find_label(name, False)
+                    if pos is not None:
+                        line = out[pos]
+                        indent, _, tail = _LINE_LABEL_RE.match(
+                            _line_text(line)
+                        ).groups()
+                        replace(pos, indent + tail, _line_target(line))
+                        l_labels.append(name)
                         break
             gap_lines.append((int(line_no), l_labels))
+        out = [line for line in out if line is not None]
         if not gap_lines:
             return out, keep
         used = set(_line_text(line) for line in out)
         seq = 0
-        targets = _line_insertion_targets(out)
+        insertions = _LineInsertions(out)
         for line_no, l_labels in gap_lines:
             if len(l_labels) == 1:
                 name = l_labels[0]
@@ -1652,10 +1699,8 @@ class _Decompiler:
                     if name not in used:
                         used.add(name)
                         break
-            pos = bisect.bisect_left(targets, line_no)
-            targets.insert(pos, line_no)
-            out.insert(pos, _line_item(name, line_no))
-        return out, keep
+            insertions.add(name, line_no)
+        return insertions.finish(out), keep
 
     def _drop_redundant_same_target_l_before_z(self, lines):
         inherited = set()

@@ -1269,19 +1269,41 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
     return 1 if source_error else 0
 
 
-def _payload_compare_scene_task(args):
-    (
-        row_index,
-        raw1,
-        raw2,
+_PAYLOAD_COMPARE_STATE = None
+
+
+def _init_payload_compare(h1, h2, exe_el1, exe_el2, pack_ctx1, pack_ctx2):
+    global _PAYLOAD_COMPARE_STATE
+    from .native_ops import is_native_available
+
+    same_context = pack_ctx1 == pack_ctx2
+    if not is_native_available():
+        from .dat import prepare_payload_context
+
+        pack_ctx1 = prepare_payload_context(pack_ctx1)
+        pack_ctx2 = pack_ctx1 if same_context else prepare_payload_context(pack_ctx2)
+    _PAYLOAD_COMPARE_STATE = (
         h1,
         h2,
         exe_el1,
         exe_el2,
         pack_ctx1,
         pack_ctx2,
-        scene_name,
-    ) = args
+        same_context,
+    )
+
+
+def _payload_compare_scene_task(args):
+    row_index, raw1, raw2, scene_name = args
+    (
+        h1,
+        h2,
+        exe_el1,
+        exe_el2,
+        pack_ctx1,
+        pack_ctx2,
+        same_pack_context,
+    ) = _PAYLOAD_COMPARE_STATE
     try:
         from . import dat as DAT
 
@@ -1294,46 +1316,14 @@ def _payload_compare_scene_task(args):
             if raw1 == raw2 and same_encoding
             else _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
         )
-        same_payload = blob1 == blob2 and pack_ctx1 == pack_ctx2
-        c1 = (
-            DAT.scn_payload_hash_bundles(
-                blob1,
-                pack_context=pack_ctx1,
-                scene_name=scene_name,
-                hashes=not same_payload,
-            )
-            if blob1
-            else None
+        return int(row_index), DAT.compare_scn_payload(
+            blob1 or None,
+            blob2 or None,
+            pack_context1=pack_ctx1,
+            pack_context2=pack_ctx2,
+            scene_name=scene_name,
+            pack_context_equal=same_pack_context,
         )
-        if same_payload:
-            c2 = c1
-        elif blob2:
-            c2 = DAT.scn_payload_hash_bundles(
-                blob2,
-                pack_context=pack_ctx2,
-                scene_name=scene_name,
-            )
-        else:
-            c2 = None
-        if any(c and c.get("status") == "INCOMPLETE" for c in (c1, c2)):
-            return int(row_index), "INCOMPLETE"
-        if not c1 or not c2:
-            return int(row_index), "-"
-        if same_payload:
-            return int(row_index), "same"
-        full1 = c1.get("full") or {}
-        full2 = c2.get("full") or {}
-        if full1.get("size") == full2.get("size") and full1.get("sha256") == full2.get(
-            "sha256"
-        ):
-            return int(row_index), "same"
-        no_text1 = c1.get("no_text") or {}
-        no_text2 = c2.get("no_text") or {}
-        if no_text1.get("size") == no_text2.get("size") and no_text1.get(
-            "sha256"
-        ) == no_text2.get("sha256"):
-            return int(row_index), "text_only"
-        return int(row_index), "real_diff"
     except Exception:
         return int(row_index), "-"
 
@@ -1511,12 +1501,6 @@ def compare_pck(
                     len(rows),
                     b1[int(r1[0]) : int(r1[1])] if r1 else None,
                     b2[int(r2[0]) : int(r2[1])] if r2 else None,
-                    h1,
-                    h2,
-                    exe_el1,
-                    exe_el2,
-                    pack_ctx1,
-                    pack_ctx2,
                     k,
                 )
             )
@@ -1527,7 +1511,10 @@ def compare_pck(
         from .parallel import parallel_process_map
 
         for row_index, payload_cmp in parallel_process_map(
-            _payload_compare_scene_task, payload_jobs
+            _payload_compare_scene_task,
+            payload_jobs,
+            initializer=_init_payload_compare,
+            initargs=(h1, h2, exe_el1, exe_el2, pack_ctx1, pack_ctx2),
         ):
             payload_cmp = payload_cmp if payload_cmp in payload_cmp_counts else "-"
             if payload_cmp == "same" and row_index in identical_rows:

@@ -1,4 +1,6 @@
 from functools import lru_cache
+from bisect import bisect_right
+import re
 from . import const as C
 from .common import (
     mark_named_usage,
@@ -75,18 +77,112 @@ def search_replace_tree(rt, text, pos):
     n = rt
     best = None
     i = pos
-    while 1:
+    length = len(text)
+    if isinstance(text, _ExpansionBuffer) and text.pieces:
+        value, start, end = text.pieces[-1]
+        limit = end - start
+    else:
+        value, start, limit = text, 0, length
+    while True:
         if n.get("r") is not None:
             best = n["r"]
-        if i >= len(text) or text[i] == "\0":
+        if i >= length:
             break
-        ch = text[i]
-        if ch in n["c"]:
-            n = n["c"][ch]
-            i += 1
-        else:
+        ch = value[start + i] if i < limit else text[i]
+        if ch == "\0":
             break
+        if ch not in n["c"]:
+            break
+        n = n["c"][ch]
+        i += 1
     return best
+
+
+class _ExpansionBuffer:
+    def __init__(self, value):
+        self.pieces = [(value, 0, len(value))] if value else []
+        self.ends = [len(value)] if value else []
+        self.size = len(value)
+        self.output = []
+        self.text = isinstance(value, str)
+
+    def __len__(self):
+        return self.size
+
+    def __getitem__(self, index):
+        if not isinstance(index, slice):
+            if self.pieces:
+                value, start, end = self.pieces[-1]
+                if 0 <= index < end - start:
+                    return value[start + index]
+            index = index + self.size if index < 0 else index
+            if not 0 <= index < self.size:
+                raise IndexError(index)
+            reverse = self.size - index - 1
+            part = bisect_right(self.ends, reverse)
+            value, start, end = self.pieces[part]
+            previous = self.ends[part - 1] if part else 0
+            return value[end - 1 - (reverse - previous)]
+        start, end, step = index.indices(self.size)
+        if step != 1:
+            raise ValueError("contiguous expansion slice required")
+        if self.pieces:
+            value, low, high = self.pieces[-1]
+            if end <= high - low:
+                return value[low + start : low + end]
+        pieces = []
+        while start < end:
+            reverse = self.size - start - 1
+            part = bisect_right(self.ends, reverse)
+            value, low, high = self.pieces[part]
+            previous = self.ends[part - 1] if part else 0
+            offset = high - 1 - (reverse - previous)
+            count = min(end - start, high - offset)
+            pieces.append(value[offset : offset + count])
+            start += count
+        return (
+            "".join(pieces)
+            if self.text
+            else [item for piece in pieces for item in piece]
+        )
+
+    def advance(self, count, *, emit=True):
+        while count:
+            value, start, end = self.pieces[-1]
+            taken = min(count, end - start)
+            if emit:
+                if (
+                    self.output
+                    and self.output[-1][0] is value
+                    and self.output[-1][2] == start
+                ):
+                    self.output[-1] = (value, self.output[-1][1], start + taken)
+                else:
+                    self.output.append((value, start, start + taken))
+            self.size -= taken
+            count -= taken
+            if start + taken == end:
+                self.pieces.pop()
+                self.ends.pop()
+            else:
+                self.pieces[-1] = (value, start + taken, end)
+                self.ends[-1] -= taken
+
+    def replace(self, removed, value):
+        self.advance(removed, emit=False)
+        if value:
+            self.pieces.append((value, 0, len(value)))
+            self.size += len(value)
+            self.ends.append(self.size)
+
+    def result(self, trailing):
+        pieces = [value[start:end] for value, start, end in self.output]
+        pieces.append(self[: max(0, self.size - trailing)])
+        return (
+            "".join(pieces)
+            if self.text
+            else [item for piece in pieces for item in piece]
+        )
 
 
 class CharacterAnalizer:
@@ -439,8 +535,9 @@ class CharacterAnalizer:
                 return text, pos, 0, source_map
             next_pos = pos + len(after)
         if source_map is not None:
-            source_map[pos:end] = inserted_map
-        return text[:pos] + after + text[end:], next_pos, 1, source_map
+            source_map.replace(end, inserted_map)
+        text.replace(end, after)
+        return text, next_pos, 1, source_map
 
     def _analize_macro(self, text, p, macro, default_rt, added_rt, source_map):
         real = []
@@ -547,8 +644,10 @@ class CharacterAnalizer:
                     if i < len(real)
                     else (defaults[i] if i < len(defaults) else [])
                 )
-                points = list(points or [None] * len(after)) + [None] * 256
-            t = after + "\0" * 256
+                points = _ExpansionBuffer(
+                    list(points or [None] * len(after)) + [None] * 256
+                )
+            t = _ExpansionBuffer(after + "\0" * 256)
             p = 0
             loop = 0
             rest_min = len(t)
@@ -556,7 +655,11 @@ class CharacterAnalizer:
                 t, p, ok, points = self._std_replace(t, p, default_rt, added_rt, points)
                 if not ok:
                     return None
-                rest = len(t) - p
+                t.advance(p)
+                if points is not None:
+                    points.advance(p)
+                p = 0
+                rest = len(t)
                 if rest >= rest_min:
                     loop += 1
                     if loop > 10000:
@@ -573,11 +676,11 @@ class CharacterAnalizer:
             rep = {
                 "type": "replace",
                 "name": arg["name"],
-                "after": t[:-256],
+                "after": t.result(256),
                 "args": [],
             }
             if mapped:
-                rep["source"] = {"map": points[:-256]}
+                rep["source"] = {"map": points.result(256)}
             reps.append(rep)
         reps.sort(key=lambda rep: len(rep["name"]))
         reps.reverse()
@@ -585,9 +688,11 @@ class CharacterAnalizer:
         for rep in reps:
             add_replace_tree(arg_tree, rep["name"], rep)
         src = macro["after"]
-        t = src + "\0" * 256
+        t = _ExpansionBuffer(src + "\0" * 256)
         points = (
-            list(source.get("map") or [None] * len(src)) + [None] * 256
+            _ExpansionBuffer(
+                list(source.get("map") or [None] * len(src)) + [None] * 256
+            )
             if mapped
             else None
         )
@@ -598,7 +703,11 @@ class CharacterAnalizer:
             t, p, ok, points = self._std_replace(t, p, default_rt, arg_tree, points)
             if not ok:
                 return None
-            rest = len(t) - p
+            t.advance(p)
+            if points is not None:
+                points.advance(p)
+            p = 0
+            rest = len(t)
             if rest >= rest_min:
                 loop += 1
                 if loop > 10000:
@@ -612,28 +721,43 @@ class CharacterAnalizer:
             else:
                 rest_min = rest
                 loop = 0
-        return t[:-256], points[:-256] if mapped else None
+        return t.result(256), points.result(256) if mapped else None
 
     def analize_line(self, in_text, piad, source_map=None):
         self.iad = piad
-        t = in_text + "\0"
+        t = _ExpansionBuffer(in_text + "\0")
+        original_map = source_map
         if source_map is not None:
-            source_map.append(None)
+            source_map = _ExpansionBuffer([*source_map, None])
         self.m_line = 1
         loop = 0
         rest_min = len(t)
         p = 0
+        stops = re.compile(
+            "[" + re.escape("".join(self.iad["replace_tree"]["c"])) + "\0]"
+        )
         while t[p] != "\0":
-            if t[p] == "\n":
-                self.m_line += 1
-                p += 1
-            else:
-                t, p, ok, source_map = self._std_replace(
-                    t, p, self.iad["replace_tree"], None, source_map
-                )
-                if not ok:
-                    return None
-            rest = len(t) - p
+            if len(t) <= rest_min:
+                value, start, end = t.pieces[-1]
+                match = stops.search(value, start, end)
+                p = (match.start() if match else end) - start
+                if p:
+                    self.m_line += value.count("\n", start, start + p)
+            if not p:
+                if t[p] == "\n":
+                    self.m_line += 1
+                    p += 1
+                else:
+                    t, p, ok, source_map = self._std_replace(
+                        t, p, self.iad["replace_tree"], None, source_map
+                    )
+                    if not ok:
+                        return None
+            t.advance(p)
+            if source_map is not None:
+                source_map.advance(p)
+            p = 0
+            rest = len(t)
             if rest >= rest_min:
                 loop += 1
                 if loop > 10000:
@@ -647,9 +771,9 @@ class CharacterAnalizer:
             else:
                 rest_min = rest
                 loop = 0
-        if source_map is not None:
-            del source_map[-1:]
-        return t[:-1]
+        if original_map is not None:
+            original_map[:] = source_map.result(1)
+        return t.result(1)
 
     def replacement_body_uses(self, rep, names, text_replacement):
         source = rep["source"]
@@ -757,46 +881,14 @@ class CharacterAnalizer:
             pcad["inc_iad2"] = iad2
         if not expand:
             return 1
-        t = scn + ("\0" * 256)
         if self.sidecar:
-            source_map = scn_source_map + ([None] * 256)
             self.replace_uses = list(iad2.get("replace_uses", []))
-        self.m_line = 1
-        loop = 0
-        rest_min = len(t)
-        p = 0
-        while t[p] != "\0":
-            if t[p] == "\n":
-                self.m_line += 1
-                p += 1
-            else:
-                t, p, ok, mapped = self._std_replace(
-                    t,
-                    p,
-                    self.iad["replace_tree"],
-                    None,
-                    source_map if self.sidecar else None,
-                )
-                if not ok:
-                    return 0
-                if self.sidecar:
-                    source_map = mapped
-            rest = len(t) - p
-            if rest >= rest_min:
-                loop += 1
-                if loop > 10000:
-                    return self.error(
-                        self.m_line,
-                        "Text replacement exceeded 10000 consecutive steps "
-                        "without a new minimum remaining-text length; "
-                        "check for cyclic #define references.",
-                    )
-            else:
-                rest_min = rest
-                loop = 0
-        pcad["scn_text"] = t.split("\0", 1)[0]
+        text = self.analize_line(scn, piad, scn_source_map if self.sidecar else None)
+        if text is None:
+            return 0
+        pcad["scn_text"] = text.split("\0", 1)[0]
         if self.sidecar:
-            pcad["scn_source_map"] = source_map[: len(pcad["scn_text"])]
+            pcad["scn_source_map"] = scn_source_map[: len(pcad["scn_text"])]
             pcad["replace_uses"] = self.replace_uses
         pcad.setdefault("property_list", [])
         return 1

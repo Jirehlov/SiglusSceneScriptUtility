@@ -34,6 +34,7 @@ pub struct SyntaxAnalyzer {
     pub warnings: Vec<(Atom, &'static str)>,
     nesting: usize,
     expression_heights: Vec<usize>,
+    command_indices: HashMap<String, usize>,
 }
 
 impl SyntaxAnalyzer {
@@ -63,6 +64,7 @@ impl SyntaxAnalyzer {
             warnings: Vec::new(),
             nesting: 0,
             expression_heights: Vec::new(),
+            command_indices: HashMap::new(),
         }
     }
 
@@ -334,6 +336,12 @@ impl SyntaxAnalyzer {
     pub fn analyze(&mut self, iad: &mut IaData) -> Result<AstNode, ()> {
         self.last = None;
         self.warnings.clear();
+        self.command_indices.clear();
+        for (index, command) in iad.command_list.iter().enumerate() {
+            self.command_indices
+                .entry(command.name.clone())
+                .or_insert(index);
+        }
         let session = Box::new(SyntaxSession { syntax: self, iad });
         let executor = Executor::new();
         let (result, session) = executor.clone().run(session.parse_root(executor));
@@ -805,11 +813,7 @@ impl<'a> SyntaxSession<'a> {
             };
             pos = after_body;
 
-            let existing = self
-                .iad
-                .command_list
-                .iter()
-                .position(|command| command.name == name);
+            let existing = self.syntax.command_indices.get(&name).copied();
             let command_id = if let Some(command_index) = existing {
                 let command = self.iad.command_list[command_index].clone();
                 if command.is_defined {
@@ -858,6 +862,9 @@ impl<'a> SyntaxSession<'a> {
                         def_exist: false,
                     })
                     .collect();
+                self.syntax
+                    .command_indices
+                    .insert(name.clone(), self.iad.command_list.len());
                 self.iad.command_list.push(IncCommand {
                     id,
                     form: form.name.clone(),

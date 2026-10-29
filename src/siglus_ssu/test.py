@@ -328,7 +328,7 @@ def _compile_payload_attempt(
     elif decompile:
         compile_args.extend(["--charset", "utf8", "--no-lzss"])
     compile_args.extend([extract_dir, rebuilt_pck])
-    rc, out, err = _capture(compiler.main, compile_args)
+    rc, out, err = _capture(compiler.main, compile_args, collect_statistics=False)
     elapsed = max(0.0, time.perf_counter() - started)
     try:
         rebuilt_read_path = resolve_read_path(rebuilt_pck, kind="file")

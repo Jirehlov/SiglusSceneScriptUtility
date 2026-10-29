@@ -151,6 +151,26 @@ def _payload_metadata_trace(meta, pack_context):
     for idx, value in enumerate(meta.get("read_flag_list") or []):
         emit("meta_read_flag", id=int(idx), value=int(value))
 
+    prepared = (pack_context or {}).get("_payload_prepared")
+    if prepared is None:
+        out.extend(_payload_pack_trace(pack_context))
+    else:
+        _, commands = prepared
+        out.extend(commands.get((pack_context or {}).get("payload_scene_name"), ()))
+    return out
+
+
+def _payload_pack_trace(pack_context):
+    out = []
+
+    def emit(op, **fields):
+        out.append(
+            {
+                "op": op,
+                **{key: value for key, value in fields.items() if value is not None},
+            }
+        )
+
     context = dict(pack_context or {})
     emit(
         "meta_pack_property_count",
@@ -187,6 +207,25 @@ def _payload_metadata_trace(meta, pack_context):
     return out
 
 
+def prepare_payload_context(context):
+    from .common import scene_global_elements
+
+    common = []
+    commands = {None: []}
+    for event in _payload_pack_trace(context):
+        if event["op"] == "meta_pack_command" and "scene" in event:
+            commands.setdefault(event["scene"], []).append(event)
+            commands[None].append(event)
+        else:
+            common.append(event)
+    prepared = dict(context or {})
+    prepared["_payload_global_elements"] = scene_global_elements(
+        prepared.get("inc_property_defs"), prepared.get("inc_command_defs")
+    )
+    prepared["_payload_prepared"] = (_payload_trace_hash_bundles(common), commands)
+    return prepared
+
+
 def _payload_string_trace(str_list):
     strings = sorted(
         str_list, key=lambda value: value.encode("utf-16-be", "surrogatepass")
@@ -221,13 +260,21 @@ def dat_disassembly_bundle(
         scn = blob[so : so + ss]
         str_idx = meta["str_index_list"]
         str_blob_end = meta["str_blob_end"]
-        str_list = (
-            decode_xor_utf16le_strings(
+        str_list = None
+        if payload_trace and str_idx:
+            from .native_ops import decode_payload_strings_native
+
+            str_list = decode_payload_strings_native(
                 blob, str_idx, h.get("str_list_ofs", 0), str_blob_end
             )
-            if str_idx
-            else []
-        )
+        if str_list is None:
+            str_list = (
+                decode_xor_utf16le_strings(
+                    blob, str_idx, h.get("str_list_ofs", 0), str_blob_end
+                )
+                if str_idx
+                else []
+            )
         label_list = meta["label_list"]
         z_label_list = meta["z_label_list"]
         parse_status = {}
@@ -746,9 +793,9 @@ def _payload_trace_hash_bundles(trace):
     }
 
 
-def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes=True):
-    from .native_ops import scn_payload_hash_bundles_native
-
+def _scn_payload_bundle(blob, pack_context, scene_name, with_trace):
+    if blob is None:
+        return None
     payload_context = dict(pack_context or {})
     if scene_name is not None:
         payload_context["payload_scene_name"] = str(scene_name)
@@ -760,18 +807,56 @@ def scn_payload_hash_bundles(blob, *, pack_context=None, scene_name=None, hashes
         scene_name=scene_name,
         emit_text=False,
         trace_profile="payload",
-        with_trace=hashes,
+        with_trace=with_trace,
     )
     if bundle is None:
         return None
     if not bundle["complete"]:
         return {"status": "INCOMPLETE"}
-    if not hashes:
-        return {"status": "COMPLETE"}
-    native = scn_payload_hash_bundles_native(bundle["trace"])
+    prepared = payload_context.get("_payload_prepared")
+    return {"trace": bundle["trace"], "common": prepared[0] if prepared else None}
+
+
+def compare_scn_payload(
+    left,
+    right,
+    *,
+    pack_context1=None,
+    pack_context2=None,
+    scene_name=None,
+    pack_context_equal=None,
+):
+    from .native_ops import compare_payload_traces_native
+
+    identical = left == right and (
+        pack_context1 == pack_context2
+        if pack_context_equal is None
+        else pack_context_equal
+    )
+    bundle1 = _scn_payload_bundle(left, pack_context1, scene_name, not identical)
+    bundle2 = (
+        bundle1
+        if identical
+        else _scn_payload_bundle(right, pack_context2, scene_name, True)
+    )
+    if any(b and b.get("status") == "INCOMPLETE" for b in (bundle1, bundle2)):
+        return "INCOMPLETE"
+    if not bundle1 or not bundle2:
+        return "-"
+    if identical:
+        return "same"
+    native = compare_payload_traces_native(bundle1["trace"], bundle2["trace"])
     if native is not None:
         return native
-    return _payload_trace_hash_bundles(bundle["trace"])
+    if bundle1["common"] != bundle2["common"]:
+        return "real_diff"
+    hashes1 = _payload_trace_hash_bundles(bundle1["trace"])
+    hashes2 = _payload_trace_hash_bundles(bundle2["trace"])
+    if hashes1["full"] == hashes2["full"]:
+        return "same"
+    if hashes1["no_text"] == hashes2["no_text"]:
+        return "text_only"
+    return "real_diff"
 
 
 def dat_sections(blob):
@@ -1235,27 +1320,8 @@ def compare_dat(
     )
     payload_status = None
     if compare_payload:
-        c1 = scn_payload_hash_bundles(b1)
-        c2 = scn_payload_hash_bundles(b2)
-        if any(c and c.get("status") == "INCOMPLETE" for c in (c1, c2)):
-            payload_status = "INCOMPLETE"
-        elif c1 and c2:
-            full1 = c1.get("full") or {}
-            full2 = c2.get("full") or {}
-            no_text1 = c1.get("no_text") or {}
-            no_text2 = c2.get("no_text") or {}
-            if full1.get("size") == full2.get("size") and full1.get(
-                "sha256"
-            ) == full2.get("sha256"):
-                payload_status = "identical"
-            elif no_text1.get("size") == no_text2.get("size") and no_text1.get(
-                "sha256"
-            ) == no_text2.get("sha256"):
-                payload_status = "text_only"
-            else:
-                payload_status = "real_diff"
-        else:
-            payload_status = "unavailable"
+        result = compare_scn_payload(b1, b2)
+        payload_status = {"same": "identical", "-": "unavailable"}.get(result, result)
         print("payload compare (normalized scene runtime semantics): " + payload_status)
     if disam_to_input_dir:
         disam_stats = new_disam_stats()

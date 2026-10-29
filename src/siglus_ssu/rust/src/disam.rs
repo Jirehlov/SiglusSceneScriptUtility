@@ -4,9 +4,9 @@ use pyo3::types::{
     PyAny, PyBool, PyBytes, PyDict, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 type R = Result<V, Failure>;
 type MapRef = Rc<RefCell<OrderedMap>>;
@@ -252,6 +252,7 @@ struct Runtime {
     literals: Rc<RefCell<HashMap<&'static str, V>>>,
     frontend: Rc<crate::compile_backend::DecompileFrontend>,
     memo: Rc<RefCell<ExpressionCache>>,
+    packs: Rc<RefCell<Vec<Rc<PackState>>>>,
 }
 
 struct Memo<T> {
@@ -1286,11 +1287,18 @@ pub(crate) mod dat {
     ) -> PyResult<NativeValue> {
         let rt = config.runtime();
         let work = || -> R {
-            let prefix = dat_payload_metadata_trace(
-                &rt,
-                &from_py(&meta)?,
-                &config.pack_context(&pack_context)?,
-            )?;
+            let context = config.pack_context(&pack_context)?;
+            let pack = rt.pack_state(&context)?;
+            let commands = match record_get(&context, "payload_scene_name")? {
+                V::None => pack.all_commands.clone(),
+                V::Str(name) => pack
+                    .scene_commands
+                    .get(&name)
+                    .unwrap_or(&pack.empty_commands)
+                    .clone(),
+                _ => return Err(Failure("scene name must be text".into())),
+            };
+            let prefix = dat_payload_metadata_trace(&rt, &from_py(&meta)?)?;
             let suffix = dat_payload_string_trace(&rt, &from_py(&str_list)?)?;
             let V::Native(value) = &trace.inner else {
                 return Err(Failure("native payload trace required".into()));
@@ -1299,6 +1307,8 @@ pub(crate) mod dat {
                 return Err(Failure("native payload trace required".into()));
             };
             Ok(NativeObject::Payload(Rc::new(PayloadTrace {
+                pack: Some(pack),
+                commands,
                 events: value.events.clone(),
                 prefix,
                 suffix,
@@ -1310,114 +1320,90 @@ pub(crate) mod dat {
         })
     }
 
-    pub(super) fn json_string(value: &SourceText, output: &mut Vec<u8>) {
-        output.push(b'"');
-        for code in &value.chars {
-            match *code {
-                34 => output.extend_from_slice(b"\\\""),
-                92 => output.extend_from_slice(b"\\\\"),
-                8 => output.extend_from_slice(b"\\b"),
-                12 => output.extend_from_slice(b"\\f"),
-                10 => output.extend_from_slice(b"\\n"),
-                13 => output.extend_from_slice(b"\\r"),
-                9 => output.extend_from_slice(b"\\t"),
-                code if code < 32 => output.extend_from_slice(format!("\\u{code:04x}").as_bytes()),
-                code if code < 0x80 => output.push(code as u8),
-                code if code < 0x800 => output
-                    .extend_from_slice(&[(0xc0 | (code >> 6)) as u8, (0x80 | (code & 63)) as u8]),
-                code if code < 0x10000 => output.extend_from_slice(&[
-                    (0xe0 | (code >> 12)) as u8,
-                    (0x80 | ((code >> 6) & 63)) as u8,
-                    (0x80 | (code & 63)) as u8,
-                ]),
-                code => output.extend_from_slice(&[
-                    (0xf0 | (code >> 18)) as u8,
-                    (0x80 | ((code >> 12) & 63)) as u8,
-                    (0x80 | ((code >> 6) & 63)) as u8,
-                    (0x80 | (code & 63)) as u8,
-                ]),
-            }
+    pub fn decode_payload_strings(
+        data: &[u8],
+        pairs: Vec<(i64, i64)>,
+        blob_ofs: i64,
+        blob_end: i64,
+        multiplier: u16,
+    ) -> NativeValue {
+        let mut output = Vec::with_capacity(pairs.len());
+        let Some(blob_ofs) = usize::try_from(blob_ofs)
+            .ok()
+            .filter(|offset| *offset <= data.len() && blob_end >= blob_ofs)
+        else {
+            return NativeValue {
+                inner: V::list(output),
+            };
+        };
+        let end = usize::try_from(blob_end)
+            .unwrap_or(data.len())
+            .min(data.len());
+        for (index, (offset, length)) in pairs.into_iter().enumerate() {
+            let bytes = usize::try_from(offset)
+                .ok()
+                .and_then(|offset| offset.checked_mul(2))
+                .and_then(|offset| blob_ofs.checked_add(offset))
+                .zip(
+                    usize::try_from(length)
+                        .ok()
+                        .and_then(|length| length.checked_mul(2)),
+                )
+                .and_then(|(start, length)| {
+                    start
+                        .checked_add(length)
+                        .filter(|last| *last <= end)
+                        .and_then(|last| data.get(start..last))
+                });
+            let text = if let Some(bytes) = bytes {
+                let key = (index as u16).wrapping_mul(multiplier);
+                let units = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|part| u16::from_le_bytes(*part) ^ key);
+                let chars = char::decode_utf16(units)
+                    .map(|unit| match unit {
+                        Ok(value) => value as u32,
+                        Err(error) => error.unpaired_surrogate() as u32,
+                    })
+                    .collect();
+                V::text(chars)
+            } else {
+                V::s("")
+            };
+            output.push(text);
         }
-        output.push(b'"');
-    }
-
-    pub fn scn_payload_hash_bundles(
-        py: Python<'_>,
-        config: PyRef<'_, DisamConfig>,
-        trace: PyRef<'_, NativeValue>,
-    ) -> PyResult<Py<PyDict>> {
-        let V::Native(value) = &trace.inner else {
-            return Err(PyValueError::new_err("native payload trace required"));
-        };
-        let NativeObject::Payload(value) = value.as_ref() else {
-            return Err(PyValueError::new_err("native payload trace required"));
-        };
-        hash_payload_trace(py, value, &config.native_tables)
-    }
-
-    pub(super) fn metadata_bytes(
-        map: &MapRef,
-        omit_text: bool,
-        output: &mut Vec<u8>,
-    ) -> Result<(), Failure> {
-        let data = map.borrow();
-        let mut entries = data
-            .entries
-            .iter()
-            .map(|(key, value)| {
-                let V::Str(key) = key else {
-                    return Err(Failure("payload field name must be a string".into()));
-                };
-                Ok((key, value))
-            })
-            .collect::<Result<Vec<_>, Failure>>()?;
-        entries.sort_by(|left, right| left.0.chars.cmp(&right.0.chars));
-        output.push(b'{');
-        let mut first = true;
-        for (key, value) in entries {
-            if omit_text && key.chars == [116, 101, 120, 116] {
-                continue;
-            }
-            if !first {
-                output.extend_from_slice(b", ");
-            }
-            first = false;
-            json_string(key, output);
-            output.extend_from_slice(b": ");
-            match value {
-                V::Int(value) => write_payload_integer(output, *value),
-                V::Str(value) => json_string(value, output),
-                V::List(values) => {
-                    output.push(b'[');
-                    for (index, value) in values.items.iter().enumerate() {
-                        if index > 0 {
-                            output.extend_from_slice(b", ");
-                        }
-                        let V::Int(value) = value else {
-                            return Err(Failure("integer payload metadata list required".into()));
-                        };
-                        write_payload_integer(output, *value);
-                    }
-                    output.push(b']');
-                }
-                _ => return Err(Failure("invalid payload metadata value".into())),
-            }
+        NativeValue {
+            inner: V::list(output),
         }
-        output.push(b'}');
-        Ok(())
     }
 
-    pub(super) fn dat_payload_metadata_trace(
-        rt: &Runtime,
-        meta: &V,
-        context: &V,
-    ) -> Result<Vec<V>, Failure> {
-        let empty = V::dictionary();
-        let context = if matches!(context, V::None) {
-            &empty
-        } else {
-            context
+    pub fn compare_payload_traces(
+        left: PyRef<'_, NativeValue>,
+        right: PyRef<'_, NativeValue>,
+    ) -> PyResult<&'static str> {
+        let (V::Native(left), V::Native(right)) = (&left.inner, &right.inner) else {
+            return Err(PyValueError::new_err("native payload traces required"));
         };
+        let (NativeObject::Payload(left), NativeObject::Payload(right)) =
+            (left.as_ref(), right.as_ref())
+        else {
+            return Err(PyValueError::new_err("native payload traces required"));
+        };
+        let work = || -> Result<&'static str, Failure> {
+            if left.equivalent(right, false)? {
+                Ok("same")
+            } else if left.equivalent(right, true)? {
+                Ok("text_only")
+            } else {
+                Ok("real_diff")
+            }
+        };
+        work().map_err(|error| PyValueError::new_err(error.0))
+    }
+
+    pub(super) fn dat_payload_metadata_trace(rt: &Runtime, meta: &V) -> Result<Vec<V>, Failure> {
         let names = record_get(meta, "raw_names")?;
         let mut out = vec![];
         let mut emit = |op: &str, fields: Vec<(&'static str, V)>| -> Result<(), Failure> {
@@ -1531,62 +1517,6 @@ pub(crate) mod dat {
                 vec![("id", V::Int(id as i64)), ("value", V::Int(value.int()?))],
             )?;
         }
-        emit(
-            "meta_pack_property_count",
-            vec![(
-                "value",
-                V::Int(record_int(context, "inc_property_cnt").unwrap_or(0)),
-            )],
-        )?;
-        for item in native_optional_values(&record_get(context, "inc_property_defs")?)? {
-            emit(
-                "meta_pack_property",
-                ["id", "form", "size", "name"]
-                    .into_iter()
-                    .map(|key| Ok((key, record_get(&item, key)?)))
-                    .collect::<Result<_, Failure>>()?,
-            )?;
-        }
-        let scene_names = native_optional_values(&record_get(context, "scene_names")?)?;
-        let current_scene = record_get(context, "payload_scene_name")?;
-        emit(
-            "meta_pack_command_count",
-            vec![(
-                "value",
-                V::Int(record_int(context, "inc_command_cnt").unwrap_or(0)),
-            )],
-        )?;
-        for item in native_optional_values(&record_get(context, "inc_command_defs")?)? {
-            let scene_no = record_get(&item, "scn_no")?.int()?;
-            let scene = usize::try_from(scene_no)
-                .ok()
-                .and_then(|id| scene_names.get(id))
-                .cloned()
-                .unwrap_or(V::None);
-            if !matches!(current_scene, V::None)
-                && !matches!(scene, V::None)
-                && !matches!((&scene, &current_scene), (V::Str(left), V::Str(right)) if left == right)
-            {
-                continue;
-            }
-            emit(
-                "meta_pack_command",
-                vec![
-                    ("id", record_get(&item, "id")?),
-                    ("name", record_get(&item, "name")?),
-                    (
-                        "scene_no",
-                        if matches!(scene, V::None) {
-                            V::Int(scene_no)
-                        } else {
-                            V::None
-                        },
-                    ),
-                    ("scene", scene),
-                    ("offset", record_get(&item, "offset")?),
-                ],
-            )?;
-        }
         Ok(out)
     }
 
@@ -1597,7 +1527,7 @@ pub(crate) mod dat {
             .map(|value| {
                 let text = source_text(value)?;
                 let mut units = vec![];
-                for code in &text.chars {
+                for code in text.chars.iter() {
                     if *code < 0x10000 {
                         units.push(*code as u16);
                     } else {
@@ -1698,6 +1628,7 @@ pub struct DisamConfig {
     literals: Rc<RefCell<HashMap<&'static str, V>>>,
     frontend: Rc<crate::compile_backend::DecompileFrontend>,
     memo: Rc<RefCell<ExpressionCache>>,
+    packs: Rc<RefCell<Vec<Rc<PackState>>>>,
 }
 
 impl DisamConfig {
@@ -1752,6 +1683,7 @@ impl DisamConfig {
             literals: self.literals.clone(),
             frontend: self.frontend.clone(),
             memo: self.memo.clone(),
+            packs: self.packs.clone(),
         }
     }
 }
@@ -1779,6 +1711,7 @@ pub fn disam_config(config: Bound<'_, PyDict>) -> PyResult<DisamConfig> {
         literals: Rc::new(RefCell::new(HashMap::new())),
         frontend: Rc::new(crate::compile_backend::DecompileFrontend::new(compiler)?),
         memo: Rc::new(RefCell::new(ExpressionCache::new())),
+        packs: Rc::new(RefCell::new(Vec::new())),
     };
     Ok(config)
 }
@@ -2436,15 +2369,154 @@ fn resolver_properties(
         })
         .collect()
 }
+struct PackState {
+    keys: [V; 3],
+    counts: (i64, i64),
+    properties: Rc<HashMap<i64, Rc<Element>>>,
+    commands: Rc<HashMap<i64, SourceText>>,
+    metadata: Vec<V>,
+    all_commands: Rc<Vec<V>>,
+    empty_commands: Rc<Vec<V>>,
+    scene_commands: HashMap<SourceText, Rc<Vec<V>>>,
+    matches: RefCell<Option<(Weak<PackState>, bool)>>,
+}
+impl Runtime {
+    fn pack_state(&self, context: &V) -> Result<Rc<PackState>, Failure> {
+        let keys = [
+            record_get(context, "inc_property_defs")?,
+            record_get(context, "inc_command_defs")?,
+            record_get(context, "scene_names")?,
+        ];
+        let counts = (
+            record_int(context, "inc_property_cnt").unwrap_or(0),
+            record_int(context, "inc_command_cnt").unwrap_or(0),
+        );
+        for pack in self.packs.borrow().iter() {
+            if pack.counts == counts
+                && pack.keys.iter().zip(&keys).all(|(a, b)| match (a, b) {
+                    (V::List(a), V::List(b)) => Rc::ptr_eq(a, b),
+                    (V::None, V::None) => true,
+                    _ => false,
+                })
+            {
+                return Ok(pack.clone());
+            }
+        }
+        let mut metadata = vec![fast_record(
+            self,
+            vec![
+                ("op", V::s("meta_pack_property_count")),
+                ("value", V::Int(counts.0)),
+            ],
+        )?];
+        for item in native_optional_values(&keys[0])? {
+            let mut fields = vec![("op", V::s("meta_pack_property"))];
+            for key in ["id", "form", "size", "name"] {
+                fields.push((key, record_get(&item, key)?));
+            }
+            fields.retain(|(_, value)| !matches!(value, V::None));
+            metadata.push(fast_record(self, fields)?);
+        }
+        metadata.push(fast_record(
+            self,
+            vec![
+                ("op", V::s("meta_pack_command_count")),
+                ("value", V::Int(counts.1)),
+            ],
+        )?);
+        let names = native_optional_values(&keys[2])?;
+        let mut commands = HashMap::new();
+        let mut all = vec![];
+        let mut grouped: HashMap<SourceText, Vec<V>> = HashMap::new();
+        for (index, item) in native_optional_values(&keys[1])?.into_iter().enumerate() {
+            commands.insert(
+                record_int(&item, "id").unwrap_or(index as i64),
+                record_text(&item, "name")?,
+            );
+            let scene_no = record_get(&item, "scn_no")?.int()?;
+            let scene = usize::try_from(scene_no)
+                .ok()
+                .and_then(|id| names.get(id))
+                .cloned()
+                .unwrap_or(V::None);
+            let mut fields = vec![
+                ("op", V::s("meta_pack_command")),
+                ("id", record_get(&item, "id")?),
+                ("name", record_get(&item, "name")?),
+                (
+                    "scene_no",
+                    if matches!(scene, V::None) {
+                        V::Int(scene_no)
+                    } else {
+                        V::None
+                    },
+                ),
+                ("scene", scene.clone()),
+                ("offset", record_get(&item, "offset")?),
+            ];
+            fields.retain(|(_, value)| !matches!(value, V::None));
+            let row = fast_record(self, fields)?;
+            if let V::Str(name) = scene {
+                grouped.entry(name).or_default().push(row.clone());
+                all.push(row);
+            } else {
+                metadata.push(row);
+            }
+        }
+        let scene_commands = grouped
+            .into_iter()
+            .map(|(name, rows)| (name, Rc::new(rows)))
+            .collect();
+        let scope = Rc::new(RefCell::new(CallScope {
+            ranges: vec![],
+            range_cursor: 0,
+            slots: vec![],
+            declarations: vec![],
+            frames: vec![],
+            version: 0,
+        }));
+        let resolver = ElementResolver::new(
+            self,
+            scope,
+            ResolverInput {
+                properties: resolver_properties(&keys[0], "id", 0)?,
+                commands: HashMap::new(),
+                global_properties: None,
+                global_commands: None,
+            },
+        );
+        let pack = Rc::new(PackState {
+            keys,
+            counts,
+            properties: Rc::new(resolver.properties),
+            commands: Rc::new(commands),
+            metadata,
+            all_commands: Rc::new(all),
+            empty_commands: Rc::new(vec![]),
+            scene_commands,
+            matches: RefCell::new(None),
+        });
+        let mut packs = self.packs.borrow_mut();
+        if packs.len() == 2 {
+            packs.remove(0);
+        }
+        packs.push(pack.clone());
+        Ok(pack)
+    }
+}
 struct ResolverInput {
     properties: Vec<ResolverProperty>,
     commands: HashMap<i64, SourceText>,
+    global_properties: Option<Rc<HashMap<i64, Rc<Element>>>>,
+    global_commands: Option<Rc<HashMap<i64, SourceText>>>,
 }
 struct ElementResolver {
     tables: Rc<NativeTables>,
     scope: ScopeRef,
     properties: HashMap<i64, Rc<Element>>,
     commands: HashMap<i64, SourceText>,
+    global_properties: Option<Rc<HashMap<i64, Rc<Element>>>>,
+    global_commands: Option<Rc<HashMap<i64, SourceText>>>,
 }
 impl ElementResolver {
     fn new(rt: &Runtime, scope: ScopeRef, input: ResolverInput) -> Self {
@@ -2475,6 +2547,8 @@ impl ElementResolver {
             scope,
             properties,
             commands: input.commands,
+            global_properties: input.global_properties,
+            global_commands: input.global_commands,
         }
     }
     fn variants(&self, parent: i64, code: i64) -> Vec<Rc<Element>> {
@@ -2495,12 +2569,27 @@ impl ElementResolver {
                 .collect();
         }
         if parent == self.tables.global && owner == self.tables.property_owner {
-            return self.properties.get(&index).cloned().into_iter().collect();
+            return self
+                .properties
+                .get(&index)
+                .or_else(|| {
+                    self.global_properties
+                        .as_ref()
+                        .and_then(|values| values.get(&index))
+                })
+                .cloned()
+                .into_iter()
+                .collect();
         }
         if parent == self.tables.global && owner == self.tables.command_owner {
             let name = self
                 .commands
                 .get(&index)
+                .or_else(|| {
+                    self.global_commands
+                        .as_ref()
+                        .and_then(|values| values.get(&index))
+                })
                 .cloned()
                 .unwrap_or_else(|| source(""));
             let qualified = if name.chars.is_empty() {
@@ -2528,9 +2617,9 @@ struct ItemFormatter {
 impl ItemFormatter {
     fn item(&self, item: &StackValue, expect: Option<i64>) -> SourceText {
         if let Some(expr) = &item.expr
-            && !expr.chars.is_empty()
+            && expr.len() != 0
         {
-            return expr.clone();
+            return expr.source();
         }
         if expect == Some(self.tables.label) {
             return item
@@ -2572,11 +2661,72 @@ impl ItemFormatter {
 }
 
 #[derive(Clone)]
+enum ExpressionText {
+    Flat(SourceText),
+    Joined(Rc<ExpressionParts>),
+}
+struct ExpressionParts {
+    parts: Vec<ExpressionText>,
+    length: usize,
+}
+impl Drop for ExpressionParts {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.parts);
+        while let Some(part) = pending.pop() {
+            if let ExpressionText::Joined(part) = part
+                && let Ok(mut part) = Rc::try_unwrap(part)
+            {
+                pending.append(&mut part.parts);
+            }
+        }
+    }
+}
+impl From<SourceText> for ExpressionText {
+    fn from(text: SourceText) -> Self {
+        Self::Flat(text)
+    }
+}
+impl ExpressionText {
+    fn len(&self) -> usize {
+        match self {
+            Self::Flat(text) => text.chars.len(),
+            Self::Joined(parts) => parts.length,
+        }
+    }
+    fn source(&self) -> SourceText {
+        if let Self::Flat(text) = self {
+            return text.clone();
+        }
+        let mut chars = Vec::with_capacity(self.len());
+        let mut pending = vec![self];
+        while let Some(part) = pending.pop() {
+            match part {
+                Self::Flat(text) => chars.extend_from_slice(&text.chars),
+                Self::Joined(parts) => pending.extend(parts.parts.iter().rev()),
+            }
+        }
+        Text::shared(chars)
+    }
+    fn join(parts: Vec<Self>) -> Self {
+        let length = parts.iter().map(Self::len).sum();
+        if length <= 128 {
+            let mut chars = Vec::with_capacity(length);
+            for part in parts {
+                chars.extend_from_slice(&part.source().chars);
+            }
+            Self::Flat(Text::shared(chars))
+        } else {
+            Self::Joined(Rc::new(ExpressionParts { parts, length }))
+        }
+    }
+}
+
+#[derive(Clone)]
 struct StackValue {
     form: Option<i64>,
     value: Option<i64>,
     receiver: bool,
-    expr: Option<SourceText>,
+    expr: Option<ExpressionText>,
 }
 struct ResolvedPath {
     ret: Option<i64>,
@@ -2643,7 +2793,7 @@ impl Instruction {
 }
 #[derive(Default)]
 struct Annotation {
-    expr: Option<SourceText>,
+    expr: Option<ExpressionText>,
     condition: Option<SourceText>,
     size_expr: Option<SourceText>,
     call_name: Option<SourceText>,
@@ -2670,12 +2820,23 @@ struct ExpressionState {
     cache_version: u64,
 }
 impl ExpressionState {
+    fn scalar_expression(&self, index: usize, form: i64) -> ExpressionText {
+        self.stack
+            .get(index)
+            .map(|item| {
+                item.expr
+                    .clone()
+                    .filter(|expr| expr.len() != 0)
+                    .unwrap_or_else(|| self.formatter.item(item, Some(form)).into())
+            })
+            .unwrap_or_else(|| source("<?>").into())
+    }
     fn push(
         &mut self,
         form: Option<i64>,
         value: Option<i64>,
         receiver: Option<bool>,
-        expr: Option<SourceText>,
+        expr: Option<ExpressionText>,
     ) {
         self.stack.push(StackValue {
             form,
@@ -2730,9 +2891,9 @@ impl ExpressionState {
     fn collapse(&mut self, start: usize, form: Option<i64>, expr: Option<SourceText>) {
         self.drop_tail(start);
         if form.is_none() {
-            self.push(None, None, Some(false), expr);
+            self.push(None, None, Some(false), expr.map(ExpressionText::from));
         } else if form != Some(self.tables.void) {
-            self.push(form, None, None, expr);
+            self.push(form, None, None, expr.map(ExpressionText::from));
         }
     }
     fn int_value(&self, item: &StackValue) -> Option<i64> {
@@ -3250,7 +3411,7 @@ impl ExpressionState {
                     .is_some_and(|form| self.tables.scalar.contains(&form))
                 {
                     if self.render {
-                        out.expr = Some(self.peek_expression(event.form.unwrap()));
+                        out.expr = Some(self.peek_expression(event.form.unwrap()).into());
                     }
                     self.pop();
                 }
@@ -3289,7 +3450,7 @@ impl ExpressionState {
                             .get(start)
                             .and_then(|item| self.tables.receiver_value(item.form))
                     });
-                    out.expr = expr.clone();
+                    out.expr = expr.clone().map(ExpressionText::from);
                     self.collapse(start, form, expr);
                 } else {
                     self.pop();
@@ -3342,7 +3503,7 @@ impl ExpressionState {
                     out.arguments = self.peek_expressions(&event.args);
                 }
                 if event.op == Opcode::Return {
-                    out.expr = out.arguments.first().cloned();
+                    out.expr = out.arguments.first().cloned().map(ExpressionText::from);
                 } else if self.render && self.gosub_expressions {
                     let keyword = if event.op == Opcode::Gosub {
                         "gosub"
@@ -3350,7 +3511,7 @@ impl ExpressionState {
                         "gosubstr"
                     };
                     let label = event.label.unwrap_or(0);
-                    out.expr = Some(if out.arguments.is_empty() {
+                    out.expr = Some(ExpressionText::from(if out.arguments.is_empty() {
                         source(&format!("{keyword} L{label}"))
                     } else {
                         let args = source_join(&out.arguments, ", ");
@@ -3359,7 +3520,7 @@ impl ExpressionState {
                             &args.chars,
                             &source(&format!(") L{label}")).chars,
                         ])
-                    });
+                    }));
                 }
                 for arg in event.args.iter().rev() {
                     self.consume_argument(arg);
@@ -3394,11 +3555,11 @@ impl ExpressionState {
                         &mut cursor,
                     );
                     let left = self.element_expression_cursor(&mut cursor);
-                    out.expr = Some(source_concat(&[
+                    out.expr = Some(ExpressionText::from(source_concat(&[
                         &left.chars,
                         &source(" = ").chars,
                         &right.chars,
-                    ]));
+                    ])));
                 }
                 if let Some(start) = self.points.last().copied() {
                     self.drop_tail(start);
@@ -3410,7 +3571,11 @@ impl ExpressionState {
                 let form = event.form.unwrap_or(self.tables.int);
                 let operator = event.operator.unwrap_or(0);
                 let rhs = if self.render {
-                    Some(self.peek_expression(form))
+                    Some(if self.tables.scalar.contains(&form) {
+                        self.scalar_expression(self.stack.len().wrapping_sub(1), form)
+                    } else {
+                        self.peek_expression(form).into()
+                    })
                 } else {
                     None
                 };
@@ -3418,10 +3583,14 @@ impl ExpressionState {
                 self.pop();
                 if form == self.tables.int && self.tables.unary_int.contains(&operator) {
                     let expr = rhs.as_ref().and_then(|rhs| {
-                        self.tables
-                            .unary
-                            .get(&operator)
-                            .map(|op| source_concat(&[&[40], &op.chars, &rhs.chars, &[41]]))
+                        self.tables.unary.get(&operator).map(|op| {
+                            ExpressionText::join(vec![
+                                source("(").into(),
+                                op.clone().into(),
+                                rhs.clone(),
+                                source(")").into(),
+                            ])
+                        })
                     });
                     self.push(
                         Some(self.tables.int),
@@ -3436,25 +3605,35 @@ impl ExpressionState {
                 let right = event.right_form.unwrap_or(self.tables.int);
                 let operator = event.operator.unwrap_or(0);
                 let expr = if self.render {
-                    let args = self.peek_expressions(&[
-                        Argument {
-                            form: left,
-                            sub: vec![],
-                        },
-                        Argument {
-                            form: right,
-                            sub: vec![],
-                        },
-                    ]);
+                    let args = if self.tables.scalar.contains(&left)
+                        && self.tables.scalar.contains(&right)
+                    {
+                        [
+                            self.scalar_expression(self.stack.len().wrapping_sub(2), left),
+                            self.scalar_expression(self.stack.len().wrapping_sub(1), right),
+                        ]
+                    } else {
+                        let args = self.peek_expressions(&[
+                            Argument {
+                                form: left,
+                                sub: vec![],
+                            },
+                            Argument {
+                                form: right,
+                                sub: vec![],
+                            },
+                        ]);
+                        [args[0].clone().into(), args[1].clone().into()]
+                    };
                     self.tables.binary.get(&operator).map(|op| {
-                        source_concat(&[
-                            &[40],
-                            &args[0].chars,
-                            &[32],
-                            &op.chars,
-                            &[32],
-                            &args[1].chars,
-                            &[41],
+                        ExpressionText::join(vec![
+                            source("(").into(),
+                            args[0].clone(),
+                            source(" ").into(),
+                            op.clone().into(),
+                            source(" ").into(),
+                            args[1].clone(),
+                            source(")").into(),
                         ])
                     })
                 } else {
@@ -3545,7 +3724,7 @@ impl ExpressionState {
                         out.call_name = Some(name.clone());
                         let args = source_join(&args, ", ");
                         expr = Some(source_concat(&[&name.chars, &[40], &args.chars, &[41]]));
-                        out.expr = expr.clone();
+                        out.expr = expr.clone().map(ExpressionText::from);
                     }
                 }
                 if let Some(start) = command.start {
@@ -3556,7 +3735,7 @@ impl ExpressionState {
                     }
                     self.consume_element();
                     if event.ret != self.tables.void {
-                        self.push(Some(event.ret), None, None, expr);
+                        self.push(Some(event.ret), None, None, expr.map(ExpressionText::from));
                     }
                 }
             }
@@ -3961,7 +4140,10 @@ fn dump_instruction(
         | Opcode::ElmPoint
         | Opcode::Arg
         | Opcode::SelStart
-        | Opcode::SelEnd => line.push_str(&expr("expr", &annotation.expr)?),
+        | Opcode::SelEnd => line.push_str(&expr(
+            "expr",
+            &annotation.expr.as_ref().map(ExpressionText::source),
+        )?),
         Opcode::DecProp => {
             line.push_str(&format!(
                 " {}, {}",
@@ -4023,7 +4205,10 @@ fn dump_instruction(
                 form(event.right_form)?,
                 event.arg_id
             ));
-            line.push_str(&expr("expr", &annotation.expr)?);
+            line.push_str(&expr(
+                "expr",
+                &annotation.expr.as_ref().map(ExpressionText::source),
+            )?);
         }
         Opcode::Operate1 => line.push_str(&format!(
             " {} op={}",
@@ -4078,7 +4263,10 @@ fn dump_instruction(
             {
                 line.push_str(&format!(" {}", display_source(name)?));
             }
-            line.push_str(&expr("expr", &annotation.expr)?);
+            line.push_str(&expr(
+                "expr",
+                &annotation.expr.as_ref().map(ExpressionText::source),
+            )?);
         }
         _ => (),
     }
@@ -4157,26 +4345,13 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     }));
     let global_property_count = record_int(&context, "inc_property_cnt").unwrap_or(0).max(0);
     let global_command_count = record_int(&context, "inc_command_cnt").unwrap_or(0).max(0);
-    let mut resolver_props =
-        resolver_properties(&record_get(&context, "inc_property_defs")?, "id", 0)?;
-    resolver_props.extend(resolver_properties(
-        &properties,
-        "code",
-        global_property_count,
-    )?);
+    let pack = rt.pack_state(&context)?;
+    let resolver_props = resolver_properties(&properties, "code", global_property_count)?;
     let mut resolver_commands = HashMap::new();
-    for (id, info) in native_optional_values(&record_get(&context, "inc_command_defs")?)?
-        .iter()
-        .enumerate()
-    {
-        resolver_commands.insert(
-            record_int(info, "id").unwrap_or(id as i64),
-            record_text(info, "name")?,
-        );
-    }
     for (id, name) in native_optional_values(&commands)?.iter().enumerate() {
         let id = global_command_count + id as i64;
-        if resolver_commands
+        if pack
+            .commands
             .get(&id)
             .is_none_or(|name| name.chars.is_empty())
         {
@@ -4189,6 +4364,8 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         ResolverInput {
             properties: resolver_props,
             commands: resolver_commands,
+            global_properties: Some(pack.properties.clone()),
+            global_commands: Some(pack.commands.clone()),
         },
     ));
     let decompile = with_trace
@@ -4196,7 +4373,16 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             .as_ref()
             .is_some_and(|value| value.eq_str("decompile"));
     let annotate = decompile && !emit_text;
-    let annotation_commands = resolver.commands.clone();
+    let mut annotation_commands = HashMap::new();
+    if annotate {
+        annotation_commands = (*pack.commands).clone();
+        annotation_commands.extend(
+            resolver
+                .commands
+                .iter()
+                .map(|(id, name)| (*id, name.clone())),
+        );
+    }
     let formatter = Rc::new(ItemFormatter {
         tables: rt.native_tables.clone(),
         strings: strings.clone(),
@@ -4493,6 +4679,8 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     } else {
         Some(if mode.payload {
             NativeObject::Payload(Rc::new(PayloadTrace {
+                pack: None,
+                commands: Rc::new(vec![]),
                 events: Rc::new(payload_events),
                 prefix: vec![],
                 suffix: vec![],
@@ -4895,6 +5083,8 @@ fn native_annotate_scene(
         ResolverInput {
             properties,
             commands,
+            global_properties: None,
+            global_commands: None,
         },
     ));
     let formatter = Rc::new(ItemFormatter {
@@ -5288,6 +5478,55 @@ fn insertion_targets(lines: &[SourceLine]) -> Vec<Option<i64>> {
         })
         .collect()
 }
+struct LineInsertions {
+    targets: Vec<Option<i64>>,
+    greatest: Option<i64>,
+    additions: BTreeMap<(usize, Option<i64>, bool), Vec<SourceLine>>,
+}
+impl LineInsertions {
+    fn new(lines: &[SourceLine]) -> Self {
+        let targets = insertion_targets(lines);
+        let greatest = targets.last().copied().flatten();
+        Self {
+            targets,
+            greatest,
+            additions: BTreeMap::new(),
+        }
+    }
+    fn add(&mut self, text: SourceText, target: Option<i64>) {
+        let (position, effective, appended) = if let Some(target) = target {
+            self.greatest = self.greatest.max(Some(target));
+            (
+                self.targets
+                    .partition_point(|old| old.is_none_or(|old| old < target)),
+                Some(target),
+                false,
+            )
+        } else {
+            (self.targets.len(), self.greatest, true)
+        };
+        self.additions
+            .entry((position, effective, appended))
+            .or_default()
+            .push(SourceLine { text, target });
+    }
+    fn finish(self, lines: Vec<SourceLine>) -> Vec<SourceLine> {
+        let mut output =
+            Vec::with_capacity(lines.len() + self.additions.values().map(Vec::len).sum::<usize>());
+        let mut lines = lines.into_iter().enumerate().peekable();
+        for ((position, _, appended), mut additions) in self.additions {
+            while lines.peek().is_some_and(|(index, _)| *index < position) {
+                output.push(lines.next().unwrap().1);
+            }
+            if !appended {
+                additions.reverse();
+            }
+            output.extend(additions);
+        }
+        output.extend(lines.map(|(_, line)| line));
+        output
+    }
+}
 fn goto_source(scene: &DecompileScene, index: usize) -> Result<SourceText, Failure> {
     let event = &scene.events[index];
     let target = event
@@ -5458,7 +5697,7 @@ fn native_line_postprocess(
         }
         LinePass::RestoreLabels => {
             let scene = &instance.scene;
-            let mut targets = insertion_targets(&lines);
+            let mut insertions = LineInsertions::new(&lines);
             let mut events = HashMap::new();
             for (index, labels) in scene.labels.iter().enumerate() {
                 for label in labels.iter().filter(|label| !label.z) {
@@ -5473,13 +5712,13 @@ fn native_line_postprocess(
                         .map(|label| definition_token(&line.text, label))
                 })
                 .collect::<std::collections::HashSet<_>>();
-            let mut references = line_references(rt, &lines)?;
-            loop {
-                let mut missing = references
-                    .iter()
-                    .filter(|label| !definitions.contains(*label))
-                    .cloned()
-                    .collect::<Vec<_>>();
+            let references = line_references(rt, &lines)?;
+            let mut pending = references
+                .difference(&definitions)
+                .cloned()
+                .collect::<std::collections::HashSet<_>>();
+            while !pending.is_empty() {
+                let mut missing = pending.drain().collect::<Vec<_>>();
                 missing.sort_by_key(|label| {
                     let mut id = 0i64;
                     for digit in label.chars.iter().skip(2) {
@@ -5487,10 +5726,6 @@ fn native_line_postprocess(
                     }
                     id
                 });
-                if missing.is_empty() {
-                    break;
-                }
-                let mut added = false;
                 for label in missing {
                     let Some(index) = events.get(&label).copied() else {
                         continue;
@@ -5502,35 +5737,17 @@ fn native_line_postprocess(
                     } else {
                         label.clone()
                     };
-                    let position = if let Some(target) = event.line {
-                        let position =
-                            targets.partition_point(|old| old.is_none_or(|old| old < target));
-                        targets.insert(position, Some(target));
-                        position
-                    } else {
-                        let position = lines.len();
-                        targets.push(targets.last().copied().flatten());
-                        position
-                    };
-                    lines.insert(
-                        position,
-                        SourceLine {
-                            text: text.clone(),
-                            target: event.line,
-                        },
-                    );
+                    insertions.add(text.clone(), event.line);
                     definitions.insert(label);
-                    references.extend(
+                    pending.extend(
                         label_references(rt, &text)?
                             .iter()
                             .map(|reference| reference.label.clone()),
                     );
-                    added = true;
                 }
-                if !added {
-                    break;
-                }
+                pending.retain(|label| !definitions.contains(label));
             }
+            lines = insertions.finish(lines);
         }
         LinePass::MergeTargets => {
             let mut next_targets = vec![None; lines.len()];
@@ -5555,7 +5772,7 @@ fn native_line_postprocess(
                     append_source_text(&mut previous.text, &stripped.chars);
                     continue;
                 }
-                if stripped.chars == [125]
+                if stripped.chars[..] == [125]
                     && let Some(previous) = out.last_mut()
                 {
                     let label = label_definition(&previous.text);
@@ -6314,9 +6531,10 @@ fn native_late_line_pass(
     Ok(lines)
 }
 
+#[derive(PartialEq)]
 enum PayloadData {
     Empty,
-    Number(&'static str, i64),
+    Number(i64),
     Push(i64, Option<i64>, Option<SourceText>),
     Declare {
         form: i64,
@@ -6347,6 +6565,8 @@ struct PayloadEvent {
     data: PayloadData,
 }
 struct PayloadTrace {
+    pack: Option<Rc<PackState>>,
+    commands: Rc<Vec<V>>,
     events: Rc<Vec<PayloadEvent>>,
     prefix: Vec<V>,
     suffix: Vec<V>,
@@ -6367,7 +6587,7 @@ impl PayloadEvent {
             })
             .cloned();
         let data = match event.op {
-            Opcode::Nl => PayloadData::Number("value", event.value.unwrap_or(0)),
+            Opcode::Nl => PayloadData::Number(event.value.unwrap_or(0)),
             Opcode::Push => PayloadData::Push(
                 event.form.unwrap_or(0),
                 event.value,
@@ -6377,7 +6597,7 @@ impl PayloadEvent {
                     None
                 },
             ),
-            Opcode::Pop | Opcode::Copy => PayloadData::Number("form", event.form.unwrap_or(0)),
+            Opcode::Pop | Opcode::Copy => PayloadData::Number(event.form.unwrap_or(0)),
             Opcode::DecProp => PayloadData::Declare {
                 form: event.form.unwrap_or(0),
                 id: event.value.unwrap_or(0),
@@ -6422,302 +6642,131 @@ impl PayloadEvent {
             data,
         }
     }
-    fn has_text(&self) -> bool {
-        matches!(
-            &self.data,
-            PayloadData::Push(_, _, Some(_))
-                | PayloadData::Text(_, Some(_))
-                | PayloadData::Name(Some(_))
-        )
-    }
-    fn write(&self, tables: &NativeTables, omit_text: bool, output: &mut Vec<u8>) {
-        let mut writer = PayloadJson {
-            output,
-            first: true,
-        };
-        writer.output.push(b'{');
-        match &self.data {
-            PayloadData::Gosub(_, args) | PayloadData::Return(args) => {
-                writer.arguments("arg_layout", args, tables)
-            }
-            PayloadData::Assign(_, _, id) => writer.integer("arg_list_id", *id),
-            PayloadData::Command {
-                arguments, arg_id, ..
-            } => {
-                writer.arguments("arg_layout", arguments, tables);
-                writer.integer("arg_list_id", *arg_id);
-            }
-            _ => (),
-        }
-        if let PayloadData::Command {
-            element: Some(value),
-            ..
-        } = &self.data
-        {
-            writer.integer("element_code", *value);
-        }
-        match &self.data {
-            PayloadData::Number("form", form)
-            | PayloadData::Push(form, _, _)
-            | PayloadData::Declare { form, .. }
-            | PayloadData::Unary(form, _) => writer.integer("form", *form),
-            _ => (),
-        }
-        if let PayloadData::Jump(id) | PayloadData::Gosub(id, _) = &self.data {
-            writer.integer("label_id", *id);
-        }
-        if let PayloadData::Assign(left, _, _) | PayloadData::Binary(left, _, _) = &self.data {
-            writer.integer("left_form", *left);
-        }
-        if let Some(line) = self.line {
-            writer.integer("line", line);
-        }
-        if let PayloadData::Declare { name, .. } = &self.data {
-            writer.string("name", name);
-        }
-        if let PayloadData::Command { named, .. } = &self.data {
-            writer.key("named_ids");
-            writer.output.push(b'[');
-            for (index, id) in named.iter().enumerate() {
-                if index > 0 {
-                    writer.output.extend_from_slice(b", ");
-                }
-                write_payload_integer(writer.output, *id);
-            }
-            writer.output.push(b']');
-        }
-        writer.key("op");
-        writer.output.push(b'"');
-        writer
-            .output
-            .extend_from_slice(self.opcode.name().as_bytes());
-        writer.output.push(b'"');
-        if let PayloadData::Unary(_, operator) | PayloadData::Binary(_, _, operator) = &self.data {
-            writer.integer("opr", *operator);
-        }
-        if let PayloadData::Declare { id, .. } = &self.data {
-            writer.integer("prop_id", *id);
-        }
-        match &self.data {
-            PayloadData::Text(Some(flag), _)
-            | PayloadData::Command {
-                read_flag: Some(flag),
-                ..
-            } => writer.integer("read_flag", *flag),
-            _ => (),
-        }
-        if let PayloadData::Command { ret, .. } = &self.data {
-            writer.integer("ret_form", *ret);
-        }
-        if let PayloadData::Assign(_, right, _) | PayloadData::Binary(_, right, _) = &self.data {
-            writer.integer("right_form", *right);
-        }
-        if let PayloadData::Declare {
-            size: Some(size), ..
-        } = &self.data
-        {
-            writer.integer("size", *size);
-        }
-        if !omit_text {
-            match &self.data {
-                PayloadData::Push(_, _, Some(text))
-                | PayloadData::Text(_, Some(text))
-                | PayloadData::Name(Some(text)) => writer.string("text", text),
-                _ => (),
-            }
-        }
-        match &self.data {
-            PayloadData::Number("value", value) | PayloadData::Push(_, Some(value), None) => {
-                writer.integer("value", *value)
-            }
-            _ => (),
-        }
-        writer.output.push(b'}');
-    }
 }
-fn write_payload_integer(output: &mut Vec<u8>, value: i64) {
-    let mut buffer = [0u8; 20];
-    let mut index = buffer.len();
-    let mut value_abs = value.unsigned_abs();
-    loop {
-        index -= 1;
-        buffer[index] = b'0' + (value_abs % 10) as u8;
-        value_abs /= 10;
-        if value_abs == 0 {
-            break;
-        }
-    }
-    if value < 0 {
-        output.push(b'-');
-    }
-    output.extend_from_slice(&buffer[index..]);
-}
-struct PayloadJson<'a> {
-    output: &'a mut Vec<u8>,
-    first: bool,
-}
-impl PayloadJson<'_> {
-    fn key(&mut self, key: &str) {
-        if !self.first {
-            self.output.extend_from_slice(b", ");
-        }
-        self.first = false;
-        self.output.push(b'"');
-        self.output.extend_from_slice(key.as_bytes());
-        self.output.extend_from_slice(b"\": ");
-    }
-    fn integer(&mut self, key: &str, value: i64) {
-        self.key(key);
-        write_payload_integer(self.output, value);
-    }
-    fn string(&mut self, key: &str, value: &SourceText) {
-        self.key(key);
-        dat::json_string(value, self.output)
-    }
 
-    fn arguments(&mut self, key: &str, args: &[Argument], tables: &NativeTables) {
-        self.key(key);
-        write_payload_arguments(self.output, args, tables)
-    }
-}
-fn write_payload_arguments(output: &mut Vec<u8>, args: &[Argument], tables: &NativeTables) {
-    if args.iter().all(|arg| arg.form != tables.list) {
-        output.push(b'[');
-        for (index, arg) in args.iter().enumerate() {
-            if index > 0 {
-                output.extend_from_slice(b", ");
-            }
-            output.extend_from_slice(b"{\"form\": ");
-            write_payload_integer(output, arg.form);
-            output.push(b'}');
-        }
-        output.push(b']');
-        return;
-    }
-    enum Step<'a> {
-        Arguments(&'a [Argument]),
-        Argument(&'a Argument),
-        Bytes(&'static [u8]),
-    }
-    let mut pending = vec![Step::Arguments(args)];
-    while let Some(step) = pending.pop() {
-        match step {
-            Step::Arguments(args) => {
-                output.push(b'[');
-                pending.push(Step::Bytes(b"]"));
-                for (index, arg) in args.iter().enumerate().rev() {
-                    pending.push(Step::Argument(arg));
-                    if index > 0 {
-                        pending.push(Step::Bytes(b", "));
+impl PayloadData {
+    fn equivalent(&self, other: &Self, omit_text: bool) -> bool {
+        match (self, other) {
+            (Self::Push(a_form, a_value, a_text), Self::Push(b_form, b_value, b_text)) => {
+                a_form == b_form
+                    && (omit_text || a_text == b_text)
+                    && match (a_text, b_text) {
+                        (Some(_), Some(_)) => true,
+                        (None, None) => a_value == b_value,
+                        (Some(_), None) => b_value.is_none(),
+                        (None, Some(_)) => a_value.is_none(),
                     }
-                }
             }
-            Step::Argument(arg) => {
-                output.extend_from_slice(b"{\"form\": ");
-                write_payload_integer(output, arg.form);
-                if arg.form == tables.list {
-                    output.extend_from_slice(b", \"sub\": ");
-                    pending.push(Step::Bytes(b"}"));
-                    pending.push(Step::Arguments(&arg.sub));
+            (Self::Text(a_flag, a_text), Self::Text(b_flag, b_text)) => {
+                a_flag == b_flag && (omit_text || a_text == b_text)
+            }
+            (Self::Name(a_text), Self::Name(b_text)) => omit_text || a_text == b_text,
+            _ => self == other,
+        }
+    }
+}
+
+fn payload_metadata_equal<'a>(
+    pairs: impl IntoIterator<Item = (&'a V, &'a V)>,
+    omit_text: bool,
+) -> Result<bool, Failure> {
+    for (left, right) in pairs {
+        let left = left.map()?;
+        let right = right.map()?;
+        let left = left.borrow();
+        let right = right.borrow();
+        let count = |map: &OrderedMap| {
+            map.entries
+                .iter()
+                .filter(|(key, _)| !omit_text || !matches!(key, V::Str(key) if key.eq_str("text")))
+                .count()
+        };
+        if count(&left) != count(&right) {
+            return Ok(false);
+        }
+        for (key, value) in &left.entries {
+            if omit_text && matches!(key, V::Str(key) if key.eq_str("text")) {
+                continue;
+            }
+            let other = right.get(key)?;
+            let equal = match (value, &other) {
+                (V::Int(a), V::Int(b)) => a == b,
+                (V::Str(a), V::Str(b)) => a == b,
+                (V::List(a), V::List(b)) => {
+                    a.items.len() == b.items.len()
+                        && a.items
+                            .iter()
+                            .zip(&b.items)
+                            .all(|(a, b)| matches!((a, b), (V::Int(a), V::Int(b)) if a == b))
+                }
+                _ => false,
+            };
+            if !equal {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+impl PayloadTrace {
+    fn equivalent(&self, other: &Self, omit_text: bool) -> Result<bool, Failure> {
+        if self.prefix.len() != other.prefix.len()
+            || self.events.len() != other.events.len()
+            || self.suffix.len() != other.suffix.len()
+            || self.commands.len() != other.commands.len()
+        {
+            return Ok(false);
+        }
+        if !payload_metadata_equal(
+            self.prefix
+                .iter()
+                .zip(&other.prefix)
+                .chain(self.suffix.iter().zip(&other.suffix))
+                .chain(self.commands.iter().zip(other.commands.iter())),
+            omit_text,
+        )? {
+            return Ok(false);
+        }
+        match (&self.pack, &other.pack) {
+            (Some(left), Some(right)) if !Rc::ptr_eq(left, right) => {
+                let cached = left
+                    .matches
+                    .borrow()
+                    .as_ref()
+                    .and_then(|(previous, equal)| {
+                        previous
+                            .upgrade()
+                            .filter(|previous| Rc::ptr_eq(previous, right))
+                            .map(|_| *equal)
+                    });
+                let equal = if let Some(equal) = cached {
+                    equal
                 } else {
-                    output.push(b'}');
+                    let equal = left.metadata.len() == right.metadata.len()
+                        && payload_metadata_equal(
+                            left.metadata.iter().zip(&right.metadata),
+                            false,
+                        )?;
+                    *left.matches.borrow_mut() = Some((Rc::downgrade(right), equal));
+                    equal
+                };
+                if !equal {
+                    return Ok(false);
                 }
             }
-            Step::Bytes(bytes) => output.extend_from_slice(bytes),
+            (Some(_), None) | (None, Some(_)) => return Ok(false),
+            _ => (),
         }
+        Ok(self
+            .events
+            .iter()
+            .zip(other.events.iter())
+            .all(|(left, right)| {
+                left.opcode == right.opcode
+                    && left.line == right.line
+                    && left.data.equivalent(&right.data, omit_text)
+            }))
     }
-}
-
-struct PayloadHashes<'py> {
-    hashers: [Bound<'py, PyAny>; 2],
-    sizes: [usize; 2],
-    pending: [Vec<u8>; 2],
-    buffer: Vec<u8>,
-}
-impl<'py> PayloadHashes<'py> {
-    fn new(py: Python<'py>) -> PyResult<Self> {
-        let sha256 = py.import("hashlib")?.getattr("sha256")?;
-        Ok(Self {
-            hashers: [sha256.call0()?, sha256.call0()?],
-            sizes: [0; 2],
-            pending: [Vec::new(), Vec::new()],
-            buffer: Vec::with_capacity(256),
-        })
-    }
-    fn flush(&mut self, index: usize) -> PyResult<()> {
-        if !self.pending[index].is_empty() {
-            self.hashers[index].call_method1(
-                "update",
-                (PyBytes::new(self.hashers[index].py(), &self.pending[index]),),
-            )?;
-            self.pending[index].clear();
-        }
-        Ok(())
-    }
-    fn commit(&mut self, index: usize) -> PyResult<()> {
-        if self.sizes[index] > 0 {
-            self.pending[index].push(b'\n');
-            self.sizes[index] += 1;
-        }
-        self.pending[index].extend_from_slice(&self.buffer);
-        self.sizes[index] += self.buffer.len();
-        if self.pending[index].len() >= 64 * 1024 {
-            self.flush(index)?;
-        }
-        Ok(())
-    }
-    fn metadata(&mut self, event: &V) -> Result<(), Failure> {
-        let map = event.map()?;
-        for index in 0..2 {
-            self.buffer.clear();
-            dat::metadata_bytes(&map, index == 1, &mut self.buffer)?;
-            self.commit(index)?;
-        }
-        Ok(())
-    }
-
-    fn runtime(&mut self, event: &PayloadEvent, tables: &NativeTables) -> PyResult<()> {
-        self.buffer.clear();
-        event.write(tables, false, &mut self.buffer);
-        self.commit(0)?;
-        if event.has_text() {
-            self.buffer.clear();
-            event.write(tables, true, &mut self.buffer);
-        }
-        self.commit(1)
-    }
-
-    fn result(mut self, py: Python<'_>) -> PyResult<Py<PyDict>> {
-        let output = PyDict::new(py);
-        for index in 0..2 {
-            self.flush(index)?;
-            let part = PyDict::new(py);
-            part.set_item("size", self.sizes[index])?;
-            part.set_item("sha256", self.hashers[index].call_method0("hexdigest")?)?;
-            output.set_item(if index == 0 { "full" } else { "no_text" }, part)?;
-        }
-        Ok(output.unbind())
-    }
-}
-fn hash_payload_trace(
-    py: Python<'_>,
-    trace: &PayloadTrace,
-    tables: &NativeTables,
-) -> PyResult<Py<PyDict>> {
-    let work = || -> Result<Py<PyDict>, Failure> {
-        let mut hashes = PayloadHashes::new(py)?;
-        for event in &trace.prefix {
-            hashes.metadata(event)?;
-        }
-        for event in trace.events.iter() {
-            hashes.runtime(event, tables)?;
-        }
-        for event in &trace.suffix {
-            hashes.metadata(event)?;
-        }
-        Ok(hashes.result(py)?)
-    };
-    work().map_err(|error| PyValueError::new_err(error.0))
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -6804,7 +6853,7 @@ fn native_render_line(
         let expr = if condition {
             annotations[index].condition.clone()
         } else {
-            annotations[index].expr.clone()
+            annotations[index].expr.as_ref().map(ExpressionText::source)
         }
         .unwrap_or_else(|| source(""));
         native_expression_source(rt, &expr, compound, condition)
@@ -7030,6 +7079,16 @@ fn native_restore_empty_lines(
 ) -> Result<RestoredLines, Failure> {
     let scene = &instance.scene;
     let references = line_references(rt, &lines)?;
+    let statements = lines
+        .iter()
+        .filter_map(|line| {
+            let text = trim_source(&line.text);
+            (!text.chars.is_empty()
+                && label_definition(&text).is_none_or(|label| definition_has_tail(&text, label)))
+            .then_some(line.target)
+            .flatten()
+        })
+        .collect::<std::collections::HashSet<_>>();
     let mut rows = LabelRows::new(lines);
     let mut seen = rows
         .targets
@@ -7100,16 +7159,7 @@ fn native_restore_empty_lines(
         }
         if seen.contains(&target) {
             let positions = rows.targets.get(&target).cloned().unwrap_or_default();
-            let has_statement = positions.iter().any(|position| {
-                let Some(line) = &rows.lines[*position] else {
-                    return false;
-                };
-                let text = trim_source(&line.text);
-                if text.chars.is_empty() {
-                    return false;
-                }
-                label_definition(&text).is_none_or(|label| definition_has_tail(&text, label))
-            });
+            let has_statement = statements.contains(&target);
             if has_z && l_labels.len() == 1 && (references.contains(&l_labels[0]) || !has_statement)
             {
                 for position in positions {
@@ -7157,7 +7207,7 @@ fn native_restore_empty_lines(
             .map(|line| line.text.clone())
             .collect::<std::collections::HashSet<_>>();
         let mut sequence = 0usize;
-        let mut targets = insertion_targets(&lines);
+        let mut insertions = LineInsertions::new(&lines);
         for (target, labels) in gaps {
             let name = if labels.len() == 1 {
                 let label = labels[0].clone();
@@ -7172,16 +7222,9 @@ fn native_restore_empty_lines(
                     }
                 }
             };
-            let position = targets.partition_point(|old| old.is_none_or(|old| old < target));
-            targets.insert(position, Some(target));
-            lines.insert(
-                position,
-                SourceLine {
-                    text: name,
-                    target: Some(target),
-                },
-            );
+            insertions.add(name, Some(target));
         }
+        lines = insertions.finish(lines);
     }
     Ok((lines, keep))
 }
@@ -7534,7 +7577,7 @@ impl<'a> SourceParser<'a> {
         let expression = if condition {
             annotations[index].condition.clone()
         } else {
-            annotations[index].expr.clone()
+            annotations[index].expr.as_ref().map(ExpressionText::source)
         }
         .unwrap_or_else(|| source(""));
         native_expression_source(self.rt, &expression, context.render.compound, condition)
@@ -8577,7 +8620,7 @@ impl<'a> SourceParser<'a> {
                                 && self.scene.events[target - 1]
                                     .operator
                                     .and_then(|operator| self.scene.tables.binary.get(&operator))
-                                    .is_some_and(|operator| operator.chars == [61, 61])
+                                    .is_some_and(|operator| operator.chars[..] == [61, 61])
                         });
                     break;
                 }
@@ -9000,7 +9043,7 @@ fn source_normalize_quoted(text: &SourceText) -> SourceText {
         index += 1;
     }
     out.push(34);
-    if out == text.chars {
+    if out == text.chars[..] {
         text.clone()
     } else {
         Rc::new(Text::new(out))
@@ -9047,7 +9090,7 @@ fn source_expression(text: &SourceText) -> SourceText {
         out.push(chars[index]);
         index += 1;
     }
-    if out == *chars {
+    if out == chars[..] {
         text.clone()
     } else {
         Rc::new(Text::new(out))

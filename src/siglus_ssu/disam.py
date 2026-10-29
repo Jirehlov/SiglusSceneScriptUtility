@@ -133,6 +133,7 @@ def disassemble_scn_bytes(
             global_command_defs=inc_command_defs,
             global_command_count=inc_command_cnt,
             scene_command_names=scn_cmd_names,
+            global_elements=(pack_context or {}).get("_payload_global_elements"),
         ),
         item_expr=new_expression_item_formatter(
             str_list=str_list or [],
@@ -427,7 +428,7 @@ def disassemble_scn_bytes(
                 gosub_exprs = result.get("_arg_exprs", [])
                 gosub_kw = "gosub" if op == cd_gosub else "gosubstr"
                 gosub_ss = (
-                    f" ; expr={gosub_kw} L{lid:d}({', '.join(gosub_exprs)})"
+                    f" ; expr={gosub_kw} L{lid:d}({', '.join(map(str, gosub_exprs))})"
                     if gosub_exprs
                     else f" ; expr={gosub_kw} L{lid:d}"
                 )

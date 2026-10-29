@@ -554,22 +554,16 @@ def _read_theora_ident_from_stream(path, oggs_off, serial):
 
 
 def _fill_tablea_backlinks(entries):
+    packet_start = 0
+    first = second = third = 0
     for index, entry in enumerate(entries):
+        if entry.aux0 > 0:
+            first, second, third = index, first, second
         if entry.is_packet_start:
-            entries[index] = entry._replace(back_link=index)
-            continue
-        seen_frames = 0
-        back_link = index
-        while back_link > 0:
-            prev = entries[back_link]
-            if seen_frames < 2:
-                if prev.aux0 > 0:
-                    seen_frames += 1
-            elif prev.aux0 > 0:
-                break
-            back_link -= 1
-            if entries[back_link].is_packet_start:
-                break
+            packet_start = index
+            back_link = index
+        else:
+            back_link = max(packet_start, third)
         entries[index] = entry._replace(back_link=back_link)
 
 
