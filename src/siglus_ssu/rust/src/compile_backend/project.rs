@@ -536,10 +536,6 @@ fn max_counter(
     }
 }
 
-fn utf16_units_len(text: &str) -> usize {
-    text.encode_utf16().count()
-}
-
 fn macro_decl_kind(decl_type: &str, kind: &super::ca::ReplaceKind) -> &'static str {
     match decl_type {
         "replace" => "replace",
@@ -763,18 +759,14 @@ fn assign_operator_symbol(codes: &RuntimeCodes, operator: i32) -> String {
     }
 }
 
-fn argument_named_count(args: &super::ast::ArgumentList) -> usize {
-    args.named_count
-}
-
 fn visit_statement_stats(
     node: &AstNode,
     stats: &mut SourceStats,
     ctx: &mut StatementStatContext<'_>,
 ) {
     let mut pending = vec![node];
+    let mut children = Vec::new();
     while let Some(node) = pending.pop() {
-        let mut children = Vec::new();
         match &node.payload {
             AstPayload::Root(items) => {
                 for item in items {
@@ -882,7 +874,7 @@ fn visit_statement_stats(
             AstPayload::Eof => inc_counter(&mut stats.statements, "eof", 1),
             _ => {}
         }
-        pending.extend(children.into_iter().rev());
+        pending.extend(children.drain(..).rev());
     }
 }
 
@@ -894,137 +886,34 @@ fn visit_label_refs(
 ) {
     let mut pending = vec![node];
     while let Some(node) = pending.pop() {
-        let mut children = Vec::new();
         match &node.payload {
-            AstPayload::Root(items) => {
-                for item in items {
-                    children.push(item);
-                }
-            }
-            AstPayload::DefProperty { form, .. } => {
-                if let Some(index) = &form.index {
-                    children.push(index);
-                }
-            }
-            AstPayload::DefCommand {
-                parameters, body, ..
-            } => {
-                for parameter in parameters {
-                    if let Some(index) = &parameter.form.index {
-                        children.push(index);
-                    }
-                }
-                for item in body {
-                    children.push(item);
-                }
-            }
-            AstPayload::Goto { target, args, .. } => {
+            AstPayload::Goto { target, .. } => {
                 if target.atom_type == ctx.codes.la.z_label {
                     z_refs.push(target.opt);
                 } else if target.atom_type == ctx.codes.la.label {
                     label_refs.push(target.opt);
                 }
-                children.extend(args.args.iter().map(|arg| &arg.value));
             }
-            AstPayload::Return { value: Some(value) } => {
-                children.push(value);
+            AstPayload::Literal { atom } if atom.atom_type == ctx.codes.la.label => {
+                label_refs.push(atom.opt);
             }
-            AstPayload::Return { value: None } => {}
-            AstPayload::If { branches } => {
-                for branch in branches {
-                    if let Some(condition) = &branch.condition {
-                        children.push(condition);
-                    }
-                    for item in &branch.body {
-                        children.push(item);
-                    }
-                }
-            }
-            AstPayload::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                for item in init {
-                    children.push(item);
-                }
-                children.push(condition);
-                for item in update {
-                    children.push(item);
-                }
-                for item in body {
-                    children.push(item);
-                }
-            }
-            AstPayload::While { condition, body } => {
-                children.push(condition);
-                for item in body {
-                    children.push(item);
-                }
-            }
-            AstPayload::Switch {
-                condition,
-                cases,
-                default_body,
-            } => {
-                children.push(condition);
-                for case in cases {
-                    children.push(&case.value);
-                    for item in &case.body {
-                        children.push(item);
-                    }
-                }
-                if let Some(body) = default_body {
-                    for item in body {
-                        children.push(item);
-                    }
-                }
-            }
-            AstPayload::Assign { left, right, .. } => {
-                children.push(left);
-                children.push(right);
-            }
-            AstPayload::Command { expression, .. } => {
-                children.push(expression);
-            }
-            AstPayload::Paren { expression } => {
-                children.push(expression);
-            }
-            AstPayload::ExpressionList { values, .. } => {
-                for value in values {
-                    children.push(value);
-                }
-            }
-            AstPayload::Literal { atom } => {
-                if atom.atom_type == ctx.codes.la.label {
-                    label_refs.push(atom.opt);
-                }
-            }
-            AstPayload::Unary { value, .. } => {
-                children.push(value);
-            }
-            AstPayload::Binary { left, right, .. } => {
-                children.push(left);
-                children.push(right);
-            }
-            AstPayload::ElementExpression { elements, .. } => {
-                for element in elements {
-                    children.extend(element.args.args.iter().map(|arg| &arg.value));
-                    if let Some(index) = &element.array_index {
-                        children.push(index);
-                    }
-                }
-            }
-            AstPayload::Label { .. }
-            | AstPayload::ZLabel { .. }
-            | AstPayload::Continue
-            | AstPayload::Break
-            | AstPayload::Text { .. }
-            | AstPayload::Name { .. }
-            | AstPayload::Eof => {}
+            _ => {}
         }
-        pending.extend(children.into_iter().rev());
+        let children_start = pending.len();
+        if let AstPayload::DefCommand {
+            parameters, body, ..
+        } = &node.payload
+        {
+            for parameter in parameters {
+                if let Some(index) = parameter.form.index.as_deref() {
+                    pending.push(index);
+                }
+            }
+            pending.extend(body.iter());
+        } else {
+            node.payload.visit_children(|child| pending.push(child));
+        }
+        pending[children_start..].reverse();
     }
 }
 
@@ -1059,18 +948,14 @@ fn visit_expression_stats(root: &AstNode, stats: &mut SourceStats, codes: &Runti
                 );
             }
             AstPayload::Goto { args, .. } => {
-                inc_counter(
-                    &mut stats.expressions,
-                    "named_args",
-                    argument_named_count(args),
-                );
+                inc_counter(&mut stats.expressions, "named_args", args.named_count);
             }
             AstPayload::ElementExpression { elements, .. } => {
                 for element in elements {
                     inc_counter(
                         &mut stats.expressions,
                         "named_args",
-                        argument_named_count(&element.args),
+                        element.args.named_count,
                     );
                 }
             }
@@ -1139,7 +1024,7 @@ fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
     let utf16_units = input
         .strings
         .iter()
-        .map(|value| utf16_units_len(value))
+        .map(|value| value.encode_utf16().count())
         .sum();
     stats
         .strings

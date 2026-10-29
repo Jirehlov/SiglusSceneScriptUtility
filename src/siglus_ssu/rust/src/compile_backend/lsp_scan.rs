@@ -2,7 +2,7 @@ use super::ast::{AstNode, AstPayload};
 use super::bs::compile_root;
 use super::ca::{CharacterAnalyzer, ReplaceUse};
 use super::codes::RuntimeCodes;
-use super::config::{CompileConstants, parse_compile_constants};
+use super::config::{CompileConstants, extract_item, parse_compile_constants};
 use super::form_table::FormTable;
 use super::ia::{IaData, IaScratch, IncAnalyzer, IncSidecar};
 use super::la::{Atom, LexResult, lex_scene_text_with_source_map};
@@ -59,19 +59,6 @@ fn key(text: &str) -> String {
     text.to_ascii_lowercase()
 }
 
-fn get_dict_item<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyAny>> {
-    dict.get_item(key)?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))
-}
-
-fn item_str(dict: &Bound<'_, PyDict>, name: &str) -> PyResult<String> {
-    Ok(dict
-        .get_item(name)?
-        .map(|value| value.extract::<String>())
-        .transpose()?
-        .unwrap_or_default())
-}
-
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
     let codes = RuntimeCodes::from_constants(constants)?;
     let mut data = IaData::new(
@@ -93,8 +80,8 @@ fn build_inc_project(mut data: IaData, inc_docs: &Bound<'_, PyList>) -> Result<I
     let mut scratch_list = Vec::new();
     for (source_id, item) in inc_docs.iter().enumerate() {
         let item = item.cast::<PyDict>().map_err(|error| error.to_string())?;
-        let path = item_str(item, "path").map_err(|error| error.to_string())?;
-        let text = item_str(item, "text").map_err(|error| error.to_string())?;
+        let path: String = extract_item(item, "path").map_err(|error| error.to_string())?;
+        let text: String = extract_item(item, "text").map_err(|error| error.to_string())?;
         let mut analyzer =
             IncAnalyzer::new_with_sidecar(&text, data.codes.forms.global.name.as_str(), Vec::new());
         analyzer.source_id = source_id + 1;
@@ -118,8 +105,8 @@ pub fn lsp_build_project(
     config: Bound<'_, PyAny>,
 ) -> PyResult<Py<NativeLspProject>> {
     let dict = config.cast_into::<PyDict>()?;
-    let constants = parse_compile_constants(get_dict_item(&dict, "constants")?)?;
-    let inc_docs = get_dict_item(&dict, "inc_docs")?.cast_into::<PyList>()?;
+    let constants = parse_compile_constants(extract_item(&dict, "constants")?)?;
+    let inc_docs = extract_item::<Bound<'_, PyList>>(&dict, "inc_docs")?;
     let base_ia = build_inc_project(
         build_base_ia(&constants).map_err(PyRuntimeError::new_err)?,
         &inc_docs,
@@ -129,7 +116,7 @@ pub fn lsp_build_project(
         .iter()
         .map(|item| {
             let item = item.cast::<PyDict>()?;
-            Ok((item_str(item, "path")?, item_str(item, "text")?))
+            Ok((extract_item(item, "path")?, extract_item(item, "text")?))
         })
         .collect::<PyResult<Vec<_>>>()?;
     Py::new(

@@ -19,6 +19,7 @@ mod sa;
 mod scene_dat;
 mod source_angou;
 
+pub(crate) use ca::is_zen as decompiler_is_zen;
 pub use lsp_scan::{NativeLspProject, lsp_build_project, lsp_scan_document};
 
 use std::cell::Cell;
@@ -318,10 +319,6 @@ impl DecompileFrontend {
             carrier: bracket,
         })
     }
-}
-
-pub(crate) fn decompiler_is_zen(ch: char) -> bool {
-    ca::is_zen(ch)
 }
 
 fn decompile_goto_reference(text: &str) -> Option<(usize, usize, String)> {

@@ -41,16 +41,7 @@ TNMSERR_BS_NEED_VALUE = 5
 
 
 def _form_code(name):
-    forms = C._FORM_CODE
-    if not isinstance(forms, dict):
-        return None
-    key = str(name)
-    if key not in forms:
-        return None
-    try:
-        return int(forms[key])
-    except (TypeError, ValueError):
-        return None
+    return C._FORM_CODE.get(name)
 
 
 def is_value(form):
@@ -678,14 +669,14 @@ def build_scn_dat(plad, out_scn):
 
     sl = list((plad or {}).get("str_list") or [])
     n = len(sl)
-    order_src = out_scn.get("str_sort_index") if isinstance(out_scn, dict) else None
+    order_src = out_scn.get("str_sort_index")
     if isinstance(order_src, (list, tuple)) and len(order_src) == n:
         order = list(order_src)
     else:
         order = list(range(n))
         if n:
             _MSR.shuffle(order)
-    idx_src = out_scn.get("str_index_list") if isinstance(out_scn, dict) else None
+    idx_src = out_scn.get("str_index_list")
     use_idx = isinstance(idx_src, (list, tuple)) and len(idx_src) == n
     idx = [(0, 0)] * n
     u16_map = {}
@@ -1477,9 +1468,7 @@ class BS:
             s.out_scn["scn"].push_i32(_to_int(element.get("element_code", 0) or 0))
             if int(element.get("element_type", 0) or 0) == C.ET_COMMAND:
                 arg_list = element.get("arg_list") or {}
-                arg_cnt = (
-                    len(arg_list.get("arg") or []) if isinstance(arg_list, dict) else 0
-                )
+                arg_cnt = len(arg_list.get("arg") or [])
                 if not (yield (s.bs_arg_list, arg_list, False)):
                     return False
                 ft = s.m_piad["form_table"]
@@ -1490,12 +1479,8 @@ class BS:
                 temp_args = None
                 if isinstance(info, dict):
                     temp = (info.get("arg_map", {}) or {}).get(aid)
-                    temp_args = (
-                        (temp.get("arg_list") if isinstance(temp, dict) else temp)
-                        if temp is not None
-                        else None
-                    )
-                if isinstance(temp_args, list) and arg_cnt < len(temp_args):
+                    temp_args = temp["arg_list"] if temp is not None else None
+                if temp_args is not None and arg_cnt < len(temp_args):
                     for ta in temp_args[arg_cnt:]:
                         tf = (ta or {}).get("form")
                         if tf in (C.FM___ARGS, C.FM___ARGSREF):
@@ -1518,7 +1503,7 @@ class BS:
                 s.out_scn["scn"].push_u8(C.CD_COMMAND)
                 s.out_scn["scn"].push_i32(int(element.get("arg_list_id", 0) or 0))
                 s.out_scn["scn"].push_i32(int(arg_cnt))
-                if isinstance(temp_args, list) and len(arg_list.get("arg") or []) < len(
+                if temp_args is not None and len(arg_list.get("arg") or []) < len(
                     temp_args
                 ):
                     for ta in reversed(temp_args[len(arg_list.get("arg") or []) :]):

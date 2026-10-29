@@ -111,48 +111,28 @@ class FormTable:
         return info
 
     def _load_system_forms(s):
-        forms = C._FORM_CODE
-        if isinstance(forms, dict):
-            forms = forms.keys()
-        for it in forms:
+        for it in C._FORM_CODE:
             s._ensure_form(it)
 
     def _load_system_elements(s):
-        for it in C.SYSTEM_ELEMENT_DEFS:
-            tp, it_parent, it_form, name, owner, group, code, spec = it
-            parent = _form_name(it_parent)
-            form = _form_name(it_form)
+        for tp, parent, form, name, owner, group, code, spec in C.SYSTEM_ELEMENT_DEFS:
             args = parse_arg_spec(spec)
-            et = (
-                C.ET_PROPERTY
-                if str(tp).upper().endswith("PROPERTY") or tp == C.ET_PROPERTY
-                else (
-                    C.ET_COMMAND
-                    if str(tp).upper().endswith("COMMAND") or tp == C.ET_COMMAND
-                    else None
-                )
-            )
-            if not name or et is None:
-                continue
-            named_args = args.get(-1) or []
-            if isinstance(named_args, dict):
-                named_args = named_args.get("arg_list") or []
-            for arg in named_args:
+            for arg in (args.get(-1) or {}).get("arg_list", []):
                 arg["preserve_int_reference"] = (
                     parent,
                     name,
                     arg.get("name"),
                 ) in C.NAMED_INT_REFERENCE_ARGUMENTS
             info = {
-                "type": et,
+                "type": tp,
                 "code": C.create_elm_code(owner, group, int(code)),
                 "name": name,
-                "form": form or C.FM_INT,
+                "form": form,
                 "size": 0,
                 "arg_map": args,
                 "origin": "sys",
             }
-            s.add(parent or C.FM_SCENE, info)
+            s.add(parent, info)
 
     def create_system_form_table(s):
         for k in set(C.FORM_SET) | {
@@ -1025,13 +1005,11 @@ class MA:
 
     @staticmethod
     def check_no_named_arg_list(temp, real):
-        if not isinstance(real, dict):
-            return 0
         args = real.get("arg", [])
         na = int(real.get("named_arg_cnt", 0))
         forms = [((a.get("exp") or {}).get("tmp_form")) for a in args]
         re = len(forms) - na
-        tl = (temp.get("arg_list") if isinstance(temp, dict) else temp) or []
+        tl = temp["arg_list"]
         ti = 0
         ri = 0
         while 1:
@@ -1085,9 +1063,7 @@ class MA:
                 "TNMSERR_MA_CMD_NO_NAMED_ARG_LIST",
                 (element or {}).get("name", {}).get("atom"),
             )
-        tmp = (
-            amap[-1].get("arg_list") if isinstance(amap[-1], dict) else amap[-1]
-        ) or []
+        tmp = amap[-1]["arg_list"]
         args = real.get("arg", [])
         named = args[len(args) - na :]
         u = s.plad.get("unknown_list", [])

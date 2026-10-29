@@ -114,62 +114,19 @@ fn apply_delta(br: &mut BitReader<'_>, nowsmp: &mut i32, nbits: u8, sign_bit: u3
 
 #[inline]
 fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
-    match m {
-        3 => match which {
-            1 => apply_delta(br, nowsmp, 3, 0x04, 5),
-            2 => apply_delta(br, nowsmp, 3, 0x04, 6),
-            3 => apply_delta(br, nowsmp, 3, 0x04, 7),
-            4 => apply_delta(br, nowsmp, 3, 0x04, 8),
-            5 => apply_delta(br, nowsmp, 3, 0x04, 9),
-            6 => apply_delta(br, nowsmp, 3, 0x04, 10),
-            _ => apply_delta(br, nowsmp, 6, 0x20, 11),
-        },
-        4 => match which {
-            1 => apply_delta(br, nowsmp, 4, 0x08, 4),
-            2 => apply_delta(br, nowsmp, 4, 0x08, 5),
-            3 => apply_delta(br, nowsmp, 4, 0x08, 6),
-            4 => apply_delta(br, nowsmp, 4, 0x08, 7),
-            5 => apply_delta(br, nowsmp, 4, 0x08, 8),
-            6 => apply_delta(br, nowsmp, 4, 0x08, 9),
-            _ => apply_delta(br, nowsmp, 7, 0x40, 10),
-        },
-        5 => match which {
-            1 => apply_delta(br, nowsmp, 5, 0x10, 3),
-            2 => apply_delta(br, nowsmp, 5, 0x10, 4),
-            3 => apply_delta(br, nowsmp, 5, 0x10, 5),
-            4 => apply_delta(br, nowsmp, 5, 0x10, 6),
-            5 => apply_delta(br, nowsmp, 5, 0x10, 7),
-            6 => apply_delta(br, nowsmp, 5, 0x10, 8),
-            _ => apply_delta(br, nowsmp, 8, 0x80, 9),
-        },
-        6 => match which {
-            1 => apply_delta(br, nowsmp, 6, 0x20, 2),
-            2 => apply_delta(br, nowsmp, 6, 0x20, 3),
-            3 => apply_delta(br, nowsmp, 6, 0x20, 4),
-            4 => apply_delta(br, nowsmp, 6, 0x20, 5),
-            5 => apply_delta(br, nowsmp, 6, 0x20, 6),
-            6 => apply_delta(br, nowsmp, 6, 0x20, 7),
-            _ => apply_delta(br, nowsmp, 8, 0x80, 9),
-        },
-        7 => match which {
-            1 => apply_delta(br, nowsmp, 7, 0x40, 2),
-            2 => apply_delta(br, nowsmp, 7, 0x40, 3),
-            3 => apply_delta(br, nowsmp, 7, 0x40, 4),
-            4 => apply_delta(br, nowsmp, 7, 0x40, 5),
-            5 => apply_delta(br, nowsmp, 7, 0x40, 6),
-            6 => apply_delta(br, nowsmp, 7, 0x40, 7),
-            _ => apply_delta(br, nowsmp, 8, 0x80, 9),
-        },
-        _ => match which {
-            1 => apply_delta(br, nowsmp, 8, 0x80, 2),
-            2 => apply_delta(br, nowsmp, 8, 0x80, 3),
-            3 => apply_delta(br, nowsmp, 8, 0x80, 4),
-            4 => apply_delta(br, nowsmp, 8, 0x80, 5),
-            5 => apply_delta(br, nowsmp, 8, 0x80, 6),
-            6 => apply_delta(br, nowsmp, 8, 0x80, 7),
-            _ => apply_delta(br, nowsmp, 8, 0x80, 9),
-        },
-    }
+    let (bits, base_shift, large_bits, large_shift) = match m {
+        3 => (3, 5, 6, 11),
+        4 => (4, 4, 7, 10),
+        5 => (5, 3, 8, 9),
+        6 | 7 => (m, 2, 8, 9),
+        _ => (8, 2, 8, 9),
+    };
+    let (bits, shift) = if (1..=6).contains(&which) {
+        (bits, base_shift + which - 1)
+    } else {
+        (large_bits, large_shift)
+    };
+    apply_delta(br, nowsmp, bits, 1 << (bits - 1), shift);
 }
 
 #[inline]
@@ -267,14 +224,6 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let original_size = h.original_size as usize;
-    if h.pack_mod == -1 {
-        let start = NWA_HEADER_SIZE;
-        let end = start + original_size;
-        if end > data.len() {
-            return Err("NWA raw PCM truncated".into());
-        }
-        return Ok(data[start..end].to_vec());
-    }
     let pack_mod = remap_pack_mod(h.pack_mod)?;
 
     let unit_cnt = h.unit_cnt as usize;

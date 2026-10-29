@@ -178,173 +178,61 @@ pub struct CompileConfig {
     pub angou_content: Option<String>,
 }
 
-fn get_dict<'py>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<Bound<'py, PyDict>> {
-    let value = dict
-        .get_item(key)?
-        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))?;
-    Ok(value.cast_into::<PyDict>()?)
-}
-
-fn get_str(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
-    Ok(dict
-        .get_item(key)?
-        .map(|v| v.extract::<String>())
-        .transpose()?
-        .unwrap_or_default())
-}
-
-fn get_bool(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
-    Ok(dict
-        .get_item(key)?
-        .map(|v| v.extract::<bool>())
-        .transpose()?
-        .unwrap_or(false))
-}
-
-fn get_i64(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<i64> {
-    Ok(dict
-        .get_item(key)?
-        .map(|v| v.extract::<i64>())
-        .transpose()?
-        .unwrap_or(0))
-}
-
-fn get_option_usize(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<usize>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(None);
-    };
-    if value.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(value.extract::<usize>()?))
-}
-
-fn get_option_string(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(None);
-    };
-    if value.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(value.extract::<String>()?))
-}
-
-fn get_string_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<String>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(Vec::new());
-    };
-    let list = value.cast::<PyList>()?;
-    let mut out = Vec::with_capacity(list.len());
-    for item in list.iter() {
-        out.push(item.extract::<String>()?);
-    }
-    Ok(out)
-}
-
-fn get_usize_list(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<usize>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(Vec::new());
-    };
-    let list = value.cast::<PyList>()?;
-    let mut out = Vec::with_capacity(list.len());
-    for item in list.iter() {
-        out.push(item.extract::<usize>()?);
-    }
-    Ok(out)
-}
-
-fn get_i32_map(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<HashMap<String, i32>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(HashMap::new());
-    };
-    let source = value.cast::<PyDict>()?;
-    let mut out = HashMap::with_capacity(source.len());
-    for (key, value) in source.iter() {
-        out.insert(key.extract::<String>()?, value.extract::<i32>()?);
-    }
-    Ok(out)
-}
-
-fn get_string_map(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<HashMap<String, String>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(HashMap::new());
-    };
-    let source = value.cast::<PyDict>()?;
-    let mut out = HashMap::with_capacity(source.len());
-    for (key, value) in source.iter() {
-        out.insert(key.extract::<String>()?, value.extract::<String>()?);
-    }
-    Ok(out)
-}
-
-fn get_bytes(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<u8>> {
-    Ok(dict
-        .get_item(key)?
-        .map(|value| value.extract::<Vec<u8>>())
-        .transpose()?
-        .unwrap_or_default())
+pub(super) fn extract_item<'py, T>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<T>
+where
+    T: pyo3::conversion::FromPyObjectOwned<'py>,
+{
+    dict.get_item(key)?
+        .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_string()))?
+        .extract()
+        .map_err(Into::into)
 }
 
 fn get_i32_pairs(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<(i32, i32)>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(Vec::new());
-    };
-    let list = value.cast::<PyList>()?;
-    let mut out = Vec::with_capacity(list.len());
-    for item in list.iter() {
-        let pair = item.cast::<PyList>()?;
-        if pair.len() >= 2 {
-            out.push((
-                pair.get_item(0)?.extract::<i32>()?,
-                pair.get_item(1)?.extract::<i32>()?,
-            ));
-        }
-    }
-    Ok(out)
+    let list: Bound<'_, PyList> = extract_item(dict, key)?;
+    list.iter()
+        .map(|pair| {
+            pair.extract::<[i32; 2]>()
+                .map(|[left, right]| (left, right))
+        })
+        .collect()
 }
 
 fn get_system_elements(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<SystemElementConfig>> {
-    let Some(value) = dict.get_item(key)? else {
-        return Ok(Vec::new());
-    };
-    let list = value.cast::<PyList>()?;
+    let list: Bound<'_, PyList> = extract_item(dict, key)?;
     let mut out = Vec::with_capacity(list.len());
     for item in list.iter() {
         let element = item.cast::<PyDict>()?;
-        let mut arg_map = Vec::new();
-        if let Some(arg_map_value) = element.get_item("arg_map")? {
-            let arg_lists = arg_map_value.cast::<PyList>()?;
-            for arg_list_item in arg_lists.iter() {
-                let arg_list_dict = arg_list_item.cast::<PyDict>()?;
-                let mut args = Vec::new();
-                if let Some(args_value) = arg_list_dict.get_item("args")? {
-                    let args_list = args_value.cast::<PyList>()?;
-                    for arg_item in args_list.iter() {
-                        let arg = arg_item.cast::<PyDict>()?;
-                        args.push(SystemArgConfig {
-                            id: get_i64(arg, "id")? as i32,
-                            name: get_str(arg, "name")?,
-                            form: get_str(arg, "form")?,
-                            def_int: get_i64(arg, "def_int")? as i32,
-                            def_exist: get_bool(arg, "def_exist")?,
-                            preserve_int_reference: get_bool(arg, "preserve_int_reference")?,
-                        });
-                    }
-                }
-                arg_map.push(SystemArgListConfig {
-                    id: get_i64(arg_list_dict, "id")? as i32,
-                    args,
+        let arg_lists: Bound<'_, PyList> = extract_item(element, "arg_map")?;
+        let mut arg_map = Vec::with_capacity(arg_lists.len());
+        for arg_list_item in arg_lists.iter() {
+            let arg_list_dict = arg_list_item.cast::<PyDict>()?;
+            let args_list: Bound<'_, PyList> = extract_item(arg_list_dict, "args")?;
+            let mut args = Vec::with_capacity(args_list.len());
+            for arg_item in args_list.iter() {
+                let arg = arg_item.cast::<PyDict>()?;
+                args.push(SystemArgConfig {
+                    id: extract_item::<i64>(arg, "id")? as i32,
+                    name: extract_item(arg, "name")?,
+                    form: extract_item(arg, "form")?,
+                    def_int: extract_item::<i64>(arg, "def_int")? as i32,
+                    def_exist: extract_item(arg, "def_exist")?,
+                    preserve_int_reference: extract_item(arg, "preserve_int_reference")?,
                 });
             }
+            arg_map.push(SystemArgListConfig {
+                id: extract_item::<i64>(arg_list_dict, "id")? as i32,
+                args,
+            });
         }
         out.push(SystemElementConfig {
-            parent: get_str(element, "parent")?,
-            kind: get_i64(element, "kind")? as i32,
-            code: get_i64(element, "code")? as i32,
-            name: get_str(element, "name")?,
-            form: get_str(element, "form")?,
+            parent: extract_item(element, "parent")?,
+            kind: extract_item::<i64>(element, "kind")? as i32,
+            code: extract_item::<i64>(element, "code")? as i32,
+            name: extract_item(element, "name")?,
+            form: extract_item(element, "form")?,
             arg_map,
-            origin: get_str(element, "origin")?,
+            origin: extract_item(element, "origin")?,
         });
     }
     Ok(out)
@@ -352,39 +240,39 @@ fn get_system_elements(dict: &Bound<'_, PyDict>, key: &str) -> PyResult<Vec<Syst
 
 fn get_source_angou(dict: &Bound<'_, PyDict>) -> PyResult<SourceAngouConfig> {
     Ok(SourceAngouConfig {
-        easy_code: get_bytes(dict, "easy_code")?,
-        easy_index: get_i64(dict, "easy_index")? as usize,
-        mask_code: get_bytes(dict, "mask_code")?,
-        mask_index: get_i64(dict, "mask_index")? as usize,
-        mask_w_smd5_i: get_i64(dict, "mask_w_md5_i")? as usize,
-        mask_w_sur: get_i64(dict, "mask_w_sur")? as usize,
-        mask_w_add: get_i64(dict, "mask_w_add")? as usize,
-        mask_h_smd5_i: get_i64(dict, "mask_h_md5_i")? as usize,
-        mask_h_sur: get_i64(dict, "mask_h_sur")? as usize,
-        mask_h_add: get_i64(dict, "mask_h_add")? as usize,
-        mask_smd5_index: get_i64(dict, "mask_md5_index")? as usize,
-        gomi_code: get_bytes(dict, "gomi_code")?,
-        gomi_index: get_i64(dict, "gomi_index")? as usize,
-        gomi_smd5_index: get_i64(dict, "gomi_md5_index")? as usize,
-        last_code: get_bytes(dict, "last_code")?,
-        last_index: get_i64(dict, "last_index")? as usize,
-        name_code: get_bytes(dict, "name_code")?,
-        name_index: get_i64(dict, "name_index")? as usize,
-        map_w_smd5_i: get_i64(dict, "map_w_md5_i")? as usize,
-        map_w_sur: get_i64(dict, "map_w_sur")? as usize,
-        map_w_add: get_i64(dict, "map_w_add")? as usize,
-        tile_repx: get_i64(dict, "tile_repx")? as i32,
-        tile_repy: get_i64(dict, "tile_repy")? as i32,
-        tile_limit: get_i64(dict, "tile_limit")? as u8,
-        header_size: get_i64(dict, "header_size")? as usize,
+        easy_code: extract_item(dict, "easy_code")?,
+        easy_index: extract_item::<i64>(dict, "easy_index")? as usize,
+        mask_code: extract_item(dict, "mask_code")?,
+        mask_index: extract_item::<i64>(dict, "mask_index")? as usize,
+        mask_w_smd5_i: extract_item::<i64>(dict, "mask_w_md5_i")? as usize,
+        mask_w_sur: extract_item::<i64>(dict, "mask_w_sur")? as usize,
+        mask_w_add: extract_item::<i64>(dict, "mask_w_add")? as usize,
+        mask_h_smd5_i: extract_item::<i64>(dict, "mask_h_md5_i")? as usize,
+        mask_h_sur: extract_item::<i64>(dict, "mask_h_sur")? as usize,
+        mask_h_add: extract_item::<i64>(dict, "mask_h_add")? as usize,
+        mask_smd5_index: extract_item::<i64>(dict, "mask_md5_index")? as usize,
+        gomi_code: extract_item(dict, "gomi_code")?,
+        gomi_index: extract_item::<i64>(dict, "gomi_index")? as usize,
+        gomi_smd5_index: extract_item::<i64>(dict, "gomi_md5_index")? as usize,
+        last_code: extract_item(dict, "last_code")?,
+        last_index: extract_item::<i64>(dict, "last_index")? as usize,
+        name_code: extract_item(dict, "name_code")?,
+        name_index: extract_item::<i64>(dict, "name_index")? as usize,
+        map_w_smd5_i: extract_item::<i64>(dict, "map_w_md5_i")? as usize,
+        map_w_sur: extract_item::<i64>(dict, "map_w_sur")? as usize,
+        map_w_add: extract_item::<i64>(dict, "map_w_add")? as usize,
+        tile_repx: extract_item::<i64>(dict, "tile_repx")? as i32,
+        tile_repy: extract_item::<i64>(dict, "tile_repy")? as i32,
+        tile_limit: extract_item::<i64>(dict, "tile_limit")? as u8,
+        header_size: extract_item::<i64>(dict, "header_size")? as usize,
     })
 }
 
 pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileConstants> {
     super::ca::initialize_cp932(constants.py())?;
     let constants_dict = constants.cast_into::<PyDict>()?;
-    let source_angou_dict = get_dict(&constants_dict, "source_angou")?;
-    let form_code = get_i32_map(&constants_dict, "form_code")?;
+    let source_angou_dict = extract_item::<Bound<'_, PyDict>>(&constants_dict, "source_angou")?;
+    let form_code: HashMap<String, i32> = extract_item(&constants_dict, "form_code")?;
     let mut form_ids = HashMap::with_capacity(form_code.len());
     let mut seen_codes = HashSet::with_capacity(form_code.len());
     let mut next_id = form_code.values().copied().max().unwrap_or(0);
@@ -405,30 +293,34 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
     Ok(CompileConstants {
         form_code,
         form_ids,
-        form_names: get_string_map(&constants_dict, "form_names")?,
-        la_type: get_i32_map(&constants_dict, "la_type")?,
-        op_code: get_i32_map(&constants_dict, "op_code")?,
-        cd_code: get_i32_map(&constants_dict, "cd_code")?,
-        element_code: get_i32_map(&constants_dict, "element_code")?,
-        element_type: get_i32_map(&constants_dict, "element_type")?,
+        form_names: extract_item(&constants_dict, "form_names")?,
+        la_type: extract_item(&constants_dict, "la_type")?,
+        op_code: extract_item(&constants_dict, "op_code")?,
+        cd_code: extract_item(&constants_dict, "cd_code")?,
+        element_code: extract_item(&constants_dict, "element_code")?,
+        element_type: extract_item(&constants_dict, "element_type")?,
         system_elements: get_system_elements(&constants_dict, "system_elements")?,
-        scn_header_fields: get_string_list(&constants_dict, "scn_header_fields")?,
-        scn_header_size: get_i64(&constants_dict, "scn_header_size")? as usize,
-        pack_header_fields: get_string_list(&constants_dict, "pack_header_fields")?,
-        pack_header_size: get_i64(&constants_dict, "pack_header_size")? as usize,
-        z_label_count: get_i64(&constants_dict, "z_label_count")? as usize,
-        logical_and_precedence: get_i64(&constants_dict, "logical_and_precedence")? as i32,
-        easy_angou_code: get_bytes(&constants_dict, "easy_angou_code")?,
-        gameexe_dat_angou_code: get_bytes(&constants_dict, "gameexe_dat_angou_code")?,
-        exe_org: get_bytes(&constants_dict, "exe_org")?,
-        exe_angou_a_idx: get_usize_list(&constants_dict, "exe_angou_a_idx")?,
-        exe_angou_b_idx: get_usize_list(&constants_dict, "exe_angou_b_idx")?,
+        scn_header_fields: extract_item(&constants_dict, "scn_header_fields")?,
+        scn_header_size: extract_item::<i64>(&constants_dict, "scn_header_size")? as usize,
+        pack_header_fields: extract_item(&constants_dict, "pack_header_fields")?,
+        pack_header_size: extract_item::<i64>(&constants_dict, "pack_header_size")? as usize,
+        z_label_count: extract_item::<i64>(&constants_dict, "z_label_count")? as usize,
+        logical_and_precedence: extract_item::<i64>(&constants_dict, "logical_and_precedence")?
+            as i32,
+        easy_angou_code: extract_item(&constants_dict, "easy_angou_code")?,
+        gameexe_dat_angou_code: extract_item(&constants_dict, "gameexe_dat_angou_code")?,
+        exe_org: extract_item(&constants_dict, "exe_org")?,
+        exe_angou_a_idx: extract_item(&constants_dict, "exe_angou_a_idx")?,
+        exe_angou_b_idx: extract_item(&constants_dict, "exe_angou_b_idx")?,
         source_angou: get_source_angou(&source_angou_dict)?,
         message_block_command_codes: get_i32_pairs(&constants_dict, "message_block_command_codes")?,
         read_flag_command_codes: get_i32_pairs(&constants_dict, "read_flag_command_codes")?,
         selection_command_codes: get_i32_pairs(&constants_dict, "selection_command_codes")?,
-        allow_property_out_of_command: get_bool(&constants_dict, "allow_property_out_of_command")?,
-        scene_string_xor_multiplier: u16::try_from(get_i64(
+        allow_property_out_of_command: extract_item(
+            &constants_dict,
+            "allow_property_out_of_command",
+        )?,
+        scene_string_xor_multiplier: u16::try_from(extract_item::<i64>(
             &constants_dict,
             "scene_string_xor_multiplier",
         )?)
@@ -440,57 +332,57 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
 
 pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig> {
     let dict = config.cast_into::<PyDict>()?;
-    let options_dict = get_dict(&dict, "options")?;
-    let context_dict = get_dict(&dict, "context")?;
-    let constants_dict = get_dict(&dict, "constants")?;
-    let cache_dict = get_dict(&dict, "cache")?;
+    let options_dict = extract_item::<Bound<'_, PyDict>>(&dict, "options")?;
+    let context_dict = extract_item::<Bound<'_, PyDict>>(&dict, "context")?;
+    let constants_dict = extract_item::<Bound<'_, PyDict>>(&dict, "constants")?;
+    let cache_dict = extract_item::<Bound<'_, PyDict>>(&dict, "cache")?;
     let constants = parse_compile_constants(constants_dict.into_any())?;
     let options = CompileOptions {
-        dat_repack: get_bool(&options_dict, "dat_repack")?,
-        max_workers: get_option_usize(&options_dict, "max_workers")?,
-        set_shuffle: get_option_string(&options_dict, "set_shuffle")?,
-        gei: get_bool(&options_dict, "gei")?,
-        test_shuffle: get_bool(&options_dict, "test_shuffle")?,
-        force_serial_compile: get_bool(&options_dict, "force_serial_compile")?,
+        dat_repack: extract_item(&options_dict, "dat_repack")?,
+        max_workers: extract_item(&options_dict, "max_workers")?,
+        set_shuffle: extract_item(&options_dict, "set_shuffle")?,
+        gei: extract_item(&options_dict, "gei")?,
+        test_shuffle: extract_item(&options_dict, "test_shuffle")?,
+        force_serial_compile: extract_item(&options_dict, "force_serial_compile")?,
     };
     let context = CompileContext {
-        gameexe_ini: get_str(&context_dict, "gameexe_ini")?,
-        angou_path: get_str(&context_dict, "angou_path")?,
-        key_path: get_str(&context_dict, "key_path")?,
-        exe_el_key: get_bytes(&context_dict, "exe_el_key")?,
-        scn_list: get_string_list(&context_dict, "scn_list")?,
-        scene_display_names: get_string_map(&context_dict, "scene_display_names")?,
-        inc_list: get_string_list(&context_dict, "inc_list")?,
-        ini_list: get_string_list(&context_dict, "ini_list")?,
-        source_texts: get_string_map(&context_dict, "source_texts")?,
-        source_bytes: get_dict(&context_dict, "source_bytes")?.extract()?,
-        utf8: get_bool(&context_dict, "utf8")?,
-        debug_outputs: get_bool(&context_dict, "debug_outputs")?,
-        lzss_mode: get_bool(&context_dict, "lzss_mode")?,
-        exe_angou_mode: get_bool(&context_dict, "exe_angou_mode")?,
-        source_angou_mode: get_bool(&context_dict, "source_angou_mode")?,
-        original_source_mode: get_bool(&context_dict, "original_source_mode")?,
-        easy_link: get_bool(&context_dict, "easy_link")?,
+        gameexe_ini: extract_item(&context_dict, "gameexe_ini")?,
+        angou_path: extract_item(&context_dict, "angou_path")?,
+        key_path: extract_item(&context_dict, "key_path")?,
+        exe_el_key: extract_item(&context_dict, "exe_el_key")?,
+        scn_list: extract_item(&context_dict, "scn_list")?,
+        scene_display_names: extract_item(&context_dict, "scene_display_names")?,
+        inc_list: extract_item(&context_dict, "inc_list")?,
+        ini_list: extract_item(&context_dict, "ini_list")?,
+        source_texts: extract_item(&context_dict, "source_texts")?,
+        source_bytes: extract_item(&context_dict, "source_bytes")?,
+        utf8: extract_item(&context_dict, "utf8")?,
+        debug_outputs: extract_item(&context_dict, "debug_outputs")?,
+        lzss_mode: extract_item(&context_dict, "lzss_mode")?,
+        exe_angou_mode: extract_item(&context_dict, "exe_angou_mode")?,
+        source_angou_mode: extract_item(&context_dict, "source_angou_mode")?,
+        original_source_mode: extract_item(&context_dict, "original_source_mode")?,
+        easy_link: extract_item(&context_dict, "easy_link")?,
     };
     let cache = CompileCache {
-        digest_path: get_str(&cache_dict, "digest_path")?,
-        pending_digests_json: get_str(&cache_dict, "pending_digests_json")?,
-        compile_scene_names: get_string_list(&cache_dict, "compile_scene_names")?,
-        dat_paths: get_string_map(&cache_dict, "dat_paths")?,
-        lzss_paths: get_string_map(&cache_dict, "lzss_paths")?,
-        lzss_remove_paths: get_string_list(&cache_dict, "lzss_remove_paths")?,
-        compiled_scene_files: get_i64(&cache_dict, "compiled_scene_files")? as usize,
-        full_compile_stats: get_bool(&cache_dict, "full_compile_stats")?,
+        digest_path: extract_item(&cache_dict, "digest_path")?,
+        pending_digests_json: extract_item(&cache_dict, "pending_digests_json")?,
+        compile_scene_names: extract_item(&cache_dict, "compile_scene_names")?,
+        dat_paths: extract_item(&cache_dict, "dat_paths")?,
+        lzss_paths: extract_item(&cache_dict, "lzss_paths")?,
+        lzss_remove_paths: extract_item(&cache_dict, "lzss_remove_paths")?,
+        compiled_scene_files: extract_item::<i64>(&cache_dict, "compiled_scene_files")? as usize,
+        full_compile_stats: extract_item(&cache_dict, "full_compile_stats")?,
     };
     Ok(CompileConfig {
-        input_dir: get_str(&dict, "input_dir")?,
-        output_dir: get_str(&dict, "output_dir")?,
-        scene_pck: get_str(&dict, "scene_pck")?,
-        tmp_dir: get_str(&dict, "tmp_dir")?,
+        input_dir: extract_item(&dict, "input_dir")?,
+        output_dir: extract_item(&dict, "output_dir")?,
+        scene_pck: extract_item(&dict, "scene_pck")?,
+        tmp_dir: extract_item(&dict, "tmp_dir")?,
         constants,
         cache,
         options,
         context,
-        angou_content: get_option_string(&dict, "angou_content")?,
+        angou_content: extract_item(&dict, "angou_content")?,
     })
 }

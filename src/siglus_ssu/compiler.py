@@ -829,10 +829,7 @@ def _native_compile_constants_config():
                 (element.get("arg_map") or {}).items(), key=lambda item: int(item[0])
             ):
                 args_snapshot = []
-                source_args = (
-                    arg_list.get("arg_list") if isinstance(arg_list, dict) else arg_list
-                ) or []
-                for index, arg in enumerate(source_args):
+                for index, arg in enumerate(arg_list["arg_list"]):
                     args_snapshot.append(
                         {
                             "id": int(arg.get("id", index) or index),

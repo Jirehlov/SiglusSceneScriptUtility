@@ -21,13 +21,7 @@ impl From<PyErr> for Failure {
 
 impl std::fmt::Debug for Failure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message())
-    }
-}
-
-impl Failure {
-    fn message(&self) -> String {
-        self.0.clone()
+        formatter.write_str(&self.0)
     }
 }
 
@@ -88,7 +82,7 @@ impl Hash for Text {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash)]
 enum Key {
     None,
     Int(i64),
@@ -96,7 +90,6 @@ enum Key {
     Tuple(Vec<Key>),
 }
 
-#[derive(Clone)]
 struct OrderedMap {
     entries: Vec<(V, V)>,
     indices: HashMap<Key, usize>,
@@ -234,15 +227,15 @@ impl V {
         }
     }
     fn map(&self) -> Result<MapRef, Failure> {
-        match self.clone() {
-            Self::Dict(value) | Self::Set(value) => Ok(value),
+        match self {
+            Self::Dict(value) | Self::Set(value) => Ok(value.clone()),
             _ => Err(Failure("native mapping required".into())),
         }
     }
 }
 
 fn values(value: &V) -> Result<Vec<V>, Failure> {
-    match value.clone() {
+    match value {
         V::List(value) | V::Tuple(value) => Ok(value.items.clone()),
         V::Dict(value) | V::Set(value) => Ok(value
             .borrow()
@@ -547,8 +540,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                     ))
                 })
                 .collect::<PyResult<Vec<_>>>()?;
-                let meta = native_record(fields)
-                    .map_err(|error| PyValueError::new_err(error.message()))?;
+                let meta = native_record(fields).map_err(|error| PyValueError::new_err(error.0))?;
                 *scene.meta.borrow_mut() = Some(meta.clone());
                 meta
             };
@@ -564,7 +556,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                     },
                 ),
             ])
-            .map_err(|error| PyValueError::new_err(error.message()));
+            .map_err(|error| PyValueError::new_err(error.0));
         }
 
         let output = V::dictionary();
@@ -574,7 +566,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                 .unwrap()
                 .borrow_mut()
                 .insert(from_py(&key)?, from_py(&value)?)
-                .map_err(|error| PyValueError::new_err(error.message()))?;
+                .map_err(|error| PyValueError::new_err(error.0))?;
         }
         return Ok(output);
     }
@@ -602,7 +594,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                 .unwrap()
                 .borrow_mut()
                 .insert(from_py(&value)?, V::None)
-                .map_err(|error| PyValueError::new_err(error.message()))?;
+                .map_err(|error| PyValueError::new_err(error.0))?;
         }
         return Ok(output);
     }
@@ -614,7 +606,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                 .unwrap()
                 .borrow_mut()
                 .insert(from_py(&value)?, V::None)
-                .map_err(|error| PyValueError::new_err(error.message()))?;
+                .map_err(|error| PyValueError::new_err(error.0))?;
         }
         return Ok(output);
     }
@@ -913,8 +905,8 @@ pub(crate) mod decompiler {
         bundles: Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
         let rt = config.runtime();
-        let Some(hints) = native_build_hints(&rt, &bundles)
-            .map_err(|error| PyValueError::new_err(error.message()))?
+        let Some(hints) =
+            native_build_hints(&rt, &bundles).map_err(|error| PyValueError::new_err(error.0))?
         else {
             return Ok(py.None());
         };
@@ -950,7 +942,7 @@ pub(crate) mod decompiler {
             let instance = new_decompiler(&rt, from_py(&bundle)?, hints.clone(), false)?;
             Ok(V::Str(decompile_scene(&rt, &instance)?))
         };
-        let result = work().map_err(|error| PyValueError::new_err(error.message()))?;
+        let result = work().map_err(|error| PyValueError::new_err(error.0))?;
         to_py(py, &result)
     }
 
@@ -1286,7 +1278,6 @@ pub(crate) mod decompiler {
 pub(crate) mod dat {
     use super::*;
     pub fn complete_payload_trace(
-        _py: Python<'_>,
         config: PyRef<'_, DisamConfig>,
         trace: PyRef<'_, NativeValue>,
         meta: Bound<'_, PyAny>,
@@ -1315,7 +1306,7 @@ pub(crate) mod dat {
             .value())
         };
         Ok(NativeValue {
-            inner: work().map_err(|error| PyValueError::new_err(error.message()))?,
+            inner: work().map_err(|error| PyValueError::new_err(error.0))?,
         })
     }
 
@@ -1751,7 +1742,7 @@ impl DisamConfig {
             };
             output
                 .insert(from_py(&key)?, converted)
-                .map_err(|error| PyValueError::new_err(error.message()))?;
+                .map_err(|error| PyValueError::new_err(error.0))?;
         }
         Ok(V::Dict(Rc::new(RefCell::new(output))))
     }
@@ -1780,8 +1771,7 @@ pub fn disam_config(config: Bound<'_, PyDict>) -> PyResult<DisamConfig> {
         .get_item("compiler")?
         .ok_or_else(|| PyValueError::new_err("missing compiler constants"))?;
     let native_tables = Rc::new(
-        NativeTables::new(&constants, &tables)
-            .map_err(|error| PyValueError::new_err(error.message()))?,
+        NativeTables::new(&constants, &tables).map_err(|error| PyValueError::new_err(error.0))?,
     );
     let config = DisamConfig {
         context_fields: RefCell::new(HashMap::new()),
@@ -1811,7 +1801,7 @@ pub fn disassemble_scn_bytes(
         };
         input
             .insert(from_py(&key)?, converted)
-            .map_err(|error| PyValueError::new_err(error.message()))?;
+            .map_err(|error| PyValueError::new_err(error.0))?;
     }
     let mapping = V::Dict(Rc::new(RefCell::new(input)));
     let work = || -> Result<Py<PyDict>, Failure> {
@@ -1832,7 +1822,7 @@ pub fn disassemble_scn_bytes(
         dictionary.set_item("status", to_py(py, &output.status)?)?;
         Ok(dictionary.unbind())
     };
-    work().map_err(|error| PyValueError::new_err(error.message()))
+    work().map_err(|error| PyValueError::new_err(error.0))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -2536,9 +2526,6 @@ struct ItemFormatter {
     with_code: bool,
 }
 impl ItemFormatter {
-    fn string_literal(&self, text: &SourceText) -> SourceText {
-        source_quote(text)
-    }
     fn item(&self, item: &StackValue, expect: Option<i64>) -> SourceText {
         if let Some(expr) = &item.expr
             && !expr.chars.is_empty()
@@ -2559,7 +2546,7 @@ impl ItemFormatter {
                         .ok()
                         .and_then(|index| self.strings.get(index))
                 })
-                .map(|value| self.string_literal(value))
+                .map(source_quote)
                 .unwrap_or_else(|| {
                     item.value
                         .map(|value| source(&format!("$str[{value}]")))
@@ -2816,6 +2803,7 @@ impl ExpressionState {
         }
         let mut pending = vec![Step::Scan(index, parent)];
         let mut path = vec![None; items.len()];
+        let mut path_end = 0;
         while let Some(step) = pending.pop() {
             match step {
                 Step::Scan(mut index, mut parent) => {
@@ -2872,7 +2860,10 @@ impl ExpressionState {
                     }
                 }
                 Step::Choose(index, code, info) => {
-                    path[index..].fill(None);
+                    if index < path_end {
+                        path[index..path_end].fill(None);
+                    }
+                    path_end = index + 1;
                     if info.kind == self.tables.property_kind {
                         path[index] = Some(info.clone());
                         if command.is_none() && index == items.len() - 1 {
@@ -2999,17 +2990,21 @@ impl ExpressionState {
         let mut parent = self.tables.global;
         let mut index = 0;
         let mut base = source("");
+        let mut suffix = Vec::new();
         while index < items.len() {
             let item = &items[index];
             let code = self.int_value(item);
             if code.is_none() {
                 parent = item.form?;
                 base = self.formatter.item(item, None);
+                suffix.clear();
                 index += 1;
             } else if code == Some(self.tables.array) {
                 parent = *self.tables.array_returns.get(&parent)?;
                 let arg = self.formatter.item(items.get(index + 1)?, None);
-                base = source_concat(&[&base.chars, &[91], &arg.chars, &[93]]);
+                suffix.push(91);
+                suffix.extend_from_slice(&arg.chars);
+                suffix.push(93);
                 index += 2;
             } else {
                 let info = path.path.get(index)?.as_ref()?;
@@ -3026,9 +3021,10 @@ impl ExpressionState {
                 } else {
                     name
                 };
-                if !base.chars.is_empty() {
+                if !base.chars.is_empty() || !suffix.is_empty() {
                     if !name.chars.is_empty() {
-                        base = source_concat(&[&base.chars, &[46], &name.chars]);
+                        suffix.push(46);
+                        suffix.extend_from_slice(&name.chars);
                     }
                 } else if !self.qualified_root
                     && index == 0
@@ -3046,6 +3042,11 @@ impl ExpressionState {
                 index += 1;
             }
         }
+        let base = if suffix.is_empty() {
+            base
+        } else {
+            source_concat(&[&base.chars, &suffix])
+        };
         Some(if base.chars.is_empty() {
             source(if path.info.is_some() {
                 "<?command>"
@@ -6716,7 +6717,7 @@ fn hash_payload_trace(
         }
         Ok(hashes.result(py)?)
     };
-    work().map_err(|error| PyValueError::new_err(error.message()))
+    work().map_err(|error| PyValueError::new_err(error.0))
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]

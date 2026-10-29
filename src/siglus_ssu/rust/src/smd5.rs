@@ -15,11 +15,6 @@ const SMD5_K: [u32; 64] = [
     0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
 ];
 
-#[inline(always)]
-fn left_rotate(x: u32, c: u32) -> u32 {
-    x.rotate_left(c)
-}
-
 pub fn digest(data: &[u8]) -> Vec<u8> {
     let total = data.len();
     let alpha = (total + 1) & 0x3F;
@@ -89,7 +84,7 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
             };
 
             let tmp = a.wrapping_add(f).wrapping_add(SMD5_K[i]).wrapping_add(x[g]);
-            let new_b = b.wrapping_add(left_rotate(tmp, SMD5_S[i]));
+            let new_b = b.wrapping_add(tmp.rotate_left(SMD5_S[i]));
 
             a = d;
             d = c;

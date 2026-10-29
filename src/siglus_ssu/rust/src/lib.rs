@@ -546,7 +546,6 @@ fn decompile_source(
 
 #[pyfunction]
 fn complete_payload_trace(
-    py: Python<'_>,
     config: PyRef<'_, disam::DisamConfig>,
     trace: PyRef<'_, disam::NativeValue>,
     meta: Bound<'_, PyAny>,
@@ -554,7 +553,7 @@ fn complete_payload_trace(
     str_list: Bound<'_, PyAny>,
 ) -> PyResult<disam::NativeValue> {
     catch_native_panic(|| {
-        disam::dat::complete_payload_trace(py, config, trace, meta, pack_context, str_list)
+        disam::dat::complete_payload_trace(config, trace, meta, pack_context, str_list)
     })
 }
 
