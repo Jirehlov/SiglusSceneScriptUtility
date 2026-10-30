@@ -1,10 +1,25 @@
 import re
 import unicodedata
+from bisect import bisect_right
 
-_HAN_RANGES = (
+_CJK_RANGES = (
+    (0x3040, 0x309F),
+    (0x30A0, 0x30FF),
+    (0x3100, 0x312F),
+    (0x31A0, 0x31BF),
+    (0x31F0, 0x31FF),
+    (0x32D0, 0x32FE),
+    (0x3300, 0x3357),
     (0x3400, 0x4DBF),
     (0x4E00, 0x9FFF),
     (0xF900, 0xFAFF),
+    (0xFF66, 0xFF9D),
+    (0xFF9E, 0xFF9F),
+    (0x1B000, 0x1B000),
+    (0x1B001, 0x1B11F),
+    (0x1B120, 0x1B12F),
+    (0x1B132, 0x1B132),
+    (0x1B150, 0x1B167),
     (0x20000, 0x2A6DF),
     (0x2A700, 0x2B73F),
     (0x2B740, 0x2B81F),
@@ -13,26 +28,7 @@ _HAN_RANGES = (
     (0x2EBF0, 0x2EE5F),
     (0x30000, 0x323AF),
 )
-_HIRAGANA_RANGES = (
-    (0x3040, 0x309F),
-    (0x1B001, 0x1B11F),
-    (0x1B132, 0x1B132),
-)
-_KATAKANA_RANGES = (
-    (0x30A0, 0x30FF),
-    (0x31F0, 0x31FF),
-    (0x32D0, 0x32FE),
-    (0x3300, 0x3357),
-    (0xFF66, 0xFF9D),
-    (0xFF9E, 0xFF9F),
-    (0x1B000, 0x1B000),
-    (0x1B120, 0x1B12F),
-    (0x1B150, 0x1B167),
-)
-_BOPOMOFO_RANGES = (
-    (0x3100, 0x312F),
-    (0x31A0, 0x31BF),
-)
+_CJK_RANGE_STARTS = tuple(start for start, _end in _CJK_RANGES)
 _HANGUL_RANGES = (
     (0x1100, 0x11FF),
     (0x3130, 0x318F),
@@ -49,35 +45,18 @@ _NUMBER_CONNECTORS = frozenset(
 _KEYCAP_RE = re.compile(r"[0-9#*]\ufe0f?\u20e3")
 
 
-def _in_ranges(cp: int, ranges) -> bool:
-    for start, end in ranges:
+def _is_hangul(ch: str) -> bool:
+    cp = ord(ch)
+    for start, end in _HANGUL_RANGES:
         if start <= cp <= end:
             return True
     return False
 
 
-def _is_han(ch: str) -> bool:
-    return _in_ranges(ord(ch), _HAN_RANGES)
-
-
-def _is_hiragana(ch: str) -> bool:
-    return _in_ranges(ord(ch), _HIRAGANA_RANGES)
-
-
-def _is_katakana(ch: str) -> bool:
-    return _in_ranges(ord(ch), _KATAKANA_RANGES)
-
-
-def _is_bopomofo(ch: str) -> bool:
-    return _in_ranges(ord(ch), _BOPOMOFO_RANGES)
-
-
-def _is_hangul(ch: str) -> bool:
-    return _in_ranges(ord(ch), _HANGUL_RANGES)
-
-
 def _is_cjk_unit(ch: str) -> bool:
-    return _is_han(ch) or _is_hiragana(ch) or _is_katakana(ch) or _is_bopomofo(ch)
+    cp = ord(ch)
+    index = bisect_right(_CJK_RANGE_STARTS, cp) - 1
+    return index >= 0 and cp <= _CJK_RANGES[index][1]
 
 
 def _is_halfwidth_katakana_base(ch: str) -> bool:
@@ -98,12 +77,10 @@ def _is_decimal_digit(ch: str) -> bool:
     return unicodedata.category(ch) == "Nd"
 
 
-def _is_letter_or_number(ch: str) -> bool:
-    return unicodedata.category(ch)[0] in ("L", "N")
-
-
 def _is_non_asian_core(ch: str) -> bool:
-    return _is_hangul(ch) or (_is_letter_or_number(ch) and (not _is_cjk_unit(ch)))
+    return _is_hangul(ch) or (
+        unicodedata.category(ch)[0] in ("L", "N") and not _is_cjk_unit(ch)
+    )
 
 
 def _prev_non_mark(text: str, idx: int, lower: int) -> int:

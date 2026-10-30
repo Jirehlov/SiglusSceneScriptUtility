@@ -137,12 +137,8 @@ def _int_value(value):
         return -1
 
 
-def _collect_compiled_string_kinds(root, atom_type_map):
+def _collect_compiled_string_kinds(root, atom_type_map, unknown_list):
     out = {}
-    if isinstance(root, dict):
-        unknown_list = list(root.get("_unknown_list") or [])
-    else:
-        unknown_list = []
 
     def _add(atom, kind):
         if not isinstance(atom, dict):
@@ -163,6 +159,13 @@ def _collect_compiled_string_kinds(root, atom_type_map):
             if isinstance(node, list):
                 pending.extend(reversed(node))
             elif isinstance(node, dict):
+                nt = node.get("node_type")
+                if nt == C.NT_ELM_ELEMENT:
+                    pending.append(node.get("arg_list"))
+                    continue
+                if nt == C.NT_ELM_ARRAY:
+                    pending.append(node.get("exp"))
+                    continue
                 if _int_value(node.get("type")) == int(C.LA_T["VAL_STR"]):
                     _add(node, kind)
                 pending.extend(reversed(node.values()))
@@ -217,7 +220,13 @@ def _collect_compiled_string_kinds(root, atom_type_map):
                             else TEXTMAP_KIND_NAME
                         ),
                     )
-        pending.extend(reversed(node.values()))
+            pending.append(node.get("arg_list"))
+            continue
+        elif nt == C.NT_ELM_ARRAY:
+            pending.append(node.get("exp"))
+            continue
+        if "atom" not in node:
+            pending.extend(reversed(node.values()))
     return out
 
 
@@ -290,9 +299,9 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
             f"textmap: MA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
         )
     root = (mad or {}).get("root") if isinstance(mad, dict) else None
-    if isinstance(root, dict):
-        root["_unknown_list"] = list(lad.get("unknown_list") or [])
-    kind_map = _collect_compiled_string_kinds(root, atom_type_map)
+    kind_map = _collect_compiled_string_kinds(
+        root, atom_type_map, lad.get("unknown_list") or []
+    )
     str_list = lad.get("str_list") or []
     tokens = []
     for atom in atom_list:

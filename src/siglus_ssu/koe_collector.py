@@ -386,28 +386,22 @@ def _normalize_voice_text(text):
     return s
 
 
-def _add_entry_ref(entry, chara_no, name, text, callsite):
+def _add_entry_ref(entry, name, text, callsite):
     name = str(name or "")
     text = str(text or "")
     ref = entry["refs"].setdefault(
         (name, text),
-        {"name": name, "text": text, "callsites": set(), "chara_no": -1},
+        {"name": name, "text": text, "callsites": set()},
     )
     ref["callsites"].add(callsite)
     entry["callsites"].add(callsite)
     if name and not entry["name"]:
         entry["name"] = name
-    if text and not entry["text"]:
-        entry["text"] = text
-    if ref["chara_no"] < 0 and chara_no >= 0:
-        ref["chara_no"] = chara_no
-    if entry["chara_no"] < 0 and chara_no >= 0:
-        entry["chara_no"] = chara_no
 
 
 def _multi_text_koe_nos(call_refs):
     texts_by_koe = {}
-    for koe_no, _ch, _names, text, _callsite in call_refs:
+    for koe_no, _names, text, _callsite in call_refs:
         koe_no_i = _try_int(koe_no)
         if koe_no_i is None:
             continue
@@ -520,7 +514,7 @@ def _scan_bundle_calls(bundle, scene_root: str):
             ref_names.extend(name for name in names[1:] if name in aliases)
             ref_text = text or inline_text
             callsite = f"{rel}:{line_no}" if line_no is not None else rel
-            refs.append([koe_no, chara_no, ref_names, ref_text, callsite])
+            refs.append([koe_no, ref_names, ref_text, callsite])
     return refs
 
 
@@ -565,10 +559,7 @@ def _index_ovk(voice_dir: str):
             continue
         z_files += 1
         scene_no = int(m.group(1))
-        chara = -1
-        sm = scene_map.setdefault(scene_no, {})
-        if chara not in sm:
-            sm[chara] = full
+        scene_map.setdefault(scene_no, full)
         try:
             table = sound.read_ovk_table(full)
         except Exception:
@@ -581,10 +572,8 @@ def _index_ovk(voice_dir: str):
             if koe_no not in entries:
                 entries[koe_no] = {
                     "name": "",
-                    "text": "",
                     "callsites": set(),
                     "refs": {},
-                    "chara_no": -1,
                 }
     return (
         scene_map,
@@ -595,15 +584,6 @@ def _index_ovk(voice_dir: str):
         entry_count,
         table_failed,
     )
-
-
-def _select_ovk(scene_map: dict, scene_no: int):
-    sm = scene_map.get(scene_no)
-    if not sm:
-        raise FileNotFoundError(f"Missing OVK for scene {scene_no:04d}")
-    if -1 in sm:
-        return sm[-1]
-    return next(iter(sm.values()))
 
 
 def _format_duration(seconds: float) -> str:
@@ -625,19 +605,11 @@ def _write_master_csv(csv_path, entries, missing_rows, duration_by_koe):
         writer = csv.writer(f, lineterminator="\r\n")
         writer.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
         csv_rows = []
-        for koe_no in sorted(entries.keys()):
-            entry = entries[koe_no]
-            refs = list((entry.get("refs") or {}).values())
+        for koe_no, entry in entries.items():
+            refs = entry["refs"]
             duration_sec = _format_duration_seconds_csv(duration_by_koe.get(koe_no))
             if refs:
-                refs.sort(
-                    key=lambda item: (
-                        str(item.get("name") or ""),
-                        str(item.get("text") or ""),
-                        ";".join(sorted(item.get("callsites") or [])),
-                    )
-                )
-                for ref in refs:
+                for ref in refs.values():
                     callsites = ";".join(sorted(ref["callsites"]))
                     csv_rows.append(
                         (
@@ -658,13 +630,13 @@ def _write_master_csv(csv_path, entries, missing_rows, duration_by_koe):
             csv_rows.append(
                 (
                     int(koe_no),
-                    str(entry["name"] or ""),
-                    str(entry["text"] or ""),
+                    "",
+                    "",
                     "",
                     [
                         str(koe_no),
-                        entry["name"],
-                        entry["text"],
+                        "",
+                        "",
                         duration_sec,
                         "",
                     ],
@@ -785,14 +757,14 @@ def main(argv):
             return 1
         missing_rows = []
         missing_calls = 0
-        for koe_no, ch, names, text, callsite in call_refs:
+        for koe_no, names, text, callsite in call_refs:
             e = entries.get(koe_no)
             if e is None:
                 missing_calls += 1
                 missing_rows.extend((koe_no, name, text, callsite) for name in names)
             else:
                 for name in names:
-                    _add_entry_ref(e, ch, name, text, callsite)
+                    _add_entry_ref(e, name, text, callsite)
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
         multi_text_koe_nos = _multi_text_koe_nos(call_refs)
@@ -850,10 +822,8 @@ def main(argv):
                 try:
                     scene_no = koe_no // 100000
                     entry_no = koe_no % 100000
-                    ovk_path = _select_ovk(scene_map, scene_no)
-                    entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
-                    if entry is None:
-                        raise KeyError(f"Entry not found: entry_no={entry_no}")
+                    ovk_path = scene_map[scene_no]
+                    entry = ovk_entry_map[ovk_path][entry_no]
                     ogg = _read_ogg_from_ovk(ovk_path, entry)
                     duration_by_koe[koe_no] = _duration_from_ovk_entry_ogg(entry, ogg)
                 except Exception as exc:
@@ -940,10 +910,8 @@ def main(argv):
                     scene_no = koe_no // 100000
                     entry_no = koe_no % 100000
                     try:
-                        ovk_path = _select_ovk(scene_map, scene_no)
-                        entry = (ovk_entry_map.get(ovk_path) or {}).get(int(entry_no))
-                        if entry is None:
-                            raise KeyError(f"Entry not found: entry_no={entry_no}")
+                        ovk_path = scene_map[scene_no]
+                        entry = ovk_entry_map[ovk_path][entry_no]
                         ogg = b""
                         if should_extract or (not duration_done):
                             ogg = _read_ogg_from_ovk(ovk_path, entry)

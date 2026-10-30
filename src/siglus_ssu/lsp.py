@@ -1,5 +1,6 @@
 from __future__ import annotations
 from bisect import bisect_left, bisect_right
+from collections import deque
 from itertools import groupby
 from contextlib import redirect_stdout
 from functools import lru_cache
@@ -1799,16 +1800,9 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
     root = mad.get("root")
     if not isinstance(root, dict):
         return []
-    marker = object()
-    old_unknown_list = root.get("_unknown_list", marker)
-    root["_unknown_list"] = list(lad.get("unknown_list") or [])
-    try:
-        kind_map = tm._collect_compiled_string_kinds(root, atom_type_map)
-    finally:
-        if old_unknown_list is marker:
-            root.pop("_unknown_list", None)
-        else:
-            root["_unknown_list"] = old_unknown_list
+    kind_map = tm._collect_compiled_string_kinds(
+        root, atom_type_map, lad.get("unknown_list") or []
+    )
     str_list = lad.get("str_list") or []
     line_count = len(_split_lines_cached(text))
     out: list[StringSemanticRange] = []
@@ -2778,7 +2772,7 @@ class SSLanguageServer:
             _silence_process_stdout()
         self._stdin_fd = self._stdin.fileno()
         self._input_buffer = bytearray()
-        self.deferred_messages: list[dict[str, Any]] = []
+        self.deferred_messages: deque[dict[str, Any]] = deque()
         self.documents: dict[str, DocumentState] = {}
         self.project_cache: dict[str, ProjectCacheEntry] = {}
         self.native_lsp_project_cache: dict[
@@ -2891,7 +2885,7 @@ class SSLanguageServer:
 
     def read_message(self) -> dict[str, Any] | None:
         if self.deferred_messages:
-            return self.deferred_messages.pop(0)
+            return self.deferred_messages.popleft()
         while True:
             message = self.pop_buffered_message()
             if message is not None:
