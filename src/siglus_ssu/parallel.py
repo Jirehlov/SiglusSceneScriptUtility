@@ -144,7 +144,6 @@ def parallel_process_completed_map(
                 if not done:
                     continue
                 for future in done:
-                    pending.discard(future)
                     index = futures.pop(future)
                     item = item_list[index]
                     result = future.result()

@@ -105,10 +105,9 @@ def _scene_inc_block_lines(scene_prop_lines):
 
 def _inject_lines_into_blank_run(lines, block_lines):
     out = list(lines)
-    block = list(block_lines)
-    if not block:
+    if not block_lines:
         return out
-    need = len(block)
+    need = len(block_lines)
     i = 0
     while i < len(out):
         if out[i]:
@@ -118,10 +117,10 @@ def _inject_lines_into_blank_run(lines, block_lines):
         while j < len(out) and not out[j]:
             j += 1
         if (j - i) >= need:
-            out[i : i + need] = block
+            out[i : i + need] = block_lines
             return out
         i = j
-    return block + out
+    return block_lines + out
 
 
 def _form_name(form):
@@ -379,10 +378,9 @@ def _indent_lines(lines):
 
 def _merge_head_with_first_line(head, body_lines):
     text = str(head or "")
-    body = list(body_lines or [])
-    if not body:
+    if not body_lines:
         return [_line_item(text)]
-    first = body[0]
+    first = body_lines[0]
     m = _LINE_LABEL_RE.match(_line_text(first))
     if m:
         indent, label, tail = m.groups()
@@ -392,25 +390,24 @@ def _merge_head_with_first_line(head, body_lines):
             return [
                 _line_item(indent + label, target),
                 _line_item(merged, target),
-            ] + body[1:]
-        return [_line_item(text)] + body
+            ] + body_lines[1:]
+        return [_line_item(text)] + body_lines
     merged = text + "\t" + str(_line_text(first) or "").lstrip()
     out = [_line_item(merged, _line_target(first))]
-    out.extend(body[1:])
+    out.extend(body_lines[1:])
     return out
 
 
 def _merge_same_target_lines(lines):
     out = []
-    kept = list(lines)
-    next_targets = [None] * len(kept)
+    next_targets = [None] * len(lines)
     next_target = None
-    for idx in range(len(kept) - 1, -1, -1):
+    for idx in range(len(lines) - 1, -1, -1):
         next_targets[idx] = next_target
-        target = _line_target(kept[idx])
+        target = _line_target(lines[idx])
         if target is not None:
             next_target = int(target)
-    for idx, line in enumerate(kept):
+    for idx, line in enumerate(lines):
         text = _line_text(line)
         target = _line_target(line)
         stripped = text.strip()
@@ -513,11 +510,10 @@ def _drop_terminal_l_before_eof(lines, eof_line):
     refs = _line_label_refs(lines)
     out = []
     last_target_idx = -1
-    kept = list(lines)
-    for idx, line in enumerate(kept):
+    for idx, line in enumerate(lines):
         if _line_target(line) is not None:
             last_target_idx = idx
-    for idx, line in enumerate(kept):
+    for idx, line in enumerate(lines):
         text = _line_text(line)
         target = _line_target(line)
         m = _LINE_LABEL_RE.match(text)
@@ -816,10 +812,10 @@ def build_decompile_hints(bundles, status):
             for cmd_id, info in command_info.items():
                 if cmd_id >= global_count:
                     continue
-                one = slots.setdefault(
-                    cmd_id,
-                    {"call_forms": set(), "def_forms": set(), "arg_layout": None},
-                )
+                one = slots.get(cmd_id)
+                if one is None:
+                    one = {"call_forms": set(), "def_forms": set(), "arg_layout": None}
+                    slots[cmd_id] = one
                 one["arg_layout"] = _merge_arg_layout(
                     one["arg_layout"], info["arg_layout"]
                 )
@@ -1052,7 +1048,7 @@ class _Decompiler:
         out = {}
         name_by_ofs = {}
         global_commands = self.hints["global_commands"]
-        names = list(self.meta.get("scn_cmd_names") or [])
+        names = self.meta.get("scn_cmd_names") or []
         for idx, ofs_i in enumerate(self.meta["scn_cmd_list"]):
             name = ""
             if 0 <= idx < len(names) and names[idx]:
@@ -1107,7 +1103,10 @@ class _Decompiler:
             owner, cmd_id = _element_owner(ec)
             if owner != C.ELM_OWNER_USER_CMD:
                 continue
-            info = out.setdefault(cmd_id, {"ret_forms": set()})
+            info = out.get(cmd_id)
+            if info is None:
+                info = {"ret_forms": set()}
+                out[cmd_id] = info
             if cmd_id < self.global_command_count:
                 info["arg_layout"] = _merge_arg_layout(
                     info.get("arg_layout"), ev["arg_layout"]
@@ -1359,19 +1358,18 @@ class _Decompiler:
         return out, cur
 
     def _restore_missing_l_labels(self, lines):
-        out = list(lines)
-        insertions = _LineInsertions(out)
+        insertions = _LineInsertions(lines)
         label_events = {}
         for ev in self.events:
             for label in self._event_labels(ev):
                 if label.startswith("L"):
                     label_events.setdefault(_label_token(int(label[1:])), ev)
         defs = set()
-        for line in out:
+        for line in lines:
             m = _LINE_LABEL_RE.match(_line_text(line))
             if m and m.group(2).startswith("#l"):
                 defs.add(m.group(2))
-        refs = _line_label_refs(out)
+        refs = _line_label_refs(lines)
         missing = refs - defs
         while missing:
             pending = set()
@@ -1387,13 +1385,12 @@ class _Decompiler:
                 defs.add(label)
                 pending.update(ref for _, _, ref in _label_ref_spans(text))
             missing = pending - defs
-        return insertions.finish(out)
+        return insertions.finish(lines)
 
     def _dedupe_l_label_defs(self, lines):
-        kept = list(lines)
         best = {}
         drop = set()
-        for idx, line in enumerate(kept):
+        for idx, line in enumerate(lines):
             text = _line_text(line)
             m = _LINE_LABEL_RE.match(text)
             if not m:
@@ -1410,7 +1407,7 @@ class _Decompiler:
                 best[label] = (spec, idx)
             else:
                 drop.add(idx)
-        return [line for idx, line in enumerate(kept) if idx not in drop]
+        return [line for idx, line in enumerate(lines) if idx not in drop]
 
     def _standalone_l_label_targets(self):
         out = {}
@@ -1440,7 +1437,7 @@ class _Decompiler:
 
     def _split_standalone_l_labels(self, lines, standalone, *, unreferenced):
         if not standalone:
-            return list(lines), set()
+            return lines, set()
         refs = _line_label_refs(lines) if unreferenced else None
         out = []
         keep = set()
@@ -1505,7 +1502,7 @@ class _Decompiler:
     def _restore_synthetic_gap_labels(self, lines):
         specs = self._synthetic_gap_label_specs()
         if not specs:
-            return list(lines)
+            return lines
         label_to_spec = {}
         ref_map = {}
         for spec in specs:
@@ -1715,10 +1712,9 @@ class _Decompiler:
                         inherited.add((line_no, _label_token(lid)))
         refs = _line_label_refs(lines)
         out = []
-        kept = list(lines)
         idx = 0
-        while idx < len(kept):
-            line = kept[idx]
+        while idx < len(lines):
+            line = lines[idx]
             text = _line_text(line)
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
@@ -1737,14 +1733,14 @@ class _Decompiler:
                     out.append(_line_item(indent + tail, target))
                     idx += 1
                     continue
-            if m and target is not None and idx + 1 < len(kept):
+            if m and target is not None and idx + 1 < len(lines):
                 _, label, tail = m.groups()
                 if (
                     label.startswith("#l")
                     and (not tail)
                     and (int(target), str(label or "")) in inherited
                 ):
-                    nxt = kept[idx + 1]
+                    nxt = lines[idx + 1]
                     next_target = _line_target(nxt)
                     next_m = _LINE_LABEL_RE.match(_line_text(nxt))
                     if next_target is not None and int(next_target) == int(target):
@@ -1766,22 +1762,21 @@ class _Decompiler:
 
     def _normalize_label_clusters(self, lines):
         refs = _line_label_refs(lines)
-        kept = list(lines)
         idx = 0
-        out = list(kept)
-        while idx < len(kept):
-            text = _line_text(kept[idx])
-            target = _line_target(kept[idx])
+        out = list(lines)
+        while idx < len(lines):
+            text = _line_text(lines[idx])
+            target = _line_target(lines[idx])
             m = _LINE_LABEL_RE.match(text)
             if m:
                 _, label, tail = m.groups()
                 if label.startswith("#l") and not tail and label not in refs:
                     j = idx + 1
-                    while j < len(kept) and not _line_text(kept[j]).strip():
+                    while j < len(lines) and not _line_text(lines[j]).strip():
                         j += 1
-                    if j < len(kept):
-                        next_text = _line_text(kept[j])
-                        next_target = _line_target(kept[j])
+                    if j < len(lines):
+                        next_text = _line_text(lines[j])
+                        next_target = _line_target(lines[j])
                         next_m = _LINE_LABEL_RE.match(next_text)
                         if (
                             next_m
@@ -1794,22 +1789,22 @@ class _Decompiler:
                             out[idx] = _line_item(next_text, target)
                             out[j] = _line_item("", next_target)
             idx += 1
-        kept = list(out)
+        lines = out
         out = []
         idx = 0
-        while idx < len(kept):
-            text = _line_text(kept[idx])
-            target = _line_target(kept[idx])
+        while idx < len(lines):
+            text = _line_text(lines[idx])
+            target = _line_target(lines[idx])
             m = _LINE_LABEL_RE.match(text)
             if m:
                 indent, label, tail = m.groups()
                 if label.startswith("#l") and tail and label not in refs:
                     prev_idx = idx - 1
-                    while prev_idx >= 0 and not _line_text(kept[prev_idx]).strip():
+                    while prev_idx >= 0 and not _line_text(lines[prev_idx]).strip():
                         prev_idx -= 1
                     if prev_idx >= 0:
-                        prev_text = _line_text(kept[prev_idx])
-                        prev_target = _line_target(kept[prev_idx])
+                        prev_text = _line_text(lines[prev_idx])
+                        prev_target = _line_target(lines[prev_idx])
                         prev_m = _LINE_LABEL_RE.match(prev_text)
                         if (
                             prev_m
@@ -1848,13 +1843,12 @@ class _Decompiler:
 
     def _normalize_inline_l_after_z(self, lines):
         refs = _line_label_refs(lines)
-        kept = list(lines)
         mapping = {}
         rewrites = {}
         idx = 0
-        while idx < len(kept):
-            text = _line_text(kept[idx])
-            target = _line_target(kept[idx])
+        while idx < len(lines):
+            text = _line_text(lines[idx])
+            target = _line_target(lines[idx])
             m = _LINE_LABEL_RE.match(text)
             if not m:
                 idx += 1
@@ -1864,13 +1858,13 @@ class _Decompiler:
                 idx += 1
                 continue
             j = idx + 1
-            while j < len(kept) and not _line_text(kept[j]).strip():
+            while j < len(lines) and not _line_text(lines[j]).strip():
                 j += 1
-            if j >= len(kept):
+            if j >= len(lines):
                 idx += 1
                 continue
-            next_text = _line_text(kept[j])
-            next_target = _line_target(kept[j])
+            next_text = _line_text(lines[j])
+            next_target = _line_target(lines[j])
             next_m = _LINE_LABEL_RE.match(next_text)
             if not next_m:
                 idx += 1
@@ -1898,9 +1892,9 @@ class _Decompiler:
             rewrites[j] = indent + l_tail
             idx += 1
         if (not mapping) and (not rewrites):
-            return list(lines)
+            return lines
         out = []
-        for idx, line in enumerate(kept):
+        for idx, line in enumerate(lines):
             text = rewrites.get(idx, _line_text(line))
             out.append(
                 _line_item(
@@ -1912,11 +1906,10 @@ class _Decompiler:
 
     def _rewrite_explicit_l_refs_to_explicit_z(self, lines):
         alias_map = {}
-        kept = list(lines)
-        refs = _line_label_refs(kept)
+        refs = _line_label_refs(lines)
         z_by_ofs = {}
         z_targets = {}
-        for line in kept:
+        for line in lines:
             text = _line_text(line)
             m = _LINE_LABEL_RE.match(text)
             if not m:
@@ -1930,8 +1923,8 @@ class _Decompiler:
             z_by_ofs.setdefault(ofs, []).append(label)
             z_targets[label] = _line_target(line)
         if not z_by_ofs:
-            return kept
-        for line in kept:
+            return lines
+        for line in lines:
             text = _line_text(line)
             m = _LINE_LABEL_RE.match(text)
             if not m:
@@ -1950,9 +1943,9 @@ class _Decompiler:
                 continue
             alias_map[label] = z_labels[0]
         if not alias_map:
-            return kept
+            return lines
         out = []
-        for line in kept:
+        for line in lines:
             text = _line_text(line)
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
@@ -1976,12 +1969,11 @@ class _Decompiler:
         return out
 
     def _rewrite_l_refs_to_existing_label_heads(self, lines):
-        kept = list(lines)
-        refs = _line_label_refs(kept)
+        refs = _line_label_refs(lines)
         if not refs:
-            return kept
+            return lines
         head_by_ofs = {}
-        for line in kept:
+        for line in lines:
             text = _line_text(line)
             m = _LINE_LABEL_RE.match(text) or _SYNTH_LINE_LABEL_RE.match(text)
             if not m:
@@ -2000,42 +1992,41 @@ class _Decompiler:
             if head and head != label:
                 mapping[label] = head
         if not mapping:
-            return kept
+            return lines
         return [
             _line_item(
                 _rewrite_refs(_line_text(line), mapping),
                 _line_target(line),
             )
-            for line in kept
+            for line in lines
         ]
 
     def _collapse_explicit_l_goto_trampolines(self, lines):
-        kept = list(lines)
         out = []
         ref_counts = {}
-        for line in kept:
+        for line in lines:
             text = _line_text(line)
             if "#l" not in text:
                 continue
             for _, _, ref in _label_ref_spans(text):
                 ref_counts[ref] = int(ref_counts.get(ref, 0) or 0) + 1
         idx = 0
-        while idx < len(kept):
-            line = kept[idx]
+        while idx < len(lines):
+            line = lines[idx]
             text = _line_text(line)
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
-            if m and target is not None and idx + 1 < len(kept):
+            if m and target is not None and idx + 1 < len(lines):
                 indent, label, tail = m.groups()
                 tail = str(tail or "")
                 tramp = re.fullmatch(r"\s*goto\s+(#l\d+)\s*", tail)
                 if label.startswith("#l") and tramp:
                     alias = str(tramp.group(1) or "")
                     j = idx + 1
-                    while j < len(kept) and not _line_text(kept[j]).strip():
+                    while j < len(lines) and not _line_text(lines[j]).strip():
                         j += 1
-                    next_text = _line_text(kept[j]) if j < len(kept) else ""
-                    next_target = _line_target(kept[j]) if j < len(kept) else None
+                    next_text = _line_text(lines[j]) if j < len(lines) else ""
+                    next_target = _line_target(lines[j]) if j < len(lines) else None
                     next_m = _LINE_LABEL_RE.match(next_text)
                     tail_text = ""
                     end_idx = None
@@ -2046,9 +2037,9 @@ class _Decompiler:
                         and int(next_target) == int(target)
                     ):
                         k = j
-                        while k < len(kept):
-                            cluster_text = _line_text(kept[k])
-                            cluster_target = _line_target(kept[k])
+                        while k < len(lines):
+                            cluster_text = _line_text(lines[k])
+                            cluster_target = _line_target(lines[k])
                             cluster_m = _LINE_LABEL_RE.match(cluster_text)
                             if (
                                 cluster_target is None
@@ -2078,21 +2069,20 @@ class _Decompiler:
 
     def _move_referenced_l_to_standalone_slot_after_z(self, lines):
         refs = _line_label_refs(lines)
-        kept = list(lines)
         out = []
         idx = 0
-        while idx < len(kept):
-            line = kept[idx]
+        while idx < len(lines):
+            line = lines[idx]
             text = _line_text(line)
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
             if m and str(m.group(2) or "").startswith("#z") and (not m.group(3)):
                 j = idx + 1
-                while j < len(kept) and not _line_text(kept[j]).strip():
+                while j < len(lines) and not _line_text(lines[j]).strip():
                     j += 1
-                if j < len(kept):
-                    mid_text = _line_text(kept[j])
-                    mid_target = _line_target(kept[j])
+                if j < len(lines):
+                    mid_text = _line_text(lines[j])
+                    mid_target = _line_target(lines[j])
                     mid_m = _LINE_LABEL_RE.match(mid_text)
                     if (
                         mid_m
@@ -2101,11 +2091,11 @@ class _Decompiler:
                         and str(mid_m.group(2) or "") not in refs
                     ):
                         k = j + 1
-                        while k < len(kept) and not _line_text(kept[k]).strip():
+                        while k < len(lines) and not _line_text(lines[k]).strip():
                             k += 1
-                        if k < len(kept):
-                            next_text = _line_text(kept[k])
-                            next_target = _line_target(kept[k])
+                        if k < len(lines):
+                            next_text = _line_text(lines[k])
+                            next_target = _line_target(lines[k])
                             next_m = _LINE_LABEL_RE.match(next_text)
                             moved_label = str(next_m.group(2) or "") if next_m else ""
                             moved_tail = str(next_m.group(3) or "") if next_m else ""
@@ -2139,21 +2129,20 @@ class _Decompiler:
 
     def _drop_unreferenced_l_after_z_before_l_tail(self, lines):
         refs = _line_label_refs(lines)
-        kept = list(lines)
         out = []
         idx = 0
-        while idx < len(kept):
-            line = kept[idx]
+        while idx < len(lines):
+            line = lines[idx]
             text = _line_text(line)
             target = _line_target(line)
             m = _LINE_LABEL_RE.match(text)
             if m and str(m.group(2) or "").startswith("#z") and (not m.group(3)):
                 j = idx + 1
-                while j < len(kept) and not _line_text(kept[j]).strip():
+                while j < len(lines) and not _line_text(lines[j]).strip():
                     j += 1
-                if j < len(kept):
-                    mid_text = _line_text(kept[j])
-                    mid_target = _line_target(kept[j])
+                if j < len(lines):
+                    mid_text = _line_text(lines[j])
+                    mid_target = _line_target(lines[j])
                     mid_m = _LINE_LABEL_RE.match(mid_text)
                     if (
                         mid_m
@@ -2165,11 +2154,11 @@ class _Decompiler:
                         and int(target) == int(mid_target)
                     ):
                         k = j + 1
-                        while k < len(kept) and not _line_text(kept[k]).strip():
+                        while k < len(lines) and not _line_text(lines[k]).strip():
                             k += 1
-                        if k < len(kept):
-                            next_text = _line_text(kept[k])
-                            next_target = _line_target(kept[k])
+                        if k < len(lines):
+                            next_text = _line_text(lines[k])
+                            next_target = _line_target(lines[k])
                             next_m = _LINE_LABEL_RE.match(next_text)
                             if (
                                 next_m
@@ -2179,9 +2168,7 @@ class _Decompiler:
                                 and int(next_target) > int(mid_target)
                             ):
                                 out.append(_line_item(text, target))
-                                idx += 1
-                                while idx <= j:
-                                    idx += 1
+                                idx = j + 1
                                 continue
             out.append(_line_item(text, target))
             idx += 1

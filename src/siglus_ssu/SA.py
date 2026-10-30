@@ -73,7 +73,8 @@ class SA:
         }
 
     def warn(s, message, i):
-        s.warnings.setdefault(message, normalize_atom(s._a(i)))
+        if message not in s.warnings:
+            s.warnings[message] = normalize_atom(s._a(i))
 
     @iterative_method
     def _parse(s, parse, i, *args):

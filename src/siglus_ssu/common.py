@@ -1972,7 +1972,7 @@ def parse_i32_header(dat: bytes, fields, size: int) -> dict:
 def read_scn_header(blob):
     if not isinstance(blob, (bytes, bytearray)) or len(blob) < C.SCN_HDR_SIZE:
         return {}
-    fields = list(C.SCN_HDR_FIELDS or [])
+    fields = C.SCN_HDR_FIELDS or []
     if len(fields) * 4 != C.SCN_HDR_SIZE:
         return {}
     return parse_i32_header(blob, fields, C.SCN_HDR_SIZE)

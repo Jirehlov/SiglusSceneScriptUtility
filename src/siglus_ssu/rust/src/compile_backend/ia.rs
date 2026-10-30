@@ -139,8 +139,7 @@ impl IaData {
     }
 
     fn add_replacement(&mut self, replacement: Replacement) {
-        self.replace_tree
-            .add(&replacement.name, replacement.clone());
+        self.replace_tree.add(replacement.clone());
         self.macro_map
             .insert(replacement.name.clone(), self.macro_defs.len());
         self.macro_defs.push(replacement);
@@ -966,7 +965,7 @@ impl IncAnalyzer {
                 kind: ReplaceKind::Macro,
                 name: name.clone(),
                 after,
-                args: args.clone(),
+                args,
                 used_count: 0,
                 decl_type: "macro".to_string(),
                 source: self.replacement_source("macro"),
@@ -1073,11 +1072,10 @@ impl IncAnalyzer {
         Ok(())
     }
 
-    pub fn step2(&mut self, iad: &mut IaData, scratch: &mut IaScratch) -> Result<(), ()> {
+    pub fn step2(&mut self, iad: &mut IaData, scratch: &IaScratch) -> Result<(), ()> {
         for (index, (raw, source_line)) in scratch
             .property_text
-            .clone()
-            .into_iter()
+            .iter()
             .zip(scratch.property_lines.iter().copied())
             .enumerate()
         {
@@ -1086,7 +1084,7 @@ impl IncAnalyzer {
                 .get(index)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let expanded = self.expand(&raw, iad, source_map, source_line)?;
+            let expanded = self.expand(raw, iad, source_map, source_line)?;
             self.text = expanded.text.chars().collect();
             let (name, pos, line) = self.property_name(0, source_line)?;
             let (form, size, _pos, line) = self.property_form(pos, line, iad)?;
@@ -1136,8 +1134,7 @@ impl IncAnalyzer {
         }
         for (index, (raw, source_line)) in scratch
             .command_text
-            .clone()
-            .into_iter()
+            .iter()
             .zip(scratch.command_lines.iter().copied())
             .enumerate()
         {
@@ -1146,7 +1143,7 @@ impl IncAnalyzer {
                 .get(index)
                 .map(Vec::as_slice)
                 .unwrap_or(&[]);
-            let expanded = self.expand(&raw, iad, source_map, source_line)?;
+            let expanded = self.expand(raw, iad, source_map, source_line)?;
             self.text = expanded.text.chars().collect();
             let (name, pos, line) = self.command_name(0, source_line)?;
             let (args, pos, line) = self.command_arg_list(pos, line, iad)?;

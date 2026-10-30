@@ -426,7 +426,7 @@ def _project_link_command_names(project: ProjectContext) -> dict[str, str]:
         return {}
     return {
         ascii_lower(cmd.get("name")): str(cmd.get("name", "") or "")
-        for cmd in list(iad.get("command_list") or [])[:inc_command_cnt]
+        for cmd in (iad.get("command_list") or [])[:inc_command_cnt]
         if str(cmd.get("name", "") or "")
     }
 
@@ -1788,7 +1788,7 @@ def _collect_ss_string_semantics(result: AnalysisResult) -> list[StringSemanticR
     mad = result.mad
     if not isinstance(lad, dict) or not isinstance(mad, dict):
         return []
-    atom_list = list(lad.get("atom_list") or [])
+    atom_list = lad.get("atom_list") or []
     spans = lad.get("atom_span_list")
     if not isinstance(spans, list):
         return []
@@ -3960,15 +3960,6 @@ class SSLanguageServer:
                 doc.analysis_signature = None
             self.publish_diagnostics(doc, include_link=include_link)
 
-    def symbol_occurrences(
-        self, directory: str, symbol_id: str
-    ) -> list[SymbolOccurrence]:
-        return list(
-            self.link_diagnostics_for_directory(directory).occurrences.get(
-                symbol_id, []
-            )
-        )
-
     def command_implementation_locations(
         self, directory: str, symbol_id: str
     ) -> list[dict[str, Any]]:
@@ -4470,9 +4461,8 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         self.report_work_done_progress("Loading workspace references...", 75)
-        refs = self.symbol_occurrences(
-            os.path.dirname(doc.path) or ".", occurrence.symbol_id
-        )
+        entry = self.link_diagnostics_for_directory(os.path.dirname(doc.path) or ".")
+        refs = entry.occurrences.get(occurrence.symbol_id, [])
         if not include_declaration:
             refs = [item for item in refs if not item.definition]
         self.report_work_done_progress("References ready.", 95)

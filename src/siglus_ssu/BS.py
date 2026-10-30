@@ -663,11 +663,11 @@ def build_scn_dat(plad, out_scn):
         h[ok] = ofs
         h[ck] = cnt
 
-    sl = list((plad or {}).get("str_list") or [])
+    sl = (plad or {}).get("str_list") or []
     n = len(sl)
     order_src = out_scn.get("str_sort_index")
     if isinstance(order_src, (list, tuple)) and len(order_src) == n:
-        order = list(order_src)
+        order = order_src
     else:
         order = list(range(n))
         if n:
@@ -699,13 +699,13 @@ def build_scn_dat(plad, out_scn):
     scn = bytes(out_scn.get("scn_bytes") or b"")
     sec("scn_ofs", "scn_size", len(b), len(scn))
     b.extend(scn)
-    label_list = list(out_scn.get("label_list") or [])
+    label_list = out_scn.get("label_list") or []
     sec("label_list_ofs", "label_cnt", len(b), len(label_list))
     write_i32_le_array(b, label_list)
-    z_label_list = list(out_scn.get("z_label_list") or [])
+    z_label_list = out_scn.get("z_label_list") or []
     sec("z_label_list_ofs", "z_label_cnt", len(b), len(z_label_list))
     write_i32_le_array(b, z_label_list)
-    cmd_label_list = list(out_scn.get("cmd_label_list") or [])
+    cmd_label_list = out_scn.get("cmd_label_list") or []
     sec("cmd_label_list_ofs", "cmd_label_cnt", len(b), len(cmd_label_list))
     for it in cmd_label_list:
         if isinstance(it, dict):
@@ -714,7 +714,7 @@ def build_scn_dat(plad, out_scn):
         else:
             write_i32_le(b, it[0])
             write_i32_le(b, it[1])
-    scn_prop_list = list(out_scn.get("scn_prop_list") or [])
+    scn_prop_list = out_scn.get("scn_prop_list") or []
     sec("scn_prop_list_ofs", "scn_prop_cnt", len(b), len(scn_prop_list))
     for it in scn_prop_list:
         if isinstance(it, dict):
@@ -723,8 +723,8 @@ def build_scn_dat(plad, out_scn):
         else:
             write_i32_le(b, _fc(it[0]))
             write_i32_le(b, int(it[1]))
-    scn_prop_name_list = list(out_scn.get("scn_prop_name_list") or [])
-    scn_prop_name_index_list = list(out_scn.get("scn_prop_name_index_list") or [])
+    scn_prop_name_list = out_scn.get("scn_prop_name_list") or []
+    scn_prop_name_index_list = out_scn.get("scn_prop_name_index_list") or []
     if len(scn_prop_name_index_list) != len(scn_prop_name_list):
         scn_prop_name_index_list = _mk_index_list(scn_prop_name_list)
     sec(
@@ -737,12 +737,12 @@ def build_scn_dat(plad, out_scn):
     sec("scn_prop_name_list_ofs", "scn_prop_name_cnt", len(b), len(scn_prop_name_list))
     for s0 in scn_prop_name_list:
         _w_utf16_raw(b, s0)
-    scn_cmd_list = list(out_scn.get("scn_cmd_list") or [])
+    scn_cmd_list = out_scn.get("scn_cmd_list") or []
     sec("scn_cmd_list_ofs", "scn_cmd_cnt", len(b), len(scn_cmd_list))
     for it in scn_cmd_list:
         write_i32_le(b, int((it.get("offset", 0) if isinstance(it, dict) else it) or 0))
-    scn_cmd_name_list = list(out_scn.get("scn_cmd_name_list") or [])
-    scn_cmd_name_index_list = list(out_scn.get("scn_cmd_name_index_list") or [])
+    scn_cmd_name_list = out_scn.get("scn_cmd_name_list") or []
+    scn_cmd_name_index_list = out_scn.get("scn_cmd_name_index_list") or []
     if len(scn_cmd_name_index_list) != len(scn_cmd_name_list):
         scn_cmd_name_index_list = _mk_index_list(scn_cmd_name_list)
     sec(
@@ -755,8 +755,8 @@ def build_scn_dat(plad, out_scn):
     sec("scn_cmd_name_list_ofs", "scn_cmd_name_cnt", len(b), len(scn_cmd_name_list))
     for s0 in scn_cmd_name_list:
         _w_utf16_raw(b, s0)
-    call_prop_name_list = list(out_scn.get("call_prop_name_list") or [])
-    call_prop_name_index_list = list(out_scn.get("call_prop_name_index_list") or [])
+    call_prop_name_list = out_scn.get("call_prop_name_list") or []
+    call_prop_name_index_list = out_scn.get("call_prop_name_index_list") or []
     if len(call_prop_name_index_list) != len(call_prop_name_list):
         call_prop_name_index_list = _mk_index_list(call_prop_name_list)
     sec(
@@ -774,10 +774,10 @@ def build_scn_dat(plad, out_scn):
     )
     for s0 in call_prop_name_list:
         _w_utf16_raw(b, s0)
-    namae_list = list(out_scn.get("namae_list") or [])
+    namae_list = out_scn.get("namae_list") or []
     sec("namae_list_ofs", "namae_cnt", len(b), len(namae_list))
     write_i32_le_array(b, namae_list)
-    read_flag_list = list(out_scn.get("read_flag_list") or [])
+    read_flag_list = out_scn.get("read_flag_list") or []
     sec("read_flag_list_ofs", "read_flag_cnt", len(b), len(read_flag_list))
     for it in read_flag_list:
         write_i32_le(
@@ -1082,7 +1082,7 @@ class BS:
         else:
             s.out_scn["scn"].push_u8(C.CD_GOSUBSTR)
             s.out_scn["scn"].push_i32(label_no)
-        args = list((goto.get("arg_list") or {}).get("arg") or [])
+        args = (goto.get("arg_list") or {}).get("arg") or []
         s.out_scn["scn"].push_i32(len(args))
         for a in args:
             form = dereference(((a or {}).get("exp") or {}).get("tmp_form"))
@@ -1115,7 +1115,7 @@ class BS:
             return True
         if not isinstance(if_, dict):
             return False
-        sub = list(if_.get("sub") or [])
+        sub = if_.get("sub") or []
         label_no_end = len(s.out_scn["label_list"])
         s.out_scn["label_list"].append(0)
         for sb in sub:
@@ -1228,7 +1228,7 @@ class BS:
         if not isinstance(switch, dict):
             return False
         form_l = _fc(dereference((switch.get("cond") or {}).get("node_form")))
-        cases = list(switch.get("case") or [])
+        cases = switch.get("case") or []
         label_size = len(s.out_scn["label_list"])
         label_no_out = label_size
         label_no_case = label_size + 1
@@ -1339,16 +1339,10 @@ class BS:
             return False
         opt = int(((name.get("name") or {}).get("atom") or {}).get("opt", 0) or 0)
         s.out_scn["scn"].push_u8(C.CD_NAME)
-        new_name = True
-        sl = s.out_scn.get("str_list") or []
-        for nid in s.out_scn.get("namae_list") or []:
-            if 0 <= nid < len(sl) and sl[nid] == (
-                sl[opt] if 0 <= opt < len(sl) else None
-            ):
-                new_name = False
-                break
-        if new_name:
-            s.out_scn.get("namae_list", []).append(opt)
+        name_text = s.out_scn["str_list"][opt]
+        if name_text not in s.namae_seen:
+            s.namae_seen.add(name_text)
+            s.out_scn["namae_list"].append(opt)
         return True
 
     def bs_eof(s):
@@ -1433,7 +1427,7 @@ class BS:
             return True
         if not isinstance(arg_list, dict):
             return False
-        args = list(arg_list.get("arg") or [])
+        args = arg_list.get("arg") or []
         for a in args:
             if not isinstance(a, dict):
                 return False
@@ -1501,21 +1495,21 @@ class BS:
                         if tf in (C.FM___ARGS, C.FM___ARGSREF):
                             break
                         s.out_scn["scn"].push_i32(_fc(tf))
-                for a in reversed(list(arg_list.get("arg") or [])):
+                for a in reversed(arg_list.get("arg") or []):
                     tf = ((a or {}).get("exp") or {}).get("tmp_form")
                     s.out_scn["scn"].push_i32(_fc(tf))
                     if tf == C.FM_LIST:
                         smp = (a.get("exp") or {}).get("smp_exp") or {}
                         while smp.get("node_type") == C.NT_SMP_KAKKO:
                             smp = (smp.get("exp") or {}).get("smp_exp") or {}
-                        fl = list(smp.get("exp_list", {}).get("form_list") or [])
+                        fl = smp.get("exp_list", {}).get("form_list") or []
                         s.out_scn["scn"].push_i32(len(fl))
                         for f0 in reversed(fl):
                             s.out_scn["scn"].push_i32(_fc(dereference(f0)))
                 s.out_scn["scn"].push_i32(
                     int((arg_list or {}).get("named_arg_cnt", 0) or 0)
                 )
-                for a in reversed(list(arg_list.get("arg") or [])):
+                for a in reversed(arg_list.get("arg") or []):
                     if int((a or {}).get("node_type", 0) or 0) == C.NT_ARG_WITH_NAME:
                         s.out_scn["scn"].push_i32(int((a or {}).get("name_id", 0) or 0))
                 s.out_scn["scn"].push_i32(_fc(element.get("node_form")))
@@ -1639,6 +1633,7 @@ class BS:
             s.m_piad = piad
             s.loop_label = []
             s.cur_read_flag_no = 0
+            s.namae_seen = set()
             out_scn = {
                 "scn": BinaryStream(),
                 "cmd_label_list": [],
@@ -1646,7 +1641,7 @@ class BS:
                 "read_flag_list": [],
                 "default_arg_fills": 0,
             }
-            sl = list(plad.get("str_list") or [])
+            sl = plad.get("str_list") or []
             str_cnt = len(sl)
             str_sort_index = list(range(str_cnt))
             _MSR.shuffle(str_sort_index)
@@ -1663,8 +1658,8 @@ class BS:
             out_scn["z_label_list"] = [0] * C.TNM_Z_LABEL_CNT
             inc_prop_cnt = int(piad.get("inc_property_cnt", 0) or 0)
             inc_cmd_cnt = int(piad.get("inc_command_cnt", 0) or 0)
-            props = list(piad.get("property_list") or [])
-            cmds = list(piad.get("command_list") or [])
+            props = piad.get("property_list") or []
+            cmds = piad.get("command_list") or []
             user_props = props[inc_prop_cnt:]
             user_cmds = cmds[inc_cmd_cnt:]
             out_scn["scn_prop_list"] = [
@@ -1688,7 +1683,7 @@ class BS:
                 idx.append((ofs, ln))
                 ofs += ln
             out_scn["scn_cmd_name_index_list"] = idx
-            out_scn["call_prop_name_list"] = list(psad.get("call_prop_name_list") or [])
+            out_scn["call_prop_name_list"] = psad.get("call_prop_name_list") or []
             ofs = 0
             idx = []
             for nm in out_scn["call_prop_name_list"]:

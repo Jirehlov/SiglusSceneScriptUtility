@@ -211,7 +211,6 @@ def analyze_file(
         except (EOFError, OSError, ValueError, struct.error) as exc:
             sys.stderr.write(f"analyze: failed to read .sav: {exc}\n")
             return 1
-    return 0
 
 
 def compare_files(
@@ -337,8 +336,6 @@ def compare_files(
         return cgm.compare_cgm(b1, b2)
     if t1 == "tcr":
         return tcr.compare_tcr(b1, b2)
-    print("No structural comparer for this type; comparing sha256 only.")
-    return 0
 
 
 def main(argv):

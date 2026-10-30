@@ -19,13 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[pyfunction]
-fn lzss_pack(
-    py: Python<'_>,
-    data: &[u8],
-    suppress_empty_tail_group: bool,
-) -> PyResult<Py<PyBytes>> {
+fn lzss_pack(py: Python<'_>, data: &[u8], suppress_empty_tail_group: bool) -> Py<PyBytes> {
     let result = py.detach(move || lzss::pack(data, suppress_empty_tail_group));
-    Ok(PyBytes::new(py, &result).into())
+    PyBytes::new(py, &result).into()
 }
 
 #[pyfunction]
@@ -47,16 +43,15 @@ fn lzss32_unpack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
 }
 
 #[pyfunction]
-fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) -> PyResult<()> {
+fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) {
     let data_slice = unsafe { data.as_bytes_mut() };
     xor::cycle_inplace(data_slice, code, start);
-    Ok(())
 }
 
 #[pyfunction]
-fn smd5_digest(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
+fn smd5_digest(py: Python<'_>, data: &[u8]) -> Py<PyBytes> {
     let result = smd5::digest(data);
-    Ok(PyBytes::new(py, &result).into())
+    PyBytes::new(py, &result).into()
 }
 
 #[pyfunction]
@@ -79,10 +74,9 @@ fn tile_copy(
     repy: i32,
     rev: bool,
     lim: u8,
-) -> PyResult<()> {
+) {
     let dst_slice = unsafe { dst.as_bytes_mut() };
     tile::copy(dst_slice, src, bx, by, mask, tx, ty, repx, repy, rev, lim);
-    Ok(())
 }
 
 #[pyfunction]
@@ -204,10 +198,9 @@ fn palette_bgra(py: Python<'_>, palette: Vec<u32>, indices: &[u8]) -> PyResult<P
         .len()
         .checked_mul(4)
         .ok_or_else(|| PyOverflowError::new_err("image is too large"))?;
-    let indices = indices.to_vec();
     let result = py.detach(move || {
         let mut out = Vec::with_capacity(capacity);
-        for index in indices {
+        for &index in indices {
             let color = *palette.get(index as usize)?;
             out.extend_from_slice(&color.to_le_bytes());
         }
@@ -500,9 +493,9 @@ fn lsp_build_project(
 fn lsp_scan_document(
     py: Python<'_>,
     project: PyRef<'_, compile_backend::NativeLspProject>,
-    path: String,
-    path_identity: String,
-    text: String,
+    path: &str,
+    path_identity: &str,
+    text: &str,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
     catch_native_panic(|| {

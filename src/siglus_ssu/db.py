@@ -208,9 +208,6 @@ def main(argv):
             return 1, out_path
 
         return run_batch(files, _proc)
-    if mode != "c":
-        eprint("error: unknown mode")
-        return 2
     expected_dbs = ""
     if test_shuffle:
         if len(argv) != 3:

@@ -61,7 +61,11 @@ def add_replace_tree(rt, name, rep):
             )
             c[ch] = child
         else:
-            child = n["c"].setdefault(ch, new_replace_tree())
+            c = n["c"]
+            child = c.get(ch)
+            if child is None:
+                child = new_replace_tree()
+                c[ch] = child
         n = child
     n["r"] = rep
 

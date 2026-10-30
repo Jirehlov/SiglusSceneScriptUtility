@@ -328,11 +328,10 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
     if not isinstance(bundle, dict):
         eprint(f"{prefix}: skipped invalid disassembly bundle", errors="replace")
         return out
-    trace_obj = bundle.get("trace") or []
-    if not isinstance(trace_obj, (list, tuple)):
+    trace = bundle.get("trace") or []
+    if not isinstance(trace, (list, tuple)):
         eprint(f"{prefix}: skipped invalid trace container", errors="replace")
         return out
-    trace = list(trace_obj)
     fm_str = int((C._FORM_CODE or {}).get(C.FM_STR, -1))
     if fm_str < 0:
         return out
@@ -639,7 +638,7 @@ def _process_dat(
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1
-    candidates = list(exe_el_candidates or [])
+    candidates = exe_el_candidates or []
     if not candidates:
         candidates = [b""]
     parsed = None

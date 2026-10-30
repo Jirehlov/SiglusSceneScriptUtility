@@ -9,7 +9,7 @@ from .common import (
     write_bytes,
     scan_text_comments,
 )
-from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace as _xor_cycle_inplace
+from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace
 from .path_policy import read_file_exists
 
 
@@ -44,12 +44,6 @@ class IniFileAnalizer:
             return self._error(result.get("line", 0), result.get("message", ""))
         self._last = result.get("text", "")
         return True
-
-
-def xor_cycle_inplace(b, code):
-    if not code:
-        raise ValueError("xor_cycle_inplace: missing code")
-    _xor_cycle_inplace(b, code, 0)
 
 
 def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):

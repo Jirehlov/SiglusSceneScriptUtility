@@ -13,7 +13,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone)]
 struct LspDefinition {
     name: String,
     path: String,
@@ -87,10 +86,10 @@ fn build_inc_project(mut data: IaData, inc_docs: &Bound<'_, PyList>) -> Result<I
             .map_err(|_| format!("{path}:{}: {}", analyzer.error_line, analyzer.error_str))?;
         scratch_list.push((path, scratch));
     }
-    for (path, mut scratch) in scratch_list {
+    for (path, scratch) in scratch_list {
         let mut analyzer = IncAnalyzer::new("", data.codes.forms.global.name.as_str());
         analyzer
-            .step2(&mut data, &mut scratch)
+            .step2(&mut data, &scratch)
             .map_err(|_| format!("{path}:{}: {}", analyzer.error_line, analyzer.error_str))?;
     }
     Ok(data)
@@ -232,21 +231,6 @@ fn label_symbol_id(path_identity: &str, name: &str) -> String {
     format!("label:{path_identity}:{}", name.to_ascii_lowercase())
 }
 
-fn append_definition(defs: &mut HashMap<String, Vec<LspDefinition>>, record: LspDefinition) {
-    defs.entry(record.name.to_ascii_lowercase())
-        .or_default()
-        .push(record);
-}
-
-fn append_document_definition(
-    defs: &mut HashMap<String, Vec<LspDefinition>>,
-    document_symbols: &mut Vec<LspDefinition>,
-    record: LspDefinition,
-) {
-    append_definition(defs, record.clone());
-    document_symbols.push(record);
-}
-
 fn format_arg_list(args: Vec<(String, String)>) -> String {
     if args.is_empty() {
         return "()".to_string();
@@ -278,7 +262,6 @@ fn collect_definitions_node(
     lex: &LexResult,
     path: &str,
     current_command: &str,
-    defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
 ) {
     let mut pending = vec![(node, current_command)];
@@ -305,7 +288,7 @@ fn collect_definitions_node(
                     start_char: -1,
                     end_char: -1,
                 };
-                append_document_definition(defs, document_symbols, record);
+                document_symbols.push(record);
             }
             AstPayload::ZLabel { z_index, .. } => {
                 let name = format!("#z{z_index}");
@@ -322,7 +305,7 @@ fn collect_definitions_node(
                     start_char: -1,
                     end_char: -1,
                 };
-                append_document_definition(defs, document_symbols, record);
+                document_symbols.push(record);
             }
             AstPayload::DefCommand {
                 name,
@@ -350,7 +333,7 @@ fn collect_definitions_node(
                     start_char: -1,
                     end_char: -1,
                 };
-                append_document_definition(defs, document_symbols, record);
+                document_symbols.push(record);
                 for parameter in parameters {
                     let record = LspDefinition {
                         name: parameter.name.clone(),
@@ -365,7 +348,7 @@ fn collect_definitions_node(
                         start_char: -1,
                         end_char: -1,
                     };
-                    append_document_definition(defs, document_symbols, record);
+                    document_symbols.push(record);
                 }
                 for item in body {
                     children.push((item, name.as_str()));
@@ -395,7 +378,7 @@ fn collect_definitions_node(
                     start_char: -1,
                     end_char: -1,
                 };
-                append_document_definition(defs, document_symbols, record);
+                document_symbols.push(record);
             }
             AstPayload::If { branches } => {
                 for branch in branches {
@@ -501,6 +484,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
         });
     };
     let codes = &input.project.base_ia.codes.la;
+    let mut declaration_positions = None;
     for atom in &input.lex.atom_list {
         if let Some((kind, identity, declaration, parameter)) = input.bindings.get(&atom.id) {
             let name = input
@@ -554,12 +538,19 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
                 name
             };
             let symbol_id = label_symbol_id(input.path_identity, &identity);
-            let declaration = input.document_symbols.iter().any(|record| {
-                record.symbol_id == symbol_id
-                    && token.as_ref().is_some_and(|token| {
-                        record.line == token.line + 1
-                            && record.start_char == token.start_char as isize
-                    })
+            let declaration = token.as_ref().is_some_and(|token| {
+                let positions = declaration_positions.get_or_insert_with(|| {
+                    input
+                        .document_symbols
+                        .iter()
+                        .map(|record| (record.symbol_id.as_str(), record.line, record.start_char))
+                        .collect::<HashSet<_>>()
+                });
+                positions.contains(&(
+                    symbol_id.as_str(),
+                    token.line + 1,
+                    token.start_char as isize,
+                ))
             });
             append(token, symbol_id, "label", "variable", declaration, false);
         }
@@ -626,7 +617,6 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
 }
 
 fn add_inline_inc_definitions(
-    defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
     sidecar: &IncSidecar,
     source_files: &[(&str, &[Vec<char>])],
@@ -639,54 +629,48 @@ fn add_inline_inc_definitions(
         if decl.name.is_empty() {
             continue;
         }
-        append_document_definition(
-            defs,
-            document_symbols,
-            LspDefinition {
-                name: decl.name.clone(),
-                path: path.to_string(),
-                line: decl.line.max(1),
-                kind: decl.kind.clone(),
-                symbol_id: if matches!(decl.kind.as_str(), "macro" | "define" | "replace") {
-                    local_macro_symbol_id(&decl.kind, path_identity, &decl.name)
-                } else {
-                    binding_symbol_id(
-                        path_identity,
-                        &if decl.kind == "command" {
-                            SourceBindingKind::LocalCommand
-                        } else {
-                            SourceBindingKind::LocalProperty
-                        },
-                        &decl.name,
-                    )
-                },
-                atom_id: -1,
-                detail: String::new(),
-                scope: "scene-local".to_string(),
-                signature: String::new(),
-                start_char: decl.start_char as isize,
-                end_char: decl.end_char as isize,
+        document_symbols.push(LspDefinition {
+            name: decl.name.clone(),
+            path: path.to_string(),
+            line: decl.line.max(1),
+            kind: decl.kind.clone(),
+            symbol_id: if matches!(decl.kind.as_str(), "macro" | "define" | "replace") {
+                local_macro_symbol_id(&decl.kind, path_identity, &decl.name)
+            } else {
+                binding_symbol_id(
+                    path_identity,
+                    &if decl.kind == "command" {
+                        SourceBindingKind::LocalCommand
+                    } else {
+                        SourceBindingKind::LocalProperty
+                    },
+                    &decl.name,
+                )
             },
-        );
+            atom_id: -1,
+            detail: String::new(),
+            scope: "scene-local".to_string(),
+            signature: String::new(),
+            start_char: decl.start_char as isize,
+            end_char: decl.end_char as isize,
+        });
     }
 }
 
-fn scene_commands(local_defs: &HashMap<String, Vec<LspDefinition>>) -> Vec<LspDefinition> {
-    let mut out = local_defs
-        .values()
-        .flat_map(|records| records.iter())
+fn scene_commands(document_symbols: &[LspDefinition]) -> Vec<&LspDefinition> {
+    let mut out = document_symbols
+        .iter()
         .filter(|record| record.kind == "command" && record.scope == "scene")
-        .cloned()
         .collect::<Vec<_>>();
     out.sort_by(|left, right| {
         (
-            left.path.clone(),
+            left.path.as_str(),
             left.line,
             left.start_char,
             left.name.to_ascii_lowercase(),
         )
             .cmp(&(
-                right.path.clone(),
+                right.path.as_str(),
                 right.line,
                 right.start_char,
                 right.name.to_ascii_lowercase(),
@@ -698,9 +682,9 @@ fn scene_commands(local_defs: &HashMap<String, Vec<LspDefinition>>) -> Vec<LspDe
 pub fn lsp_scan_document(
     py: Python<'_>,
     project: PyRef<'_, NativeLspProject>,
-    path: String,
-    path_identity: String,
-    text: String,
+    path: &str,
+    path_identity: &str,
+    text: &str,
     run_bs: bool,
 ) -> PyResult<Py<PyDict>> {
     let source_text = text.replace('\r', "");
@@ -730,7 +714,7 @@ pub fn lsp_scan_document(
         if analyzer.step1(&mut ia_data, &mut scratch).is_err() {
             return diagnostic_result(py);
         }
-        if analyzer.step2(&mut ia_data, &mut scratch).is_err() {
+        if analyzer.step2(&mut ia_data, &scratch).is_err() {
             return diagnostic_result(py);
         }
         scene_sidecar = analyzer.sidecar_data;
@@ -780,21 +764,13 @@ pub fn lsp_scan_document(
     {
         return diagnostic_result(py);
     }
-    let mut local_defs = HashMap::new();
     let mut document_symbols = Vec::new();
-    collect_definitions_node(
-        &root,
-        &lex,
-        &path,
-        "",
-        &mut local_defs,
-        &mut document_symbols,
-    );
+    collect_definitions_node(&root, &lex, path, "", &mut document_symbols);
     let source_lines = source_text
         .split('\n')
         .map(|line| line.chars().collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    let mut source_files = vec![(path.as_str(), source_lines.as_slice())];
+    let mut source_files = vec![(path, source_lines.as_slice())];
     source_files.extend(
         project
             .source_files
@@ -802,11 +778,10 @@ pub fn lsp_scan_document(
             .map(|(path, lines)| (path.as_str(), lines.as_slice())),
     );
     add_inline_inc_definitions(
-        &mut local_defs,
         &mut document_symbols,
         &scene_sidecar,
         &source_files,
-        &path_identity,
+        path_identity,
     );
     for record in &mut document_symbols {
         if let Some(atom) = lex.atom_list.get(record.atom_id as usize) {
@@ -827,19 +802,15 @@ pub fn lsp_scan_document(
             }
         }
         if let Some((kind, identity, _, _)) = bindings.get(&record.atom_id) {
-            record.symbol_id = binding_symbol_id(&path_identity, kind, identity);
+            record.symbol_id = binding_symbol_id(path_identity, kind, identity);
         } else if matches!(record.kind.as_str(), "label" | "z_label") {
-            record.symbol_id = label_symbol_id(&path_identity, &record.name);
+            record.symbol_id = label_symbol_id(path_identity, &record.name);
         }
-    }
-    local_defs.clear();
-    for record in &document_symbols {
-        append_definition(&mut local_defs, record.clone());
     }
     let commands = if run_bs {
         Vec::new()
     } else {
-        scene_commands(&local_defs)
+        scene_commands(&document_symbols)
     };
     let (occurrences, unmapped_bindings) = if run_bs {
         (Vec::new(), Vec::new())
@@ -848,7 +819,7 @@ pub fn lsp_scan_document(
             project: &project,
             lex: &lex,
             source_files: &source_files,
-            path_identity: &path_identity,
+            path_identity,
             bindings: &bindings,
             replace_uses: &scene.replace_uses,
             inc_replace_uses: &scene_sidecar.replace_uses,

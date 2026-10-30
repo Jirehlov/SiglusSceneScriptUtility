@@ -245,7 +245,7 @@ def iter_ovk_entries(
     ovk_path: str,
     entries: List[OVKEntry] | None = None,
 ) -> Iterator[Tuple[int, bytes]]:
-    table = read_ovk_table(ovk_path) if entries is None else list(entries)
+    table = read_ovk_table(ovk_path) if entries is None else entries
     if not table:
         return
     with open_read(ovk_path) as f:

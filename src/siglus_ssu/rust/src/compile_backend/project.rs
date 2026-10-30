@@ -1254,7 +1254,7 @@ fn build_original_source_chunks(
             sources.len(),
             workers
         ))?;
-        let tmp_dir = config.tmp_dir.clone();
+        let tmp_dir = &config.tmp_dir;
         let source_count = sources.len();
         let mut results = std::iter::repeat_with(|| None)
             .take(source_count)
@@ -1264,18 +1264,21 @@ fn build_original_source_chunks(
             workers,
             || (),
             |(), (name, path)| -> Result<Option<(String, Vec<u8>)>, String> {
+                let owned_source;
                 let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
-                    raw.clone()
+                    raw.as_slice()
                 } else {
                     if !path.is_file() {
                         return Ok(None);
                     }
-                    fs::read(&path).map_err(|error| format_path_error(&path, error))?
+                    owned_source =
+                        fs::read(&path).map_err(|error| format_path_error(&path, error))?;
+                    &owned_source
                 };
-                let encrypted = encrypt_source(&raw, &name, &config.constants.source_angou)?;
+                let encrypted = encrypt_source(raw, &name, &config.constants.source_angou)?;
                 if !tmp_dir.is_empty() {
                     write_cached_bytes(
-                        &Path::new(&tmp_dir)
+                        &Path::new(tmp_dir)
                             .join("os")
                             .join(name.replace('\\', std::path::MAIN_SEPARATOR_STR)),
                         &encrypted,
@@ -1310,15 +1313,17 @@ fn build_original_source_chunks(
         for (name, path) in sources {
             let stage_start = Instant::now();
             log_stage(log, "OS", &scene_display_name(config, &name))?;
+            let owned_source;
             let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
-                raw.clone()
+                raw.as_slice()
             } else {
                 if !path.is_file() {
                     continue;
                 }
-                fs::read(&path).map_err(|error| format_path_error(&path, error))?
+                owned_source = fs::read(&path).map_err(|error| format_path_error(&path, error))?;
+                &owned_source
             };
-            let encrypted = encrypt_source(&raw, &name, &config.constants.source_angou)?;
+            let encrypted = encrypt_source(raw, &name, &config.constants.source_angou)?;
             if !config.tmp_dir.is_empty() {
                 write_cached_bytes(
                     &tmp_os_dir.join(name.replace('\\', std::path::MAIN_SEPARATOR_STR)),
@@ -1388,10 +1393,10 @@ fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<Ia
             .map_err(|_| line_error(&display_name, analyzer.error_line, &analyzer.error_str))?;
         scratch_list.push((display_name, scratch));
     }
-    for (display_name, mut scratch) in scratch_list {
+    for (display_name, scratch) in scratch_list {
         let mut analyzer = IncAnalyzer::new("", data.codes.forms.global.name.as_str());
         analyzer
-            .step2(&mut data, &mut scratch)
+            .step2(&mut data, &scratch)
             .map_err(|_| line_error(&display_name, analyzer.error_line, &analyzer.error_str))?;
         if config.context.debug_outputs && !config.tmp_dir.is_empty() {
             let stem = scene_stem(&display_name);
@@ -1446,7 +1451,7 @@ fn prepare_scene(
         scene_inc_properties = scratch.property_text.len();
         scene_inc_commands = scratch.command_text.len();
         scene_ia
-            .step2(&mut ia_data, &mut scratch)
+            .step2(&mut ia_data, &scratch)
             .map_err(|_| scene_error("UNK_ERROR", display_name, scene_ia.error_line))?;
     }
     let scene_text = ca
@@ -1600,32 +1605,20 @@ fn finalize_scene(
         header_size: config.constants.scn_header_size,
     };
     let string_count = prepared.scene.str_list.len();
-    let mut generated_order: Vec<usize> = (0..string_count).collect();
+    let mut string_order: Vec<usize> = (0..string_count).collect();
     if string_count > 0 {
-        rand.shuffle(&mut generated_order);
+        rand.shuffle(&mut string_order);
     }
-    let string_order = generated_order;
     let shuffled_strings: Vec<&str> = string_order
         .iter()
         .map(|index| prepared.scene.str_list[*index].as_str())
         .collect();
-    let mut namae_list = Vec::new();
-    for candidate in &prepared.scene.namae_list {
-        let candidate_index = *candidate as usize;
-        if candidate_index >= shuffled_strings.len() {
-            continue;
-        }
-        let exists = namae_list.iter().any(|existing: &i32| {
-            shuffled_strings
-                .get(*existing as usize)
-                .zip(shuffled_strings.get(candidate_index))
-                .is_some_and(|(left, right)| left == right)
-        });
-        if !exists {
-            namae_list.push(*candidate);
-        }
-    }
-    prepared.scene.namae_list = namae_list;
+    let mut namae_seen = HashSet::new();
+    prepared.scene.namae_list.retain(|candidate| {
+        shuffled_strings
+            .get(*candidate as usize)
+            .is_some_and(|text| namae_seen.insert(*text))
+    });
     prepared.scene.str_sort_index = string_order;
     let dat = build_scn_dat(
         &layout,

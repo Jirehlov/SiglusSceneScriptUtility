@@ -62,9 +62,9 @@ impl Drop for ReplaceTree {
 }
 
 impl ReplaceTree {
-    pub fn add(&mut self, name: &str, replacement: Replacement) {
+    pub fn add(&mut self, replacement: Replacement) {
         let mut node = self;
-        for ch in name.chars() {
+        for ch in replacement.name.chars() {
             node = Arc::make_mut(&mut node.children).entry(ch).or_default();
         }
         node.replacement = Some(replacement);
@@ -703,7 +703,7 @@ impl CharacterAnalyzer {
         arg_replacements.reverse();
         let mut arg_tree = ReplaceTree::default();
         for replacement in arg_replacements {
-            arg_tree.add(&replacement.name.clone(), replacement);
+            arg_tree.add(replacement);
         }
         let points = if mapped {
             macro_def

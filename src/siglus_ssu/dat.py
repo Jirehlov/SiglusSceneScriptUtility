@@ -123,8 +123,8 @@ def _payload_metadata_trace(meta, pack_context):
         for idx, (offset, size) in enumerate(meta.get(key) or []):
             emit(op, id=int(idx), offset=int(offset), size=int(size))
 
-    prop_list = list(meta.get("scn_prop_list") or [])
-    prop_names = list(names.get("scn_prop_names") or [])
+    prop_list = meta.get("scn_prop_list") or []
+    prop_names = names.get("scn_prop_names") or []
     for idx in range(max(len(prop_list), len(prop_names))):
         item = prop_list[idx] if idx < len(prop_list) else None
         emit(
@@ -135,8 +135,8 @@ def _payload_metadata_trace(meta, pack_context):
             name=str(prop_names[idx]) if idx < len(prop_names) else None,
         )
 
-    command_list = list(meta.get("scn_cmd_list") or [])
-    command_names = list(names.get("scn_cmd_names") or [])
+    command_list = meta.get("scn_cmd_list") or []
+    command_names = names.get("scn_cmd_names") or []
     for idx in range(max(len(command_list), len(command_names))):
         emit(
             "meta_scene_command",
@@ -171,7 +171,7 @@ def _payload_pack_trace(pack_context):
             }
         )
 
-    context = dict(pack_context or {})
+    context = pack_context or {}
     emit(
         "meta_pack_property_count",
         value=int(context.get("inc_property_cnt", 0) or 0),
@@ -185,7 +185,7 @@ def _payload_pack_trace(pack_context):
             name=item["name"],
         )
 
-    scene_names = list(context.get("scene_names") or [])
+    scene_names = context.get("scene_names") or []
     emit(
         "meta_pack_command_count",
         value=int(context.get("inc_command_cnt", 0) or 0),
@@ -1090,7 +1090,7 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None):
         return bytes(blob)
     from . import textmap as _textmap
 
-    cands = list(candidates or [])
+    cands = candidates or []
     if not cands:
         cands = [b""]
     for cand in cands:

@@ -118,12 +118,8 @@ def _parse_flix_pck(blob: bytes) -> dict:
     }
 
 
-def _looks_like_flix_pck(blob) -> bool:
-    return bool(_parse_flix_pck(blob))
-
-
 def looks_like_pck(blob):
-    return looks_like_siglus_pck(blob) or _looks_like_flix_pck(blob)
+    return looks_like_siglus_pck(blob) or bool(_parse_flix_pck(blob))
 
 
 def _pck_sections(blob, preview=False):
@@ -1043,7 +1039,7 @@ def pck_word_count(
         sys.stderr.write("--word output must differ from the input PCK\n")
         return 2
     blob = read_bytes(input_pck)
-    if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
+    if _parse_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         print("unsupported --word input: flix .pck is not supported")
         return 1
     if not looks_like_siglus_pck(blob):
@@ -1087,7 +1083,7 @@ def pck_word_count(
                 }
             ]
         }
-    rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
+    rows = (dat_stats.get("rows") or []) + (ss_stats.get("rows") or [])
     _write_pck_word_csv(csv_path, rows)
     failed_rows = [row for row in rows if row["status"] != "ok"]
     for row in failed_rows:
@@ -1915,7 +1911,7 @@ def _build_disam_pack_context(blob: bytes, *, hdr, scene_names):
         inc_prop_names = meta["inc_prop_names"]
         inc_cmd_names = meta["inc_cmd_names"]
         return {
-            "scene_names": list(scene_names),
+            "scene_names": scene_names,
             "inc_property_cnt": hdr["inc_prop_cnt"],
             "inc_property_defs": [
                 {

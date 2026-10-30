@@ -389,10 +389,11 @@ def _normalize_voice_text(text):
 def _add_entry_ref(entry, name, text, callsite):
     name = str(name or "")
     text = str(text or "")
-    ref = entry["refs"].setdefault(
-        (name, text),
-        {"name": name, "text": text, "callsites": set()},
-    )
+    ref_key = (name, text)
+    ref = entry["refs"].get(ref_key)
+    if ref is None:
+        ref = {"name": name, "text": text, "callsites": set()}
+        entry["refs"][ref_key] = ref
     ref["callsites"].add(callsite)
     entry["callsites"].add(callsite)
     if name and not entry["name"]:
@@ -427,8 +428,6 @@ def _voice_ref_from_event(ev):
     args = ev.get("_arg_values")
     if not isinstance(args, (list, tuple)):
         args = []
-    else:
-        args = list(args)
     koe_no = named.get("koe_no")
     if koe_no is None and args:
         koe_no = args[0]
@@ -452,8 +451,6 @@ def _line_inline_voice_meta(events):
         args = ev.get("_arg_values")
         if not isinstance(args, (list, tuple)):
             args = []
-        else:
-            args = list(args)
         if len(args) < 4:
             continue
         koe_no = _try_int(args[0])
@@ -474,12 +471,10 @@ def _scan_bundle_calls(bundle, scene_root: str):
         return []
     refs = []
     rel = _bundle_relpath(bundle, scene_root)
-    trace_obj = bundle.get("trace") or []
-    if not isinstance(trace_obj, (list, tuple)):
+    trace = bundle.get("trace") or []
+    if not isinstance(trace, (list, tuple)):
         eprint(f"koe: {rel}: skipped invalid trace container", errors="replace")
         trace = []
-    else:
-        trace = list(trace_obj)
     skipped_trace = 0
     for ev in trace:
         if not isinstance(ev, dict):
@@ -489,7 +484,6 @@ def _scan_bundle_calls(bundle, scene_root: str):
             f"koe: {rel}: skipped {skipped_trace} invalid trace item(s)",
             errors="replace",
         )
-    trace = [x for x in trace if isinstance(x, dict)]
     for line_no, events in _iter_trace_line_groups(trace):
         names, text = _line_names_text(events)
         line_meta = _line_inline_voice_meta(events)
@@ -505,7 +499,7 @@ def _scan_bundle_calls(bundle, scene_root: str):
         )
         for _index, ref in voices:
             koe_no, chara_no = ref
-            inline = dict(
+            inline = (
                 line_meta.get((koe_no, chara_no)) or line_meta.get((koe_no, -1)) or {}
             )
             inline_name = str(inline.get("name") or "")

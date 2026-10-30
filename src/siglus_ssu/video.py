@@ -513,7 +513,10 @@ def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
             serial = int(page.serial)
             if serial_filter is not None and serial != int(serial_filter):
                 continue
-            assembler = assemblers.setdefault(serial, _OggPacketAssembler())
+            assembler = assemblers.get(serial)
+            if assembler is None:
+                assembler = _OggPacketAssembler()
+                assemblers[serial] = assembler
             assembler.start_page(is_packet_start=bool(page.header_type & 1 == 0))
             for packet, _span in assembler.feed_page(page.body, page.segments):
                 yield serial, packet

@@ -268,7 +268,7 @@ impl DecompileFrontend {
             .step1(&mut data, &mut scratch)
             .map_err(|_| analyzer.error_str.clone())?;
         analyzer
-            .step2(&mut data, &mut scratch)
+            .step2(&mut data, &scratch)
             .map_err(|_| analyzer.error_str.clone())?;
         data.inc_property_cnt = data.property_cnt;
         data.inc_command_cnt = data.command_cnt;
@@ -285,7 +285,7 @@ impl DecompileFrontend {
                 .step1(&mut data, &mut scratch)
                 .map_err(|_| analyzer.error_str.clone())?;
             analyzer
-                .step2(&mut data, &mut scratch)
+                .step2(&mut data, &scratch)
                 .map_err(|_| analyzer.error_str.clone())?;
         }
         let expanded = ca
