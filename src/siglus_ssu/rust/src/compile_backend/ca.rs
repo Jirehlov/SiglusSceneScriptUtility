@@ -4,6 +4,7 @@ use super::frontend_common::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -519,18 +520,16 @@ impl CharacterAnalyzer {
         })
     }
 
-    fn replacement_at(
-        default_tree: &ReplaceTree,
-        added_tree: &ReplaceTree,
+    fn replacement_at<'a>(
+        default_tree: &'a ReplaceTree,
+        added_tree: &'a ReplaceTree,
         text: &ExpansionText,
-    ) -> Option<Replacement> {
+    ) -> Option<&'a Replacement> {
         let default = default_tree.search(text);
         let added = added_tree.search(text);
         match (default, added) {
-            (Some(left), Some(right)) => {
-                Some(if left.name > right.name { left } else { right }.clone())
-            }
-            (Some(replacement), None) | (None, Some(replacement)) => Some(replacement.clone()),
+            (Some(left), Some(right)) => Some(if left.name > right.name { left } else { right }),
+            (Some(replacement), None) | (None, Some(replacement)) => Some(replacement),
             (None, None) => None,
         }
     }
@@ -831,7 +830,7 @@ impl CharacterAnalyzer {
                 } else {
                     0
                 };
-                (end, replacement.after, map, next)
+                (end, Cow::Borrowed(replacement.after.as_str()), map, next)
             }
             ReplaceKind::Macro => {
                 if self.macro_depth >= 128 {
@@ -839,11 +838,11 @@ impl CharacterAnalyzer {
                 }
                 self.macro_depth += 1;
                 let expanded =
-                    self.expand_macro(text, name_len, &replacement, default_tree, added_tree);
+                    self.expand_macro(text, name_len, replacement, default_tree, added_tree);
                 self.macro_depth -= 1;
                 let (end, expanded) = expanded?;
                 let next = expanded.text.chars().count();
-                (end, expanded.text, expanded.map, next)
+                (end, Cow::Owned(expanded.text), expanded.map, next)
             }
         };
         text.replace(end, &after, map);

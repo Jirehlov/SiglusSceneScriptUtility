@@ -203,11 +203,8 @@ def is_trace_command_base(ev, base_name: str) -> bool:
     base_name = str(base_name or "").casefold()
     if not base_name:
         return False
-    base = str(ev.get("_call_base_name") or "").casefold()
-    if base == base_name:
-        return True
     name = str(ev.get("_call_name") or "").casefold()
-    return name == base_name or name.endswith("." + base_name)
+    return name in (f"global.{base_name}", f"mwnd.{base_name}")
 
 
 def next_elseif_ifdef_state(state: int, matched: bool) -> int:

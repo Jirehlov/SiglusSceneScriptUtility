@@ -25,14 +25,18 @@ from .path_policy import (
 
 _VOICE_CALL_NAMES = frozenset(
     {
-        "koe",
-        "koe_play_wait",
-        "koe_play_wait_key",
-        "exkoe",
-        "exkoe_play_wait",
-        "exkoe_play_wait_key",
-        "add_koe",
+        f"{owner}.{name}"
+        for owner in ("global", "mwnd")
+        for name in (
+            "koe",
+            "koe_play_wait",
+            "koe_play_wait_key",
+            "exkoe",
+            "exkoe_play_wait",
+            "exkoe_play_wait_key",
+        )
     }
+    | {"msgbk.add_koe"}
 )
 _INLINE_VOICE_META_CALL_NAMES = frozenset({"$$add_msgback", "add_msgback"})
 _Z_OVK_RE = re.compile(r"^z(\d{4})\.ovk$", re.IGNORECASE)
@@ -269,25 +273,101 @@ def _iter_trace_line_groups(trace):
         yield cur_line, cur_events
 
 
-def _line_name_text(events):
-    name = ""
+def _line_names_text(events):
+    names = []
     texts = []
-    for ev in events or []:
-        if not isinstance(ev, dict):
+    for ev in events:
+        op = ev.get("op")
+        if op not in ("CD_NAME", "CD_TEXT"):
             continue
-        text = ev.get("text")
+        text = str(ev.get("text") or "")
         if not text:
             continue
-        op = str(ev.get("op") or "")
-        text = str(text)
         if op == "CD_NAME":
-            name = text
+            names.append(text)
             continue
         if op == "CD_TEXT":
             text = _normalize_voice_text(text)
             if text.strip():
                 texts.append(text)
-    return name, "".join(texts)
+    return list(dict.fromkeys(reversed(names))), "".join(texts)
+
+
+def _line_voice_aliases(events, voice_index):
+    if events[voice_index].get("_call_name") not in (
+        "global.koe",
+        "global.koe_play_wait",
+        "global.koe_play_wait_key",
+    ):
+        return set()
+    text_indices = [
+        index
+        for index, ev in enumerate(events)
+        if ev.get("op") == "CD_TEXT" and ev.get("text")
+    ]
+    if not text_indices or voice_index >= text_indices[0]:
+        return set()
+    for ev in events[text_indices[0] + 1 : text_indices[-1] + 1]:
+        op = ev.get("op")
+        if op == "CD_COMMAND":
+            if ev.get("_call_name") != "global.msg_block":
+                return set()
+        elif op not in (
+            "CD_NL",
+            "CD_PUSH",
+            "CD_POP",
+            "CD_COPY",
+            "CD_COPY_ELM",
+            "CD_ELM_POINT",
+            "CD_TEXT",
+        ):
+            return set()
+    offsets = {ev["ofs"]: index for index, ev in enumerate(events)}
+    text_index = text_indices[0]
+    pending = [(0, "", False)]
+    seen = set()
+    aliases = set()
+    while pending:
+        index, name, has_voice = pending.pop()
+        state = (index, name, has_voice)
+        if index > text_index or state in seen:
+            continue
+        seen.add(state)
+        ev = events[index]
+        op = ev.get("op")
+        if index == voice_index:
+            has_voice = True
+        if op == "CD_NAME" and ev.get("text"):
+            new_name = str(ev["text"])
+            if name and name != new_name:
+                return set()
+            name = new_name
+        if index == text_index:
+            if has_voice and name:
+                aliases.add(name)
+            continue
+        if op in ("CD_GOTO", "CD_GOTO_TRUE", "CD_GOTO_FALSE"):
+            target = offsets.get(ev.get("target_ofs"))
+            if target is not None:
+                if target <= index:
+                    return set()
+                pending.append((target, name, has_voice))
+            if op == "CD_GOTO":
+                continue
+        elif op in (
+            "CD_GOSUB",
+            "CD_GOSUBSTR",
+            "CD_RETURN",
+            "CD_EOF",
+            "CD_SEL_BLOCK_START",
+            "CD_SEL_BLOCK_END",
+        ):
+            continue
+        elif op == "CD_COMMAND" and index != voice_index:
+            if ev.get("_call_name") != "global.msg_block":
+                continue
+        pending.append((index + 1, name, has_voice))
+    return aliases
 
 
 def _normalize_voice_text(text):
@@ -327,7 +407,7 @@ def _add_entry_ref(entry, chara_no, name, text, callsite):
 
 def _multi_text_koe_nos(call_refs):
     texts_by_koe = {}
-    for koe_no, _ch, _name, text, _callsite in call_refs:
+    for koe_no, _ch, _names, text, _callsite in call_refs:
         koe_no_i = _try_int(koe_no)
         if koe_no_i is None:
             continue
@@ -338,68 +418,14 @@ def _multi_text_koe_nos(call_refs):
     return [koe_no for koe_no in sorted(texts_by_koe) if len(texts_by_koe[koe_no]) > 1]
 
 
-def _build_local_koe_no_index(entries):
-    local_index = {}
-    conflicts = set()
-    for koe_no in entries:
-        koe_no_i = _try_int(koe_no)
-        if koe_no_i is None:
-            continue
-        local_koe_no = koe_no_i % 100000
-        if local_koe_no in local_index and local_index[local_koe_no] != koe_no_i:
-            conflicts.add(local_koe_no)
-        else:
-            local_index[local_koe_no] = koe_no_i
-    for local_koe_no in conflicts:
-        local_index.pop(local_koe_no, None)
-    return local_index
-
-
-def _resolve_indexed_koe_no(entries, local_koe_no_index, koe_no):
-    koe_no_i = _try_int(koe_no)
-    if koe_no_i is None:
-        return koe_no
-    if koe_no_i in entries:
-        return koe_no_i
-    if not (0 <= koe_no_i < 100000):
-        return koe_no_i
-    resolved_koe_no = local_koe_no_index.get(koe_no_i)
-    if resolved_koe_no is not None:
-        return resolved_koe_no
-    return koe_no_i
-
-
 def _format_koe_nos(koe_nos):
     return ", ".join(str(int(koe_no)) for koe_no in koe_nos) if koe_nos else "-"
 
 
-def _voice_call_base_name(ev):
-    if not isinstance(ev, dict):
-        return ""
-    base = str(ev.get("_call_base_name") or "").strip()
-    if base:
-        return base
-    call_name = str(ev.get("_call_name") or "").strip()
-    if "." in call_name:
-        return call_name.rsplit(".", 1)[-1]
-    return call_name
-
-
-def _normalize_koe_no(koe_no, scene_no=None):
-    koe_no_i = _try_int(koe_no)
-    if koe_no_i is None:
-        return None
-    scene_no_i = _try_int(scene_no) if scene_no is not None else None
-    if 0 <= koe_no_i < 100000 and scene_no_i is not None:
-        return scene_no_i * 100000 + koe_no_i
-    return koe_no_i
-
-
-def _voice_ref_from_event(ev, scene_no=None):
+def _voice_ref_from_event(ev):
     if not isinstance(ev, dict) or str(ev.get("op") or "") != "CD_COMMAND":
         return None
-    base = _voice_call_base_name(ev)
-    if base not in _VOICE_CALL_NAMES:
+    if ev.get("_call_name") not in _VOICE_CALL_NAMES:
         return None
     named = ev.get("_named_values")
     if not isinstance(named, dict):
@@ -412,8 +438,8 @@ def _voice_ref_from_event(ev, scene_no=None):
     koe_no = named.get("koe_no")
     if koe_no is None and args:
         koe_no = args[0]
-    koe_no = _normalize_koe_no(koe_no, scene_no=scene_no)
-    if koe_no is None:
+    koe_no = _try_int(koe_no)
+    if koe_no is None or koe_no < 0:
         return None
     chara_no = named.get("chara_no")
     if chara_no is None and len(args) >= 2:
@@ -422,15 +448,12 @@ def _voice_ref_from_event(ev, scene_no=None):
     return koe_no, chara_no
 
 
-def _line_inline_voice_meta(events, scene_no=None):
+def _line_inline_voice_meta(events):
     out = {}
     for ev in events or []:
         if not isinstance(ev, dict) or str(ev.get("op") or "") != "CD_COMMAND":
             continue
-        base = _voice_call_base_name(ev)
-        if base in _VOICE_CALL_NAMES:
-            continue
-        if base not in _INLINE_VOICE_META_CALL_NAMES:
+        if ev.get("_call_name") not in _INLINE_VOICE_META_CALL_NAMES:
             continue
         args = ev.get("_arg_values")
         if not isinstance(args, (list, tuple)):
@@ -439,8 +462,8 @@ def _line_inline_voice_meta(events, scene_no=None):
             args = list(args)
         if len(args) < 4:
             continue
-        koe_no = _normalize_koe_no(args[0], scene_no=scene_no)
-        if koe_no is None:
+        koe_no = _try_int(args[0])
+        if koe_no is None or koe_no < 0:
             continue
         chara_no = _int_or(args[1])
         name = str(args[2] or "")
@@ -473,24 +496,31 @@ def _scan_bundle_calls(bundle, scene_root: str):
             errors="replace",
         )
     trace = [x for x in trace if isinstance(x, dict)]
-    scene_no = bundle.get("scene_no")
     for line_no, events in _iter_trace_line_groups(trace):
-        name, text = _line_name_text(events)
-        line_meta = _line_inline_voice_meta(events, scene_no=scene_no)
-        for ev in events:
-            ref = _voice_ref_from_event(ev, scene_no=scene_no)
-            if ref is None:
-                continue
+        names, text = _line_names_text(events)
+        line_meta = _line_inline_voice_meta(events)
+        voices = [
+            (index, ref)
+            for index, ev in enumerate(events)
+            if (ref := _voice_ref_from_event(ev)) is not None
+        ]
+        aliases = (
+            _line_voice_aliases(events, voices[0][0])
+            if len(names) > 1 and len(voices) == 1
+            else set()
+        )
+        for _index, ref in voices:
             koe_no, chara_no = ref
             inline = dict(
                 line_meta.get((koe_no, chara_no)) or line_meta.get((koe_no, -1)) or {}
             )
             inline_name = str(inline.get("name") or "")
             inline_text = str(inline.get("text") or "")
-            ref_name = name or inline_name
+            ref_names = [names[0] if names else inline_name]
+            ref_names.extend(name for name in names[1:] if name in aliases)
             ref_text = text or inline_text
             callsite = f"{rel}:{line_no}" if line_no is not None else rel
-            refs.append([koe_no, chara_no, ref_name, ref_text, callsite])
+            refs.append([koe_no, chara_no, ref_names, ref_text, callsite])
     return refs
 
 
@@ -754,21 +784,18 @@ def main(argv):
             eprint("No scene .dat files or supported .pck scenes found.")
             return 1
         missing_rows = []
-        indexed_call_refs = []
-        local_koe_no_index = _build_local_koe_no_index(entries)
-        for koe_no, ch, name, text, callsite in call_refs:
-            resolved_koe_no = _resolve_indexed_koe_no(
-                entries, local_koe_no_index, koe_no
-            )
-            indexed_call_refs.append((resolved_koe_no, ch, name, text, callsite))
-            e = entries.get(resolved_koe_no)
+        missing_calls = 0
+        for koe_no, ch, names, text, callsite in call_refs:
+            e = entries.get(koe_no)
             if e is None:
-                missing_rows.append((resolved_koe_no, name, text, callsite))
-                continue
-            _add_entry_ref(e, ch, name, text, callsite)
+                missing_calls += 1
+                missing_rows.extend((koe_no, name, text, callsite) for name in names)
+            else:
+                for name in names:
+                    _add_entry_ref(e, ch, name, text, callsite)
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
-        multi_text_koe_nos = _multi_text_koe_nos(indexed_call_refs)
+        multi_text_koe_nos = _multi_text_koe_nos(call_refs)
     else:
         call_refs = []
         scene_files = 0
@@ -960,7 +987,7 @@ def main(argv):
     if single_koe_no is None:
         eprint(f"Scene files      : {scene_files:,}")
         eprint(f"Scene callsites  : {len(call_refs):,}")
-        eprint(f"Scene missing    : {len(missing_rows):,}")
+        eprint(f"Scene missing    : {missing_calls:,}")
         eprint(f"KOE total        : {len(entries):,}")
         eprint(f"KOE referenced   : {referenced:,}")
         eprint(f"KOE unreferenced : {unreferenced:,}")

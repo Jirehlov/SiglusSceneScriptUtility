@@ -406,6 +406,8 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 
 重建目标是通过 `-c` 回编后，规范化的场景 payload 一致。请将 `decompiled/` 目录传给编译器，使用与原文件相同的 `--const-profile` 和场景字符串乘数，再用 `-a --payload` 验证结果。反汇编和反编译通过所选 profile 解释 form 和内置元素，不会自动探测 profile。已存储的命令名和属性名会尽可能复用；缺失的名字使用生成名。已编译数据无法还原原始宏、注释和源码排版，回编后的完整 `.pck` 也不要求字节完全一致。
 
+**已知限制：** 请向 `gosub` 和 `gosubstr` 传递独立的整数或字符串实参。当前编译器在接受列表字面量实参后会漏写必要的列表元数据，因此可能生成无法完整反汇编、反编译或通过 payload 回测的字节码。
+
 FlixEngine 场景 `.pck` 使用 profile `10`。Flix 资源 `.pck` 容器仅支持普通提取，对这类容器使用 `--disam` 或 `--decompile` 会被拒绝。
 
 #### 示例
@@ -725,6 +727,8 @@ siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/
 扫描 `.pck`、单个场景 `.dat`，或场景 `.dat` 目录树中的编译后场景数据，从反汇编 trace 中读取 KOE 相关调用，将其与 `.ovk` 语音文件条目匹配，并提取对应的 `.ogg` 音频文件。普通模式下，输出会按角色名分类到子目录中。
 
 普通模式下还会生成 `koe_master.csv` 清单，列出所有找到的 KOE 条目及其角色名、对话文本和调用位置。如果同一个 `koe_no` 被多个不同的角色/文本组合引用，CSV 会保留多行，并且只在相同 `koe_no`/角色/文本组合内合并调用位置。若直接扫描 `.pck`，调用位置会写成 `Scene.pck!scene.dat:line`。命令处理完成后还会统计**已引用语音**的总时长；写入 `unreferenced/` 的条目不会计入该总时长。若某个 `.ogg` 的时长读取失败，也不会阻止 CSV 导出，但会计入 `Duration failed` 统计。
+
+对于可确认与同一语音对应的同行条件分支称呼，CSV 会分别保留。工具按原始全局语音编号匹配音频，并为每个文件选择一个已推断的称呼作为目录名。
 
 #### 语法
 

@@ -11,7 +11,6 @@ use super::frontend_common::{
 };
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone)]
 pub struct IncProperty {
     pub form: String,
     pub size: i32,
@@ -39,15 +38,16 @@ pub struct IncCommand {
 #[derive(Clone)]
 pub struct IaData {
     pub replace_tree: ReplaceTree,
-    pub name_set: HashSet<String>,
+    pub name_set: Arc<HashSet<String>>,
     pub macro_defs: Vec<Replacement>,
     pub macro_map: HashMap<String, usize>,
     pub property_cnt: i32,
     pub command_cnt: i32,
     pub inc_property_cnt: i32,
     pub inc_command_cnt: i32,
-    pub property_list: Vec<IncProperty>,
-    pub command_list: Vec<IncCommand>,
+    pub property_list: Vec<Arc<IncProperty>>,
+    pub command_list: Vec<Arc<IncCommand>>,
+    pub command_indices: Arc<HashMap<String, usize>>,
     pub form_table: FormTable,
     pub codes: RuntimeCodes,
     pub selection_command_codes: HashSet<(i32, i32)>,
@@ -113,7 +113,7 @@ impl IaData {
     ) -> Self {
         Self {
             replace_tree: ReplaceTree::default(),
-            name_set: defined_names.into_iter().collect(),
+            name_set: Arc::new(defined_names.into_iter().collect()),
             macro_defs: Vec::new(),
             macro_map: HashMap::new(),
             property_cnt: 0,
@@ -122,12 +122,20 @@ impl IaData {
             inc_command_cnt: 0,
             property_list: Vec::new(),
             command_list: Vec::new(),
+            command_indices: Arc::default(),
             form_table,
             codes,
             selection_command_codes: HashSet::new(),
             message_block_command_codes: HashSet::new(),
             read_flag_command_codes: HashSet::new(),
         }
+    }
+
+    pub fn add_command(&mut self, command: IncCommand) {
+        Arc::make_mut(&mut self.command_indices)
+            .entry(command.name.clone())
+            .or_insert(self.command_list.len());
+        self.command_list.push(Arc::new(command));
     }
 
     fn add_replacement(&mut self, replacement: Replacement) {
@@ -916,7 +924,7 @@ impl IncAnalyzer {
             if iad.name_set.contains(&name) {
                 return self.err(line2, format!("{name} is declared twice."));
             }
-            iad.name_set.insert(name.clone());
+            Arc::make_mut(&mut iad.name_set).insert(name.clone());
             let record_kind = if kind == "replace" {
                 "replace"
             } else {
@@ -953,7 +961,7 @@ impl IncAnalyzer {
             if iad.name_set.contains(&name) {
                 return self.err(line2, format!("{name} is declared twice."));
             }
-            iad.name_set.insert(name.clone());
+            Arc::make_mut(&mut iad.name_set).insert(name.clone());
             iad.add_replacement(Replacement {
                 kind: ReplaceKind::Macro,
                 name: name.clone(),
@@ -1088,14 +1096,14 @@ impl IncAnalyzer {
             if form == iad.codes.forms.void.name.as_str() {
                 return self.err(line, "Property of type void cannot be declared.");
             }
-            iad.name_set.insert(name.clone());
+            Arc::make_mut(&mut iad.name_set).insert(name.clone());
             let id = iad.property_cnt;
             iad.property_cnt += 1;
-            iad.property_list.push(IncProperty {
+            iad.property_list.push(Arc::new(IncProperty {
                 form: form.clone(),
                 size,
                 name: name.clone(),
-            });
+            }));
             add_user_property_to_form_table(
                 &mut iad.form_table,
                 &self.parent_form,
@@ -1146,10 +1154,10 @@ impl IncAnalyzer {
             if iad.name_set.contains(&name) {
                 return self.err(source_line, format!("{name} is declared twice."));
             }
-            iad.name_set.insert(name.clone());
+            Arc::make_mut(&mut iad.name_set).insert(name.clone());
             let id = iad.command_cnt;
             iad.command_cnt += 1;
-            iad.command_list.push(IncCommand {
+            iad.add_command(IncCommand {
                 id,
                 form: form.clone(),
                 name: name.clone(),

@@ -203,9 +203,11 @@ def _collect_compiled_string_kinds(root, atom_type_map):
             if _int_value(node.get("element_type")) == int(C.ET_COMMAND):
                 parent = node.get("element_parent_form")
                 name = _command_name(node)
-                if parent in (C.FM_GLOBAL, C.FM_MWND) and name in (
-                    "print",
-                    "set_namae",
+                if (
+                    parent in (C.FM_GLOBAL, C.FM_MWND)
+                    and name in ("print", "set_namae")
+                    and (_int_value(node.get("element_code")) >> 24)
+                    != C.ELM_OWNER_USER_CMD
                 ):
                     _mark_string_atoms(
                         (node.get("arg_list") or {}).get("arg") or [],
@@ -369,7 +371,7 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
 
 
 def locate_tokens(source_text: str, tokens, iad):
-    source_lines = source_text.splitlines(keepends=True)
+    source_lines = source_text.split("\n")
     cursors = {}
     out = []
     replace_tree = iad.get("replace_tree") if isinstance(iad, dict) else None

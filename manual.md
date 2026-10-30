@@ -406,6 +406,8 @@ The actual extraction directory is printed after `Output:`. If original sources 
 
 The reconstruction target is equality of normalized scene payloads after recompiling with `-c`. Compile the `decompiled/` directory using the same `--const-profile` and scene-string multiplier as the original, then verify the result with `-a --payload`. Disassembly and decompilation use the selected profile to interpret forms and built-in elements; they do not automatically detect the profile. Stored command and property names are reused where available; absent names receive generated names. Original macros, comments, and source formatting cannot be recovered from compiled data, and the rebuilt whole `.pck` need not be byte-identical.
 
+**Known limitation:** Pass individual integer or string arguments to `gosub` and `gosubstr`. The compiler currently accepts list-literal arguments but omits the required list metadata, which can prevent complete disassembly, decompilation, or payload round-trip checks.
+
 FlixEngine scene `.pck` files use profile `10`. Flix resource `.pck` containers support plain extraction only; `--disam` and `--decompile` are rejected for those containers.
 
 #### Examples
@@ -725,6 +727,8 @@ Special characters in string values are handled by normal CSV quoting rather tha
 Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files. In normal mode, files are grouped into per-character subdirectories.
 
 In normal mode, the command also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. If the same `koe_no` is referenced by multiple distinct character/text pairs, the CSV keeps separate rows and only merges call-sites for the same `koe_no`/character/text tuple. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
+
+The CSV also keeps alternative names from same-line conditional branches when their association with the voice can be established. The tool matches the original global voice number and uses one inferred name for each audio file's directory.
 
 #### Syntax
 

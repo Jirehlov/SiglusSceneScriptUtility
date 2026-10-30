@@ -233,8 +233,9 @@ def disassemble_scn_bytes(
         if trace is None:
             return
         one = {"op": opname, "line": cur_line, **fields}
-        if not (koe_trace or payload_trace):
+        if not payload_trace:
             one["ofs"] = ofs
+        if not (koe_trace or payload_trace):
             one["labels"] = labels_at.get(ofs, [])
         trace.append(one)
 
@@ -404,8 +405,8 @@ def disassemble_scn_bytes(
             goto_fields = {}
             if not koe_trace:
                 goto_fields["label_id"] = lid
-                if not payload_trace:
-                    goto_fields["target_ofs"] = target
+            if not payload_trace:
+                goto_fields["target_ofs"] = target
             _trace(opname, ofs, **goto_fields)
             continue
         if op in (cd_gosub, cd_gosubstr):

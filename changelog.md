@@ -5,12 +5,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Added Rust implementations of scene disassembly and decompilation, used automatically when the native extension is available. Payload comparison now reuses the native disassembly pipeline; `--legacy-full` selects the Python implementations.
+- Added Rust implementations of scene disassembly and decompilation, used automatically when the native extension is available. Payload comparison reuses the native disassembly pipeline; `--legacy-full` selects the Python implementations.
 - Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Successful decompile tests report `PAYLOAD_SAME`; JSON reports record the successful profile. Recompilation uses `--no-lzss` to skip scene compression and original-source generation.
 - Changed syntax-analysis nesting beyond 64 levels and expression-tree height beyond 128 from errors to warnings, allowing compilation and LSP analysis to continue in both backends.
 - Improved Python/Rust alignment for deeply nested source, argument and bytecode metadata, malformed scene data, and LSP diagnostics. Reworked recursive Python analysis and bytecode generation to handle deep inputs.
 - Reduced native dependencies to PyO3 by reusing Python's CP932 codec and batched hashlib SHA-256 hashing, and replacing stack growth with safe Rust task stacks. Updated PyO3 to 0.30.1.
-- Reduced compilation overhead by sharing immutable element definitions, processing small expression trees directly, and using iterative bytecode generation and source-statistics traversal.
+- Reduced compilation overhead by sharing immutable element and declaration definitions, borrowing lexer tables and macro replacements, processing small expression trees directly, and using iterative bytecode generation and source-statistics traversal.
+- Reused INC source lines across scenes during native LSP workspace scanning.
+- Accelerated payload comparison by comparing native traces directly, sharing package metadata and resolver tables, and initializing comparison-worker context once. Round-trip compilation skips unused source statistics, and native LZSS compression uses a more compact tree layout.
+- Removed repeated whole-text copying during macro expansion and quadratic intermediate expression storage. Indexed command lookups, decompiler label insertion, and LSP semantic-token overlap checks, and shortened repeated scans in G00 chip merging and OMV backlink generation.
+- Added native wheels for standard CPython 3.15 on the supported Windows, Linux, and macOS targets.
+- Included built-in `print` text in word counts.
+- Preserved confirmed conditional speaker aliases in voice CSVs and matched voice references by their original global numbers and resolved built-in calls.
+- Prevented word-count CSV output from overwriting the input PCK, corrected punctuation and Unicode text counting, and aligned source token locations with compiler line boundaries.
+- Documented an existing limitation: `gosub` or `gosubstr` with list-literal arguments can compile but may fail disassembly, decompilation, or payload round-trip checks.
 
 
 ## [v0.5.7] - 2026-10-14

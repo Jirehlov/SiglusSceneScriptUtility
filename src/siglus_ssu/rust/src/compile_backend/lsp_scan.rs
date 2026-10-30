@@ -52,7 +52,7 @@ struct SourceToken {
 #[pyclass]
 pub struct NativeLspProject {
     base_ia: IaData,
-    source_files: Vec<(String, String)>,
+    source_files: Vec<(String, Vec<Vec<char>>)>,
 }
 
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
@@ -112,7 +112,12 @@ pub fn lsp_build_project(
         .iter()
         .map(|item| {
             let item = item.cast::<PyDict>()?;
-            Ok((extract_item(item, "path")?, extract_item(item, "text")?))
+            let text: String = extract_item(item, "text")?;
+            let lines = text
+                .split('\n')
+                .map(|line| line.chars().collect())
+                .collect();
+            Ok((extract_item(item, "path")?, lines))
         })
         .collect::<PyResult<Vec<_>>>()?;
     Py::new(
@@ -442,7 +447,7 @@ fn collect_definitions_node(
 struct CollectOccurrencesInput<'a> {
     project: &'a NativeLspProject,
     lex: &'a LexResult,
-    source_files: &'a [(String, Vec<Vec<char>>)],
+    source_files: &'a [(&'a str, &'a [Vec<char>])],
     path_identity: &'a str,
     bindings: &'a HashMap<i32, super::ma::SourceBinding>,
     replace_uses: &'a [ReplaceUse],
@@ -473,7 +478,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
             return;
         }
         if !seen.insert((
-            path.clone(),
+            *path,
             token.line,
             token.start_char,
             token.end_char,
@@ -484,7 +489,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
         }
         out.push(LspOccurrence {
             symbol_id,
-            path: path.clone(),
+            path: path.to_string(),
             line: token.line,
             start_char: token.start_char,
             end_char: token.end_char,
@@ -624,7 +629,7 @@ fn add_inline_inc_definitions(
     defs: &mut HashMap<String, Vec<LspDefinition>>,
     document_symbols: &mut Vec<LspDefinition>,
     sidecar: &IncSidecar,
-    source_files: &[(String, Vec<Vec<char>>)],
+    source_files: &[(&str, &[Vec<char>])],
     path_identity: &str,
 ) {
     for decl in &sidecar.decls {
@@ -785,21 +790,17 @@ pub fn lsp_scan_document(
         &mut local_defs,
         &mut document_symbols,
     );
-    let mut source_files = vec![(
-        path.clone(),
-        source_text
-            .split('\n')
-            .map(|line| line.chars().collect::<Vec<_>>())
-            .collect::<Vec<_>>(),
-    )];
-    source_files.extend(project.source_files.iter().map(|(path, text)| {
-        (
-            path.clone(),
-            text.split('\n')
-                .map(|line| line.chars().collect::<Vec<_>>())
-                .collect::<Vec<_>>(),
-        )
-    }));
+    let source_lines = source_text
+        .split('\n')
+        .map(|line| line.chars().collect::<Vec<_>>())
+        .collect::<Vec<_>>();
+    let mut source_files = vec![(path.as_str(), source_lines.as_slice())];
+    source_files.extend(
+        project
+            .source_files
+            .iter()
+            .map(|(path, lines)| (path.as_str(), lines.as_slice())),
+    );
     add_inline_inc_definitions(
         &mut local_defs,
         &mut document_symbols,
@@ -819,7 +820,7 @@ pub fn lsp_scan_document(
                     source_files.get(token.source_id as usize)
                 && token_matches_text(source_lines, &token)
             {
-                record.path = source_path.clone();
+                record.path = source_path.to_string();
                 record.line = token.line + 1;
                 record.start_char = token.start_char as isize;
                 record.end_char = token.end_char as isize;

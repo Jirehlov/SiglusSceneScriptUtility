@@ -1,3 +1,4 @@
+import re
 import unicodedata
 
 _HAN_RANGES = (
@@ -9,6 +10,7 @@ _HAN_RANGES = (
     (0x2B740, 0x2B81F),
     (0x2B820, 0x2CEAF),
     (0x2CEB0, 0x2EBEF),
+    (0x2EBF0, 0x2EE5F),
     (0x30000, 0x323AF),
 )
 _HIRAGANA_RANGES = (
@@ -44,6 +46,7 @@ _WORD_CONNECTORS = frozenset(
 _NUMBER_CONNECTORS = frozenset(
     {".", ",", "/", ":", "\uff0e", "\uff0c", "\uff0f", "\uff1a"}
 )
+_KEYCAP_RE = re.compile(r"[0-9#*]\ufe0f?\u20e3")
 
 
 def _in_ranges(cp: int, ranges) -> bool:
@@ -145,11 +148,14 @@ def _consume_non_asian_run(text: str, start: int) -> int:
 
 
 def count_text_units(text: str) -> int:
-    text = unicodedata.normalize("NFC", str(text or ""))
+    text = _KEYCAP_RE.sub(" ", unicodedata.normalize("NFC", str(text or "")))
     total = 0
     i = 0
     while i < len(text):
         ch = text[i]
+        if unicodedata.category(ch)[0] in ("P", "S", "M"):
+            i += 1
+            continue
         if _is_halfwidth_katakana_base(ch):
             if (i + 1) < len(text) and _is_halfwidth_katakana_mark(text[i + 1]):
                 total += 1

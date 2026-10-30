@@ -3903,9 +3903,12 @@ fn trace_instruction(
         Opcode::Unknown(code) => source(&format!("OP_{code:02X}")),
         op => source(op.name()),
     };
-    let mut fields = vec![("op", V::Str(opcode)), ("line", optional_int(event.line))];
+    let mut fields = vec![
+        ("op", V::Str(opcode)),
+        ("line", optional_int(event.line)),
+        ("ofs", V::Int(event.offset)),
+    ];
     if !mode.koe {
-        fields.push(("ofs", V::Int(event.offset)));
         fields.push((
             "labels",
             V::list(
@@ -4022,6 +4025,14 @@ fn trace_instruction(
         if event.value.is_some() && !mode.koe {
             fields.push(("str_id", optional_int(event.value)));
         }
+    }
+    if mode.koe
+        && matches!(
+            event.op,
+            Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse
+        )
+    {
+        fields.push(("target_ofs", optional_int(event.target)));
     }
     if event.op == Opcode::Command && mode.command_values {
         let info = command.and_then(|command| command.info.as_ref());

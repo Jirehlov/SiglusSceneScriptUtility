@@ -37,12 +37,12 @@ pub struct FormInfo {
     pub element_map_by_code: HashMap<i32, Arc<ElementInfo>>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct FormTable {
     pub form_map_by_name: HashMap<String, Arc<FormInfo>>,
     pub call_base: Option<Arc<FormInfo>>,
-    pub form_code: HashMap<String, i32>,
-    pub code_form: HashMap<i32, String>,
+    pub form_code: Arc<HashMap<String, i32>>,
+    pub code_form: Arc<HashMap<i32, String>>,
     pub call_form: String,
     pub scene_form: String,
     pub global_form: String,
@@ -57,13 +57,14 @@ impl FormTable {
             .map(|(name, code)| (*code, name.clone()))
             .collect();
         Ok(Self {
-            form_code,
-            code_form,
+            form_code: Arc::new(form_code),
+            code_form: Arc::new(code_form),
             call_form: constants.form_name("FM_CALL")?.to_string(),
             scene_form: constants.form_name("FM_SCENE")?.to_string(),
             global_form: constants.form_name("FM_GLOBAL")?.to_string(),
             command_element_type: constants.element_type("ET_COMMAND")?,
-            ..Self::default()
+            form_map_by_name: HashMap::new(),
+            call_base: None,
         })
     }
 

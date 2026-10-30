@@ -41,6 +41,7 @@ from .common import (
     write_disam_totals,
     iter_exe_el_sources,
     format_exe_el_source,
+    is_trace_command_base,
 )
 from .path_policy import (
     FilenameCaseCollisionError,
@@ -870,6 +871,8 @@ def _pck_cd_word_rows(
             pack_context=item.get("pack_context"),
             scene_no=item.get("scene_no"),
             scene_name=item.get("scene_name"),
+            emit_text=False,
+            trace_profile="koe",
         )
         if not bundle:
             row.update(
@@ -882,14 +885,15 @@ def _pck_cd_word_rows(
             continue
         stats["parsed_scene_files"] += 1
         for ev in bundle.get("trace") or []:
-            if str((ev or {}).get("op") or "") != "CD_TEXT":
-                continue
-            txt = (ev or {}).get("text")
-            if txt is None:
-                continue
-            try:
-                txt = str(txt)
-            except Exception:
+            op = ev.get("op")
+            if op == "CD_TEXT":
+                txt = str(ev.get("text") or "")
+            elif op == "CD_COMMAND" and is_trace_command_base(ev, "print"):
+                args = ev.get("_arg_values") or []
+                if not args or not isinstance(args[0], (str, int)):
+                    continue
+                txt = str(args[0])
+            else:
                 continue
             if txt == "":
                 continue
@@ -1030,6 +1034,14 @@ def pck_word_count(
     except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write(f"not found: {input_pck}\n")
         return 2
+    csv_path = _pck_word_csv_path(input_pck, output_csv)
+    try:
+        same_input = os.path.samefile(input_pck, csv_path)
+    except (FileNotFoundError, NotADirectoryError):
+        same_input = False
+    if same_input:
+        sys.stderr.write("--word output must differ from the input PCK\n")
+        return 2
     blob = read_bytes(input_pck)
     if _looks_like_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
         print("unsupported --word input: flix .pck is not supported")
@@ -1076,7 +1088,6 @@ def pck_word_count(
             ]
         }
     rows = list(dat_stats.get("rows") or []) + list(ss_stats.get("rows") or [])
-    csv_path = _pck_word_csv_path(input_pck, output_csv)
     _write_pck_word_csv(csv_path, rows)
     failed_rows = [row for row in rows if row["status"] != "ok"]
     for row in failed_rows:

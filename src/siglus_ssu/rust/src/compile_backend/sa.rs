@@ -8,6 +8,7 @@ use super::form_table::{ArgInfo, ArgList, ElementInfo, ElementKind, create_elm_c
 use super::ia::{CommandArg, IaData, IncCommand};
 use super::la::{Atom, LexResult};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 type ParseResult<T> = Result<Option<(usize, T)>, ()>;
 
@@ -23,28 +24,27 @@ struct LabelState {
     exists: bool,
 }
 
-pub struct SyntaxAnalyzer {
+pub struct SyntaxAnalyzer<'lex> {
     codes: RuntimeCodes,
-    atoms: Vec<Atom>,
-    strings: Vec<String>,
-    unknowns: Vec<String>,
+    atoms: &'lex [Atom],
+    string_count: usize,
+    unknowns: &'lex [String],
     labels: Vec<LabelState>,
     z_labels: Vec<LabelState>,
     pub last: Option<SyntaxErrorInfo>,
     pub warnings: Vec<(Atom, &'static str)>,
     nesting: usize,
     expression_heights: Vec<usize>,
-    command_indices: HashMap<String, usize>,
 }
 
-impl SyntaxAnalyzer {
-    pub fn new(lex: &LexResult, codes: RuntimeCodes) -> Self {
+impl<'lex> SyntaxAnalyzer<'lex> {
+    pub fn new(lex: &'lex LexResult, codes: RuntimeCodes) -> Self {
         let z_label_count = codes.la.z_label_count;
         Self {
             codes,
-            atoms: lex.atom_list.clone(),
-            strings: lex.str_list.clone(),
-            unknowns: lex.unknown_list.clone(),
+            atoms: &lex.atom_list,
+            string_count: lex.str_list.len(),
+            unknowns: &lex.unknown_list,
             labels: lex
                 .label_list
                 .iter()
@@ -64,7 +64,6 @@ impl SyntaxAnalyzer {
             warnings: Vec::new(),
             nesting: 0,
             expression_heights: Vec::new(),
-            command_indices: HashMap::new(),
         }
     }
 
@@ -130,10 +129,10 @@ impl SyntaxAnalyzer {
 
     fn string_index(&self, atom: &Atom) -> usize {
         let index = atom.opt.max(0) as usize;
-        if index < self.strings.len() {
+        if index < self.string_count {
             index
         } else {
-            self.strings.len().saturating_sub(1)
+            self.string_count.saturating_sub(1)
         }
     }
 
@@ -336,12 +335,6 @@ impl SyntaxAnalyzer {
     pub fn analyze(&mut self, iad: &mut IaData) -> Result<AstNode, ()> {
         self.last = None;
         self.warnings.clear();
-        self.command_indices.clear();
-        for (index, command) in iad.command_list.iter().enumerate() {
-            self.command_indices
-                .entry(command.name.clone())
-                .or_insert(index);
-        }
         let session = Box::new(SyntaxSession { syntax: self, iad });
         let executor = Executor::new();
         let (result, session) = executor.clone().run(session.parse_root(executor));
@@ -397,12 +390,12 @@ macro_rules! parse_step {
     }};
 }
 
-struct SyntaxSession<'a> {
-    syntax: &'a mut SyntaxAnalyzer,
+struct SyntaxSession<'a, 'lex> {
+    syntax: &'a mut SyntaxAnalyzer<'lex>,
     iad: &'a mut IaData,
 }
 
-impl<'a> SyntaxSession<'a> {
+impl<'a, 'lex> SyntaxSession<'a, 'lex> {
     async fn parse_root(
         mut self: Box<Self>,
         executor: Executor<'a>,
@@ -813,7 +806,7 @@ impl<'a> SyntaxSession<'a> {
             };
             pos = after_body;
 
-            let existing = self.syntax.command_indices.get(&name).copied();
+            let existing = self.iad.command_indices.get(&name).copied();
             let command_id = if let Some(command_index) = existing {
                 let command = self.iad.command_list[command_index].clone();
                 if command.is_defined {
@@ -845,7 +838,7 @@ impl<'a> SyntaxSession<'a> {
                         );
                     }
                 } else {
-                    self.iad.command_list[command_index].is_defined = true;
+                    Arc::make_mut(&mut self.iad.command_list[command_index]).is_defined = true;
                 }
                 command.id
             } else {
@@ -862,17 +855,14 @@ impl<'a> SyntaxSession<'a> {
                         def_exist: false,
                     })
                     .collect();
-                self.syntax
-                    .command_indices
-                    .insert(name.clone(), self.iad.command_list.len());
-                self.iad.command_list.push(IncCommand {
+                self.iad.add_command(IncCommand {
                     id,
                     form: form.name.clone(),
                     name: name.clone(),
                     arg_list: command_args.clone(),
                     is_defined: true,
                 });
-                self.iad.name_set.insert(name.clone());
+                Arc::make_mut(&mut self.iad.name_set).insert(name.clone());
                 let mut arg_map = HashMap::new();
                 arg_map.insert(
                     0,
