@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "siglus_ssu_native"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "pyo3",
 ]
