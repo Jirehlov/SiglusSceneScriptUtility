@@ -2,7 +2,9 @@ import os
 import struct
 import sys
 import shutil
+import json
 from .common import (
+    ascii_lower,
     hx,
     fmt_ts,
     read_bytes,
@@ -13,14 +15,24 @@ from .common import (
     iter_exe_el_sources,
     split_end_of_options,
     first_option_token,
+    I32_STRUCT,
+    looks_like_siglus_pck,
+    parse_i32_header_checked,
+    read_struct_list,
 )
-from .path_policy import open_read, read_file_stat, resolve_read_path
+from .path_policy import (
+    open_read,
+    read_file_stat,
+    resolve_read_path,
+    windows_filename_key,
+)
 from . import pck
 from . import dat
 from . import gan
 from . import sav
 from . import cgm
 from . import tcr
+from . import const as C
 
 SUPPORTED_TYPES = ("pck", "dat", "gan", "sav", "cgm", "tcr")
 
@@ -213,6 +225,156 @@ def analyze_file(
             return 1
 
 
+def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json=""):
+    try:
+        save_path = resolve_read_path(save_path, kind="file")
+        if input_pck:
+            input_pck = resolve_read_path(input_pck, kind="file")
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        sys.stderr.write(f"analyze: {exc}\n")
+        return 2
+    report_json = os.path.abspath(
+        report_json or os.path.splitext(save_path)[0] + ".flags.json"
+    )
+    try:
+        for input_path in (save_path, input_pck):
+            if not input_path:
+                continue
+            same_input = windows_filename_key(report_json) == windows_filename_key(
+                os.path.abspath(input_path)
+            )
+            if not same_input:
+                try:
+                    same_input = os.path.samefile(report_json, input_path)
+                except (FileNotFoundError, NotADirectoryError):
+                    pass
+            if same_input:
+                sys.stderr.write(
+                    "analyze: --report-json must not overwrite an input file\n"
+                )
+                return 2
+    except OSError as exc:
+        sys.stderr.write(f"analyze: cannot check JSON output path: {exc}\n")
+        return 1
+    try:
+        info = sav.parse_read_sav(read_bytes(save_path))
+        scene_lines = {}
+        if input_pck:
+            blob = read_bytes(input_pck)
+            if not looks_like_siglus_pck(blob):
+                raise ValueError("--read-flags requires a Siglus scene PCK")
+            wanted = info["flags"]
+            for item in pck.iter_pck_scene_dat_items(
+                blob,
+                input_pck=input_pck,
+                require_exe=True,
+                explicit_angou=explicit_angou,
+                trace_key=True,
+            ):
+                name = ascii_lower(item["scene_name"])
+                if name not in wanted:
+                    continue
+                scene = item["blob"]
+                header = (
+                    parse_i32_header_checked(scene, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
+                    if scene is not None
+                    else None
+                )
+                lines = None
+                if header:
+                    lines = read_struct_list(
+                        scene,
+                        header["read_flag_list_ofs"],
+                        header["read_flag_cnt"],
+                        I32_STRUCT,
+                    )
+                    if len(lines) != header["read_flag_cnt"]:
+                        lines = None
+                scene_lines[name] = lines
+    except (OSError, ValueError, RuntimeError, struct.error) as exc:
+        sys.stderr.write(f"analyze: failed to read flags: {exc}\n")
+        return 1
+    mapping_counts = dict.fromkeys(
+        ("notChecked", "matched", "ignored", "countMismatch", "sceneUnavailable"), 0
+    )
+    scenes = []
+    for name, count, read in info["rows"]:
+        lines = None
+        status = "notChecked"
+        if input_pck:
+            key = ascii_lower(name)
+            lines = scene_lines.get(key)
+            if key not in scene_lines:
+                status = "ignored"
+            elif lines is None:
+                status = "sceneUnavailable"
+            else:
+                status, _flags = sav.match_read_flags(info, name, len(lines))
+        mapping_counts[status] += 1
+        scenes.append(
+            {
+                "name": name,
+                "status": status,
+                "flagCount": count,
+                "pckFlagCount": len(lines) if lines is not None else None,
+                "readCount": read,
+                "unreadCount": count - read,
+                "unreadFlags": [
+                    {
+                        "index": index,
+                        "line": lines[index] if status == "matched" else None,
+                    }
+                    for index, value in enumerate(info["flags"][ascii_lower(name)])
+                    if value == 0
+                ],
+            }
+        )
+    report = {
+        "savePath": save_path,
+        "pckPath": input_pck or None,
+        "summary": {
+            "sceneCount": info["scn_cnt"],
+            "flagCount": info["total_cnt"],
+            "readCount": info["total_read"],
+            "unreadCount": info["total_cnt"] - info["total_read"],
+            "mapping": mapping_counts,
+        },
+        "scenes": scenes,
+    }
+    try:
+        os.makedirs(os.path.dirname(report_json), exist_ok=True)
+        with open(report_json, "w", encoding="utf-8", newline="\r\n") as output:
+            json.dump(report, output, ensure_ascii=False, indent=2)
+            output.write("\n")
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"analyze: failed to write read-flag JSON: {exc}\n")
+        return 1
+    print(f"saved read flags: {info['total_read']}/{info['total_cnt']}")
+    print(f"saved unread flags: {info['total_cnt'] - info['total_read']}")
+    if input_pck:
+        print(
+            f"PCK mapping: matched={mapping_counts['matched']} ignored={mapping_counts['ignored']} "
+            f"countMismatch={mapping_counts['countMismatch']} sceneUnavailable={mapping_counts['sceneUnavailable']}"
+        )
+    print(f"report_json: {report_json}")
+    failed = mapping_counts["countMismatch"] + mapping_counts["sceneUnavailable"]
+    if failed:
+        sys.stderr.write(
+            f"analyze: warning: saved read flags could not be mapped for {failed} scene(s):\n"
+        )
+        for scene in scenes:
+            if scene["status"] == "countMismatch":
+                sys.stderr.write(
+                    f"  {scene['name']!r}: saved flag count {scene['flagCount']} differs from "
+                    f"PCK {scene['pckFlagCount']}; the engine ignores this saved scene data\n"
+                )
+            elif scene["status"] == "sceneUnavailable":
+                sys.stderr.write(
+                    f"  {scene['name']!r}: PCK scene data is unavailable; mapping could not be checked\n"
+                )
+    return 1 if failed else 0
+
+
 def compare_files(
     p1,
     p2,
@@ -377,12 +539,56 @@ def main(argv):
     if "--payload" in args:
         args = [arg for arg in args if arg != "--payload"]
         compare_payload = True
+    read_flags = "--read-flags" in args
+    if read_flags:
+        args = [arg for arg in args if arg != "--read-flags"]
+    report_json = ""
+    filtered = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg == "--report-json":
+            if (
+                index + 1 >= len(args)
+                or not args[index + 1]
+                or first_option_token([args[index + 1]]) is not None
+            ):
+                sys.stderr.write("--report-json requires a file path\n")
+                return 2
+            index += 1
+            report_json = args[index]
+        elif arg.startswith("--report-json="):
+            report_json = arg.split("=", 1)[1]
+            if not report_json:
+                sys.stderr.write("--report-json requires a file path\n")
+                return 2
+        else:
+            filtered.append(arg)
+        index += 1
+    args = filtered
     unknown_option = first_option_token(args)
     if unknown_option is not None:
         sys.stderr.write(f"analyze: unknown option: {unknown_option}\n")
         return 2
     if positional_args is not None:
         args.extend(positional_args)
+    if read_flags:
+        if word or gei or _disam or readall or apply or compare_payload:
+            return 2
+        if len(args) not in (1, 2) or (explicit_angou and len(args) != 2):
+            return 2
+        if explicit_angou:
+            try:
+                list(iter_exe_el_sources(explicit_angou=explicit_angou))
+            except ValueError as exc:
+                sys.stderr.write(str(exc) + "\n")
+                return 2
+        return analyze_read_flags(
+            args[0], args[1] if len(args) == 2 else "", explicit_angou, report_json
+        )
+    if report_json:
+        sys.stderr.write("analyze: --report-json requires --read-flags\n")
+        return 2
     if apply and (compare_payload or _disam):
         return 2
     if word:

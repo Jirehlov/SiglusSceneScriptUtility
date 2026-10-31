@@ -212,6 +212,7 @@ pub struct CharacterAnalyzer {
     pub current_line: usize,
     pub used_replacements: Vec<String>,
     pub sidecar: bool,
+    pub read_flag_origins: Option<Vec<(usize, usize, usize)>>,
     macro_depth: usize,
     replace_uses: Vec<ReplaceUse>,
 }
@@ -224,6 +225,7 @@ impl CharacterAnalyzer {
             current_line: 1,
             used_replacements: Vec::new(),
             sidecar,
+            read_flag_origins: None,
             macro_depth: 0,
             replace_uses: Vec::new(),
         }
@@ -541,6 +543,7 @@ impl CharacterAnalyzer {
         macro_def: &Replacement,
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
+        read_origin: usize,
     ) -> Result<(usize, MappedText), ()> {
         let mut actual = Vec::new();
         if text.get(pos) == Some(&'(') {
@@ -645,6 +648,7 @@ impl CharacterAnalyzer {
             default_tree,
             added_tree,
             text.map.is_some(),
+            read_origin,
         )?;
         Ok((pos, expanded))
     }
@@ -656,6 +660,7 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
         mapped: bool,
+        read_origin: usize,
     ) -> Result<MappedText, ()> {
         let mut arg_replacements = Vec::with_capacity(macro_def.args.len());
         for (index, arg) in macro_def.args.iter().enumerate() {
@@ -667,6 +672,7 @@ impl CharacterAnalyzer {
             let Some(source) = source else {
                 return self.error(self.current_line, "Not enough macro arguments.");
             };
+            let mut default_points;
             let points = if mapped {
                 actual
                     .get(index)
@@ -680,6 +686,15 @@ impl CharacterAnalyzer {
                     .or(Some(&[]))
             } else {
                 None
+            };
+            let points = if read_origin != 0 && index >= actual.len() {
+                default_points = points.unwrap_or_default().to_vec();
+                for point in default_points.iter_mut().flatten() {
+                    point.read_origin = read_origin;
+                }
+                Some(default_points.as_slice())
+            } else {
+                points
             };
             let expanded =
                 self.expand_text(source, default_tree, added_tree, points, Some("argument"))?;
@@ -705,6 +720,7 @@ impl CharacterAnalyzer {
         for replacement in arg_replacements {
             arg_tree.add(replacement);
         }
+        let mut body_points;
         let points = if mapped {
             macro_def
                 .source
@@ -713,6 +729,15 @@ impl CharacterAnalyzer {
                 .or(Some(&[]))
         } else {
             None
+        };
+        let points = if read_origin != 0 {
+            body_points = points.unwrap_or_default().to_vec();
+            for point in body_points.iter_mut().flatten() {
+                point.read_origin = read_origin;
+            }
+            Some(body_points.as_slice())
+        } else {
+            points
         };
         self.expand_text(
             &macro_def.after,
@@ -779,6 +804,7 @@ impl CharacterAnalyzer {
             self.used_replacements.push(replacement.name.clone());
         }
         let name_len = replacement.name.chars().count();
+        let mut read_origin = 0;
         if let (Some(map), Some(declaration)) = (
             text.map.as_ref(),
             replacement
@@ -813,10 +839,24 @@ impl CharacterAnalyzer {
                 },
                 declaration: declaration.clone(),
             });
+            if let Some(origins) = self.read_flag_origins.as_mut() {
+                read_origin = points
+                    .iter()
+                    .find_map(|point| (point.read_origin != 0).then_some(point.read_origin))
+                    .unwrap_or(0);
+                if read_origin == 0 && mapped && points[0].source_id == 0 {
+                    origins.push((
+                        points[0].line,
+                        points.iter().map(|point| point.column).min().unwrap(),
+                        points.iter().map(|point| point.column + 1).max().unwrap(),
+                    ));
+                    read_origin = origins.len();
+                }
+            }
         }
         let (end, after, map, next) = match replacement.kind {
             ReplaceKind::Replace | ReplaceKind::Define => {
-                let map = text.map.as_ref().map(|_| {
+                let mut map = text.map.as_ref().map(|_| {
                     replacement
                         .source
                         .as_ref()
@@ -824,6 +864,13 @@ impl CharacterAnalyzer {
                         .map(|source| source.map.clone())
                         .unwrap_or_else(|| vec![None; replacement.after.chars().count()])
                 });
+                if read_origin != 0
+                    && let Some(map) = map.as_mut()
+                {
+                    for point in map.iter_mut().flatten() {
+                        point.read_origin = read_origin;
+                    }
+                }
                 let end = name_len;
                 let next = if replacement.kind == ReplaceKind::Replace {
                     replacement.after.chars().count()
@@ -837,8 +884,14 @@ impl CharacterAnalyzer {
                     return self.error(self.current_line, "Macro expansion nesting limit reached.");
                 }
                 self.macro_depth += 1;
-                let expanded =
-                    self.expand_macro(text, name_len, replacement, default_tree, added_tree);
+                let expanded = self.expand_macro(
+                    text,
+                    name_len,
+                    replacement,
+                    default_tree,
+                    added_tree,
+                    read_origin,
+                );
                 self.macro_depth -= 1;
                 let (end, expanded) = expanded?;
                 let next = expanded.text.chars().count();

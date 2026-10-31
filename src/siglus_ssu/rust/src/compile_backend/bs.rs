@@ -26,6 +26,7 @@ struct BytecodeBuilder<'a> {
     scn_cmd_list: Vec<i32>,
     namae_list: Vec<i32>,
     read_flag_list: Vec<i32>,
+    read_flag_atoms: Option<&'a mut Vec<i32>>,
     current_read_flag: i32,
     default_arg_fills: usize,
 }
@@ -473,6 +474,9 @@ impl<'a> BytecodeBuilder<'a> {
                         self.push_i32(self.current_read_flag);
                         self.current_read_flag += 1;
                         self.read_flag_list.push(element.line as i32);
+                        if let Some(atoms) = self.read_flag_atoms.as_mut() {
+                            atoms.push(element.name_atom.as_ref().map_or(-1, |atom| atom.id));
+                        }
                     }
                     if need_value && !self.is_value(node.form) {
                         if [
@@ -771,6 +775,9 @@ impl<'a> BytecodeBuilder<'a> {
                         self.push_i32(self.current_read_flag);
                         self.current_read_flag += 1;
                         self.read_flag_list.push(node.line as i32);
+                        if let Some(atoms) = self.read_flag_atoms.as_mut() {
+                            atoms.push(node.first_atom().map_or(-1, |atom| atom.id));
+                        }
                     }
                     AstPayload::Name { string_index } => {
                         self.push_message_block();
@@ -825,6 +832,7 @@ pub fn compile_root(
     strings: &[String],
     label_count: usize,
     call_property_names: &[String],
+    read_flag_atoms: Option<&mut Vec<i32>>,
 ) -> Result<BsOutput, BsError> {
     let mut builder = BytecodeBuilder {
         stream: Vec::new(),
@@ -837,6 +845,7 @@ pub fn compile_root(
         scn_cmd_list: vec![0; (ia_data.command_cnt - ia_data.inc_command_cnt).max(0) as usize],
         namae_list: Vec::new(),
         read_flag_list: Vec::new(),
+        read_flag_atoms,
         current_read_flag: 0,
         default_arg_fills: 0,
     };

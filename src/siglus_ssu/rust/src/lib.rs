@@ -497,9 +497,18 @@ fn lsp_scan_document(
     path_identity: &str,
     text: &str,
     run_bs: bool,
+    read_flags: bool,
 ) -> PyResult<Py<PyDict>> {
     catch_native_panic(|| {
-        compile_backend::lsp_scan_document(py, project, path, path_identity, text, run_bs)
+        compile_backend::lsp_scan_document(
+            py,
+            project,
+            path,
+            path_identity,
+            text,
+            run_bs,
+            read_flags,
+        )
     })
 }
 

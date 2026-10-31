@@ -76,6 +76,7 @@ pub struct LexResult {
     pub label_list: Vec<LabelDef>,
     pub unknown_list: Vec<String>,
     pub atom_span_list: Vec<AtomSpan>,
+    pub read_flag_span_list: Option<Vec<Vec<(usize, usize, usize)>>>,
 }
 
 pub struct LexError {
@@ -174,10 +175,49 @@ fn token_span(
     span
 }
 
+fn read_flag_spans(
+    source_map: Option<&[Option<SourcePoint>]>,
+    origins: &[(usize, usize, usize)],
+    start: usize,
+    end: usize,
+) -> Vec<(usize, usize, usize)> {
+    let mut ranges = source_map
+        .unwrap_or_default()
+        .iter()
+        .skip(start)
+        .take(end.saturating_sub(start))
+        .flatten()
+        .filter_map(|point| {
+            let (line, left, right) = if point.read_origin != 0 {
+                *origins.get(point.read_origin - 1)?
+            } else if point.source_id == 0 {
+                (point.line, point.column, point.column + 1)
+            } else {
+                return None;
+            };
+            (line != 0).then_some((line.saturating_sub(1), left, right))
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    let mut merged: Vec<(usize, usize, usize)> = Vec::new();
+    for (line, left, right) in ranges {
+        if let Some(last) = merged.last_mut()
+            && last.0 == line
+            && left <= last.2
+        {
+            last.2 = last.2.max(right);
+        } else {
+            merged.push((line, left, right));
+        }
+    }
+    merged
+}
+
 pub fn lex_scene_text(
     text: &str,
     codes: &LexCodes,
     source_map: Option<&[Option<SourcePoint>]>,
+    read_origins: Option<&[(usize, usize, usize)]>,
 ) -> Result<LexResult, LexError> {
     let mut chars: Vec<char> = text.chars().collect();
     let original_len = chars.len();
@@ -192,6 +232,7 @@ pub fn lex_scene_text(
     let mut label_map: HashMap<String, i32> = HashMap::new();
     let mut unknown_list = Vec::new();
     let mut atom_span_list = Vec::new();
+    let mut read_flag_span_list = read_origins.map(|_| Vec::new());
     let mut i = 0usize;
 
     while chars[i] != '\0' {
@@ -365,6 +406,14 @@ pub fn lex_scene_text(
         }
         if atom.atom_type != codes.none {
             atom_span_list.push(token_span(&starts, source_map, token_start, i, cur_line));
+            if let Some(spans) = read_flag_span_list.as_mut() {
+                spans.push(read_flag_spans(
+                    source_map,
+                    read_origins.unwrap(),
+                    token_start,
+                    i,
+                ));
+            }
             atom_list.push(atom);
         }
     }
@@ -383,5 +432,6 @@ pub fn lex_scene_text(
         label_list,
         unknown_list,
         atom_span_list,
+        read_flag_span_list,
     })
 }

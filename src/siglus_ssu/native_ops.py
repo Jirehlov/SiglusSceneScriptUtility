@@ -42,14 +42,16 @@ def build_lsp_project_native(config):
     return native_accel.lsp_build_project(config)
 
 
-def scan_lsp_document_native(project, path: str, text: str, run_bs: bool = False):
+def scan_lsp_document_native(
+    project, path: str, text: str, run_bs: bool = False, read_flags: bool = False
+):
     if not _USE_NATIVE or _runtime._LEGACY_FULL or project is None:
         return None
     from .path_policy import windows_filename_key
 
     path_identity = windows_filename_key(os.path.abspath(path))
     return native_accel.lsp_scan_document(
-        project, path, path_identity, text, bool(run_bs)
+        project, path, path_identity, text, bool(run_bs), bool(read_flags)
     )
 
 

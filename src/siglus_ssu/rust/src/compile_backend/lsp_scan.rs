@@ -686,6 +686,7 @@ pub fn lsp_scan_document(
     path_identity: &str,
     text: &str,
     run_bs: bool,
+    read_flags: bool,
 ) -> PyResult<Py<PyDict>> {
     let source_text = text.replace('\r', "");
     let mut ia_data = project.base_ia.clone();
@@ -719,6 +720,7 @@ pub fn lsp_scan_document(
         }
         scene_sidecar = analyzer.sidecar_data;
     }
+    ca.read_flag_origins = read_flags.then(Vec::new);
     let scene = match ca.analyze_scene_line_with_map(
         &file2.scene_text,
         &file2.scene_source_map,
@@ -729,7 +731,12 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let mut lex = match lex_scene_text(&scene.text, &ia_data.codes.la, Some(&scene.source_map)) {
+    let mut lex = match lex_scene_text(
+        &scene.text,
+        &ia_data.codes.la,
+        Some(&scene.source_map),
+        ca.read_flag_origins.as_deref(),
+    ) {
         Ok(value) => value,
         Err(_) => {
             return diagnostic_result(py);
@@ -752,6 +759,7 @@ pub fn lsp_scan_document(
             Err(()) => return diagnostic_result(py),
         }
     };
+    let mut read_flag_atoms = read_flags.then(Vec::new);
     if run_bs
         && compile_root(
             &root,
@@ -759,6 +767,7 @@ pub fn lsp_scan_document(
             &lex.str_list,
             lex.label_list.len(),
             &call_property_names,
+            read_flag_atoms.as_mut(),
         )
         .is_err()
     {
@@ -845,5 +854,13 @@ pub fn lsp_scan_document(
         py_document_symbols.append(record_to_py(py, record)?)?;
     }
     out.set_item("document_symbols", py_document_symbols)?;
+    let read_flag_ranges = read_flag_atoms.map(|atoms| {
+        let spans = lex.read_flag_span_list.as_ref().unwrap();
+        atoms
+            .into_iter()
+            .map(|id| spans.get(id as usize).cloned().unwrap_or_default())
+            .collect::<Vec<_>>()
+    });
+    out.set_item("read_flag_ranges", read_flag_ranges)?;
     Ok(out.unbind())
 }

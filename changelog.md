@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Added `-a --read-flags` to export unread flag indices to JSON, optionally validate them against a scene PCK and include original source lines, and report compatibility according to the engine's scene-name and flag-count rules. LSP accepts `--read-sav` and exposes individual saved states and precise compiler-derived source ranges through hover and `siglus/readFlags`, preserving separate flags on the same line, mapping macro expansions to their source origins, and reporting mismatches explicitly.
 - Added Rust implementations of scene disassembly and decompilation, used automatically when the native extension is available. Payload comparison reuses the native disassembly pipeline; `--legacy-full` selects the Python implementations.
 - Added `test --decompile` for decompile/recompile payload checks under a required explicit `--const-profile`, without profile or charset fallback. Successful decompile tests report `PAYLOAD_SAME`; JSON reports record the successful profile. Recompilation uses `--no-lzss` to skip scene compression and original-source generation.
 - Changed syntax-analysis nesting beyond 64 levels and expression-tree height beyond 128 from errors to warnings, allowing compilation and LSP analysis to continue in both backends.

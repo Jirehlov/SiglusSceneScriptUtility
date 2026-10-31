@@ -84,6 +84,8 @@ def la_analize(pcad):
         if sidecar and isinstance(pcad.get("scn_source_map"), list)
         else []
     )
+    read_origins = pcad.get("read_flag_origins")
+    read_flag_span_list = [] if isinstance(read_origins, list) else None
     line_starts = [0]
     if sidecar:
         for pos, ch in enumerate(str(pcad.get("scn_text", ""))):
@@ -139,6 +141,27 @@ def la_analize(pcad):
                         "source_id": next(iter(sources)),
                     }
         return fallback_span(start, end, line)
+
+    def read_flag_spans(start, end):
+        ranges = set()
+        for point in source_map[start:end]:
+            if point is None:
+                continue
+            origin = point[4] if len(point) > 4 else 0
+            if origin:
+                line, left, right = read_origins[origin - 1]
+            elif len(point) < 4 or point[3] == 0:
+                line, left, right = point[0], point[1], point[1] + 1
+            else:
+                continue
+            ranges.add((line - 1, left, right))
+        merged = []
+        for line, left, right in sorted(ranges):
+            if merged and merged[-1][0] == line and left <= merged[-1][2]:
+                merged[-1] = (line, merged[-1][1], max(merged[-1][2], right))
+            else:
+                merged.append((line, left, right))
+        return merged
 
     i = 0
     while s[i] != "\0":
@@ -268,6 +291,8 @@ def la_analize(pcad):
             atom_list.append(a)
             if sidecar:
                 atom_span_list.append(token_span(token_start, i, cur_line))
+            if read_flag_span_list is not None:
+                read_flag_span_list.append(read_flag_spans(token_start, i))
     atom_list.append(
         {"id": cur_id, "line": cur_line, "type": C.LA_T["EOF"], "opt": 0, "subopt": 0}
     )
@@ -285,6 +310,8 @@ def la_analize(pcad):
     }
     if sidecar:
         lad["atom_span_list"] = atom_span_list
+    if read_flag_span_list is not None:
+        lad["read_flag_span_list"] = read_flag_span_list
     return lad, None
 
 

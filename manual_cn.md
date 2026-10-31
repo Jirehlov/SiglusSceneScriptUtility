@@ -224,12 +224,13 @@ siglus-ssu -c --help
 #### 语法
 
 ```
-siglus-ssu -lsp [--serial]
+siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 ```
 
 #### 参数
 
 - `--serial`：禁用默认的 LSP 工作区并行扫描，并强制按串行方式扫描。
+- `--read-sav PATH`：指定用于查看已读状态的 `read.sav`，启用 flag 悬停说明与 `siglus/readFlags` 扩展请求。文件缺失或暂时无法读取时，服务可以启动，并在请求时返回不可用状态。
 
 #### 说明
 
@@ -241,6 +242,26 @@ siglus-ssu -lsp [--serial]
 - 服务会协商 position encoding，返回带范围的补全编辑，按客户端支持的 completion item kind 输出，支持长时间扫描的 work-done progress 取消，并校验文档 URI 与请求结构。
 - 分析过程会复用适用的 `-c` 阶段（`CA`、`LA`、`SA`、`MA`、`BS`）。项目模型按目录组织，与 `.inc` / `.ss` 联合分析及全局 `.inc #command` 链接一致。
 - 两个编译后端和 LSP 的语法分析器会在分析嵌套超过 `64` 层或表达式树高度超过 `128` 时发出警告并继续分析，详见[分析深度警告](#分析深度警告)。分析器对宏参数、默认值和宏体采用另外的扫描步数及宏嵌套硬限制，并在超限时终止当前分析、报告错误，详见[宏展开](#macro)。
+
+#### 已读 flag
+
+编译器会在每个场景内从 `0` 开始，为台词及当前 profile 指定的 `print`、语音、选择等命令分配固定编号。一次带标记的选择命令调用只对应一个 flag，涵盖整个选择过程。引擎会在同一条字节码的重复执行中复用编号，并将部分 flag 暂存至清屏、等待等处理点再写为 `1`。存档中的 `0` 表示未标记已读；非零值表示已标记已读。零值 flag 对应的内容可能已经显示过。
+
+LSP 的 Python 与 Rust 实现会在 `BS` 分配 flag 时记录对应的 token，并沿源码映射定位到当前文档的具体片段。服务会将台词、普通命令和宏展开生成的命令分别定位到文本 token、命令名和宏调用名，并将宏实参中的文本定位到实参本身。一次宏调用可能生成多个 flag，因此不同编号可以共享同一个宏调用范围。服务会分别返回各个编号的已读状态，不按行合并，也不会用整行范围替代缺失的精确位置。服务仅在启用 `--read-sav` 时收集这些额外映射。
+
+请通过全局 `--const-profile N` 选择适用的命令规则。服务会按官方引擎的逐场景加载规则匹配存档，以场景名命中且 flag 数量相同作为对应的判据。存档与 PCK 不需要包含完全相同的场景集合。官方引擎会忽略存档中不存在于 PCK 的场景，并让缺少存档记录的 PCK 场景保留初始化的全零状态。官方引擎也会在单个场景的 flag 数量不匹配时忽略该场景的已读数据，并保留初始化的全零状态；LSP 会返回 `countMismatch` 并省略高亮数据，避免把不匹配的存档状态套到源码上。
+
+初始化结果包含 `capabilities.experimental.siglusReadFlags.version = 1`。客户端可通过 `siglus/readFlags` 发送 `{"textDocument":{"uri":"file:///path/to/scene.ss"}}` 参数，请求该文档的既读状态。响应字段如下：
+
+| 字段 | 说明 |
+|---|---|
+| `uri`、`version`、`scene`、`savePath` | 当前文档 URI、文档版本、场景名和指定的存档路径。 |
+| `status` | `matched`、`notConfigured`、`saveUnavailable`、`unsupportedDocument`、`analysisError`、`missingScene` 或 `countMismatch`。文档无法加载时返回 `documentUnavailable`。只有 `matched` 返回 flag 明细。 |
+| `flagCount`、`savedFlagCount`、`readCount`、`unreadCount` | 当前源码和存档的 flag 数量，以及匹配后的已读、未读数量。尚无法确定的值为 `null`。 |
+| `items` | 按 flag 编号排列的结果，每个 flag 单独一项。每项包含从 `0` 开始的 `index`、布尔值 `read`，以及 `ranges`。同一行的多个 flag 也分别返回。 |
+| `items[].ranges` | 该 flag 在当前文档中的精确 LSP 范围数组，使用协商后的 position encoding。一个 flag 可以对应多个不连续片段。无法定位时返回空数组，并保留编号和状态。 |
+
+服务会在每次 flag 请求或相关悬停时读取存档，并按内容摘要复用解析结果，不会主动监控文件。客户端可在存档变化后重新请求，并依据每个 flag 的 `read` 与 `ranges` 绘制背景装饰。悬停说明只包含指针所在片段对应的 flag。服务不指定颜色，也不会修改台词原有的语义 token。
 
 ---
 
@@ -448,7 +469,7 @@ payload 一致要求没有新增或缺失的场景，也没有 `text_only`、`re
 
 ### `-a` / `--analyze` — 分析和比较文件
 
-分析支持的二进制文件的内部结构，并将详细报告打印到标准输出。提供两个同类型文件时，执行结构比较。
+程序分析支持的二进制文件的内部结构，并在提供两个同类型文件时执行结构比较。程序默认将详细报告打印到标准输出，在 `--read-flags` 模式下写出 JSON、打印摘要。
 
 #### 支持的文件类型
 
@@ -466,6 +487,8 @@ siglus-ssu -a [--disam] <input_file.dat> [--angou <path|angou=text|key=bytes>]
 # 分析或修改其他支持文件
 siglus-ssu -a [--readall|--apply] <input_file.sav>
 siglus-ssu -a <input_file.(gan|sav|cgm|tcr)>
+
+siglus-ssu -a --read-flags <read.sav> [Scene.pck] [--report-json FILE] [--angou VALUE]
 
 # 仅统计 .pck 中的台词计数并导出逐文件 CSV
 siglus-ssu -a --word <input_pck> [output_csv] [--angou <path|angou=text|key=bytes>]
@@ -494,6 +517,8 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 | `[input_file_2]` | 用于比较的可选第二个文件。若两个文件类型相同，则执行结构比较；若类型不同，则退化为分别分析两个文件。 |
 | `--disam` | 分析 `.dat` 文件或比较两个 `.dat` 文件时，将可读反汇编写在各自输入 `.dat` 同目录下的 `<scene>.dat.txt`。命令结束前会打印反汇编总耗时。如需重建 `.ss` 输出，请使用 `-x --decompile <input_pck>`。 |
 | `--readall` | 只允许用于 `read.sav` 和 `global.sav`。对 `read.sav`：将所有已读标志位设为 `1`（标记所有场景为已读）。对 `global.sav`：就地解锁引擎管理的收集字段，目前包括存在时的 `cg_table`、`bgm_table` 和 `chrkoe.look_flag`。写入前会自动创建不覆盖旧文件的 `.bak` 备份。不能与 `--apply`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。不会修改无关的通用全局标志数组，也不会修改 Steam 这类外部成就后端。 |
+| `--read-flags` | 将各场景中值为 `0` 的 flag 编号导出为 UTF-8 JSON，默认写到存档旁的 `<save_stem>.flags.json`。可选 PCK 用于校验场景名与 flag 数量并提供原始源码行号，无需内嵌 OS 源码区段。控制台只打印摘要和报告路径。`--angou` 仅限带 PCK 的用法。`--read-flags` 不能与其他分析修饰选项同用，也不会修改存档。 |
+| `--report-json FILE` | 在 `--read-flags` 模式下指定 JSON 输出路径，也支持 `--report-json=FILE`。程序会创建缺失的父目录，且不会覆盖输入存档或 PCK。 |
 | `--apply` | 仅用于 `global.sav`：读取同目录、同主文件名的 `global.txt`，应用其中可编辑的 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag` 条目，自动创建不覆盖旧文件的 `.bak` 备份，并就地重写 `.sav`。其他生成字段，如 `M`、`global_namae` 和角色显示名，会被忽略。不能与 `--readall`、比较模式、`--disam`、`--payload`、`--word`、`--angou` 或 `--gei` 同用。 |
 | `--word` | 仅用于 `.pck`：跳过常规结构分析，统计每个已解码场景 `.dat` 和每个内嵌 `.ss` source 的台词计数，逐文件打印，并写入 CSV。若省略 `[output_csv]`，则默认写到输入 `.pck` 同目录下的 `<input_pck_stem>.word.csv`；若 `[output_csv]` 是已存在目录或以路径分隔符结尾，则把这个默认 CSV 文件名写入该目录。可以与 `--angou` 同用。加密场景数据没有有效 key 时，会在写出 CSV 前失败。 |
 | `--payload` | **（仅比较模式）** 对 `.pck` 和 `.dat` 增加规范化场景运行时 payload 比较。比较范围、结果标签及一致性判据见 [payload 比较结果](#payload-比较结果)。原生加速可用时使用 Rust 场景反汇编，不可用或通过 `--legacy-full` 禁用时使用 Python。 |
@@ -507,6 +532,22 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 `key.txt` 中的文本和 `key=bytes` 按以下优先级解析：`0xNN`、两位十六进制、最后是一至三位十进制。采用首个匹配到至少16个数值的格式，并取其前16个字节。因此，16个 `10` 表示16个 `0x10`，不是十进制10。建议显式写成 `0xNN`，避免歧义。恰好16字节的 `key.txt` 按原始二进制读取。
 
 尝试解密候选时会向 stderr 打印 key-source 诊断信息：每行包含来源、类型、适用时的路径或包内文件、具体 `exe_el` 值，以及该候选是 accepted 还是 rejected 并继续 fallback。
+
+#### read flag JSON
+
+报告记录存档中保存的数据。值为 `0` 的 flag 表示尚未被引擎标记为已读。部分命令直到清除文本或结束等待时才会设置已读标记。每个场景的 flag 编号从 `0` 开始。
+
+顶层字段包括 `savePath`、`pckPath`（未提供 PCK 时为 `null`）、`summary` 和 `scenes`。`summary` 包含 `sceneCount`、`flagCount`、`readCount`、`unreadCount`，以及按状态统计场景数量的 `mapping`。每个场景包含 `name`、`status`、存档中的 `flagCount`、`pckFlagCount`（无法获取时为 `null`）、存档中的 `readCount` 和 `unreadCount`，以及 `unreadFlags` 列表。每个未读条目包含 `index` 和 `line`。匹配成功时，`line` 为官方编译器记录的原始源码行号，从 `1` 开始，不能直接用于反编译后的脚本。未匹配时，`line` 为 `null`。
+
+| 场景 `status` | 含义 |
+|---|---|
+| `notChecked` | 未提供 PCK，仅导出存档编号，不校验对应关系。 |
+| `matched` | 引擎按一致的场景名与 flag 数量接受该场景的存档标记。 |
+| `ignored` | 引擎忽略存档中不存在于 PCK 的场景记录。程序不会因该状态而失败。 |
+| `countMismatch` | 引擎忽略因同名场景的 flag 数量不同而不匹配的存档标记。 |
+| `sceneUnavailable` | 无法解码 PCK 场景数据或读取 flag 表，未能校验对应关系。 |
+
+PCK 中没有存档记录的场景在引擎中初始为未读，不会加入这份存档数据报告。引擎只要求相应场景的名称与数量匹配，不要求两边的场景集合完全一致。程序会在写出 JSON 后集中提示 `countMismatch` 和 `sceneUnavailable` 场景，并返回退出状态 `1`。报告会保留全部存档计数与未读编号，包括被忽略或数量不匹配的记录。
 
 #### payload 比较结果
 

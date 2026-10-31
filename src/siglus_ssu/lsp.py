@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 from . import const as C, package_version
+from . import sav
 from .BS import BS, copy_ia_data
 from .CA import (
     CharacterAnalizer,
@@ -31,6 +32,7 @@ from .common import (
     content_digest,
     content_digest_file,
     read_text_auto,
+    read_bytes,
     split_end_of_options,
 )
 from .native_ops import (
@@ -174,6 +176,7 @@ class AnalysisResult:
     replace_uses: list[dict[str, Any]] = field(default_factory=list)
     directive_tokens: list[dict[str, Any]] = field(default_factory=list)
     unmapped_bindings: list[str] = field(default_factory=list)
+    read_flag_ranges: list[list[tuple[int, int, int]]] | None = None
 
 
 @dataclass(slots=True)
@@ -1114,12 +1117,17 @@ def _format_unknown_element_message(last: dict[str, Any]) -> str:
 
 
 def _analyze_ss_document(
-    abs_path: str, text: str, project: ProjectContext, *, run_bs: bool = True
+    abs_path: str,
+    text: str,
+    project: ProjectContext,
+    *,
+    run_bs: bool = True,
+    read_flags: bool = False,
 ) -> AnalysisResult:
     result = AnalysisResult(path=abs_path, text=text, project=project)
     iad = copy_ia_data(project.iad)
     pcad: dict[str, Any] = {}
-    ca = CharacterAnalizer(sidecar=True)
+    ca = CharacterAnalizer(sidecar=True, read_flags=read_flags)
     compiled = ca.analize_file(text, iad, pcad)
     result.directive_tokens = pcad.get("directive_tokens", [])
     if not compiled:
@@ -1188,7 +1196,8 @@ def _analyze_ss_document(
     if run_bs:
         bs = BS()
         bsd: dict[str, Any] = {}
-        if not bs.compile(iad, lad, mad, bsd):
+        read_flag_atoms = [] if read_flags else None
+        if not bs.compile(iad, lad, mad, bsd, read_flag_atoms=read_flag_atoms):
             result.diagnostics.append(
                 SourceDiagnostic(
                     path=abs_path,
@@ -1198,6 +1207,12 @@ def _analyze_ss_document(
                 )
             )
             return result
+        if read_flag_atoms is not None:
+            spans = lad["read_flag_span_list"]
+            result.read_flag_ranges = [
+                spans[atom] if 0 <= atom < len(spans) else []
+                for atom in read_flag_atoms
+            ]
     local_defs, label_defs, z_label_defs, doc_symbols = _collect_scene_symbols(
         lad, sad, result
     )
@@ -1230,6 +1245,7 @@ def analyze_document(
     text: str,
     project: ProjectContext,
     run_bs: bool = True,
+    read_flags: bool = False,
 ) -> AnalysisResult:
     abs_path = os.path.abspath(path)
     text = _normalize_source_text(text)
@@ -1269,7 +1285,9 @@ def analyze_document(
                 if _path_identity(item.path) == _path_identity(abs_path):
                     result.document_symbols.append(item)
         return result
-    result = _analyze_ss_document(abs_path, text, project, run_bs=run_bs)
+    result = _analyze_ss_document(
+        abs_path, text, project, run_bs=run_bs, read_flags=read_flags
+    )
     return result
 
 
@@ -1392,12 +1410,14 @@ def _native_symbol_occurrence(
 
 
 def _native_scan_document_result(
-    native_project: Any, path: str, text: str, run_bs: bool
+    native_project: Any, path: str, text: str, run_bs: bool, read_flags: bool = False
 ) -> dict[str, Any] | None:
     if native_project is None or not path.lower().endswith(".ss"):
         return None
     try:
-        result = scan_lsp_document_native(native_project, path, text, run_bs)
+        result = scan_lsp_document_native(
+            native_project, path, text, run_bs, read_flags
+        )
     except Exception:
         return None
     if not isinstance(result, dict) or not result.get("handled"):
@@ -1452,23 +1472,34 @@ def _native_int_field(item: dict[str, Any], name: str, default: int) -> int:
         return default
 
 
-def _native_document_symbols_result(
+def _native_scene_analysis_result(
     native_project: Any,
     path: str,
     text: str,
-) -> list[DefinitionRecord] | None:
-    result = _native_scan_document_result(native_project, path, text, True)
+    project: ProjectContext,
+    read_flags: bool,
+) -> AnalysisResult | None:
+    result = _native_scan_document_result(native_project, path, text, True, read_flags)
     if result is None or result.get("has_diagnostics"):
         return None
     symbols_raw = result.get("document_symbols")
-    if not isinstance(symbols_raw, list):
+    read_flag_ranges = result.get("read_flag_ranges")
+    if not isinstance(symbols_raw, list) or (
+        read_flags and not isinstance(read_flag_ranges, list)
+    ):
         return None
     try:
-        return [
-            _native_definition_record(item, path)
-            for item in symbols_raw
-            if isinstance(item, dict)
-        ]
+        return AnalysisResult(
+            path=path,
+            text=text,
+            project=project,
+            document_symbols=[
+                _native_definition_record(item, path)
+                for item in symbols_raw
+                if isinstance(item, dict)
+            ],
+            read_flag_ranges=read_flag_ranges,
+        )
     except Exception:
         return None
 
@@ -2765,7 +2796,7 @@ class ScanProgressState:
 
 
 class SSLanguageServer:
-    def __init__(self, *, serial: bool = False) -> None:
+    def __init__(self, *, serial: bool = False, read_sav: str = "") -> None:
         self._stdin = sys.stdin.buffer
         self._stdout, detached_stdout = _protocol_stdout_buffer()
         if detached_stdout:
@@ -2782,6 +2813,8 @@ class SSLanguageServer:
         self.initialize_seen = False
         self.shutdown_requested = False
         self.serial = bool(serial)
+        self.read_sav = os.path.abspath(read_sav) if read_sav else ""
+        self.read_sav_cache: tuple[str, dict[str, Any]] | None = None
         self.client_capabilities: dict[str, Any] = {}
         self.position_encoding = POSITION_ENCODING_UTF16
         self.completion_kind_value_set = set(DEFAULT_COMPLETION_KIND_VALUE_SET)
@@ -3608,7 +3641,11 @@ class SSLanguageServer:
             return doc.base_analysis
         self.report_work_done_progress("Analyzing current file...", 50)
         doc.base_analysis = _silent_stdout_call(
-            analyze_document, doc.path, doc.text, project_entry.project
+            analyze_document,
+            doc.path,
+            doc.text,
+            project_entry.project,
+            read_flags=bool(self.read_sav),
         )
         doc.base_analysis_signature = signature
         doc.analysis = None
@@ -3898,6 +3935,7 @@ class SSLanguageServer:
                 replace_uses=base.replace_uses,
                 directive_tokens=base.directive_tokens,
                 unmapped_bindings=base.unmapped_bindings,
+                read_flag_ranges=base.read_flag_ranges,
             )
         doc.analysis_signature = signature
         return doc.analysis
@@ -3981,24 +4019,25 @@ class SSLanguageServer:
                 )
         return locations
 
-    def native_document_symbols(self, doc: DocumentState) -> AnalysisResult | None:
+    def native_scene_analysis(self, doc: DocumentState) -> AnalysisResult | None:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
         project_entry = self.project_for_directory(directory)
         native_project, _native_config = self.native_lsp_project_for_directory(
             directory, project_entry
         )
         self.report_work_done_progress("Loading current-file symbols with Rust...", 50)
-        symbols = _native_document_symbols_result(native_project, doc.path, doc.text)
-        if symbols is None:
+        result = _native_scene_analysis_result(
+            native_project,
+            doc.path,
+            doc.text,
+            project_entry.project,
+            bool(self.read_sav),
+        )
+        if result is None:
             self.report_work_done_progress("Falling back to Python symbols...", 55)
             return None
         self.report_work_done_progress("Current-file symbols ready.", 90)
-        return AnalysisResult(
-            path=doc.path,
-            text=doc.text,
-            project=project_entry.project,
-            document_symbols=symbols,
-        )
+        return result
 
     def pick_position_encoding(self, capabilities: dict[str, Any]) -> str:
         raw = _dict_member(capabilities, "general").get("positionEncodings") or []
@@ -4121,6 +4160,7 @@ class SSLanguageServer:
                 "renameProvider": rename_provider,
                 "semanticTokensProvider": semantic_tokens_provider,
                 "documentSymbolProvider": document_symbol_provider,
+                "experimental": {"siglusReadFlags": {"version": 1}},
             },
             "serverInfo": {
                 "name": "siglus-ssu",
@@ -4361,7 +4401,139 @@ class SSLanguageServer:
             character,
             self.position_encoding,
         )
+        flag_indices = []
+        anchor = None
+        if self.read_sav and result.read_flag_ranges is not None:
+            line_text = _line_text_at(doc.text, line)
+            offset = _lsp_character_to_char(
+                line_text, character, self.position_encoding
+            )
+            anchor_start = 0
+            anchor_end = len(line_text)
+            for index, ranges in enumerate(result.read_flag_ranges):
+                matched = False
+                for flag_line, left, right in ranges:
+                    if flag_line != line or not 0 <= left < right <= len(line_text):
+                        continue
+                    for boundary in (left, right):
+                        if boundary <= offset:
+                            anchor_start = max(anchor_start, boundary)
+                        else:
+                            anchor_end = min(anchor_end, boundary)
+                    matched |= left <= offset < right
+                if matched:
+                    flag_indices.append(index)
+            if flag_indices:
+                anchor = _range(
+                    line, anchor_start, anchor_end, line_text, self.position_encoding
+                )
+        if flag_indices:
+            report = self.read_flag_report(doc, result, flag_indices)
+            if report["status"] == "matched":
+                detail = "\n\n".join(
+                    f"**Read flag {flag['index']}**: {'read' if flag['read'] else 'unread'}"
+                    for flag in report["items"]
+                )
+            else:
+                detail = f"**Read flags**: unavailable ({report['status']})"
+            if hover is None:
+                hover = {
+                    "contents": {"kind": "markdown", "value": detail},
+                    "range": anchor,
+                }
+            else:
+                hover["contents"]["value"] += "\n\n" + detail
+                hover["range"] = anchor
         self.respond(msg_id, result=hover)
+
+    def read_flag_report(
+        self,
+        doc: DocumentState,
+        analysis: AnalysisResult | None = None,
+        flag_indices: list[int] | None = None,
+    ) -> dict[str, Any]:
+        scene = ascii_lower(os.path.splitext(os.path.basename(doc.path))[0])
+        report = {
+            "uri": doc.uri,
+            "version": doc.version,
+            "scene": scene,
+            "savePath": self.read_sav or None,
+            "status": "notConfigured",
+            "flagCount": None,
+            "savedFlagCount": None,
+            "readCount": None,
+            "unreadCount": None,
+            "items": [],
+        }
+        if not self.read_sav:
+            return report
+        if not doc.path.lower().endswith(".ss"):
+            report["status"] = "unsupportedDocument"
+            return report
+        try:
+            blob = read_bytes(self.read_sav)
+            digest = content_digest(blob)
+            if self.read_sav_cache is None or self.read_sav_cache[0] != digest:
+                info = sav.parse_read_sav(blob)
+                self.read_sav_cache = (digest, info)
+            info = self.read_sav_cache[1]
+        except (OSError, ValueError, RuntimeError) as exc:
+            self.read_sav_cache = None
+            report["status"] = "saveUnavailable"
+            report["message"] = str(exc)
+            return report
+        if analysis is None:
+            analysis = self.native_scene_analysis(doc) or self.analyze_base(doc)
+        flag_ranges = analysis.read_flag_ranges
+        if flag_ranges is None:
+            report["status"] = "analysisError"
+            return report
+        report["flagCount"] = len(flag_ranges)
+        status, flags = sav.match_read_flags(info, scene, len(flag_ranges))
+        report["status"] = status
+        if flags is not None:
+            report["savedFlagCount"] = len(flags)
+        if status != "matched":
+            return report
+        read_count = sum(1 for value in flags if value)
+        report["readCount"] = read_count
+        report["unreadCount"] = len(flags) - read_count
+        source_lines = _split_lines_cached(doc.text)
+        indices = range(len(flags)) if flag_indices is None else flag_indices
+        for index in indices:
+            if index % 256 == 0:
+                self.raise_if_request_cancelled()
+            ranges = []
+            for line, left, right in flag_ranges[index]:
+                if 0 <= line < len(source_lines) and 0 <= left < right <= len(
+                    source_lines[line]
+                ):
+                    ranges.append(
+                        _range(
+                            line,
+                            left,
+                            right,
+                            source_lines[line],
+                            self.position_encoding,
+                        )
+                    )
+            report["items"].append(
+                {"index": index, "read": bool(flags[index]), "ranges": ranges}
+            )
+        return report
+
+    def handle_read_flags(self, msg_id: Any, params: dict[str, Any]) -> None:
+        uri = self.text_document_uri_from_params(msg_id, params)
+        if uri is None:
+            return
+        doc = self.get_or_load_document(uri)
+        if doc is None:
+            self.respond(
+                msg_id,
+                result={"uri": uri, "status": "documentUnavailable", "items": []},
+            )
+            return
+        self.respond(msg_id, result=self.read_flag_report(doc))
 
     def handle_definition(self, msg_id: Any, params: dict[str, Any]) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
@@ -4971,7 +5143,7 @@ class SSLanguageServer:
         if doc is None:
             self.respond(msg_id, result=[])
             return
-        result = self.native_document_symbols(doc) or self.analyze_base(doc)
+        result = self.native_scene_analysis(doc) or self.analyze_base(doc)
         self.report_work_done_progress("Publishing current-file symbols...", 95)
         self.respond(
             msg_id,
@@ -5152,6 +5324,7 @@ class SSLanguageServer:
             "textDocument/rename",
             "textDocument/semanticTokens/full",
             "textDocument/documentSymbol",
+            "siglus/readFlags",
         }
         if method in methods_with_object_params:
             params = self.coerce_params_object(msg_id, has_id, raw_params)
@@ -5189,6 +5362,12 @@ class SSLanguageServer:
             if has_id:
                 self.run_request_handler(
                     msg_id, params, lambda: self.handle_hover(msg_id, params)
+                )
+            return
+        if method == "siglus/readFlags":
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_read_flags(msg_id, params)
                 )
             return
         if method == "textDocument/definition":
@@ -5275,14 +5454,30 @@ def main(argv: list[str]) -> int:
     argv = list(argv)
     argv, positional_args = split_end_of_options(argv)
     serial = False
-    for arg in argv:
+    read_sav = ""
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        index += 1
         if arg == "--serial":
             serial = True
+            continue
+        if arg == "--read-sav":
+            if (
+                read_sav
+                or index >= len(argv)
+                or not argv[index]
+                or argv[index].startswith("--")
+            ):
+                sys.stderr.write("--read-sav requires one read.sav path\n")
+                return 2
+            read_sav = argv[index]
+            index += 1
             continue
         sys.stderr.write(f"Unknown argument: {arg}\n")
         return 2
     if positional_args:
         sys.stderr.write(f"Unknown argument: {positional_args[0]}\n")
         return 2
-    server = SSLanguageServer(serial=serial)
+    server = SSLanguageServer(serial=serial, read_sav=read_sav)
     return server.run()

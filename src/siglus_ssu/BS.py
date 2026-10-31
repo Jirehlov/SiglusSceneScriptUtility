@@ -1316,12 +1316,9 @@ class BS:
         if text is None:
             return True
         s.bs_push_msg_block()
-        opt = int(
-            ((text.get("text") or text or {}).get("atom") or {}).get("opt", 0) or 0
-        )
-        line = int(
-            ((text.get("text") or text or {}).get("atom") or {}).get("line", 0) or 0
-        )
+        atom = (text.get("text") or text or {}).get("atom") or {}
+        opt = int(atom.get("opt", 0) or 0)
+        line = int(atom.get("line", 0) or 0)
         s.out_scn["scn"].push_u8(C.CD_PUSH)
         s.out_scn["scn"].push_i32(_fc(C.FM_STR))
         s.out_scn["scn"].push_i32(opt)
@@ -1329,6 +1326,8 @@ class BS:
         s.out_scn["scn"].push_i32(s.cur_read_flag_no)
         s.cur_read_flag_no += 1
         s.out_scn["read_flag_list"].append({"line_no": line})
+        if s.read_flag_atoms is not None:
+            s.read_flag_atoms.append(int(atom.get("id", -1)))
         return True
 
     def bs_name(s, name):
@@ -1571,6 +1570,9 @@ class BS:
                 s.out_scn["read_flag_list"].append(
                     {"line_no": int((el[-1] or {}).get("node_line", 0) if el else 0)}
                 )
+                if s.read_flag_atoms is not None:
+                    atom = ((el[-1].get("name") or {}).get("atom") or {}) if el else {}
+                    s.read_flag_atoms.append(int(atom.get("id", -1)))
         elif et == C.ET_PROPERTY:
             if not (yield (s.bs_elm_list, elm_list)):
                 return False
@@ -1627,8 +1629,9 @@ class BS:
         s.out_scn["scn"].push_i32(0)
         s.out_scn["scn"].push_i32(_fc(C.FM_VOID))
 
-    def compile(s, piad, plad, psad, pbsd):
+    def compile(s, piad, plad, psad, pbsd, *, read_flag_atoms=None):
         s.clear_error()
+        s.read_flag_atoms = read_flag_atoms
         try:
             s.m_piad = piad
             s.loop_label = []

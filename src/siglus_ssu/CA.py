@@ -188,7 +188,7 @@ class _ExpansionBuffer:
 
 
 class CharacterAnalizer:
-    def __init__(self, *, sidecar=False):
+    def __init__(self, *, sidecar=False, read_flags=False):
         self.error_line = 0
         self.error_str = ""
         self.sidecar = bool(sidecar)
@@ -196,6 +196,7 @@ class CharacterAnalizer:
         self.replace_uses = []
         self.condition_names = []
         self.directive_tokens = []
+        self.read_flag_origins = [] if read_flags else None
 
     def error(self, line, s):
         self.error_line = line
@@ -491,6 +492,7 @@ class CharacterAnalizer:
         tp, nm, after = rep["type"], rep["name"], rep.get("after", "")
         nl = len(nm)
         source = rep.get("source") or {}
+        read_origin = 0
         if source_map is not None and source.get("declaration") is not None:
             points = [point for point in source_map[:nl] if point is not None]
             mapped = (
@@ -512,6 +514,23 @@ class CharacterAnalizer:
                     "declaration": source.get("declaration"),
                 }
             )
+            if self.read_flag_origins is not None:
+                read_origin = next(
+                    (point[4] for point in points if len(point) > 4 and point[4]), 0
+                )
+                if (
+                    not read_origin
+                    and mapped
+                    and (points[0][3] if len(points[0]) > 3 else 0) == 0
+                ):
+                    self.read_flag_origins.append(
+                        (
+                            points[0][0],
+                            min(point[1] for point in points),
+                            max(point[1] for point in points) + 1,
+                        )
+                    )
+                    read_origin = len(self.read_flag_origins)
         if tp in ("replace", "define"):
             end = nl
             inserted_map = (
@@ -519,6 +538,13 @@ class CharacterAnalizer:
                 if source_map is not None
                 else None
             )
+            if read_origin:
+                inserted_map = [
+                    (*point[:3], point[3] if len(point) > 3 else 0, read_origin)
+                    if point is not None
+                    else None
+                    for point in inserted_map
+                ]
             consumed = len(after) if tp == "replace" else 0
         else:
             if self.macro_depth >= 128:
@@ -527,7 +553,7 @@ class CharacterAnalizer:
             self.macro_depth += 1
             try:
                 expanded = self._analize_macro(
-                    text, nl, rep, default_rt, added_rt, source_map
+                    text, nl, rep, default_rt, added_rt, source_map, read_origin
                 )
             finally:
                 self.macro_depth -= 1
@@ -540,7 +566,9 @@ class CharacterAnalizer:
         text.replace(end, after)
         return consumed
 
-    def _analize_macro(self, text, p, macro, default_rt, added_rt, source_map):
+    def _analize_macro(
+        self, text, p, macro, default_rt, added_rt, source_map, read_origin
+    ):
         real = []
         real_maps = []
         kak = 0
@@ -611,7 +639,13 @@ class CharacterAnalizer:
             self.error(self.m_line, "Too many macro arguments.")
             return None
         res = self._analize_macro_replace(
-            macro, real, real_maps, default_rt, added_rt, source_map is not None
+            macro,
+            real,
+            real_maps,
+            default_rt,
+            added_rt,
+            source_map is not None,
+            read_origin,
         )
         if res is None:
             return None
@@ -646,7 +680,7 @@ class CharacterAnalizer:
         return text.result(256), points.result(256) if points is not None else None
 
     def _analize_macro_replace(
-        self, macro, real, real_maps, default_rt, added_rt, mapped
+        self, macro, real, real_maps, default_rt, added_rt, mapped, read_origin
     ):
         reps = []
         source = macro.get("source") or {}
@@ -664,6 +698,13 @@ class CharacterAnalizer:
                     else (defaults[i] if i < len(defaults) else [])
                 )
                 points = list(points or [None] * len(after))
+                if read_origin and i >= len(real):
+                    points = [
+                        (*point[:3], point[3] if len(point) > 3 else 0, read_origin)
+                        if point is not None
+                        else None
+                        for point in points
+                    ]
             expanded = self._expand_macro_text(
                 after, points, default_rt, added_rt, "argument"
             )
@@ -685,6 +726,13 @@ class CharacterAnalizer:
             add_replace_tree(arg_tree, rep["name"], rep)
         src = macro["after"]
         points = list(source.get("map") or [None] * len(src)) if mapped else None
+        if read_origin:
+            points = [
+                (*point[:3], point[3] if len(point) > 3 else 0, read_origin)
+                if point is not None
+                else None
+                for point in points
+            ]
         return self._expand_macro_text(src, points, default_rt, arg_tree, "body")
 
     def analize_line(self, in_text, piad, source_map=None):
@@ -853,5 +901,7 @@ class CharacterAnalizer:
         if self.sidecar:
             pcad["scn_source_map"] = scn_source_map[: len(pcad["scn_text"])]
             pcad["replace_uses"] = self.replace_uses
+        if self.read_flag_origins is not None:
+            pcad["read_flag_origins"] = self.read_flag_origins
         pcad.setdefault("property_list", [])
         return 1

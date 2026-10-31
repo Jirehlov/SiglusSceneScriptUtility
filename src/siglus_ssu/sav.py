@@ -3,7 +3,7 @@ import re
 import struct
 from . import const as C
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
-from .common import content_digest, dn
+from .common import ascii_lower, content_digest, dn
 
 
 _GLOBAL_APPLY_INT_RE = re.compile(r"^(G|Z|cg_table|bgm_table)\[(\d+)\]\s*:\s*(.*?)\s*$")
@@ -244,7 +244,7 @@ def _peek_lzss_header(enc):
     return int(pack_sz), int(org_sz)
 
 
-def _parse_read_sav(blob):
+def parse_read_sav(blob):
     if (not blob) or len(blob) < 24:
         raise ValueError("read.sav: too small")
     major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
@@ -273,6 +273,7 @@ def _parse_read_sav(blob):
     mv = memoryview(unpacked)
     q = 0
     rows = []
+    scene_flags = {}
     tr = 0
     tc = 0
     for _ in range(int(scn_cnt)):
@@ -297,6 +298,7 @@ def _parse_read_sav(blob):
             raise ValueError("read.sav: truncated (flags)")
         flags = mv[q : q + int(cnt)]
         q += int(cnt)
+        scene_flags[ascii_lower(name)] = flags
         r = int(sum(1 for x in flags if x)) if cnt else 0
         tr += r
         tc += int(cnt)
@@ -311,9 +313,19 @@ def _parse_read_sav(blob):
         "org_size": int(org_sz),
         "unpacked_sha256": content_digest(unpacked),
         "rows": rows,
+        "flags": scene_flags,
         "total_read": tr,
         "total_cnt": tc,
     }
+
+
+def match_read_flags(info, scene, flag_count):
+    flags = info["flags"].get(ascii_lower(scene))
+    if flags is None:
+        return "missingScene", None
+    if len(flags) != flag_count:
+        return "countMismatch", flags
+    return "matched", flags
 
 
 def _try_parse_read_meta(blob):
@@ -986,7 +998,7 @@ def sav(blob, path=None):
     if k is None:
         raise ValueError("not a .sav")
     if k["kind"] == "read":
-        info = _parse_read_sav(blob)
+        info = parse_read_sav(blob)
         w = int(C.NAME_W)
         print("==== read.sav ====")
         print(f"version: {info['major']}.{info['minor']}")
@@ -1127,8 +1139,8 @@ def compare_sav(b1, b2):
         sav(b2)
         return 0
     if k1["kind"] == "read":
-        a = _parse_read_sav(b1)
-        b = _parse_read_sav(b2)
+        a = parse_read_sav(b1)
+        b = parse_read_sav(b2)
         w = int(C.NAME_W)
         print("==== Compare read.sav ====")
         print(

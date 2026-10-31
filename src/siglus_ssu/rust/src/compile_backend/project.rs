@@ -1475,7 +1475,7 @@ fn prepare_scene(
         log_stage(log, "LA", display_name)?;
     }
     let stage_start = Instant::now();
-    let lex_result = lex_scene_text(&scene_text, &ia_data.codes.la, None);
+    let lex_result = lex_scene_text(&scene_text, &ia_data.codes.la, None, None);
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "LA", stage_start);
     }
@@ -1549,6 +1549,7 @@ fn prepare_scene(
         &lex.str_list,
         lex.label_list.len(),
         &call_property_names,
+        None,
     )
     .map_err(|error| scene_error(error.code, display_name, error.line))?;
     let (scene_macro_counts, global_macro_usage_delta, source_stats) =

@@ -53,6 +53,7 @@ pub struct SourcePoint {
     pub column: usize,
     pub index: usize,
     pub source_id: usize,
+    pub read_origin: usize,
 }
 
 pub struct TextCommentResult {
@@ -225,6 +226,7 @@ pub fn scan_text_comments(
                 column: source_column,
                 index: i,
                 source_id: 0,
+                read_origin: 0,
             }));
         }
         out.push(out_ch);
