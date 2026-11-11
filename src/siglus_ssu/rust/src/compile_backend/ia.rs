@@ -49,10 +49,7 @@ pub struct IaData {
     pub command_list: Vec<Arc<IncCommand>>,
     pub command_indices: Arc<HashMap<String, usize>>,
     pub form_table: FormTable,
-    pub codes: RuntimeCodes,
-    pub selection_command_codes: HashSet<(i32, i32)>,
-    pub message_block_command_codes: HashSet<(i32, i32)>,
-    pub read_flag_command_codes: HashSet<(i32, i32)>,
+    pub codes: Arc<RuntimeCodes>,
 }
 
 #[derive(Default)]
@@ -108,7 +105,7 @@ pub struct IncAnalyzer<const TRACK_USAGE: bool = true> {
 impl IaData {
     pub fn new(
         form_table: FormTable,
-        codes: RuntimeCodes,
+        codes: Arc<RuntimeCodes>,
         defined_names: impl IntoIterator<Item = String>,
     ) -> Self {
         Self {
@@ -125,9 +122,6 @@ impl IaData {
             command_indices: Arc::default(),
             form_table,
             codes,
-            selection_command_codes: HashSet::new(),
-            message_block_command_codes: HashSet::new(),
-            read_flag_command_codes: HashSet::new(),
         }
     }
 
@@ -213,13 +207,13 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         let options = TextCommentOptions {
             case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::String,
-            single_escape_chars: "\"\\n".to_string(),
-            double_escape_chars: "\"\\n".to_string(),
-            newline_single_message: "Found newline inside single quotes.".to_string(),
-            newline_double_message: "Found newline inside double quotes.".to_string(),
-            unclosed_single_message: "Single quote is not closed.".to_string(),
-            unclosed_double_message: "Double quote is not closed.".to_string(),
-            unclosed_block_message: " Comment (/*) is not closed.".to_string(),
+            single_escape_chars: "\"\\n",
+            double_escape_chars: "\"\\n",
+            newline_single_message: "Found newline inside single quotes.",
+            newline_double_message: "Found newline inside double quotes.",
+            unclosed_single_message: "Single quote is not closed.",
+            unclosed_double_message: "Double quote is not closed.",
+            unclosed_block_message: " Comment (/*) is not closed.",
             allow_trailing_escape_eof: true,
             with_map: self.sidecar,
             ..TextCommentOptions::default()
@@ -583,24 +577,30 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
 
     fn span_from_offsets(&self, start: usize, end: usize, line: usize) -> NameSpan {
         if self.sidecar && end > start {
-            let points: Vec<SourcePoint> = self
+            let mut points = self
                 .source_map
                 .iter()
                 .skip(start)
                 .take(end.saturating_sub(start))
-                .filter_map(|point| *point)
-                .collect();
-            if !points.is_empty() {
-                let first_line = points[0].line;
-                if points
-                    .iter()
-                    .all(|point| point.line == first_line && point.source_id == points[0].source_id)
-                {
+                .flatten();
+            if let Some(first) = points.next() {
+                let mut min_column = first.column;
+                let mut max_column = first.column;
+                let mut mapped = true;
+                for point in points {
+                    if point.line != first.line || point.source_id != first.source_id {
+                        mapped = false;
+                        break;
+                    }
+                    min_column = min_column.min(point.column);
+                    max_column = max_column.max(point.column);
+                }
+                if mapped {
                     return NameSpan {
-                        source_id: points[0].source_id as isize,
-                        line: first_line,
-                        start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
-                        end_char: points.iter().map(|point| point.column).max().unwrap_or(0) + 1,
+                        source_id: first.source_id as isize,
+                        line: first.line,
+                        start_char: min_column,
+                        end_char: max_column + 1,
                     };
                 }
             }
@@ -632,14 +632,14 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         });
     }
 
-    fn replacement_source(&self, kind: &str) -> Option<Arc<ReplacementSource>> {
+    fn take_replacement_source(&mut self, kind: &str) -> Option<Arc<ReplacementSource>> {
         if !self.sidecar {
             return None;
         }
         Some(Arc::new(ReplacementSource {
-            map: self.last_after_source_map.clone(),
+            map: std::mem::take(&mut self.last_after_source_map),
             defaults: if kind == "macro" {
-                self.default_maps.clone()
+                std::mem::take(&mut self.default_maps)
             } else {
                 Vec::new()
             },
@@ -952,7 +952,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 } else {
                     String::new()
                 },
-                source: self.replacement_source(record_kind),
+                source: self.take_replacement_source(record_kind),
             });
             self.record_decl(record_kind, &name, line, name_start, name_end);
             return Ok((next, line2));
@@ -984,7 +984,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 } else {
                     String::new()
                 },
-                source: self.replacement_source("macro"),
+                source: self.take_replacement_source("macro"),
             });
             self.record_decl("macro", &name, line, name_start, name_end);
             return Ok((next, line2));
@@ -1126,7 +1126,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 &mut iad.form_table,
                 &self.parent_form,
                 name.clone(),
-                form.clone(),
+                form,
                 create_elm_code(iad.codes.elm.owner_user_prop, 0, id),
             );
             if self.parent_form == iad.codes.forms.global.name.as_str() {
@@ -1141,7 +1141,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 self.sidecar_data.decls.push(IncDeclaration {
                     source_id: span.source_id,
                     kind: "property".to_string(),
-                    name: name.clone(),
+                    name,
                     line: if span.line == 0 {
                         source_line
                     } else {
@@ -1174,24 +1174,27 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             Arc::make_mut(&mut iad.name_set).insert(name.clone());
             let id = iad.command_cnt;
             iad.command_cnt += 1;
-            iad.add_command(IncCommand {
-                id,
-                form: form.clone(),
-                name: name.clone(),
-                arg_list: args.clone(),
-                is_defined: false,
-            });
             let arg_info: Vec<ArgInfo> = args
-                .into_iter()
+                .iter()
                 .map(|arg| ArgInfo {
                     id: arg.id,
-                    name: arg.name,
-                    form: arg.form,
+                    name: arg.name.clone(),
+                    form: iad
+                        .form_table
+                        .form_code_of(&arg.form)
+                        .unwrap_or(iad.codes.forms.void.code),
                     def_int: arg.def_int,
                     def_exist: arg.def_exist,
                     preserve_int_reference: false,
                 })
                 .collect();
+            iad.add_command(IncCommand {
+                id,
+                form: form.clone(),
+                name: name.clone(),
+                arg_list: args,
+                is_defined: false,
+            });
             let mut arg_map = HashMap::new();
             arg_map.insert(0, ArgList { arg_list: arg_info });
             iad.form_table.add(
@@ -1200,7 +1203,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                     kind: super::form_table::ElementKind::Command,
                     code: create_elm_code(iad.codes.elm.owner_user_cmd, 0, id),
                     name: name.clone(),
-                    form: form.clone(),
+                    form,
                     arg_map,
                     origin: "inc".to_string(),
                 },
@@ -1217,7 +1220,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 self.sidecar_data.decls.push(IncDeclaration {
                     source_id: span.source_id,
                     kind: "command".to_string(),
-                    name: name.clone(),
+                    name,
                     line: if span.line == 0 {
                         source_line
                     } else {

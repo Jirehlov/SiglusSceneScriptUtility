@@ -719,10 +719,8 @@ class CharacterAnalizer:
             if mapped:
                 rep["source"] = {"map": expanded[1]}
             reps.append(rep)
-        reps.sort(key=lambda rep: len(rep["name"]))
-        reps.reverse()
         arg_tree = new_replace_tree()
-        for rep in reps:
+        for rep in reversed(reps):
             add_replace_tree(arg_tree, rep["name"], rep)
         src = macro["after"]
         points = list(source.get("map") or [None] * len(src)) if mapped else None

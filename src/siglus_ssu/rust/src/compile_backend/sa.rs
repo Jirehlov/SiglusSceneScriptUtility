@@ -885,24 +885,20 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                         def_exist: false,
                     })
                     .collect();
-                self.iad.add_command(IncCommand {
-                    id,
-                    form: form.name.clone(),
-                    name: name.clone(),
-                    arg_list: command_args.clone(),
-                    is_defined: true,
-                });
-                Arc::make_mut(&mut self.iad.name_set).insert(name.clone());
                 let mut arg_map = HashMap::new();
                 arg_map.insert(
                     0,
                     ArgList {
                         arg_list: command_args
-                            .into_iter()
+                            .iter()
                             .map(|arg| ArgInfo {
                                 id: arg.id,
-                                name: arg.name,
-                                form: arg.form,
+                                name: arg.name.clone(),
+                                form: self
+                                    .iad
+                                    .form_table
+                                    .form_code_of(&arg.form)
+                                    .unwrap_or(self.iad.codes.forms.void.code),
                                 def_int: arg.def_int,
                                 def_exist: arg.def_exist,
                                 preserve_int_reference: false,
@@ -910,6 +906,14 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                             .collect(),
                     },
                 );
+                self.iad.add_command(IncCommand {
+                    id,
+                    form: form.name.clone(),
+                    name: name.clone(),
+                    arg_list: command_args,
+                    is_defined: true,
+                });
+                Arc::make_mut(&mut self.iad.name_set).insert(name.clone());
                 self.iad.form_table.add(
                     self.iad.codes.forms.scene.name.as_str(),
                     ElementInfo {

@@ -1,13 +1,12 @@
 use super::config::CompileConstants;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-#[derive(Clone)]
 pub struct FormValue {
     pub name: String,
     pub code: i32,
 }
 
-#[derive(Clone)]
 pub struct FormCodes {
     pub argsref: FormValue,
     pub args: FormValue,
@@ -123,7 +122,6 @@ pub struct OperatorCodes {
     pub sr3: i32,
 }
 
-#[derive(Clone)]
 pub struct BytecodeCodes {
     pub nl: i32,
     pub push: i32,
@@ -151,7 +149,6 @@ pub struct BytecodeCodes {
     pub sel_block_end: i32,
 }
 
-#[derive(Clone)]
 pub struct ElementCodes {
     pub array: i32,
     pub global_cur_call: i32,
@@ -161,16 +158,17 @@ pub struct ElementCodes {
     pub owner_user_prop: i32,
 }
 
-#[derive(Clone)]
 pub struct ElementTypeCodes {
     pub property: i32,
     pub command: i32,
 }
 
-#[derive(Clone)]
 pub struct RuntimeCodes {
     pub forms: FormCodes,
     pub form_bytecode: HashMap<i32, i32>,
+    pub selection_command_codes: HashSet<(i32, i32)>,
+    pub message_block_command_codes: HashSet<(i32, i32)>,
+    pub read_flag_command_codes: HashSet<(i32, i32)>,
     pub la: LexCodes,
     pub op: OperatorCodes,
     pub cd: BytecodeCodes,
@@ -181,8 +179,8 @@ pub struct RuntimeCodes {
 }
 
 impl RuntimeCodes {
-    pub fn from_constants(constants: &CompileConstants) -> Result<Self, String> {
-        Ok(Self {
+    pub fn from_constants(constants: &CompileConstants) -> Result<Arc<Self>, String> {
+        Ok(Arc::new(Self {
             forms: FormCodes {
                 argsref: form_value(constants, "FM___ARGSREF")?,
                 args: form_value(constants, "FM___ARGS")?,
@@ -336,9 +334,16 @@ impl RuntimeCodes {
                 property: constants.element_type("ET_PROPERTY")?,
                 command: constants.element_type("ET_COMMAND")?,
             },
+            selection_command_codes: constants.selection_command_codes.iter().copied().collect(),
+            message_block_command_codes: constants
+                .message_block_command_codes
+                .iter()
+                .copied()
+                .collect(),
+            read_flag_command_codes: constants.read_flag_command_codes.iter().copied().collect(),
             logical_and_precedence: constants.logical_and_precedence,
             allow_property_out_of_command: constants.allow_property_out_of_command,
-        })
+        }))
     }
 }
 

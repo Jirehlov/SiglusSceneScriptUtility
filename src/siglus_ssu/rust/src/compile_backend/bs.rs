@@ -1,6 +1,5 @@
 use super::ast::{ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind};
 use super::codes::RuntimeCodes;
-use super::form_table::ArgInfo;
 use super::ia::IaData;
 use super::la::Atom;
 use super::scene_dat::SceneDatInput;
@@ -414,16 +413,12 @@ impl<'a> BytecodeBuilder<'a> {
                     else {
                         return Self::error("TNMSERR_BS_NEED_VALUE", node);
                     };
-                    let key = elements.last().map(|element| {
-                        (
+                    if *element_type == self.codes.element_type.command
+                        && let Some(element) = elements.last()
+                        && self.codes.message_block_command_codes.contains(&(
                             self.codes.form_bytecode[&element.parent_form],
                             element.element_code,
-                        )
-                    });
-                    if *element_type == self.codes.element_type.command
-                        && key.is_some_and(|key| {
-                            self.ia_data.message_block_command_codes.contains(&key)
-                        })
+                        ))
                     {
                         self.push_message_block();
                     }
@@ -466,7 +461,7 @@ impl<'a> BytecodeBuilder<'a> {
                     };
                     if *element_type == self.codes.element_type.command
                         && let Some(element) = elements.last()
-                        && self.ia_data.read_flag_command_codes.contains(&(
+                        && self.codes.read_flag_command_codes.contains(&(
                             self.codes.form_bytecode[&element.parent_form],
                             element.element_code,
                         ))
@@ -512,21 +507,15 @@ impl<'a> BytecodeBuilder<'a> {
                 }
                 CompileStep::ElementCommand(element, node) => {
                     let mut argument_count = element.args.args.len();
-                    let missing = self
-                        .ia_data
+                    let ia_data = self.ia_data;
+                    let missing = ia_data
                         .form_table
                         .get_element_by_code(element.parent_form, element.element_code)
                         .and_then(|info| info.arg_map.get(&element.arg_list_id))
-                        .map(|list| {
-                            list.arg_list
-                                .get(argument_count..)
-                                .unwrap_or_default()
-                                .iter()
-                                .map(|arg| (self.form_code_for_arg(arg), arg.def_int))
-                                .collect::<Vec<_>>()
-                        })
+                        .and_then(|list| list.arg_list.get(argument_count..))
                         .unwrap_or_default();
-                    for &(form, value) in &missing {
+                    for argument in missing {
+                        let form = argument.form;
                         if [self.codes.forms.args.code, self.codes.forms.argsref.code]
                             .contains(&form)
                         {
@@ -537,14 +526,15 @@ impl<'a> BytecodeBuilder<'a> {
                         if form != self.codes.forms.int.code {
                             return Self::error("TNMSERR_BS_ILLEGAL_DEFAULT_ARG", node);
                         }
-                        self.push_i32(value);
+                        self.push_i32(argument.def_int);
                         argument_count += 1;
                         self.default_arg_fills += 1;
                     }
                     self.push_u8(self.codes.cd.command);
                     self.push_i32(element.arg_list_id);
                     self.push_i32(argument_count as i32);
-                    for &(form, _) in missing.iter().rev() {
+                    for argument in missing.iter().rev() {
+                        let form = argument.form;
                         if [self.codes.forms.args.code, self.codes.forms.argsref.code]
                             .contains(&form)
                         {
@@ -566,10 +556,9 @@ impl<'a> BytecodeBuilder<'a> {
                         }
                     }
                     self.push_i32(element.args.named_count as i32);
-                    for argument in element.args.args.iter().rev() {
-                        if argument.name.is_some() {
-                            self.push_i32(argument.name_id);
-                        }
+                    let named_start = element.args.args.len() - element.args.named_count;
+                    for argument in element.args.args[named_start..].iter().rev() {
+                        self.push_i32(argument.name_id);
                     }
                     self.push_form(element.form);
                 }
@@ -804,13 +793,6 @@ impl<'a> BytecodeBuilder<'a> {
             self.push_form(form);
             self.push_i32(atom.opt);
         }
-    }
-
-    fn form_code_for_arg(&self, argument: &ArgInfo) -> i32 {
-        self.ia_data
-            .form_table
-            .form_code_of(&argument.form)
-            .unwrap_or(self.codes.forms.void.code)
     }
 
     fn push_message_block(&mut self) {

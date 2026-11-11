@@ -96,14 +96,14 @@ fn push_utf16_raw(out: &mut Vec<u8>, text: &str) {
     }
 }
 
-pub(super) fn push_indexed_strings(out: &mut Vec<u8>, strings: &[String]) -> usize {
+pub(super) fn push_indexed_strings(out: &mut Vec<u8>, strings: &[impl AsRef<str>]) -> usize {
     let index_ofs = out.len();
     let string_ofs = index_ofs + strings.len() * 8;
     out.resize(string_ofs, 0);
     let mut ofs = 0i32;
     for (index, text) in strings.iter().enumerate() {
         let start = out.len();
-        push_utf16_raw(out, text);
+        push_utf16_raw(out, text.as_ref());
         let len = ((out.len() - start) / 2) as i32;
         let entry = index_ofs + index * 8;
         out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());

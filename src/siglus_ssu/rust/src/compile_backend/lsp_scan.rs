@@ -1,4 +1,4 @@
-use super::ast::{AstNode, AstPayload};
+use super::ast::{AstNode, AstPayload, Parameter};
 use super::bs::compile_root;
 use super::ca::{CharacterAnalyzer, ReplaceUse};
 use super::codes::RuntimeCodes;
@@ -56,18 +56,11 @@ pub struct NativeLspProject {
 
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
     let codes = RuntimeCodes::from_constants(constants)?;
-    let mut data = IaData::new(
+    let data = IaData::new(
         FormTable::from_constants(constants)?,
         codes,
         std::iter::empty::<String>(),
     );
-    data.selection_command_codes = constants.selection_command_codes.iter().copied().collect();
-    data.message_block_command_codes = constants
-        .message_block_command_codes
-        .iter()
-        .copied()
-        .collect();
-    data.read_flag_command_codes = constants.read_flag_command_codes.iter().copied().collect();
     Ok(data)
 }
 
@@ -231,20 +224,21 @@ fn label_symbol_id(path_identity: &str, name: &str) -> String {
     format!("label:{path_identity}:{}", name.to_ascii_lowercase())
 }
 
-fn format_arg_list(args: Vec<(String, String)>) -> String {
+fn format_arg_list(args: &[Parameter]) -> String {
     if args.is_empty() {
         return "()".to_string();
     }
     let parts: Vec<String> = args
-        .into_iter()
+        .iter()
         .enumerate()
-        .map(|(index, (name, form))| {
-            let label = if name.is_empty() {
-                format!("arg{index}")
+        .map(|(index, parameter)| {
+            let name = parameter.name.as_str();
+            let form = parameter.form.name.as_str();
+            if name.is_empty() {
+                format!("arg{index}: {form}")
             } else {
-                name
-            };
-            format!("{label}: {form}")
+                format!("{name}: {form}")
+            }
         })
         .collect();
     format!("({})", parts.join(", "))
@@ -315,11 +309,7 @@ fn collect_definitions_node(
                 body,
                 ..
             } => {
-                let args = parameters
-                    .iter()
-                    .map(|parameter| (parameter.name.clone(), parameter.form.name.clone()))
-                    .collect::<Vec<_>>();
-                let signature = format!("{}{} -> {}", name, format_arg_list(args), form.name);
+                let signature = format!("{}{} -> {}", name, format_arg_list(parameters), form.name);
                 let record = LspDefinition {
                     name: name.clone(),
                     path: path.to_string(),
@@ -703,13 +693,12 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let scene_form = ia_data.codes.forms.scene.name.clone();
     let mut scene_sidecar = IncSidecar::default();
     if !file2.inc_text.is_empty() {
         let mut analyzer = IncAnalyzer::new_with_sidecar(
             &file2.inc_text,
-            scene_form,
-            file2.inc_source_map.clone(),
+            ia_data.codes.forms.scene.name.as_str(),
+            file2.inc_source_map,
         );
         let mut scratch = IaScratch::default();
         if analyzer.step1(&mut ia_data, &mut scratch).is_err() {

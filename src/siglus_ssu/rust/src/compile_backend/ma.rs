@@ -30,7 +30,7 @@ pub type SourceBinding = (SourceBindingKind, String, bool, bool);
 pub struct SemanticAnalyzer<'a> {
     pub ia_data: &'a mut IaData,
     strings: &'a mut Vec<String>,
-    codes: RuntimeCodes,
+    codes: Arc<RuntimeCodes>,
     pub last: Option<SemanticErrorInfo>,
     pub call_property_names: Vec<String>,
     pub current_call_property_count: i32,
@@ -171,73 +171,60 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn check_positional_arguments(&self, expected: &[ArgInfo], real: &mut ArgumentList) -> bool {
         let positional_count = real.args.len().saturating_sub(real.named_count);
-        let mut forms: Vec<i32> = real.args[..positional_count]
-            .iter()
-            .map(|argument| argument.value.temp_form)
-            .collect();
-        let mut expected_index = 0usize;
-        let mut real_index = 0usize;
-        loop {
-            if expected_index == expected.len() {
-                if real_index == positional_count {
-                    for (argument, form) in real.args.iter_mut().zip(forms) {
-                        argument.value.temp_form = form;
-                    }
-                    return true;
+        let mut matched = 0usize;
+        let mut variadic_form = None;
+        for argument in expected {
+            let expected_form = argument.form;
+            if expected_form == self.codes.forms.args.code
+                || expected_form == self.codes.forms.argsref.code
+            {
+                variadic_form = Some(expected_form);
+                break;
+            }
+            if matched == positional_count {
+                if argument.def_exist {
+                    break;
                 }
                 return false;
             }
-            let expected_form = self.form_code(&expected[expected_index].form);
-            if expected_form == self.codes.forms.args.code {
-                for form in &mut forms[real_index..positional_count] {
-                    *form = self.value_form(*form);
-                }
-                for (argument, form) in real.args.iter_mut().zip(forms) {
-                    argument.value.temp_form = form;
-                }
-                return true;
+            let real_form = real.args[matched].value.temp_form;
+            if expected_form != real_form
+                && !((expected_form == self.codes.forms.int.code
+                    && real_form == self.codes.forms.intref.code)
+                    || (expected_form == self.codes.forms.str_.code
+                        && real_form == self.codes.forms.strref.code))
+            {
+                return false;
             }
-            if expected_form == self.codes.forms.argsref.code {
-                for form in &mut forms[real_index..positional_count] {
-                    *form = if *form == self.codes.forms.int.code {
+            matched += 1;
+        }
+        if matched != positional_count && variadic_form.is_none() {
+            return false;
+        }
+        for (argument, expected) in real.args[..matched].iter_mut().zip(expected) {
+            argument.value.temp_form = expected.form;
+        }
+        match variadic_form {
+            Some(form) if form == self.codes.forms.args.code => {
+                for argument in &mut real.args[matched..positional_count] {
+                    argument.value.temp_form = self.value_form(argument.value.temp_form);
+                }
+            }
+            Some(_) => {
+                for argument in &mut real.args[matched..positional_count] {
+                    let form = argument.value.temp_form;
+                    argument.value.temp_form = if form == self.codes.forms.int.code {
                         self.codes.forms.intref.code
-                    } else if *form == self.codes.forms.str_.code {
+                    } else if form == self.codes.forms.str_.code {
                         self.codes.forms.strref.code
                     } else {
-                        *form
+                        form
                     };
                 }
-                for (argument, form) in real.args.iter_mut().zip(forms) {
-                    argument.value.temp_form = form;
-                }
-                return true;
             }
-            if real_index == positional_count {
-                if expected[expected_index].def_exist {
-                    for (argument, form) in real.args.iter_mut().zip(forms) {
-                        argument.value.temp_form = form;
-                    }
-                    return true;
-                }
-                return false;
-            }
-            let real_form = forms[real_index];
-            if expected_form != real_form {
-                if expected_form == self.codes.forms.int.code
-                    && real_form == self.codes.forms.intref.code
-                {
-                    forms[real_index] = self.codes.forms.int.code;
-                } else if expected_form == self.codes.forms.str_.code
-                    && real_form == self.codes.forms.strref.code
-                {
-                    forms[real_index] = self.codes.forms.str_.code;
-                } else {
-                    return false;
-                }
-            }
-            expected_index += 1;
-            real_index += 1;
+            None => {}
         }
+        true
     }
 
     fn check_named_arguments(&mut self, info: &ElementInfo, real: &mut ArgumentList) -> bool {
@@ -253,7 +240,7 @@ impl<'a> SemanticAnalyzer<'a> {
             let Some(expected) = named_list.arg_list.iter().find(|item| item.name == name) else {
                 return false;
             };
-            let expected_form = self.form_code(&expected.form);
+            let expected_form = expected.form;
             let real_form = argument.value.temp_form;
             if expected_form != real_form {
                 if expected_form == self.codes.forms.int.code
@@ -276,7 +263,7 @@ impl<'a> SemanticAnalyzer<'a> {
     }
 
     fn is_selection_command(&self, parent: &str, element_code: i32) -> bool {
-        self.ia_data.selection_command_codes.contains(&(
+        self.codes.selection_command_codes.contains(&(
             self.codes.form_bytecode[&self.form_code(parent)],
             element_code,
         ))
@@ -877,7 +864,6 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
     ) -> (Result<(), ()>, (FormSpec, i32), Box<Self>) {
         let mut input = (form, property_id);
         let result = {
-            let name = name.as_str();
             let form = &mut input.0;
             let property_id = &mut input.1;
             if !self.analyzer.command_in && !self.analyzer.codes.allow_property_out_of_command {
@@ -903,26 +889,26 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                     .analyzer
                     .ia_data
                     .form_table
-                    .get(&self.analyzer.codes.forms.call.name, name)
+                    .get(&self.analyzer.codes.forms.call.name, &name)
                     .is_none()
             {
                 self.analyzer
                     .call_bindings
-                    .insert(name.to_string(), self.analyzer.total_call_property_count);
+                    .insert(name.clone(), self.analyzer.total_call_property_count);
             }
             self.analyzer.ia_data.form_table.add(
                 self.analyzer.codes.forms.call.name.as_str(),
                 ElementInfo {
                     kind: ElementKind::Property,
                     code,
-                    name: name.to_string(),
+                    name: name.clone(),
                     form: form.name.clone(),
                     arg_map: Default::default(),
                     origin: "call".to_string(),
                 },
             );
             *property_id = self.analyzer.total_call_property_count;
-            self.analyzer.call_property_names.push(name.to_string());
+            self.analyzer.call_property_names.push(name);
             self.analyzer.current_call_property_count += 1;
             self.analyzer.total_call_property_count += 1;
             Ok(())

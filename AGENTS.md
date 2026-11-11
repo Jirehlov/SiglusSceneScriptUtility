@@ -10,3 +10,4 @@
 8. Keep corresponding Rust and Python implementations behaviorally aligned.
 9. Keep both language versions of the manuals aligned with the implementation and with each other.
 10. For every diff, manually run and pass all lint checks defined in CI.
+11. Code comments are prohibited.

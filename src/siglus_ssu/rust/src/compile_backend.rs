@@ -1,6 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 mod ast;
 mod bs;
@@ -152,7 +153,7 @@ pub(crate) struct DecompileStringPool {
 
 pub(crate) struct DecompileFrontend {
     constants: config::CompileConstants,
-    codes: codes::RuntimeCodes,
+    codes: Arc<codes::RuntimeCodes>,
 }
 
 impl DecompileFrontend {
@@ -243,24 +244,6 @@ impl DecompileFrontend {
             self.codes.clone(),
             std::iter::empty::<String>(),
         );
-        data.selection_command_codes = self
-            .constants
-            .selection_command_codes
-            .iter()
-            .copied()
-            .collect();
-        data.message_block_command_codes = self
-            .constants
-            .message_block_command_codes
-            .iter()
-            .copied()
-            .collect();
-        data.read_flag_command_codes = self
-            .constants
-            .read_flag_command_codes
-            .iter()
-            .copied()
-            .collect();
         let mut analyzer =
             ia::IncAnalyzer::new(declarations, self.codes.forms.global.name.as_str());
         let mut scratch = ia::IaScratch::default();

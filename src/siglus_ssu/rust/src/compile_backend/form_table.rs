@@ -12,7 +12,7 @@ pub enum ElementKind {
 pub struct ArgInfo {
     pub id: i32,
     pub name: String,
-    pub form: String,
+    pub form: i32,
     pub def_int: i32,
     pub def_exist: bool,
     pub preserve_int_reference: bool,
@@ -131,6 +131,7 @@ impl FormTable {
 
     pub fn from_constants(constants: &CompileConstants) -> Result<Self, String> {
         let mut table = Self::new(constants)?;
+        let void_form = constants.form_id_of(constants.form_name("FM_VOID")?)?;
         for form in constants.form_ids.keys() {
             table.ensure_form(form);
         }
@@ -146,7 +147,7 @@ impl FormTable {
                             .map(|arg| ArgInfo {
                                 id: arg.id,
                                 name: arg.name.clone(),
-                                form: arg.form.clone(),
+                                form: table.form_code_of(&arg.form).unwrap_or(void_form),
                                 def_int: arg.def_int,
                                 def_exist: arg.def_exist,
                                 preserve_int_reference: arg.preserve_int_reference,

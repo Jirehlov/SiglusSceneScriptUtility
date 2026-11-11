@@ -149,9 +149,10 @@ impl ExpansionText {
             .rev()
             .collect::<Vec<_>>();
         let map = source_map.map(|points| {
-            let mut values = points.to_vec();
-            values.resize(text.len(), None);
-            values.reverse();
+            let source_len = points.len().min(text.len());
+            let mut values = Vec::with_capacity(text.len());
+            values.resize(text.len() - source_len, None);
+            values.extend(points[..source_len].iter().rev().copied());
             values
         });
         Self {
@@ -299,16 +300,15 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         let options = TextCommentOptions {
             case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::Char,
-            single_escape_chars: "\\'n".to_string(),
-            double_escape_chars: "\\\"n".to_string(),
-            newline_single_message: "Newline is not allowed inside single quotes.".to_string(),
-            newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
-            single_empty_message: "Single quotes must enclose exactly one character.".to_string(),
-            single_invalid_message:
-                "Single quotes are not closed or contain more than one character.".to_string(),
-            unclosed_single_message: "Unclosed single quote.".to_string(),
-            unclosed_double_message: "Unclosed double quote.".to_string(),
-            unclosed_block_message: "Unclosed /* comment.".to_string(),
+            single_escape_chars: "\\'n",
+            double_escape_chars: "\\\"n",
+            newline_single_message: "Newline is not allowed inside single quotes.",
+            newline_double_message: "Newline is not allowed inside double quotes.",
+            single_empty_message: "Single quotes must enclose exactly one character.",
+            single_invalid_message: "Single quotes are not closed or contain more than one character.",
+            unclosed_single_message: "Unclosed single quote.",
+            unclosed_double_message: "Unclosed double quote.",
+            unclosed_block_message: "Unclosed /* comment.",
             with_map: self.sidecar,
             ..TextCommentOptions::default()
         };
@@ -766,7 +766,6 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                 }),
             });
         }
-        arg_replacements.sort_by_key(|item| item.name.len());
         let mut arg_tree = ReplaceTree::default();
         for replacement in arg_replacements.into_iter().rev() {
             arg_tree.add(replacement);
@@ -863,44 +862,39 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                 .as_ref()
                 .and_then(|source| source.declaration.as_ref()),
         ) {
-            let points: Vec<_> = map[map.len() - name_len..]
-                .iter()
-                .rev()
-                .flatten()
-                .copied()
-                .collect();
-            let mapped = points.first().is_some_and(|first| {
-                points
-                    .iter()
-                    .all(|point| point.line == first.line && point.source_id == first.source_id)
-            });
+            let mut points = map[map.len() - name_len..].iter().rev().flatten();
+            let first = points.next();
+            let mut mapped = first.is_some();
+            let mut start_char = first.map_or(0, |point| point.column);
+            let mut end_char = first.map_or(name_len, |point| point.column + 1);
+            let mut first_read_origin = first.map_or(0, |point| point.read_origin);
+            if let Some(first) = first {
+                for point in points {
+                    mapped =
+                        mapped && point.line == first.line && point.source_id == first.source_id;
+                    start_char = start_char.min(point.column);
+                    end_char = end_char.max(point.column + 1);
+                    if first_read_origin == 0 {
+                        first_read_origin = point.read_origin;
+                    }
+                }
+            }
             self.replace_uses.push(ReplaceUse {
                 name: replacement.name.clone(),
-                line: points.first().map_or(self.current_line, |point| point.line),
-                start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
-                end_char: points
-                    .iter()
-                    .map(|point| point.column + 1)
-                    .max()
-                    .unwrap_or(name_len),
-                source_id: if mapped {
-                    points[0].source_id as isize
-                } else {
-                    -1
-                },
+                line: first.map_or(self.current_line, |point| point.line),
+                start_char,
+                end_char,
+                source_id: first
+                    .filter(|_| mapped)
+                    .map_or(-1, |point| point.source_id as isize),
                 declaration: declaration.clone(),
             });
             if let Some(origins) = self.read_flag_origins.as_mut() {
-                read_origin = points
-                    .iter()
-                    .find_map(|point| (point.read_origin != 0).then_some(point.read_origin))
-                    .unwrap_or(0);
-                if read_origin == 0 && mapped && points[0].source_id == 0 {
-                    origins.push((
-                        points[0].line,
-                        points.iter().map(|point| point.column).min().unwrap(),
-                        points.iter().map(|point| point.column + 1).max().unwrap(),
-                    ));
+                read_origin = first_read_origin;
+                if read_origin == 0
+                    && let Some(first) = first.filter(|point| mapped && point.source_id == 0)
+                {
+                    origins.push((first.line, start_char, end_char));
                     read_origin = origins.len();
                 }
             }

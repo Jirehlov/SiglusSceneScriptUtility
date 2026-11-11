@@ -14,15 +14,15 @@ pub enum SingleQuoteMode {
 pub struct TextCommentOptions {
     pub case_mode: CaseMode,
     pub single_quote_mode: SingleQuoteMode,
-    pub single_escape_chars: String,
-    pub double_escape_chars: String,
-    pub newline_single_message: String,
-    pub newline_double_message: String,
-    pub single_empty_message: String,
-    pub single_invalid_message: String,
-    pub unclosed_single_message: String,
-    pub unclosed_double_message: String,
-    pub unclosed_block_message: String,
+    pub single_escape_chars: &'static str,
+    pub double_escape_chars: &'static str,
+    pub newline_single_message: &'static str,
+    pub newline_double_message: &'static str,
+    pub single_empty_message: &'static str,
+    pub single_invalid_message: &'static str,
+    pub unclosed_single_message: &'static str,
+    pub unclosed_double_message: &'static str,
+    pub unclosed_block_message: &'static str,
     pub allow_trailing_escape_eof: bool,
     pub with_map: bool,
 }
@@ -32,15 +32,15 @@ impl Default for TextCommentOptions {
         Self {
             case_mode: CaseMode::Lower,
             single_quote_mode: SingleQuoteMode::None,
-            single_escape_chars: String::new(),
-            double_escape_chars: String::new(),
-            newline_single_message: String::new(),
-            newline_double_message: String::new(),
-            single_empty_message: String::new(),
-            single_invalid_message: String::new(),
-            unclosed_single_message: String::new(),
-            unclosed_double_message: String::new(),
-            unclosed_block_message: String::new(),
+            single_escape_chars: "",
+            double_escape_chars: "",
+            newline_single_message: "",
+            newline_double_message: "",
+            single_empty_message: "",
+            single_invalid_message: "",
+            unclosed_single_message: "",
+            unclosed_double_message: "",
+            unclosed_block_message: "",
             allow_trailing_escape_eof: false,
             with_map: false,
         }
@@ -63,7 +63,7 @@ pub struct TextCommentResult {
 
 pub struct TextCommentError {
     pub line: usize,
-    pub message: String,
+    pub message: &'static str,
 }
 
 pub fn next_elseif_ifdef_state(state: i32, matched: bool) -> i32 {
@@ -108,19 +108,19 @@ pub fn scan_text_comments(
             if options.single_quote_mode == SingleQuoteMode::String && matches!(state, 1 | 2) {
                 return Err(TextCommentError {
                     line,
-                    message: options.newline_single_message.clone(),
+                    message: options.newline_single_message,
                 });
             }
             if options.single_quote_mode == SingleQuoteMode::Char && matches!(state, 1..=3) {
                 return Err(TextCommentError {
                     line,
-                    message: options.newline_single_message.clone(),
+                    message: options.newline_single_message,
                 });
             }
             if matches!(state, 4 | 5) {
                 return Err(TextCommentError {
                     line,
-                    message: options.newline_double_message.clone(),
+                    message: options.newline_double_message,
                 });
             }
             if state == 6 {
@@ -139,7 +139,7 @@ pub fn scan_text_comments(
             } else if ch == '\'' {
                 return Err(TextCommentError {
                     line,
-                    message: options.single_empty_message.clone(),
+                    message: options.single_empty_message,
                 });
             } else {
                 state = 3;
@@ -154,7 +154,7 @@ pub fn scan_text_comments(
             } else {
                 return Err(TextCommentError {
                     line,
-                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
+                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.",
                 });
             }
         } else if state == 3 {
@@ -163,7 +163,7 @@ pub fn scan_text_comments(
             } else {
                 return Err(TextCommentError {
                     line,
-                    message: options.single_invalid_message.clone(),
+                    message: options.single_invalid_message,
                 });
             }
         } else if state == 4 {
@@ -178,7 +178,7 @@ pub fn scan_text_comments(
             } else {
                 return Err(TextCommentError {
                     line,
-                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.".to_string(),
+                    message: "Invalid escape (\\). Use '\\\\' to write a backslash.",
                 });
             }
         } else if state == 6 {
@@ -242,25 +242,25 @@ pub fn scan_text_comments(
     {
         return Err(TextCommentError {
             line,
-            message: options.unclosed_single_message.clone(),
+            message: options.unclosed_single_message,
         });
     }
     if options.single_quote_mode == SingleQuoteMode::Char && matches!(state, 1..=3) {
         return Err(TextCommentError {
             line,
-            message: options.unclosed_single_message.clone(),
+            message: options.unclosed_single_message,
         });
     }
     if state == 4 || (state == 5 && !options.allow_trailing_escape_eof) {
         return Err(TextCommentError {
             line,
-            message: options.unclosed_double_message.clone(),
+            message: options.unclosed_double_message,
         });
     }
     if state == 7 {
         return Err(TextCommentError {
             line: block_line,
-            message: options.unclosed_block_message.clone(),
+            message: options.unclosed_block_message,
         });
     }
     Ok(TextCommentResult {

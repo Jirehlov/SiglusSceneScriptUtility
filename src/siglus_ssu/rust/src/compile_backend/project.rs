@@ -64,7 +64,7 @@ struct PreparedScene {
     scene: SceneDatInput,
     source_stats: SourceStats,
     scene_macro_counts: MacroStats,
-    global_macro_usage_delta: BTreeMap<(String, String), usize>,
+    global_macro_usage_delta: BTreeMap<usize, usize>,
 }
 
 struct FinalizedScene {
@@ -74,7 +74,7 @@ struct FinalizedScene {
     read_flag_count: usize,
     source_stats: SourceStats,
     scene_macro_counts: MacroStats,
-    global_macro_usage_delta: BTreeMap<(String, String), usize>,
+    global_macro_usage_delta: BTreeMap<usize, usize>,
 }
 
 struct SceneData {
@@ -101,6 +101,48 @@ pub struct TopCount {
     pub name: String,
     pub value: usize,
     pub entries: usize,
+}
+
+#[derive(Default)]
+struct TopSceneCounts<'a> {
+    rows: [(usize, &'a str); 5],
+    len: usize,
+}
+
+impl<'a> TopSceneCounts<'a> {
+    fn insert(&mut self, value: usize, name: &'a str) {
+        let index = self.rows[..self.len].partition_point(|(current_value, current_name)| {
+            value
+                .cmp(current_value)
+                .then_with(|| {
+                    current_name
+                        .bytes()
+                        .map(|byte| byte.to_ascii_lowercase())
+                        .cmp(name.bytes().map(|byte| byte.to_ascii_lowercase()))
+                })
+                .then_with(|| current_name.cmp(&name))
+                .is_le()
+        });
+        if index == self.rows.len() {
+            return;
+        }
+        let end = self.len.min(self.rows.len() - 1);
+        self.rows.copy_within(index..end, index + 1);
+        self.rows[index] = (value, name);
+        self.len = (self.len + 1).min(self.rows.len());
+    }
+
+    fn into_counts(self) -> Vec<TopCount> {
+        self.rows
+            .into_iter()
+            .take(self.len)
+            .map(|(value, name)| TopCount {
+                name: name.to_string(),
+                value,
+                entries: 0,
+            })
+            .collect()
+    }
 }
 
 #[derive(Default)]
@@ -549,10 +591,7 @@ fn merge_macro_stats(dst: &mut MacroStats, src: &MacroStats) {
     }
 }
 
-fn scene_macro_stats(
-    ia_data: &IaData,
-    base_ia: &IaData,
-) -> (MacroStats, BTreeMap<(String, String), usize>) {
+fn scene_macro_stats(ia_data: &IaData, base_ia: &IaData) -> (MacroStats, BTreeMap<usize, usize>) {
     let mut counts = empty_macro_stats();
     let base_count = base_ia.macro_defs.len();
     for replacement in ia_data.macro_defs.iter().skip(base_count) {
@@ -567,17 +606,15 @@ fn scene_macro_stats(
         }
     }
     let mut usage_delta = BTreeMap::new();
-    for replacement in &base_ia.macro_defs {
-        let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
+    for (index, replacement) in base_ia.macro_defs.iter().enumerate() {
         let before = replacement.used_count;
         let after = ia_data
-            .macro_map
-            .get(&replacement.name)
-            .and_then(|index| ia_data.macro_defs.get(*index))
+            .macro_defs
+            .get(index)
             .map(|value| value.used_count)
             .unwrap_or_default();
         if after > before {
-            usage_delta.insert((kind.to_string(), replacement.name.clone()), after - before);
+            usage_delta.insert(index, after - before);
         }
     }
     (counts, usage_delta)
@@ -586,20 +623,17 @@ fn scene_macro_stats(
 fn collect_macro_stats(
     base_ia: &IaData,
     scene_counts: &MacroStats,
-    global_usage_delta: &BTreeMap<(String, String), usize>,
+    global_usage_delta: &BTreeMap<usize, usize>,
 ) -> MacroStats {
     let mut counts = empty_macro_stats();
-    for replacement in &base_ia.macro_defs {
+    for (index, replacement) in base_ia.macro_defs.iter().enumerate() {
         let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
         let bucket = counts
             .buckets
             .get_mut(kind)
             .expect("initialized macro bucket");
         bucket.total += 1;
-        let extra = global_usage_delta
-            .get(&(kind.to_string(), replacement.name.clone()))
-            .copied()
-            .unwrap_or_default();
+        let extra = global_usage_delta.get(&index).copied().unwrap_or_default();
         if replacement.used_count + extra == 0 {
             bucket.unused += 1;
         }
@@ -1111,14 +1145,14 @@ fn write_gameexe_dat(
     let options = TextCommentOptions {
         case_mode: CaseMode::Upper,
         single_quote_mode: SingleQuoteMode::None,
-        double_escape_chars: "\\\"".to_string(),
-        newline_double_message: "Newline is not allowed inside double quotes.".to_string(),
-        unclosed_double_message: "Unclosed double quote.".to_string(),
-        unclosed_block_message: "Unclosed /* comment.".to_string(),
+        double_escape_chars: "\\\"",
+        newline_double_message: "Newline is not allowed inside double quotes.",
+        unclosed_double_message: "Unclosed double quote.",
+        unclosed_block_message: "Unclosed /* comment.",
         ..TextCommentOptions::default()
     };
     let parsed = scan_text_comments(source, &options)
-        .map_err(|error| line_error("GEI parse error", error.line, &error.message))?;
+        .map_err(|error| line_error("GEI parse error", error.line, error.message))?;
     if !parsed.text.is_empty() {
         payload = crate::lzss::pack(&utf16le(&parsed.text), false);
         crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
@@ -1356,24 +1390,6 @@ fn build_global_ia<const FULL_STATS: bool>(
         codes,
         std::iter::empty::<String>(),
     );
-    data.selection_command_codes = config
-        .constants
-        .selection_command_codes
-        .iter()
-        .copied()
-        .collect();
-    data.message_block_command_codes = config
-        .constants
-        .message_block_command_codes
-        .iter()
-        .copied()
-        .collect();
-    data.read_flag_command_codes = config
-        .constants
-        .read_flag_command_codes
-        .iter()
-        .copied()
-        .collect();
     let base = Path::new(&config.input_dir);
     let mut scratch_list = Vec::new();
     for name in &config.context.inc_list {
@@ -1696,7 +1712,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             scene_count: 0,
             compiled_scene_count: 0,
             full_compile_stats: false,
-            stage_times: stage_times.clone(),
+            stage_times: std::mem::take(stage_times),
             macro_counts: None,
             read_flag_stats: None,
             source_stats: None,
@@ -1854,7 +1870,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
     } else {
         MacroStats::default()
     };
-    let mut aggregate_global_usage_delta = BTreeMap::<(String, String), usize>::new();
+    let mut aggregate_global_usage_delta = BTreeMap::<usize, usize>::new();
     for task in &tasks {
         let record = if let Some(scene) = compiled_map.remove(task.key.as_str()) {
             if FULL_STATS {
@@ -1883,14 +1899,14 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 .cache
                 .dat_paths
                 .get(&key)
-                .map(PathBuf::from)
+                .map(Path::new)
                 .ok_or_else(|| {
                     format!(
                         "scene dat not found: {}",
                         bs_dir.join(format!("{stem}.dat")).display()
                     )
                 })?;
-            let dat = fs::read(&dat_path).map_err(|error| format_path_error(&dat_path, error))?;
+            let dat = fs::read(dat_path).map_err(|error| format_path_error(dat_path, error))?;
             if dat.len() < config.constants.scn_header_size {
                 return Err(format!("{}: bad dat header", dat_path.display()));
             }
@@ -1913,30 +1929,15 @@ fn compile_project_inner<const FULL_STATS: bool>(
 
     let read_flag_stats = FULL_STATS.then(|| {
         let mut stats = ReadFlagStats::default();
+        let mut top = TopSceneCounts::default();
         for record in &scene_records {
             stats.total += record.read_flag_count;
             if record.read_flag_count > 0 {
                 stats.scenes += 1;
-                stats.top_scenes.push(TopCount {
-                    name: record.stem.clone(),
-                    value: record.read_flag_count,
-                    entries: 0,
-                });
+                top.insert(record.read_flag_count, record.stem.as_str());
             }
         }
-        stats.top_scenes.sort_by(|left, right| {
-            right
-                .value
-                .cmp(&left.value)
-                .then_with(|| {
-                    left.name
-                        .bytes()
-                        .map(|byte| byte.to_ascii_lowercase())
-                        .cmp(right.name.bytes().map(|byte| byte.to_ascii_lowercase()))
-                })
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        stats.top_scenes.truncate(5);
+        stats.top_scenes = top.into_counts();
         stats
     });
 
@@ -2030,7 +2031,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     let (stem, lz) = result?;
                     stdout.push_line(format!(
                         "  LZSS: {}",
-                        scene_display_name(config, &(stem.clone() + ".ss"))
+                        scene_display_name(config, &format!("{stem}.ss"))
                     ))?;
                     lzss_results.insert(stem, lz);
                     Ok(())
@@ -2052,7 +2053,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 log_stage(
                     stdout,
                     "LZSS",
-                    &scene_display_name(config, &(stem.clone() + ".ss")),
+                    &scene_display_name(config, &format!("{stem}.ss")),
                 )?;
                 lzss_results.insert(stem, packed);
                 record_stage_time(stage_times, "LZSS", stage_start);
@@ -2064,6 +2065,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             lzss_mode: use_lzss,
             ..BinarySizeStats::default()
         };
+        let mut top = TopSceneCounts::default();
         for record in &scene_records {
             let dat_size = record.dat.len();
             let scn_size = scn_header_value(config, &record.dat, "scn_size").max(0) as usize;
@@ -2078,25 +2080,9 @@ fn compile_project_inner<const FULL_STATS: bool>(
             stats.dat_bytes += dat_size;
             stats.scn_bytes += scn_size;
             stats.lzss_bytes += lzss_size;
-            stats.top_dat_scenes.push(TopCount {
-                name: record.stem.clone(),
-                value: dat_size,
-                entries: 0,
-            });
+            top.insert(dat_size, record.stem.as_str());
         }
-        stats.top_dat_scenes.sort_by(|left, right| {
-            right
-                .value
-                .cmp(&left.value)
-                .then_with(|| {
-                    left.name
-                        .bytes()
-                        .map(|byte| byte.to_ascii_lowercase())
-                        .cmp(right.name.bytes().map(|byte| byte.to_ascii_lowercase()))
-                })
-                .then_with(|| left.name.cmp(&right.name))
-        });
-        stats.top_dat_scenes.truncate(5);
+        stats.top_dat_scenes = top.into_counts();
         stats
     });
     let encoded_scenes = scene_records.into_iter().map(|scene| {
@@ -2130,12 +2116,12 @@ fn compile_project_inner<const FULL_STATS: bool>(
         inc_cmd_name_list: base_ia
             .command_list
             .iter()
-            .map(|command| command.name.clone())
+            .map(|command| command.name.as_str())
             .collect(),
         inc_prop_name_list: base_ia
             .property_list
             .iter()
-            .map(|property| property.name.clone())
+            .map(|property| property.name.as_str())
             .collect(),
         inc_cmd_list: inc_command_locations,
         scn_name_list: scene_names,
@@ -2172,7 +2158,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         scene_count: pack_input.scn_name_list.len(),
         compiled_scene_count: config.cache.compiled_scene_files,
         full_compile_stats: FULL_STATS,
-        stage_times: stage_times.clone(),
+        stage_times: std::mem::take(stage_times),
         macro_counts,
         read_flag_stats,
         source_stats,

@@ -167,23 +167,29 @@ fn token_span(
     line: usize,
 ) -> AtomSpan {
     if let Some(source_map) = source_map {
-        let points: Vec<SourcePoint> = source_map
+        let mut points = source_map
             .iter()
             .skip(start)
             .take(end.saturating_sub(start))
-            .filter_map(|point| *point)
-            .collect();
-        if !points.is_empty() {
-            let first_line = points[0].line;
-            if points
-                .iter()
-                .all(|point| point.line == first_line && point.source_id == points[0].source_id)
-            {
+            .flatten();
+        if let Some(first) = points.next() {
+            let mut min_column = first.column;
+            let mut max_column = first.column;
+            let mut mapped = true;
+            for point in points {
+                if point.line != first.line || point.source_id != first.source_id {
+                    mapped = false;
+                    break;
+                }
+                min_column = min_column.min(point.column);
+                max_column = max_column.max(point.column);
+            }
+            if mapped {
                 return AtomSpan {
-                    line: first_line,
-                    start_char: points.iter().map(|point| point.column).min().unwrap_or(0),
-                    end_char: points.iter().map(|point| point.column).max().unwrap_or(0) + 1,
-                    source_id: points[0].source_id as isize,
+                    line: first.line,
+                    start_char: min_column,
+                    end_char: max_column + 1,
+                    source_id: first.source_id as isize,
                 };
             }
         }

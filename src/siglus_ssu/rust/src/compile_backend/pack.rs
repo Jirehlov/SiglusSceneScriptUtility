@@ -10,10 +10,10 @@ pub struct IncPropertyPack {
     pub size: i32,
 }
 
-pub struct PackInput {
+pub struct PackInput<'a> {
     pub inc_prop_list: Vec<IncPropertyPack>,
-    pub inc_cmd_name_list: Vec<String>,
-    pub inc_prop_name_list: Vec<String>,
+    pub inc_cmd_name_list: Vec<&'a str>,
+    pub inc_prop_name_list: Vec<&'a str>,
     pub inc_cmd_list: Vec<(i32, i32)>,
     pub scn_name_list: Vec<String>,
     pub scn_data_list: Vec<Vec<u8>>,
@@ -34,14 +34,18 @@ fn push_i32_pairs(out: &mut Vec<u8>, pairs: &[(i32, i32)]) {
     }
 }
 
-fn push_index_list_for_blobs(out: &mut Vec<u8>, values: &[Vec<u8>]) {
+fn push_index_list_for_blobs(out: &mut Vec<u8>, values: &[Vec<u8>]) -> usize {
     out.reserve(values.len() * 8);
     let mut ofs = 0i32;
+    let mut total_bytes = 0usize;
     for value in values {
+        let len = value.len();
         push_i32(out, ofs);
-        push_i32(out, value.len() as i32);
-        ofs = ofs.wrapping_add(value.len() as i32);
+        push_i32(out, len as i32);
+        ofs = ofs.wrapping_add(len as i32);
+        total_bytes += len;
     }
+    total_bytes
 }
 
 fn push_inc_props(out: &mut Vec<u8>, values: &[IncPropertyPack]) {
@@ -52,7 +56,7 @@ fn push_inc_props(out: &mut Vec<u8>, values: &[IncPropertyPack]) {
     }
 }
 
-pub fn build_pack_bytes(layout: &PackHeaderLayout<'_>, input: &PackInput) -> Vec<u8> {
+pub fn build_pack_bytes(layout: &PackHeaderLayout<'_>, input: &PackInput<'_>) -> Vec<u8> {
     let mut header = std::collections::HashMap::<&str, i32>::new();
     header.insert("header_size", layout.header_size as i32);
     header.insert("scn_data_exe_angou_mod", input.scn_data_exe_angou_mod);
@@ -93,10 +97,10 @@ pub fn build_pack_bytes(layout: &PackHeaderLayout<'_>, input: &PackInput) -> Vec
     header.insert("scn_name_cnt", input.scn_name_list.len() as i32);
 
     header.insert("scn_data_index_list_ofs", out.len() as i32);
-    push_index_list_for_blobs(&mut out, &input.scn_data_list);
+    let scene_data_bytes = push_index_list_for_blobs(&mut out, &input.scn_data_list);
     header.insert("scn_data_index_cnt", input.scn_data_list.len() as i32);
     out.reserve_exact(
-        input.scn_data_list.iter().map(Vec::len).sum::<usize>()
+        scene_data_bytes
             + input
                 .original_source_chunks
                 .iter()
