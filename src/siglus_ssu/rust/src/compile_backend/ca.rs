@@ -4,7 +4,6 @@ use super::frontend_common::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
@@ -46,7 +45,7 @@ pub struct ReplaceTree {
 
 impl Drop for ReplaceTree {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.children) != 1 {
+        if Arc::strong_count(&self.children) != 1 || self.children.is_empty() {
             return;
         }
         let empty = Arc::default();
@@ -70,9 +69,12 @@ impl ReplaceTree {
         node.replacement = Some(replacement);
     }
 
-    fn search(&self, text: &ExpansionText) -> Option<&Replacement> {
+    fn search(&self, text: &ExpansionText) -> Option<(&Replacement, usize)> {
         let mut node = self;
-        let mut best = node.replacement.as_ref();
+        let mut best = node
+            .replacement
+            .as_ref()
+            .map(|replacement| (replacement, 0));
         let mut i = 0;
         while i < text.len() {
             let ch = *text.get(i).unwrap();
@@ -83,10 +85,10 @@ impl ReplaceTree {
                 break;
             };
             node = next;
-            if node.replacement.is_some() {
-                best = node.replacement.as_ref();
-            }
             i += 1;
+            if let Some(replacement) = node.replacement.as_ref() {
+                best = Some((replacement, i));
+            }
         }
         best
     }
@@ -183,12 +185,23 @@ impl ExpansionText {
                 .collect()
         })
     }
-    fn replace(&mut self, end: usize, after: &str, points: Option<Vec<Option<SourcePoint>>>) {
-        self.text.truncate(self.len() - end);
+    fn replace<const SKIP_AFTER: bool>(
+        &mut self,
+        end: usize,
+        after: &str,
+        points: Option<Vec<Option<SourcePoint>>>,
+    ) -> usize {
+        let remaining = self.len() - end;
+        self.text.truncate(remaining);
         self.text.extend(after.chars().rev());
         if let Some(map) = &mut self.map {
             map.truncate(map.len() - end);
             map.extend(points.unwrap().into_iter().rev());
+        }
+        if SKIP_AFTER {
+            self.len() - remaining
+        } else {
+            0
         }
     }
     fn advance(&mut self, count: usize) {
@@ -206,7 +219,7 @@ struct MappedText {
     map: Option<Vec<Option<SourcePoint>>>,
 }
 
-pub struct CharacterAnalyzer {
+pub struct CharacterAnalyzer<const TRACK_USAGE: bool = true> {
     pub error_line: usize,
     pub error_str: String,
     pub current_line: usize,
@@ -219,6 +232,12 @@ pub struct CharacterAnalyzer {
 
 impl CharacterAnalyzer {
     pub fn new(sidecar: bool) -> Self {
+        Self::new_with_usage_tracking(sidecar)
+    }
+}
+
+impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
+    pub fn new_with_usage_tracking(sidecar: bool) -> Self {
         Self {
             error_line: 0,
             error_str: String::new(),
@@ -307,6 +326,14 @@ impl CharacterAnalyzer {
         input: &File1Result,
         name_set: &HashSet<String>,
     ) -> Result<File2Result, ()> {
+        self.analyze_file_2_with_stats::<true>(input, name_set)
+    }
+
+    pub fn analyze_file_2_with_stats<const COLLECT_STATS: bool>(
+        &mut self,
+        input: &File1Result,
+        name_set: &HashSet<String>,
+    ) -> Result<File2Result, ()> {
         let chars: Vec<char> = input.text.chars().chain(std::iter::once('\0')).collect();
         let mut out = String::new();
         let mut inc = String::new();
@@ -326,7 +353,7 @@ impl CharacterAnalyzer {
         while chars[i] != '\0' {
             let ch = chars[i];
             if ch == '\n' {
-                if excluded_line {
+                if COLLECT_STATS && excluded_line {
                     stats.excluded_lines += 1;
                     excluded_line = false;
                 }
@@ -396,14 +423,20 @@ impl CharacterAnalyzer {
                     let Some((next, word)) = Self::check_word(&chars, j) else {
                         return self.error(self.current_line, "Missing word after #ifdef.");
                     };
-                    stats.ifdef += 1;
+                    if COLLECT_STATS {
+                        stats.ifdef += 1;
+                    }
                     depth += 1;
                     if depth >= ifs.len() {
                         return self.error(self.current_line, "if depth overflow");
                     }
-                    stats.max_ifdef_depth = stats.max_ifdef_depth.max(depth);
+                    if COLLECT_STATS {
+                        stats.max_ifdef_depth = stats.max_ifdef_depth.max(depth);
+                    }
                     let matched = name_set.contains(&word);
-                    self.used_replacements.push(word);
+                    if TRACK_USAGE {
+                        self.used_replacements.push(word);
+                    }
                     ifs[depth] = if matched { 1 } else { 2 };
                     i = next;
                     continue;
@@ -418,9 +451,13 @@ impl CharacterAnalyzer {
                     let Some((next, word)) = Self::check_word(&chars, j) else {
                         return self.error(self.current_line, "Missing word after #elseifdef.");
                     };
-                    stats.elseifdef += 1;
+                    if COLLECT_STATS {
+                        stats.elseifdef += 1;
+                    }
                     let matched = name_set.contains(&word);
-                    self.used_replacements.push(word);
+                    if TRACK_USAGE {
+                        self.used_replacements.push(word);
+                    }
                     ifs[depth] = next_elseif_ifdef_state(ifs[depth], matched);
                     i = next;
                     continue;
@@ -430,7 +467,9 @@ impl CharacterAnalyzer {
                         return self
                             .error(self.current_line, "#else does not have a matching #if.");
                     }
-                    stats.else_count += 1;
+                    if COLLECT_STATS {
+                        stats.else_count += 1;
+                    }
                     ifs[depth] = next_else_ifdef_state(ifs[depth]);
                     i = j;
                     continue;
@@ -440,13 +479,17 @@ impl CharacterAnalyzer {
                         return self
                             .error(self.current_line, "#endif does not have a matching #if.");
                     }
-                    stats.endif += 1;
+                    if COLLECT_STATS {
+                        stats.endif += 1;
+                    }
                     depth = depth.saturating_sub(1);
                     i = j;
                     continue;
                 }
                 if let Some(j) = Self::check_str(&chars, i, "#inc_start") {
-                    stats.inc_start += 1;
+                    if COLLECT_STATS {
+                        stats.inc_start += 1;
+                    }
                     in_inc = true;
                     i = j;
                     continue;
@@ -458,7 +501,9 @@ impl CharacterAnalyzer {
                             "#inc_end does not have a matching #inc_start.",
                         );
                     }
-                    stats.inc_end += 1;
+                    if COLLECT_STATS {
+                        stats.inc_end += 1;
+                    }
                     in_inc = false;
                     i = j;
                     continue;
@@ -488,12 +533,12 @@ impl CharacterAnalyzer {
                         out_source_map.push(source_at(i));
                     }
                 }
-            } else {
+            } else if COLLECT_STATS {
                 excluded_line = true;
             }
             i += 1;
         }
-        if excluded_line {
+        if COLLECT_STATS && excluded_line {
             stats.excluded_lines += 1;
         }
         if matches!(string_state, 1..=3) {
@@ -508,11 +553,13 @@ impl CharacterAnalyzer {
         if depth > 0 {
             return self.error(self.current_line, "Unclosed #ifdef.");
         }
-        stats.inc_lines = if inc.is_empty() {
-            0
-        } else {
-            inc.matches('\n').count() + usize::from(!inc.ends_with('\n'))
-        };
+        if COLLECT_STATS {
+            stats.inc_lines = if inc.is_empty() {
+                0
+            } else {
+                inc.matches('\n').count() + usize::from(!inc.ends_with('\n'))
+            };
+        }
         Ok(File2Result {
             scene_text: out,
             inc_text: inc,
@@ -526,11 +573,12 @@ impl CharacterAnalyzer {
         default_tree: &'a ReplaceTree,
         added_tree: &'a ReplaceTree,
         text: &ExpansionText,
-    ) -> Option<&'a Replacement> {
+    ) -> Option<(&'a Replacement, usize)> {
         let default = default_tree.search(text);
         let added = added_tree.search(text);
         match (default, added) {
-            (Some(left), Some(right)) => Some(if left.name > right.name { left } else { right }),
+            // Both names are prefixes of the same text; a longer prefix sorts after a shorter one.
+            (Some(left), Some(right)) => Some(if left.1 > right.1 { left } else { right }),
             (Some(replacement), None) | (None, Some(replacement)) => Some(replacement),
             (None, None) => None,
         }
@@ -704,7 +752,11 @@ impl CharacterAnalyzer {
                 after: expanded.text,
                 args: Vec::new(),
                 used_count: 0,
-                decl_type: "parameter".to_string(),
+                decl_type: if TRACK_USAGE {
+                    "parameter".to_string()
+                } else {
+                    String::new()
+                },
                 source: expanded.map.map(|map| {
                     Arc::new(ReplacementSource {
                         map,
@@ -715,9 +767,8 @@ impl CharacterAnalyzer {
             });
         }
         arg_replacements.sort_by_key(|item| item.name.len());
-        arg_replacements.reverse();
         let mut arg_tree = ReplaceTree::default();
-        for replacement in arg_replacements {
+        for replacement in arg_replacements.into_iter().rev() {
             arg_tree.add(replacement);
         }
         let mut body_points;
@@ -797,13 +848,13 @@ impl CharacterAnalyzer {
         default_tree: &ReplaceTree,
         added_tree: &ReplaceTree,
     ) -> Result<usize, ()> {
-        let Some(replacement) = Self::replacement_at(default_tree, added_tree, text) else {
+        let Some((replacement, name_len)) = Self::replacement_at(default_tree, added_tree, text)
+        else {
             return Ok(1);
         };
-        if replacement.decl_type != "parameter" {
+        if TRACK_USAGE && replacement.decl_type != "parameter" {
             self.used_replacements.push(replacement.name.clone());
         }
-        let name_len = replacement.name.chars().count();
         let mut read_origin = 0;
         if let (Some(map), Some(declaration)) = (
             text.map.as_ref(),
@@ -854,7 +905,7 @@ impl CharacterAnalyzer {
                 }
             }
         }
-        let (end, after, map, next) = match replacement.kind {
+        match replacement.kind {
             ReplaceKind::Replace | ReplaceKind::Define => {
                 let mut map = text.map.as_ref().map(|_| {
                     replacement
@@ -871,13 +922,11 @@ impl CharacterAnalyzer {
                         point.read_origin = read_origin;
                     }
                 }
-                let end = name_len;
-                let next = if replacement.kind == ReplaceKind::Replace {
-                    replacement.after.chars().count()
+                if replacement.kind == ReplaceKind::Replace {
+                    Ok(text.replace::<true>(name_len, &replacement.after, map))
                 } else {
-                    0
-                };
-                (end, Cow::Borrowed(replacement.after.as_str()), map, next)
+                    Ok(text.replace::<false>(name_len, &replacement.after, map))
+                }
             }
             ReplaceKind::Macro => {
                 if self.macro_depth >= 128 {
@@ -894,12 +943,9 @@ impl CharacterAnalyzer {
                 );
                 self.macro_depth -= 1;
                 let (end, expanded) = expanded?;
-                let next = expanded.text.chars().count();
-                (end, Cow::Owned(expanded.text), expanded.map, next)
+                Ok(text.replace::<true>(end, &expanded.text, expanded.map))
             }
-        };
-        text.replace(end, &after, map);
-        Ok(next)
+        }
     }
 
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {

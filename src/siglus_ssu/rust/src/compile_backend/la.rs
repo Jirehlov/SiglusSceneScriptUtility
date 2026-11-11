@@ -3,50 +3,79 @@ use super::codes::LexCodes;
 use super::frontend_common::SourcePoint;
 use std::collections::HashMap;
 
-fn symbols(codes: &LexCodes) -> Vec<(&'static str, i32)> {
-    vec![
-        (">>>=", codes.sr3_assign),
-        (">>>", codes.sr3),
-        ("<<=", codes.sl_assign),
-        (">>=", codes.sr_assign),
-        ("+=", codes.plus_assign),
-        ("-=", codes.minus_assign),
-        ("*=", codes.multiple_assign),
-        ("/=", codes.divide_assign),
-        ("%=", codes.percent_assign),
-        ("&=", codes.and_assign),
-        ("|=", codes.or_assign),
-        ("^=", codes.hat_assign),
-        ("<<", codes.sl),
-        (">>", codes.sr),
-        ("==", codes.equal),
-        ("!=", codes.not_equal),
-        (">=", codes.greater_equal),
-        ("<=", codes.less_equal),
-        ("&&", codes.logical_and),
-        ("||", codes.logical_or),
-        ("=", codes.assign),
-        ("+", codes.plus),
-        ("-", codes.minus),
-        ("*", codes.multiple),
-        ("/", codes.divide),
-        ("%", codes.percent),
-        ("&", codes.and),
-        ("|", codes.or),
-        ("^", codes.hat),
-        (">", codes.greater),
-        ("<", codes.less),
-        ("~", codes.tilde),
-        (".", codes.dot),
-        (",", codes.comma),
-        (":", codes.colon),
-        ("(", codes.open_paren),
-        (")", codes.close_paren),
-        ("[", codes.open_bracket),
-        ("]", codes.close_bracket),
-        ("{", codes.open_brace),
-        ("}", codes.close_brace),
-    ]
+fn symbol_at(chars: &[char], pos: usize, codes: &LexCodes) -> Option<(i32, usize)> {
+    // Dispatch by the first character and retain longest-prefix matching.
+    Some(match chars[pos] {
+        '>' => match chars.get(pos + 1) {
+            Some('>') => match chars.get(pos + 2) {
+                Some('>') => {
+                    if chars.get(pos + 3) == Some(&'=') {
+                        (codes.sr3_assign, 4)
+                    } else {
+                        (codes.sr3, 3)
+                    }
+                }
+                Some('=') => (codes.sr_assign, 3),
+                _ => (codes.sr, 2),
+            },
+            Some('=') => (codes.greater_equal, 2),
+            _ => (codes.greater, 1),
+        },
+        '<' => match chars.get(pos + 1) {
+            Some('<') => {
+                if chars.get(pos + 2) == Some(&'=') {
+                    (codes.sl_assign, 3)
+                } else {
+                    (codes.sl, 2)
+                }
+            }
+            Some('=') => (codes.less_equal, 2),
+            _ => (codes.less, 1),
+        },
+        '&' => match chars.get(pos + 1) {
+            Some('=') => (codes.and_assign, 2),
+            Some('&') => (codes.logical_and, 2),
+            _ => (codes.and, 1),
+        },
+        '|' => match chars.get(pos + 1) {
+            Some('=') => (codes.or_assign, 2),
+            Some('|') => (codes.logical_or, 2),
+            _ => (codes.or, 1),
+        },
+        '+' | '-' | '*' | '/' | '%' | '^' | '=' => {
+            let assignment = chars.get(pos + 1) == Some(&'=');
+            let kind = match (chars[pos], assignment) {
+                ('+', true) => codes.plus_assign,
+                ('+', false) => codes.plus,
+                ('-', true) => codes.minus_assign,
+                ('-', false) => codes.minus,
+                ('*', true) => codes.multiple_assign,
+                ('*', false) => codes.multiple,
+                ('/', true) => codes.divide_assign,
+                ('/', false) => codes.divide,
+                ('%', true) => codes.percent_assign,
+                ('%', false) => codes.percent,
+                ('^', true) => codes.hat_assign,
+                ('^', false) => codes.hat,
+                ('=', true) => codes.equal,
+                ('=', false) => codes.assign,
+                _ => unreachable!(),
+            };
+            (kind, 1 + usize::from(assignment))
+        }
+        '!' if chars.get(pos + 1) == Some(&'=') => (codes.not_equal, 2),
+        '~' => (codes.tilde, 1),
+        '.' => (codes.dot, 1),
+        ',' => (codes.comma, 1),
+        ':' => (codes.colon, 1),
+        '(' => (codes.open_paren, 1),
+        ')' => (codes.close_paren, 1),
+        '[' => (codes.open_bracket, 1),
+        ']' => (codes.close_bracket, 1),
+        '{' => (codes.open_brace, 1),
+        '}' => (codes.close_brace, 1),
+        _ => return None,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -85,15 +114,6 @@ pub struct LexError {
 
 fn to_i32(value: i64) -> i32 {
     value as u32 as i32
-}
-
-fn starts_with(chars: &[char], pos: usize, text: &str) -> bool {
-    for (i, ch) in (pos..).zip(text.chars()) {
-        if chars.get(i) != Some(&ch) {
-            return false;
-        }
-    }
-    true
 }
 
 fn keyword_type(word: &str, codes: &LexCodes) -> Option<i32> {
@@ -219,11 +239,28 @@ pub fn lex_scene_text(
     source_map: Option<&[Option<SourcePoint>]>,
     read_origins: Option<&[(usize, usize, usize)]>,
 ) -> Result<LexResult, LexError> {
+    lex_scene_text_inner::<true>(text, codes, source_map, read_origins)
+}
+
+/// Compilation uses token lines, but does not consume editor column spans.
+pub fn lex_scene_text_for_compile(text: &str, codes: &LexCodes) -> Result<LexResult, LexError> {
+    lex_scene_text_inner::<false>(text, codes, None, None)
+}
+
+fn lex_scene_text_inner<const WITH_SPANS: bool>(
+    text: &str,
+    codes: &LexCodes,
+    source_map: Option<&[Option<SourcePoint>]>,
+    read_origins: Option<&[(usize, usize, usize)]>,
+) -> Result<LexResult, LexError> {
     let mut chars: Vec<char> = text.chars().collect();
     let original_len = chars.len();
-    let starts = line_starts(&chars);
+    let starts = if WITH_SPANS {
+        line_starts(&chars)
+    } else {
+        Vec::new()
+    };
     chars.extend(std::iter::repeat_n('\0', 256));
-    let symbol_defs = symbols(codes);
     let mut cur_id = 0i32;
     let mut cur_line = 1usize;
     let mut atom_list = Vec::new();
@@ -358,22 +395,27 @@ pub fn lex_scene_text(
                 i += 1;
             }
             let name: String = chars[start..i].iter().collect();
-            let is_z = matches!(name.len(), 2..=4)
+            let z_index = if matches!(name.len(), 2..=4)
                 && name.starts_with('z')
                 && name[1..].chars().all(|c| c.is_ascii_digit())
-                && name[1..]
+            {
+                name[1..]
                     .parse::<usize>()
-                    .is_ok_and(|index| index < codes.z_label_count);
-            if is_z {
+                    .ok()
+                    .filter(|index| *index < codes.z_label_count)
+            } else {
+                None
+            };
+            if let Some(index) = z_index {
                 atom.atom_type = codes.z_label;
-                atom.opt = name[1..].parse::<i32>().unwrap_or(0);
+                atom.opt = index as i32;
                 if let Some(idx) = label_map.get(&name).copied() {
                     atom.subopt = idx;
                 } else {
                     atom.subopt = label_list.len() as i32;
                     label_map.insert(name.clone(), atom.subopt);
                     label_list.push(LabelDef {
-                        name: name.clone(),
+                        name,
                         line: cur_line,
                     });
                 }
@@ -385,27 +427,22 @@ pub fn lex_scene_text(
                     atom.opt = label_list.len() as i32;
                     label_map.insert(name.clone(), atom.opt);
                     label_list.push(LabelDef {
-                        name: name.clone(),
+                        name,
                         line: cur_line,
                     });
                 }
             }
         } else {
-            let mut symbol_type = None;
-            for (symbol, kind) in &symbol_defs {
-                if starts_with(&chars, i, symbol) {
-                    symbol_type = Some(*kind);
-                    i += symbol.chars().count();
-                    break;
-                }
-            }
-            let Some(kind) = symbol_type else {
+            let Some((kind, len)) = symbol_at(&chars, i, codes) else {
                 return Err(LexError { line: cur_line });
             };
+            i += len;
             atom.atom_type = kind;
         }
         if atom.atom_type != codes.none {
-            atom_span_list.push(token_span(&starts, source_map, token_start, i, cur_line));
+            if WITH_SPANS {
+                atom_span_list.push(token_span(&starts, source_map, token_start, i, cur_line));
+            }
             if let Some(spans) = read_flag_span_list.as_mut() {
                 spans.push(read_flag_spans(
                     source_map,
@@ -424,7 +461,9 @@ pub fn lex_scene_text(
         opt: 0,
         subopt: 0,
     });
-    atom_span_list.push(fallback_span(&starts, original_len, original_len, cur_line));
+    if WITH_SPANS {
+        atom_span_list.push(fallback_span(&starts, original_len, original_len, cur_line));
+    }
     str_list.push("dummy".to_string());
     Ok(LexResult {
         atom_list,

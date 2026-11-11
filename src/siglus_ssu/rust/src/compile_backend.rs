@@ -293,7 +293,7 @@ impl DecompileFrontend {
             .map_err(|_| ca.error_str.clone())?;
         let mut lex = la::lex_scene_text(&expanded, &self.codes.la, None, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
-        let mut syntax = sa::SyntaxAnalyzer::new(&lex, self.codes.clone());
+        let mut syntax = sa::SyntaxAnalyzer::new(&lex, &self.codes);
         let root = syntax
             .analyze(&mut data)
             .map_err(|_| format!("{:?}", syntax.last))?;

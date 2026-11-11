@@ -3,7 +3,7 @@ use super::ast::{
     Argument, ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, IfBranch,
     Parameter, SwitchCase,
 };
-use super::codes::RuntimeCodes;
+use super::codes::{LexCodes, OperatorCodes, RuntimeCodes};
 use super::form_table::{ArgInfo, ArgList, ElementInfo, ElementKind, create_elm_code};
 use super::ia::{CommandArg, IaData, IncCommand};
 use super::la::{Atom, LexResult};
@@ -24,8 +24,14 @@ struct LabelState {
     exists: bool,
 }
 
+struct SyntaxCodes {
+    la: LexCodes,
+    op: OperatorCodes,
+    logical_and_precedence: i32,
+}
+
 pub struct SyntaxAnalyzer<'lex> {
-    codes: RuntimeCodes,
+    codes: SyntaxCodes,
     atoms: &'lex [Atom],
     string_count: usize,
     unknowns: &'lex [String],
@@ -38,10 +44,14 @@ pub struct SyntaxAnalyzer<'lex> {
 }
 
 impl<'lex> SyntaxAnalyzer<'lex> {
-    pub fn new(lex: &'lex LexResult, codes: RuntimeCodes) -> Self {
+    pub fn new(lex: &'lex LexResult, codes: &RuntimeCodes) -> Self {
         let z_label_count = codes.la.z_label_count;
         Self {
-            codes,
+            codes: SyntaxCodes {
+                la: codes.la.clone(),
+                op: codes.op.clone(),
+                logical_and_precedence: codes.logical_and_precedence,
+            },
             atoms: &lex.atom_list,
             string_count: lex.str_list.len(),
             unknowns: &lex.unknown_list,
@@ -78,7 +88,9 @@ impl<'lex> SyntaxAnalyzer<'lex> {
     }
 
     fn atom_type(&self, index: usize) -> i32 {
-        self.atom(index).atom_type
+        self.atoms
+            .get(index)
+            .map_or(self.codes.la.none, |atom| atom.atom_type)
     }
 
     fn atom_type_is_any(&self, index: usize, candidates: &[i32]) -> bool {
@@ -111,8 +123,21 @@ impl<'lex> SyntaxAnalyzer<'lex> {
     }
 
     fn accept(&self, index: usize, atom_type: i32) -> Option<(usize, Atom)> {
-        let atom = self.atom(index);
-        (atom.atom_type == atom_type).then_some((index + 1, atom))
+        match self.atoms.get(index) {
+            Some(atom) => (atom.atom_type == atom_type).then(|| (index + 1, atom.clone())),
+            None => (self.codes.la.none == atom_type).then(|| {
+                (
+                    index + 1,
+                    Atom {
+                        id: index as i32,
+                        line: 0,
+                        atom_type: self.codes.la.none,
+                        opt: 0,
+                        subopt: 0,
+                    },
+                )
+            }),
+        }
     }
 
     fn node(&self, start: usize, payload: AstPayload) -> AstNode {
@@ -678,11 +703,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
             };
             pos = next;
             let name = self.syntax.unknown_name(&name_atom);
-            let mut form = FormSpec {
-                name: self.iad.codes.forms.int.name.clone(),
-                index: None,
-                open_bracket_line: 0,
-            };
+            let form;
             if let Some((next, _colon)) = self.syntax.accept(pos, self.syntax.codes.la.colon) {
                 let Some((after_form, parsed_form)) =
                     parse_try!(self, parse_step!(self, executor, parse_form(index = next)))
@@ -691,6 +712,12 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 };
                 pos = after_form;
                 form = parsed_form;
+            } else {
+                form = FormSpec {
+                    name: self.iad.codes.forms.int.name.clone(),
+                    index: None,
+                    open_bracket_line: 0,
+                };
             }
             Ok(Some((
                 pos,
@@ -758,7 +785,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                         parameters.push(Parameter {
                             line: parameter_node.line,
                             name,
-                            name_atom: name_atom.clone(),
+                            name_atom,
                             form,
                             property_id,
                         });
@@ -778,11 +805,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                     }
                 }
             }
-            let mut form = FormSpec {
-                name: self.iad.codes.forms.int.name.clone(),
-                index: None,
-                open_bracket_line: 0,
-            };
+            let form;
             if let Some((next, _colon)) = self.syntax.accept(pos, self.syntax.codes.la.colon) {
                 let Some((after_form, parsed_form)) =
                     parse_try!(self, parse_step!(self, executor, parse_form(index = next)))
@@ -794,6 +817,12 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 };
                 pos = after_form;
                 form = parsed_form;
+            } else {
+                form = FormSpec {
+                    name: self.iad.codes.forms.int.name.clone(),
+                    index: None,
+                    open_bracket_line: 0,
+                };
             }
             let Some((after_body, body)) =
                 parse_try!(self, parse_step!(self, executor, parse_block(index = pos)))
@@ -808,7 +837,8 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
 
             let existing = self.iad.command_indices.get(&name).copied();
             let command_id = if let Some(command_index) = existing {
-                let command = self.iad.command_list[command_index].clone();
+                let command = &self.iad.command_list[command_index];
+                let id = command.id;
                 if command.is_defined {
                     return (
                         self.syntax
@@ -840,7 +870,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 } else {
                     Arc::make_mut(&mut self.iad.command_list[command_index]).is_defined = true;
                 }
-                command.id
+                id
             } else {
                 let id = self.iad.command_cnt;
                 self.iad.command_cnt += 1;
@@ -1958,6 +1988,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 return (Ok((next, ArgumentList::default())), self);
             }
             let mut args = Vec::new();
+            let mut named_count = 0;
             loop {
                 let Some((next, argument)) = parse_try!(
                     self,
@@ -1965,6 +1996,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 ) else {
                     return (self.syntax.fail("TNMSERR_SA_EXP_ILLEGAL", pos), self);
                 };
+                named_count += usize::from(argument.name.is_some());
                 args.push(argument);
                 pos = next;
                 if let Some((next, _close)) =
@@ -1982,11 +2014,9 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 };
                 pos = next;
             }
-            args.sort_by_key(|argument| argument.name.is_some());
-            let named_count = args
-                .iter()
-                .filter(|argument| argument.name.is_some())
-                .count();
+            if named_count != 0 && named_count != args.len() {
+                args.sort_by_key(|argument| argument.name.is_some());
+            }
             Ok((pos, ArgumentList { args, named_count }))
         };
         (result, self)

@@ -171,8 +171,7 @@ impl<'a> SemanticAnalyzer<'a> {
 
     fn check_positional_arguments(&self, expected: &[ArgInfo], real: &mut ArgumentList) -> bool {
         let positional_count = real.args.len().saturating_sub(real.named_count);
-        let mut forms: Vec<i32> = real
-            .args
+        let mut forms: Vec<i32> = real.args[..positional_count]
             .iter()
             .map(|argument| argument.value.temp_form)
             .collect();
@@ -406,8 +405,8 @@ impl<'a> SemanticAnalyzer<'a> {
             AstPayload::ElementExpression { elements, .. } => {
                 let first = elements.first();
                 (
-                    first.and_then(|element| element.name.clone()),
-                    first.and_then(|element| element.name_atom.clone()),
+                    first.and_then(|element| element.name.as_deref()),
+                    first.and_then(|element| element.name_atom.as_ref()),
                     elements.len() == 1
                         && first.is_some_and(|element| {
                             element.array_index.is_none() && element.args.args.is_empty()
@@ -417,7 +416,7 @@ impl<'a> SemanticAnalyzer<'a> {
             _ => return self.fail("TNMSERR_MA_ELEMENT_UNKNOWN", node.line, None),
         };
         let first_name = first_name.unwrap_or_default();
-        if let Some((_, parent)) = self.ia_data.form_table.find(&first_name) {
+        if let Some((_, parent)) = self.ia_data.form_table.find(first_name) {
             return Ok(Some(parent.to_string()));
         }
         if allow_bare_string
@@ -425,7 +424,7 @@ impl<'a> SemanticAnalyzer<'a> {
             && !first_name.contains('@')
             && !first_name.contains('$')
         {
-            let mut atom = first_atom.unwrap_or(Atom {
+            let mut atom = first_atom.cloned().unwrap_or(Atom {
                 id: 0,
                 line: node.line,
                 atom_type: self.codes.la.val_str,
@@ -434,7 +433,7 @@ impl<'a> SemanticAnalyzer<'a> {
             });
             atom.atom_type = self.codes.la.val_str;
             atom.opt = self.strings.len() as i32;
-            self.strings.push(first_name);
+            self.strings.push(first_name.to_string());
             node.payload = AstPayload::Literal { atom };
             node.form = self.codes.forms.str_.code;
             node.temp_form = self.codes.forms.str_.code;
@@ -575,9 +574,12 @@ impl<'a> SemanticAnalyzer<'a> {
         };
         let mut current_form = self.codes.forms.void.code;
         let mut current_type = 0;
-        for element in elements {
-            (current_form, current_type) = self.small_element(&parent, element, selection)?;
-            parent = self.element_parent(current_form);
+        if let Some((first, rest)) = elements.split_first_mut() {
+            (current_form, current_type) = self.small_element(&parent, first, selection)?;
+            for element in rest {
+                parent = self.element_parent(current_form);
+                (current_form, current_type) = self.small_element(&parent, element, selection)?;
+            }
         }
         *element_type = current_type;
         if current_type == self.codes.element_type.property {
@@ -1525,13 +1527,24 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
             };
             let mut current_form = self.analyzer.codes.forms.void.code;
             let mut current_type = 0;
-            for element in elements {
+            if let Some((first, rest)) = elements.split_first_mut() {
                 (current_form, current_type) = semantic_try!(
                     self,
                     input,
-                    semantic_step!(self, executor, analyze_element(&parent, element, selection))
+                    semantic_step!(self, executor, analyze_element(&parent, first, selection))
                 );
-                parent = self.analyzer.element_parent(current_form);
+                for element in rest {
+                    parent = self.analyzer.element_parent(current_form);
+                    (current_form, current_type) = semantic_try!(
+                        self,
+                        input,
+                        semantic_step!(
+                            self,
+                            executor,
+                            analyze_element(&parent, element, selection)
+                        )
+                    );
+                }
             }
             *element_type = current_type;
             if current_type == self.analyzer.codes.element_type.property {

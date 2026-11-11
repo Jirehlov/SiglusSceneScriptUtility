@@ -1161,11 +1161,15 @@ class SA:
             al["close_p"] = cp
             s.last = err
             return 1, p, al
+        named_args = []
         while 1:
             ok, p, a = yield (s.sa_arg, p)
             if not ok:
                 return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
-            al["arg"].append(a)
+            if a.get("node_type") == C.NT_ARG_WITH_NAME:
+                named_args.append(a)
+            else:
+                al["arg"].append(a)
             ok, p, cp = s.sa_atom(p, C.LA_T["CLOSE_PAREN"])
             if ok:
                 al["close_p"] = cp
@@ -1174,10 +1178,8 @@ class SA:
             if not ok:
                 return s.error("TNMSERR_SA_ARG_LIST_NO_CLOSE_PAREN", s._a(p)), i, None
             al["comma"].append(c)
-        na = [x for x in al["arg"] if x.get("node_type") == C.NT_ARG_WITH_NAME]
-        nn = [x for x in al["arg"] if x.get("node_type") != C.NT_ARG_WITH_NAME]
-        al["named_arg_cnt"] = len(na)
-        al["arg"] = nn + na
+        al["named_arg_cnt"] = len(named_args)
+        al["arg"].extend(named_args)
         s.last = err
         return 1, p, al
 

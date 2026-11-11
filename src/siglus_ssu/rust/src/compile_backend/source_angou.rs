@@ -13,14 +13,6 @@ fn write_u32(data: &mut [u8], offset: usize, value: u32) {
     }
 }
 
-fn utf16le(text: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(text.encode_utf16().count() * 2);
-    for unit in text.encode_utf16() {
-        out.extend_from_slice(&unit.to_le_bytes());
-    }
-    out
-}
-
 pub fn exe_angou_element(source: &[u8], original: &[u8]) -> Vec<u8> {
     let mut out = original.to_vec();
     if source.is_empty() || out.is_empty() {
@@ -52,13 +44,12 @@ pub fn encrypt_source(
     let packed_size = packed.len();
     crate::xor::cycle_inplace(&mut packed, &config.easy_code, config.easy_index);
     let digest = crate::smd5::digest(&packed);
-    let mut smd5_code = vec![0u8; 68];
+    let mut smd5_code = [0u8; 68];
     smd5_code[..digest.len().min(68)].copy_from_slice(&digest[..digest.len().min(68)]);
     let n0x40 = packed_size as u32;
     write_u32(&mut smd5_code, 64, n0x40);
 
-    let mut name_bytes = utf16le(name);
-    crate::xor::cycle_inplace(&mut name_bytes, &config.name_code, config.name_index);
+    let name_size = name.encode_utf16().count() * 2;
 
     let mask_width = (read_u32(&smd5_code, config.mask_w_smd5_i) as usize
         % config.mask_w_sur.max(1))
@@ -90,13 +81,22 @@ pub fn encrypt_source(
         garbage_smd5_index = (garbage_smd5_index + 1) % 16;
     }
 
-    let mut output = vec![0u8; config.header_size + 4 + name_bytes.len() + map_bytes * 2];
+    let mut output = vec![0u8; config.header_size + 4 + name_size + map_bytes * 2];
     write_u32(&mut output, 0, 1);
     output[4..config.header_size].copy_from_slice(&smd5_code[..config.header_size - 4]);
-    write_u32(&mut output, config.header_size, name_bytes.len() as u32);
+    write_u32(&mut output, config.header_size, name_size as u32);
     let name_offset = config.header_size + 4;
-    output[name_offset..name_offset + name_bytes.len()].copy_from_slice(&name_bytes);
-    let data_offset_1 = name_offset + name_bytes.len();
+    let data_offset_1 = name_offset + name_size;
+    let name_bytes = &mut output[name_offset..data_offset_1];
+    for (bytes, unit) in name_bytes
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
+        .zip(name.encode_utf16())
+    {
+        bytes.copy_from_slice(&unit.to_le_bytes());
+    }
+    crate::xor::cycle_inplace(name_bytes, &config.name_code, config.name_index);
     let data_offset_2 = data_offset_1 + map_bytes;
     let source_offset_1 = 0;
     let source_offset_2 = half_bytes;

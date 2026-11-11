@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-pub struct ScnHeaderLayout {
-    pub fields: Vec<String>,
+pub struct ScnHeaderLayout<'a> {
+    pub fields: &'a [String],
     pub header_size: usize,
 }
 
@@ -96,15 +96,21 @@ fn push_utf16_raw(out: &mut Vec<u8>, text: &str) {
     }
 }
 
-fn make_index_list(strings: &[String]) -> Vec<(i32, i32)> {
-    let mut out = Vec::with_capacity(strings.len());
+pub(super) fn push_indexed_strings(out: &mut Vec<u8>, strings: &[String]) -> usize {
+    let index_ofs = out.len();
+    let string_ofs = index_ofs + strings.len() * 8;
+    out.resize(string_ofs, 0);
     let mut ofs = 0i32;
-    for text in strings {
-        let len = text.encode_utf16().count() as i32;
-        out.push((ofs, len));
+    for (index, text) in strings.iter().enumerate() {
+        let start = out.len();
+        push_utf16_raw(out, text);
+        let len = ((out.len() - start) / 2) as i32;
+        let entry = index_ofs + index * 8;
+        out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());
+        out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
         ofs = ofs.wrapping_add(len);
     }
-    out
+    string_ofs
 }
 
 fn section(
@@ -119,7 +125,7 @@ fn section(
 }
 
 pub fn build_scn_dat(
-    layout: &ScnHeaderLayout,
+    layout: &ScnHeaderLayout<'_>,
     input: &SceneDatInput,
     string_xor_multiplier: u16,
 ) -> Vec<u8> {
@@ -130,30 +136,29 @@ pub fn build_scn_dat(
     let strings = &input.str_list;
     let n = strings.len();
     let order = &input.str_sort_index;
-    let mut idx = vec![(0i32, 0i32); n];
-    let mut units: Vec<Vec<u16>> = vec![Vec::new(); n];
-    let mut ofs = 0i32;
-    for &orig in order {
-        let u: Vec<u16> = strings[orig].encode_utf16().collect();
-        idx[orig] = (ofs, u.len() as i32);
-        ofs = ofs.wrapping_add(u.len() as i32);
-        units[orig] = u;
-    }
-
+    let index_ofs = out.len();
     section(
         &mut header,
         "str_index_list_ofs",
         "str_index_cnt",
-        out.len(),
+        index_ofs,
         n,
     );
-    push_i32_pairs(&mut out, &idx);
+    out.resize(index_ofs + n * 8, 0);
     section(&mut header, "str_list_ofs", "str_cnt", out.len(), n);
+    let mut ofs = 0i32;
     for &orig in order {
+        let start = out.len();
         let key = u32::from(string_xor_multiplier).wrapping_mul(orig as u32);
-        for unit in &units[orig] {
-            push_u16(&mut out, ((*unit as u32 ^ key) & 0xffff) as u16);
+        for unit in strings[orig].encode_utf16() {
+            push_u16(&mut out, ((unit as u32 ^ key) & 0xffff) as u16);
         }
+        let len = ((out.len() - start) / 2) as i32;
+        // The payload is shuffled, but index slots and XOR keys use original IDs.
+        let entry = index_ofs + orig * 8;
+        out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());
+        out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
+        ofs = ofs.wrapping_add(len);
     }
 
     section(
@@ -201,25 +206,21 @@ pub fn build_scn_dat(
     );
     push_i32_pairs(&mut out, &input.scn_prop_list);
 
-    let scn_prop_name_index_list = make_index_list(&input.scn_prop_name_list);
     section(
         &mut header,
         "scn_prop_name_index_list_ofs",
         "scn_prop_name_index_cnt",
         out.len(),
-        scn_prop_name_index_list.len(),
+        input.scn_prop_name_list.len(),
     );
-    push_i32_pairs(&mut out, &scn_prop_name_index_list);
+    let string_ofs = push_indexed_strings(&mut out, &input.scn_prop_name_list);
     section(
         &mut header,
         "scn_prop_name_list_ofs",
         "scn_prop_name_cnt",
-        out.len(),
+        string_ofs,
         input.scn_prop_name_list.len(),
     );
-    for text in &input.scn_prop_name_list {
-        push_utf16_raw(&mut out, text);
-    }
 
     section(
         &mut header,
@@ -230,45 +231,37 @@ pub fn build_scn_dat(
     );
     push_i32_array(&mut out, &input.scn_cmd_list);
 
-    let scn_cmd_name_index_list = make_index_list(&input.scn_cmd_name_list);
     section(
         &mut header,
         "scn_cmd_name_index_list_ofs",
         "scn_cmd_name_index_cnt",
         out.len(),
-        scn_cmd_name_index_list.len(),
+        input.scn_cmd_name_list.len(),
     );
-    push_i32_pairs(&mut out, &scn_cmd_name_index_list);
+    let string_ofs = push_indexed_strings(&mut out, &input.scn_cmd_name_list);
     section(
         &mut header,
         "scn_cmd_name_list_ofs",
         "scn_cmd_name_cnt",
-        out.len(),
+        string_ofs,
         input.scn_cmd_name_list.len(),
     );
-    for text in &input.scn_cmd_name_list {
-        push_utf16_raw(&mut out, text);
-    }
 
-    let call_prop_name_index_list = make_index_list(&input.call_prop_name_list);
     section(
         &mut header,
         "call_prop_name_index_list_ofs",
         "call_prop_name_index_cnt",
         out.len(),
-        call_prop_name_index_list.len(),
+        input.call_prop_name_list.len(),
     );
-    push_i32_pairs(&mut out, &call_prop_name_index_list);
+    let string_ofs = push_indexed_strings(&mut out, &input.call_prop_name_list);
     section(
         &mut header,
         "call_prop_name_list_ofs",
         "call_prop_name_cnt",
-        out.len(),
+        string_ofs,
         input.call_prop_name_list.len(),
     );
-    for text in &input.call_prop_name_list {
-        push_utf16_raw(&mut out, text);
-    }
 
     section(
         &mut header,
@@ -288,11 +281,15 @@ pub fn build_scn_dat(
     );
     push_i32_array(&mut out, &input.read_flag_list);
 
-    let mut hdr = Vec::with_capacity(layout.fields.len() * 4);
-    for field in &layout.fields {
-        push_i32(&mut hdr, *header.get(field.as_str()).unwrap_or(&0));
+    // Zip preserves truncation when the output ends partway through a field.
+    for (bytes, field) in out.chunks_mut(4).zip(layout.fields) {
+        let value = header
+            .get(field.as_str())
+            .copied()
+            .unwrap_or(0)
+            .to_le_bytes();
+        let len = bytes.len();
+        bytes.copy_from_slice(&value[..len]);
     }
-    let n = hdr.len().min(out.len());
-    out[..n].copy_from_slice(&hdr[..n]);
     out
 }

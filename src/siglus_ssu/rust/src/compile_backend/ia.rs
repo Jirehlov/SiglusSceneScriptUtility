@@ -90,12 +90,12 @@ pub struct IncSidecar {
     pub replace_uses: Vec<ReplaceUse>,
 }
 
-pub struct IncAnalyzer {
+pub struct IncAnalyzer<const TRACK_USAGE: bool = true> {
     text: Vec<char>,
     pub parent_form: String,
     pub error_line: usize,
     pub error_str: String,
-    ca: super::ca::CharacterAnalyzer,
+    ca: super::ca::CharacterAnalyzer<TRACK_USAGE>,
     sidecar: bool,
     pub source_id: usize,
     default_maps: Vec<Vec<Option<SourcePoint>>>,
@@ -138,11 +138,16 @@ impl IaData {
         self.command_list.push(Arc::new(command));
     }
 
-    fn add_replacement(&mut self, replacement: Replacement) {
-        self.replace_tree.add(replacement.clone());
-        self.macro_map
-            .insert(replacement.name.clone(), self.macro_defs.len());
-        self.macro_defs.push(replacement);
+    fn add_replacement<const TRACK_USAGE: bool>(&mut self, replacement: Replacement) {
+        // Expansion uses the tree; the duplicate definitions and index serve statistics.
+        if TRACK_USAGE {
+            self.replace_tree.add(replacement.clone());
+            self.macro_map
+                .insert(replacement.name.clone(), self.macro_defs.len());
+            self.macro_defs.push(replacement);
+        } else {
+            self.replace_tree.add(replacement);
+        }
     }
 
     pub fn record_named_usage(&mut self, name: &str) {
@@ -162,20 +167,7 @@ impl IaData {
 
 impl IncAnalyzer {
     pub fn new(text: &str, parent_form: impl Into<String>) -> Self {
-        Self {
-            text: text.chars().collect(),
-            parent_form: parent_form.into(),
-            error_line: 0,
-            error_str: String::new(),
-            ca: super::ca::CharacterAnalyzer::new(false),
-            sidecar: false,
-            source_id: 0,
-            default_maps: Vec::new(),
-            input_source_map: Vec::new(),
-            source_map: Vec::new(),
-            sidecar_data: IncSidecar::default(),
-            last_after_source_map: Vec::new(),
-        }
+        Self::new_with_usage_tracking(text, parent_form)
     }
 
     pub fn new_with_sidecar(
@@ -187,6 +179,25 @@ impl IncAnalyzer {
         analyzer.sidecar = true;
         analyzer.input_source_map = source_map;
         analyzer
+    }
+}
+
+impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
+    pub fn new_with_usage_tracking(text: &str, parent_form: impl Into<String>) -> Self {
+        Self {
+            text: text.chars().collect(),
+            parent_form: parent_form.into(),
+            error_line: 0,
+            error_str: String::new(),
+            ca: super::ca::CharacterAnalyzer::<TRACK_USAGE>::new_with_usage_tracking(false),
+            sidecar: false,
+            source_id: 0,
+            default_maps: Vec::new(),
+            input_source_map: Vec::new(),
+            source_map: Vec::new(),
+            sidecar_data: IncSidecar::default(),
+            last_after_source_map: Vec::new(),
+        }
     }
 
     fn err<T>(&mut self, line: usize, message: impl Into<String>) -> Result<T, ()> {
@@ -331,24 +342,20 @@ impl IncAnalyzer {
         Some((pos, value.wrapping_mul(sign)))
     }
 
-    fn double_quoted(&self, mut pos: usize) -> Option<(usize, String)> {
+    fn skip_double_quoted(&self, mut pos: usize) -> Option<usize> {
         if self.text.get(pos) != Some(&'"') {
             return None;
         }
         pos += 1;
-        let mut out = String::new();
         loop {
             let ch = *self.text.get(pos)?;
             pos += 1;
             if ch == '"' {
-                return Some((pos, out));
+                return Some(pos);
             }
             if ch == '\\' {
-                let escaped = *self.text.get(pos)?;
+                self.text.get(pos)?;
                 pos += 1;
-                out.push(if escaped == 'n' { '\n' } else { escaped });
-            } else {
-                out.push(ch);
             }
         }
     }
@@ -406,9 +413,9 @@ impl IncAnalyzer {
         line: usize,
         iad: &IaData,
     ) -> Result<(String, i32, usize, usize), ()> {
-        let mut form = iad.codes.forms.int.name.clone();
         let mut size = 0i32;
         let (mut i, mut line, _) = self.skip(pos, line);
+        let form;
         if self.text.get(i) == Some(&':') {
             let colon_line = line;
             (form, i, line) = self.parse_form(i + 1, colon_line, line, iad)?;
@@ -437,6 +444,8 @@ impl IncAnalyzer {
                     return self.err(bracket_line, "Only intlist or strlist can be arrays.");
                 }
             }
+        } else {
+            form = iad.codes.forms.int.name.clone();
         }
         Ok((form, size, i, line))
     }
@@ -464,7 +473,7 @@ impl IncAnalyzer {
         let mut arg = CommandArg {
             id: 0,
             name: String::new(),
-            form: form.clone(),
+            form,
             def_int: 0,
             def_exist: false,
         };
@@ -475,15 +484,15 @@ impl IncAnalyzer {
             let skipped = self.skip(i + 1, line);
             i = skipped.0;
             line = skipped.1;
-            if form == iad.codes.forms.int.name.as_str() {
+            if arg.form == iad.codes.forms.int.name.as_str() {
                 let Some((next, value)) = self.integer(i) else {
                     return self.err(line, "Invalid default argument for int type.");
                 };
                 i = next;
                 arg.def_int = value;
                 arg.def_exist = true;
-            } else if form == iad.codes.forms.str_.name.as_str() {
-                let Some((next, _value)) = self.double_quoted(i) else {
+            } else if arg.form == iad.codes.forms.str_.name.as_str() {
+                let Some(next) = self.skip_double_quoted(i) else {
                     return self.err(line, "Invalid default argument for str type.");
                 };
                 i = next;
@@ -596,12 +605,10 @@ impl IncAnalyzer {
                 }
             }
         }
-        let mut line_start = 0usize;
-        for index in 0..start.min(self.text.len()) {
-            if self.text[index] == '\n' {
-                line_start = index + 1;
-            }
-        }
+        let line_start = self.text[..start.min(self.text.len())]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map_or(0, |index| index + 1);
         NameSpan {
             source_id: -1,
             line,
@@ -655,7 +662,7 @@ impl IncAnalyzer {
             ("#expand", "expand"),
         ] {
             if self.starts_with(i, prefix) {
-                return Ok((kind, i + prefix.chars().count(), line));
+                return Ok((kind, i + prefix.len(), line));
             }
         }
         self.err(line, "Invalid declaration. For labels, change '#' to '##'.")
@@ -703,7 +710,9 @@ impl IncAnalyzer {
                     return self.err(line2, "if depth overflow");
                 }
                 let matched = iad.name_set.contains(&word);
-                iad.record_named_usage(&word);
+                if TRACK_USAGE {
+                    iad.record_named_usage(&word);
+                }
                 ifs[depth] = if matched { 1 } else { 2 };
                 pos = after_word;
                 line = line2;
@@ -722,7 +731,9 @@ impl IncAnalyzer {
                     return self.err(line2, "Missing word after #elseifdef.");
                 };
                 let matched = iad.name_set.contains(&word);
-                iad.record_named_usage(&word);
+                if TRACK_USAGE {
+                    iad.record_named_usage(&word);
+                }
                 ifs[depth] = next_elseif_ifdef_state(ifs[depth], matched);
                 pos = after_word;
                 line = line2;
@@ -797,20 +808,17 @@ impl IncAnalyzer {
             }
             j += 1;
         }
-        let mut _name_end = i;
-        while _name_end < self.text.len() && !stopset.contains(&self.text[_name_end]) {
-            _name_end += 1;
-        }
-        if self.sidecar {
+        let span = if self.sidecar {
+            let mut name_end = i;
+            while name_end < self.text.len() && !stopset.contains(&self.text[name_end]) {
+                name_end += 1;
+            }
             self.last_after_source_map = self.source_map[i..j].to_vec();
-        }
-        (
-            self.text[i..j].iter().collect(),
-            j,
-            line2,
-            name_line,
-            self.span_from_offsets(i, _name_end, name_line),
-        )
+            self.span_from_offsets(i, name_end, name_line)
+        } else {
+            NameSpan::default()
+        };
+        (self.text[i..j].iter().collect(), j, line2, name_line, span)
     }
 
     fn macro_arg_list(
@@ -911,12 +919,12 @@ impl IncAnalyzer {
         let declaration_start = pos;
         let (kind, mut i, mut line) = self.decl_type(pos, line)?;
         if matches!(kind, "replace" | "define" | "define_s") {
-            let stopset = if kind == "define_s" {
-                vec!['\t', '\n']
+            let stopset: &[char] = if kind == "define_s" {
+                &['\t', '\n']
             } else {
-                vec!['\t', ' ', '\n']
+                &['\t', ' ', '\n']
             };
-            let (name, next, line2, name_start, name_end) = self.name_until(i, line, &stopset)?;
+            let (name, next, line2, name_start, name_end) = self.name_until(i, line, stopset)?;
             i = next;
             line = line2;
             let (after, next, line2) = self.after(i, line, iad)?;
@@ -929,7 +937,7 @@ impl IncAnalyzer {
             } else {
                 "define"
             };
-            iad.add_replacement(Replacement {
+            iad.add_replacement::<TRACK_USAGE>(Replacement {
                 kind: if kind == "replace" {
                     ReplaceKind::Replace
                 } else {
@@ -939,7 +947,11 @@ impl IncAnalyzer {
                 after,
                 args: Vec::new(),
                 used_count: 0,
-                decl_type: kind.to_string(),
+                decl_type: if TRACK_USAGE {
+                    kind.to_string()
+                } else {
+                    String::new()
+                },
                 source: self.replacement_source(record_kind),
             });
             self.record_decl(record_kind, &name, line, name_start, name_end);
@@ -961,13 +973,17 @@ impl IncAnalyzer {
                 return self.err(line2, format!("{name} is declared twice."));
             }
             Arc::make_mut(&mut iad.name_set).insert(name.clone());
-            iad.add_replacement(Replacement {
+            iad.add_replacement::<TRACK_USAGE>(Replacement {
                 kind: ReplaceKind::Macro,
                 name: name.clone(),
                 after,
                 args,
                 used_count: 0,
-                decl_type: "macro".to_string(),
+                decl_type: if TRACK_USAGE {
+                    "macro".to_string()
+                } else {
+                    String::new()
+                },
                 source: self.replacement_source("macro"),
             });
             self.record_decl("macro", &name, line, name_start, name_end);
@@ -978,8 +994,8 @@ impl IncAnalyzer {
                 self.prop_cmd_text(i, line, &[' ', ':', '\t', '\n']);
             scratch.property_text.push(text);
             scratch.property_lines.push(name_line);
-            scratch.property_spans.push(span);
             if self.sidecar {
+                scratch.property_spans.push(span);
                 scratch
                     .property_source_maps
                     .push(std::mem::take(&mut self.last_after_source_map));
@@ -991,8 +1007,8 @@ impl IncAnalyzer {
                 self.prop_cmd_text(i, line, &[' ', '(', ':', '\t', '\n']);
             scratch.command_text.push(text);
             scratch.command_lines.push(name_line);
-            scratch.command_spans.push(span);
             if self.sidecar {
+                scratch.command_spans.push(span);
                 scratch
                     .command_source_maps
                     .push(std::mem::take(&mut self.last_after_source_map));
@@ -1019,7 +1035,9 @@ impl IncAnalyzer {
         line: usize,
     ) -> Result<SceneExpansion, ()> {
         let ca = &mut self.ca;
-        ca.used_replacements.clear();
+        if TRACK_USAGE {
+            ca.used_replacements.clear();
+        }
         let mut expanded = if self.sidecar {
             ca.analyze_scene_line_with_map(text, source_map, &iad.replace_tree)
         } else {
@@ -1034,7 +1052,9 @@ impl IncAnalyzer {
             self.error_line = line;
             self.error_str = ca.error_str.clone();
         })?;
-        iad.record_replacement_usage(&ca.used_replacements);
+        if TRACK_USAGE {
+            iad.record_replacement_usage(&ca.used_replacements);
+        }
         self.sidecar_data
             .replace_uses
             .append(&mut expanded.replace_uses);

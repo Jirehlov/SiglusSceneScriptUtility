@@ -742,7 +742,7 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let mut syntax = SyntaxAnalyzer::new(&lex, ia_data.codes.clone());
+    let mut syntax = SyntaxAnalyzer::new(&lex, &ia_data.codes);
     let root = match syntax.analyze(&mut ia_data) {
         Ok(value) => value,
         Err(()) => return diagnostic_result(py),
@@ -753,7 +753,7 @@ pub fn lsp_scan_document(
         match semantic.analyze(root) {
             Ok(value) => (
                 value,
-                semantic.call_property_names.clone(),
+                semantic.call_property_names,
                 semantic.bindings.take().unwrap(),
             ),
             Err(()) => return diagnostic_result(py),
@@ -764,9 +764,9 @@ pub fn lsp_scan_document(
         && compile_root(
             &root,
             &ia_data,
-            &lex.str_list,
+            lex.str_list.as_slice(),
             lex.label_list.len(),
-            &call_property_names,
+            call_property_names,
             read_flag_atoms.as_mut(),
         )
         .is_err()

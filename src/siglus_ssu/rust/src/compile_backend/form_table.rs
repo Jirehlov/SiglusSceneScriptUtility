@@ -131,9 +131,8 @@ impl FormTable {
 
     pub fn from_constants(constants: &CompileConstants) -> Result<Self, String> {
         let mut table = Self::new(constants)?;
-        let form_names: Vec<String> = table.form_code.keys().cloned().collect();
-        for form in form_names {
-            table.ensure_form(&form);
+        for form in constants.form_ids.keys() {
+            table.ensure_form(form);
         }
         for source in &constants.system_elements {
             let mut arg_map = HashMap::new();

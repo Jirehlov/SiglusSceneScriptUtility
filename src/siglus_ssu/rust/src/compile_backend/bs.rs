@@ -829,9 +829,9 @@ impl<'a> BytecodeBuilder<'a> {
 pub fn compile_root(
     root: &AstNode,
     ia_data: &IaData,
-    strings: &[String],
+    strings: impl Into<Vec<String>>,
     label_count: usize,
-    call_property_names: &[String],
+    call_property_names: Vec<String>,
     read_flag_atoms: Option<&mut Vec<i32>>,
 ) -> Result<BsOutput, BsError> {
     let mut builder = BytecodeBuilder {
@@ -871,7 +871,7 @@ pub fn compile_root(
         .map(|command| command.name.clone())
         .collect();
     let scene = SceneDatInput {
-        str_list: strings.to_vec(),
+        str_list: strings.into(),
         scn_bytes: builder.stream,
         label_list: builder.label_list,
         z_label_list: builder.z_label_list,
@@ -880,7 +880,7 @@ pub fn compile_root(
         scn_prop_name_list,
         scn_cmd_list: builder.scn_cmd_list,
         scn_cmd_name_list,
-        call_prop_name_list: call_property_names.to_vec(),
+        call_prop_name_list: call_property_names,
         namae_list: builder.namae_list,
         read_flag_list: builder.read_flag_list,
         ..SceneDatInput::default()

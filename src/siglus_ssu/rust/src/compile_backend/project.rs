@@ -6,7 +6,7 @@ use super::config::CompileConfig;
 use super::form_table::FormTable;
 use super::frontend_common::{CaseMode, SingleQuoteMode, TextCommentOptions, scan_text_comments};
 use super::ia::{IaData, IaScratch, IncAnalyzer};
-use super::la::lex_scene_text;
+use super::la::lex_scene_text_for_compile;
 use super::ma::SemanticAnalyzer;
 use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes};
 use super::sa::SyntaxAnalyzer;
@@ -53,6 +53,7 @@ impl<'a> OutputLog<'a> {
 
 struct SceneTask {
     name: String,
+    key: String,
     display_name: String,
     status_display_name: String,
     path: PathBuf,
@@ -450,33 +451,21 @@ fn read_i32_le(bytes: &[u8], offset: usize) -> Option<i32> {
     Some(i32::from_le_bytes(chunk.try_into().ok()?))
 }
 
-fn parse_scn_header(config: &CompileConfig, dat: &[u8]) -> Vec<(String, i32)> {
-    let mut out = Vec::new();
+fn scn_header_value(config: &CompileConfig, dat: &[u8], name: &str) -> i32 {
     if dat.len() < config.constants.scn_header_size {
-        return out;
+        return 0;
     }
-    for (index, field) in config.constants.scn_header_fields.iter().enumerate() {
-        if let Some(value) = read_i32_le(dat, index * 4) {
-            out.push((field.clone(), value));
-        }
-    }
-    out
-}
-
-fn header_value(header: &[(String, i32)], name: &str) -> i32 {
-    header
+    dat.as_chunks::<4>()
+        .0
         .iter()
-        .find_map(|(key, value)| (key == name).then_some(*value))
+        .zip(&config.constants.scn_header_fields)
+        .find_map(|(bytes, field)| (field == name).then(|| i32::from_le_bytes(*bytes)))
         .unwrap_or_default()
 }
 
 fn parse_command_labels(config: &CompileConfig, dat: &[u8]) -> Vec<(i32, i32)> {
-    let header = parse_scn_header(config, dat);
-    if header.is_empty() {
-        return Vec::new();
-    }
-    let ofs = header_value(&header, "cmd_label_list_ofs");
-    let cnt = header_value(&header, "cmd_label_cnt");
+    let ofs = scn_header_value(config, dat, "cmd_label_list_ofs");
+    let cnt = scn_header_value(config, dat, "cmd_label_cnt");
     if ofs <= 0 || cnt <= 0 {
         return Vec::new();
     }
@@ -554,7 +543,7 @@ fn empty_macro_stats() -> MacroStats {
 fn merge_macro_stats(dst: &mut MacroStats, src: &MacroStats) {
     for kind in ["replace", "define", "define_s", "macro"] {
         let other = src.buckets.get(kind).cloned().unwrap_or_default();
-        let bucket = dst.buckets.entry(kind.to_string()).or_default();
+        let bucket = dst.buckets.get_mut(kind).expect("initialized macro bucket");
         bucket.total += other.total;
         bucket.unused += other.unused;
     }
@@ -568,7 +557,10 @@ fn scene_macro_stats(
     let base_count = base_ia.macro_defs.len();
     for replacement in ia_data.macro_defs.iter().skip(base_count) {
         let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
-        let bucket = counts.buckets.entry(kind.to_string()).or_default();
+        let bucket = counts
+            .buckets
+            .get_mut(kind)
+            .expect("initialized macro bucket");
         bucket.total += 1;
         if replacement.used_count == 0 {
             bucket.unused += 1;
@@ -599,7 +591,10 @@ fn collect_macro_stats(
     let mut counts = empty_macro_stats();
     for replacement in &base_ia.macro_defs {
         let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
-        let bucket = counts.buckets.entry(kind.to_string()).or_default();
+        let bucket = counts
+            .buckets
+            .get_mut(kind)
+            .expect("initialized macro bucket");
         bucket.total += 1;
         let extra = global_usage_delta
             .get(&(kind.to_string(), replacement.name.clone()))
@@ -613,31 +608,30 @@ fn collect_macro_stats(
     counts
 }
 
-fn merge_source_stats(dst: &mut SourceStats, src: &SourceStats) {
+fn merge_source_stats(dst: &mut SourceStats, src: SourceStats) {
     dst.scene_count += src.scene_count;
-    for (key, value) in &src.preprocess {
+    for (key, value) in src.preprocess {
         if key == "max_ifdef_depth" {
-            max_counter(&mut dst.preprocess, key.clone(), *value);
+            max_counter(&mut dst.preprocess, key, value);
         } else {
-            inc_counter(&mut dst.preprocess, key.clone(), *value);
+            inc_counter(&mut dst.preprocess, key, value);
         }
     }
-    for (key, value) in &src.inc {
-        inc_counter(&mut dst.inc, key.clone(), *value);
+    for (key, value) in src.inc {
+        inc_counter(&mut dst.inc, key, value);
     }
-    for (key, value) in &src.directives {
-        inc_counter(&mut dst.directives, key.clone(), *value);
+    for (key, value) in src.directives {
+        inc_counter(&mut dst.directives, key, value);
     }
-    for (key, value) in &src.strings {
-        inc_counter(&mut dst.strings, key.clone(), *value);
+    for (key, value) in src.strings {
+        inc_counter(&mut dst.strings, key, value);
     }
-    dst.top_string_scenes
-        .extend(src.top_string_scenes.iter().cloned());
-    for (key, value) in &src.statements {
-        inc_counter(&mut dst.statements, key.clone(), *value);
+    dst.top_string_scenes.extend(src.top_string_scenes);
+    for (key, value) in src.statements {
+        inc_counter(&mut dst.statements, key, value);
     }
-    for (key, value) in &src.labels {
-        inc_counter(&mut dst.labels, key.clone(), *value);
+    for (key, value) in src.labels {
+        inc_counter(&mut dst.labels, key, value);
     }
     for key in ["unary_ops", "binary_ops", "named_args", "default_arg_fills"] {
         inc_counter(
@@ -654,19 +648,17 @@ fn merge_source_stats(dst: &mut SourceStats, src: &SourceStats) {
             .copied()
             .unwrap_or_default(),
     );
-    for (key, value) in &src.assign_ops {
-        inc_counter(&mut dst.assign_ops, key.clone(), *value);
+    for (key, value) in src.assign_ops {
+        inc_counter(&mut dst.assign_ops, key, value);
     }
-    for (key, value) in &src.unary_op_kinds {
-        inc_counter(&mut dst.unary_op_kinds, key.clone(), *value);
+    for (key, value) in src.unary_op_kinds {
+        inc_counter(&mut dst.unary_op_kinds, key, value);
     }
-    for (key, value) in &src.binary_op_kinds {
-        inc_counter(&mut dst.binary_op_kinds, key.clone(), *value);
+    for (key, value) in src.binary_op_kinds {
+        inc_counter(&mut dst.binary_op_kinds, key, value);
     }
-    dst.unique_strings
-        .extend(src.unique_strings.iter().cloned());
-    dst.unique_speakers
-        .extend(src.unique_speakers.iter().cloned());
+    dst.unique_strings.extend(src.unique_strings);
+    dst.unique_speakers.extend(src.unique_speakers);
 }
 
 fn finalize_source_stats(stats: &mut SourceStats, ia_data: &IaData) {
@@ -1354,7 +1346,10 @@ fn build_original_source_chunks(
     Ok((header_size, chunks))
 }
 
-fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<IaData, String> {
+fn build_global_ia<const FULL_STATS: bool>(
+    config: &CompileConfig,
+    log: &mut OutputLog<'_>,
+) -> Result<IaData, String> {
     let codes = RuntimeCodes::from_constants(&config.constants)?;
     let mut data = IaData::new(
         FormTable::from_constants(&config.constants)?,
@@ -1386,7 +1381,10 @@ fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<Ia
         let display_name = file_name(&path);
         log_stage(log, "IA", &display_name)?;
         let text = read_source(config, &path)?;
-        let mut analyzer = IncAnalyzer::new(text, data.codes.forms.global.name.as_str());
+        let mut analyzer = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
+            text,
+            data.codes.forms.global.name.as_str(),
+        );
         let mut scratch = IaScratch::default();
         analyzer
             .step1(&mut data, &mut scratch)
@@ -1394,7 +1392,10 @@ fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<Ia
         scratch_list.push((display_name, scratch));
     }
     for (display_name, scratch) in scratch_list {
-        let mut analyzer = IncAnalyzer::new("", data.codes.forms.global.name.as_str());
+        let mut analyzer = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
+            "",
+            data.codes.forms.global.name.as_str(),
+        );
         analyzer
             .step2(&mut data, &scratch)
             .map_err(|_| line_error(&display_name, analyzer.error_line, &analyzer.error_str))?;
@@ -1412,7 +1413,7 @@ fn build_global_ia(config: &CompileConfig, log: &mut OutputLog<'_>) -> Result<Ia
     Ok(data)
 }
 
-fn prepare_scene(
+fn prepare_scene<const FULL_STATS: bool>(
     config: &CompileConfig,
     source_path: &Path,
     display_name: &str,
@@ -1423,7 +1424,7 @@ fn prepare_scene(
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
     let mut ia_data = base_ia.clone();
-    let mut ca = CharacterAnalyzer::new(false);
+    let mut ca = CharacterAnalyzer::<FULL_STATS>::new_with_usage_tracking(false);
     if let Some(log) = log.as_mut() {
         log_stage(log, "CA", display_name)?;
     }
@@ -1432,10 +1433,12 @@ fn prepare_scene(
         .analyze_file_1(source)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
     let file2 = ca
-        .analyze_file_2(&file1, &ia_data.name_set)
+        .analyze_file_2_with_stats::<FULL_STATS>(&file1, &ia_data.name_set)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
-    ia_data.record_replacement_usage(&ca.used_replacements);
-    ca.used_replacements.clear();
+    if FULL_STATS {
+        ia_data.record_replacement_usage(&ca.used_replacements);
+        ca.used_replacements.clear();
+    }
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "CA", stage_start);
     }
@@ -1443,8 +1446,10 @@ fn prepare_scene(
     let mut scene_inc_commands = 0usize;
     if !file2.inc_text.is_empty() {
         let mut scratch = IaScratch::default();
-        let mut scene_ia =
-            IncAnalyzer::new(&file2.inc_text, ia_data.codes.forms.scene.name.as_str());
+        let mut scene_ia = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
+            &file2.inc_text,
+            ia_data.codes.forms.scene.name.as_str(),
+        );
         scene_ia
             .step1(&mut ia_data, &mut scratch)
             .map_err(|_| scene_error("UNK_ERROR", display_name, scene_ia.error_line))?;
@@ -1470,12 +1475,14 @@ fn prepare_scene(
             config.context.utf8,
         )?;
     }
-    ia_data.record_replacement_usage(&ca.used_replacements);
+    if FULL_STATS {
+        ia_data.record_replacement_usage(&ca.used_replacements);
+    }
     if let Some(log) = log.as_mut() {
         log_stage(log, "LA", display_name)?;
     }
     let stage_start = Instant::now();
-    let lex_result = lex_scene_text(&scene_text, &ia_data.codes.la, None, None);
+    let lex_result = lex_scene_text_for_compile(&scene_text, &ia_data.codes.la);
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "LA", stage_start);
     }
@@ -1485,7 +1492,7 @@ fn prepare_scene(
         log_stage(log, "SA", display_name)?;
     }
     let stage_start = Instant::now();
-    let mut syntax = SyntaxAnalyzer::new(&lex, ia_data.codes.clone());
+    let mut syntax = SyntaxAnalyzer::new(&lex, &ia_data.codes);
     let syntax_result = syntax.analyze(&mut ia_data);
     for (atom, message) in &syntax.warnings {
         let warning = format!("warning: {}", scene_error(message, display_name, atom.line));
@@ -1537,7 +1544,7 @@ fn prepare_scene(
                 error.and_then(|value| value.qname.as_deref()),
             )
         })?;
-        (root, semantic.call_property_names.clone())
+        (root, semantic.call_property_names)
     };
     if let Some(log) = log.as_mut() {
         log_stage(log, "BS", display_name)?;
@@ -1546,39 +1553,37 @@ fn prepare_scene(
     let bs_output = compile_root(
         &root,
         &ia_data,
-        &lex.str_list,
+        lex.str_list,
         lex.label_list.len(),
-        &call_property_names,
+        call_property_names,
         None,
     )
     .map_err(|error| scene_error(error.code, display_name, error.line))?;
-    let (scene_macro_counts, global_macro_usage_delta, source_stats) =
-        if config.cache.full_compile_stats {
-            let (scene_macro_counts, global_macro_usage_delta) =
-                scene_macro_stats(&ia_data, base_ia);
-            let source_stats = collect_scene_source_stats(SceneSourceInputs {
-                name: source_path
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default(),
-                preprocess: &file2.stats,
-                root: &root,
-                strings: &lex.str_list,
-                source_label_count,
-                scene_inc_properties,
-                scene_inc_commands,
-                scene: &bs_output.scene,
-                default_arg_fills: bs_output.default_arg_fills,
-                ia_data: &ia_data,
-            });
-            (scene_macro_counts, global_macro_usage_delta, source_stats)
-        } else {
-            (
-                MacroStats::default(),
-                BTreeMap::new(),
-                SourceStats::default(),
-            )
-        };
+    let (scene_macro_counts, global_macro_usage_delta, source_stats) = if FULL_STATS {
+        let (scene_macro_counts, global_macro_usage_delta) = scene_macro_stats(&ia_data, base_ia);
+        let source_stats = collect_scene_source_stats(SceneSourceInputs {
+            name: source_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default(),
+            preprocess: &file2.stats,
+            root: &root,
+            strings: &bs_output.scene.str_list,
+            source_label_count,
+            scene_inc_properties,
+            scene_inc_commands,
+            scene: &bs_output.scene,
+            default_arg_fills: bs_output.default_arg_fills,
+            ia_data: &ia_data,
+        });
+        (scene_macro_counts, global_macro_usage_delta, source_stats)
+    } else {
+        (
+            MacroStats::default(),
+            BTreeMap::new(),
+            SourceStats::default(),
+        )
+    };
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "BS", stage_start);
     }
@@ -1602,7 +1607,7 @@ fn finalize_scene(
     rand: &mut MsvcRand,
 ) -> FinalizedScene {
     let layout = ScnHeaderLayout {
-        fields: config.constants.scn_header_fields.clone(),
+        fields: &config.constants.scn_header_fields,
         header_size: config.constants.scn_header_size,
     };
     let string_count = prepared.scene.str_list.len();
@@ -1610,15 +1615,12 @@ fn finalize_scene(
     if string_count > 0 {
         rand.shuffle(&mut string_order);
     }
-    let shuffled_strings: Vec<&str> = string_order
-        .iter()
-        .map(|index| prepared.scene.str_list[*index].as_str())
-        .collect();
+    let strings = &prepared.scene.str_list;
     let mut namae_seen = HashSet::new();
     prepared.scene.namae_list.retain(|candidate| {
-        shuffled_strings
+        string_order
             .get(*candidate as usize)
-            .is_some_and(|text| namae_seen.insert(*text))
+            .is_some_and(|index| namae_seen.insert(strings[*index].as_str()))
     });
     prepared.scene.str_sort_index = string_order;
     let dat = build_scn_dat(
@@ -1664,7 +1666,7 @@ fn invalidate_lzss_cache(config: &CompileConfig) -> Result<(), String> {
     Ok(())
 }
 
-fn compile_project_inner(
+fn compile_project_inner<const FULL_STATS: bool>(
     config: &CompileConfig,
     stdout: &mut OutputLog<'_>,
     stage_times: &mut Vec<(String, f64)>,
@@ -1702,7 +1704,7 @@ fn compile_project_inner(
         });
     }
     let stage_start = Instant::now();
-    let base_ia = build_global_ia(config, stdout)?;
+    let base_ia = build_global_ia::<FULL_STATS>(config, stdout)?;
     if !config.context.inc_list.is_empty() || !config.cache.compile_scene_names.is_empty() {
         record_stage_time(stage_times, "IA", stage_start);
     }
@@ -1748,6 +1750,7 @@ fn compile_project_inner(
         .iter()
         .map(|name| SceneTask {
             name: name.clone(),
+            key: lower_file_name(name),
             display_name: scene_compile_display_name(config, name, compile_workers),
             status_display_name: scene_display_name(config, name),
             path: source_path(input_dir, name),
@@ -1758,13 +1761,7 @@ fn compile_project_inner(
         let stage_start = Instant::now();
         let compile_tasks = tasks
             .iter()
-            .filter(|task| compile_targets.contains(&lower_file_name(&task.name)))
-            .map(|task| SceneTask {
-                name: task.name.clone(),
-                display_name: task.display_name.clone(),
-                status_display_name: task.status_display_name.clone(),
-                path: task.path.clone(),
-            })
+            .filter(|task| compile_targets.contains(&task.key))
             .collect::<Vec<_>>();
         stdout.push_line(format!(
             "[PARALLEL] Compiling {} files with {} processes...",
@@ -1778,10 +1775,10 @@ fn compile_project_inner(
             compile_workers,
             || MsvcRand::new(1),
             |worker_rand, task| {
-                let key = lower_file_name(&task.name);
-                let status = task.status_display_name.clone();
+                let key = task.key.as_str();
+                let status = task.status_display_name.as_str();
                 let mut warnings = Vec::new();
-                let result = match prepare_scene(
+                let result = match prepare_scene::<FULL_STATS>(
                     config,
                     &task.path,
                     &task.display_name,
@@ -1830,9 +1827,9 @@ fn compile_project_inner(
     } else {
         for task in tasks
             .iter()
-            .filter(|task| compile_targets.contains(&lower_file_name(&task.name)))
+            .filter(|task| compile_targets.contains(&task.key))
         {
-            let mut scene = prepare_scene(
+            let mut scene = prepare_scene::<FULL_STATS>(
                 config,
                 &task.path,
                 &task.display_name,
@@ -1844,10 +1841,7 @@ fn compile_project_inner(
             if scene.stem.is_empty() {
                 scene.stem = scene_stem(&task.name);
             }
-            compiled.push((
-                lower_file_name(&task.name),
-                finalize_scene(config, scene, &mut rand),
-            ));
+            compiled.push((task.key.as_str(), finalize_scene(config, scene, &mut rand)));
         }
     }
     let mut compiled_map = compiled
@@ -1855,19 +1849,23 @@ fn compile_project_inner(
         .collect::<std::collections::HashMap<_, _>>();
     let mut scene_records = Vec::with_capacity(tasks.len());
     let mut aggregate_source_stats = SourceStats::default();
-    let mut aggregate_scene_macro_counts = empty_macro_stats();
+    let mut aggregate_scene_macro_counts = if FULL_STATS {
+        empty_macro_stats()
+    } else {
+        MacroStats::default()
+    };
     let mut aggregate_global_usage_delta = BTreeMap::<(String, String), usize>::new();
     for task in &tasks {
-        let key = lower_file_name(&task.name);
-        let stem = scene_stem(&task.name);
-        let record = if let Some(scene) = compiled_map.remove(&key) {
-            merge_source_stats(&mut aggregate_source_stats, &scene.source_stats);
-            merge_macro_stats(&mut aggregate_scene_macro_counts, &scene.scene_macro_counts);
-            for (key, value) in &scene.global_macro_usage_delta {
-                *aggregate_global_usage_delta.entry(key.clone()).or_default() += *value;
+        let record = if let Some(scene) = compiled_map.remove(task.key.as_str()) {
+            if FULL_STATS {
+                merge_source_stats(&mut aggregate_source_stats, scene.source_stats);
+                merge_macro_stats(&mut aggregate_scene_macro_counts, &scene.scene_macro_counts);
+                for (key, value) in scene.global_macro_usage_delta {
+                    *aggregate_global_usage_delta.entry(key).or_default() += value;
+                }
             }
-            let dat_path = bs_dir.join(format!("{}.dat", scene.stem));
             if !config.tmp_dir.is_empty() {
+                let dat_path = bs_dir.join(format!("{}.dat", scene.stem));
                 fs::write(&dat_path, &scene.dat)
                     .map_err(|error| format_path_error(&dat_path, error))?;
             }
@@ -1879,6 +1877,7 @@ fn compile_project_inner(
                 compiled: true,
             }
         } else {
+            let stem = scene_stem(&task.name);
             let key = stem.to_ascii_lowercase();
             let dat_path = config
                 .cache
@@ -1896,8 +1895,11 @@ fn compile_project_inner(
                 return Err(format!("{}: bad dat header", dat_path.display()));
             }
             let command_labels = parse_command_labels(config, &dat);
-            let read_flag_count =
-                header_value(&parse_scn_header(config, &dat), "read_flag_cnt").max(0) as usize;
+            let read_flag_count = if FULL_STATS {
+                scn_header_value(config, &dat, "read_flag_cnt").max(0) as usize
+            } else {
+                0
+            };
             SceneData {
                 stem,
                 dat,
@@ -1909,30 +1911,34 @@ fn compile_project_inner(
         scene_records.push(record);
     }
 
-    let mut read_flag_stats = ReadFlagStats::default();
-    for record in &scene_records {
-        read_flag_stats.total += record.read_flag_count;
-        if record.read_flag_count > 0 {
-            read_flag_stats.scenes += 1;
-            read_flag_stats.top_scenes.push(TopCount {
-                name: record.stem.clone(),
-                value: record.read_flag_count,
-                entries: 0,
-            });
+    let read_flag_stats = FULL_STATS.then(|| {
+        let mut stats = ReadFlagStats::default();
+        for record in &scene_records {
+            stats.total += record.read_flag_count;
+            if record.read_flag_count > 0 {
+                stats.scenes += 1;
+                stats.top_scenes.push(TopCount {
+                    name: record.stem.clone(),
+                    value: record.read_flag_count,
+                    entries: 0,
+                });
+            }
         }
-    }
-    read_flag_stats.top_scenes.sort_by(|left, right| {
-        right
-            .value
-            .cmp(&left.value)
-            .then_with(|| {
-                left.name
-                    .to_ascii_lowercase()
-                    .cmp(&right.name.to_ascii_lowercase())
-            })
-            .then_with(|| left.name.cmp(&right.name))
+        stats.top_scenes.sort_by(|left, right| {
+            right
+                .value
+                .cmp(&left.value)
+                .then_with(|| {
+                    left.name
+                        .bytes()
+                        .map(|byte| byte.to_ascii_lowercase())
+                        .cmp(right.name.bytes().map(|byte| byte.to_ascii_lowercase()))
+                })
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        stats.top_scenes.truncate(5);
+        stats
     });
-    read_flag_stats.top_scenes.truncate(5);
 
     for (scene_number, record) in scene_records.iter().enumerate() {
         for (command_id, offset) in &record.command_labels {
@@ -1973,7 +1979,6 @@ fn compile_project_inner(
     };
     if use_lzss {
         for record in &scene_records {
-            let path = bs_dir.join(format!("{}.lzss", record.stem));
             if !record.compiled
                 && let Some(cached_path) = config
                     .cache
@@ -1986,6 +1991,8 @@ fn compile_project_inner(
                 lzss_results.insert(record.stem.clone(), lz);
                 continue;
             }
+            let path =
+                (!config.tmp_dir.is_empty()).then(|| bs_dir.join(format!("{}.lzss", record.stem)));
             lzss_tasks.push((record.stem.clone(), record.dat.as_slice(), path));
         }
     }
@@ -2013,7 +2020,7 @@ fn compile_project_inner(
                     }
                     let mut packed = crate::lzss::pack(dat, false);
                     crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
-                    if !config.tmp_dir.is_empty() {
+                    if let Some(path) = path {
                         fs::write(&path, &packed)
                             .map_err(|error| format_path_error(&path, error))?;
                     }
@@ -2039,7 +2046,7 @@ fn compile_project_inner(
                 }
                 let mut packed = crate::lzss::pack(dat, false);
                 crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
-                if !config.tmp_dir.is_empty() {
+                if let Some(path) = path {
                     fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
                 }
                 log_stage(
@@ -2052,43 +2059,46 @@ fn compile_project_inner(
             }
         }
     }
-    let mut binary_size_stats = BinarySizeStats {
-        lzss_mode: use_lzss,
-        ..BinarySizeStats::default()
-    };
-    for record in &scene_records {
-        let dat_size = record.dat.len();
-        let scn_size =
-            header_value(&parse_scn_header(config, &record.dat), "scn_size").max(0) as usize;
-        let lzss_size = if use_lzss {
-            lzss_results
-                .get(&record.stem)
-                .map(Vec::len)
-                .unwrap_or_default()
-        } else {
-            0
+    let binary_size_stats = FULL_STATS.then(|| {
+        let mut stats = BinarySizeStats {
+            lzss_mode: use_lzss,
+            ..BinarySizeStats::default()
         };
-        binary_size_stats.dat_bytes += dat_size;
-        binary_size_stats.scn_bytes += scn_size;
-        binary_size_stats.lzss_bytes += lzss_size;
-        binary_size_stats.top_dat_scenes.push(TopCount {
-            name: record.stem.clone(),
-            value: dat_size,
-            entries: 0,
+        for record in &scene_records {
+            let dat_size = record.dat.len();
+            let scn_size = scn_header_value(config, &record.dat, "scn_size").max(0) as usize;
+            let lzss_size = if use_lzss {
+                lzss_results
+                    .get(&record.stem)
+                    .map(Vec::len)
+                    .unwrap_or_default()
+            } else {
+                0
+            };
+            stats.dat_bytes += dat_size;
+            stats.scn_bytes += scn_size;
+            stats.lzss_bytes += lzss_size;
+            stats.top_dat_scenes.push(TopCount {
+                name: record.stem.clone(),
+                value: dat_size,
+                entries: 0,
+            });
+        }
+        stats.top_dat_scenes.sort_by(|left, right| {
+            right
+                .value
+                .cmp(&left.value)
+                .then_with(|| {
+                    left.name
+                        .bytes()
+                        .map(|byte| byte.to_ascii_lowercase())
+                        .cmp(right.name.bytes().map(|byte| byte.to_ascii_lowercase()))
+                })
+                .then_with(|| left.name.cmp(&right.name))
         });
-    }
-    binary_size_stats.top_dat_scenes.sort_by(|left, right| {
-        right
-            .value
-            .cmp(&left.value)
-            .then_with(|| {
-                left.name
-                    .to_ascii_lowercase()
-                    .cmp(&right.name.to_ascii_lowercase())
-            })
-            .then_with(|| left.name.cmp(&right.name))
+        stats.top_dat_scenes.truncate(5);
+        stats
     });
-    binary_size_stats.top_dat_scenes.truncate(5);
     let encoded_scenes = scene_records.into_iter().map(|scene| {
         let mut encoded = if use_lzss {
             lzss_results.remove(&scene.stem).unwrap_or_default()
@@ -2135,7 +2145,7 @@ fn compile_project_inner(
         original_source_chunks,
     };
     let pack_layout = PackHeaderLayout {
-        fields: config.constants.pack_header_fields.clone(),
+        fields: &config.constants.pack_header_fields,
         header_size: config.constants.pack_header_size,
     };
     let pack = build_pack_bytes(&pack_layout, &pack_input);
@@ -2145,26 +2155,23 @@ fn compile_project_inner(
     }
     fs::write(&output_path, &pack).map_err(|error| format_path_error(&output_path, error))?;
     write_digest_cache(config)?;
-    let (macro_counts, source_stats, read_flag_stats, binary_size_stats) =
-        if config.cache.full_compile_stats {
-            finalize_source_stats(&mut aggregate_source_stats, &base_ia);
-            (
-                Some(collect_macro_stats(
-                    &base_ia,
-                    &aggregate_scene_macro_counts,
-                    &aggregate_global_usage_delta,
-                )),
-                Some(aggregate_source_stats),
-                Some(read_flag_stats),
-                Some(binary_size_stats),
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let (macro_counts, source_stats) = if FULL_STATS {
+        finalize_source_stats(&mut aggregate_source_stats, &base_ia);
+        (
+            Some(collect_macro_stats(
+                &base_ia,
+                &aggregate_scene_macro_counts,
+                &aggregate_global_usage_delta,
+            )),
+            Some(aggregate_source_stats),
+        )
+    } else {
+        (None, None)
+    };
     Ok(ProjectOutput {
         scene_count: pack_input.scn_name_list.len(),
         compiled_scene_count: config.cache.compiled_scene_files,
-        full_compile_stats: config.cache.full_compile_stats,
+        full_compile_stats: FULL_STATS,
         stage_times: stage_times.clone(),
         macro_counts,
         read_flag_stats,
@@ -2182,7 +2189,13 @@ where
 {
     let mut stdout = OutputLog { streamer };
     let mut stage_times = Vec::new();
-    match compile_project_inner(config, &mut stdout, &mut stage_times) {
+    // Specialize once so disabled statistics add no branches to macro expansion.
+    let result = if config.cache.full_compile_stats {
+        compile_project_inner::<true>(config, &mut stdout, &mut stage_times)
+    } else {
+        compile_project_inner::<false>(config, &mut stdout, &mut stage_times)
+    };
+    match result {
         Ok(output) => Ok(output),
         Err(stderr) => Err(CompileFailure {
             stderr,
