@@ -11,3 +11,5 @@
 9. Keep both language versions of the manuals aligned with the implementation and with each other.
 10. For every diff, manually run and pass all lint checks defined in CI.
 11. Code comments are prohibited.
+12. Do not document scripts/ or CI in either manual or the changelog; they are outside the project's scope.
+13. Do not modify changelog entries for released versions.

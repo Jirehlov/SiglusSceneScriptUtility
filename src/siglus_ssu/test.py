@@ -40,16 +40,17 @@ class _TestResult:
     elapsed: float
     timings: tuple[tuple[str, float], ...]
     profile: int | None
+    allow_invalid: bool | None
 
 
 def _usage(out=None) -> None:
     if out is None:
         out = sys.stderr
     out.write(
-        "usage: siglus-ssu [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
+        "usage: siglus-ssu [--const-profile N] test [--decompile] [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
     )
     out.write(
-        "Round-trip test embedded sources or decompiled scripts; --decompile requires --const-profile.\n"
+        "Explicit --const-profile runs one configuration without fallback; --allow-invalid selects UTF-8 with replacement decoding for embedded sources.\n"
     )
 
 
@@ -507,7 +508,13 @@ def _print_compile_errors(attempts) -> None:
 
 
 def _test_one(
-    path: str, index: int, total: int, serial=False, decompile=False, const_profile=None
+    path: str,
+    index: int,
+    total: int,
+    serial=False,
+    decompile=False,
+    const_profile=None,
+    allow_invalid=False,
 ) -> _TestResult:
     started = time.perf_counter()
     path = os.path.abspath(path)
@@ -518,8 +525,9 @@ def _test_one(
     detail = ""
     original_blob = b""
     result_profile = None
+    result_allow_invalid = None
     try:
-        C.set_profile(const_profile if decompile else 0)
+        C.set_profile(0 if const_profile is None else const_profile)
         step_started = time.perf_counter()
         try:
             original_blob, hdr, err = _read_siglus_pck(path)
@@ -589,6 +597,22 @@ def _test_one(
                     rebuilt_pck,
                     serial=serial,
                     profile=const_profile,
+                )
+            elif const_profile is not None:
+                attempt = _compile_payload_attempt(
+                    path,
+                    original_blob,
+                    extract_dir,
+                    rebuilt_pck,
+                    serial=serial,
+                    profile=const_profile,
+                    allow_invalid=allow_invalid,
+                )
+                result = (
+                    bool(attempt.get("payload_ok")),
+                    const_profile,
+                    [attempt],
+                    attempt if attempt.get("payload_compared") else None,
                 )
             else:
                 result = _compile_payload_with_profile_fallback(
@@ -668,6 +692,7 @@ def _test_one(
                     )
                     status = result
                     result_profile = int(selected_profile)
+                    result_allow_invalid = bool(selected_attempt.get("allow_invalid"))
                     detail = f"profile={int(selected_profile):d} {detail_text}".strip()
     finally:
         if tmp_root:
@@ -691,7 +716,13 @@ def _test_one(
         f"timings={_format_timings(timings)}"
     )
     return _TestResult(
-        path, status, detail, total_elapsed, tuple(timings), result_profile
+        path,
+        status,
+        detail,
+        total_elapsed,
+        tuple(timings),
+        result_profile,
+        result_allow_invalid,
     )
 
 
@@ -705,6 +736,7 @@ def main(argv=None, *, const_profile=None):
     argv, positional_args = split_end_of_options(argv)
     serial = False
     decompile = False
+    allow_invalid = False
     report_json = ""
     filtered = []
     i = 0
@@ -714,6 +746,8 @@ def main(argv=None, *, const_profile=None):
             serial = True
         elif arg == "--decompile":
             decompile = True
+        elif arg == "--allow-invalid":
+            allow_invalid = True
         elif arg == "--report-json":
             if (
                 i + 1 >= len(argv)
@@ -746,6 +780,11 @@ def main(argv=None, *, const_profile=None):
     if decompile and const_profile is None:
         sys.stderr.write("test --decompile requires explicit --const-profile N\n")
         return 2
+    if allow_invalid and (decompile or const_profile is None):
+        sys.stderr.write(
+            "test --allow-invalid requires explicit --const-profile N and embedded sources\n"
+        )
+        return 2
     try:
         input_path = resolve_read_path(argv[0])
     except (FileNotFoundError, NotADirectoryError):
@@ -774,6 +813,7 @@ def main(argv=None, *, const_profile=None):
                 serial=serial,
                 decompile=decompile,
                 const_profile=const_profile,
+                allow_invalid=allow_invalid,
             )
         )
     exact = sum(1 for r in results if r.status == "EXACT")

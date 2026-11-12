@@ -120,7 +120,7 @@ When the Rust extension is available and supports the selected operation, compil
 | `-V`, `--version` | Show the program version and exit. |
 | `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
 | `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. Without `--decompile`, `test` searches all profiles even when this option is supplied. `test --decompile` requires an explicit profile and uses only that profile. |
+| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. `test` uses only an explicitly selected profile, without profile or charset fallback. `test --decompile` requires an explicit profile. |
 | `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profiles `3`, `5`, and `8`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
 
 Global options may appear before or after the mode, but must precede `--`. The forms `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
@@ -155,7 +155,7 @@ Profile `8` defines its tables independently. It uses profile `5`'s command retu
 
 Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence than `||`, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
 
-Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions, and embedded-source `test` automatically tries it after profile `9`. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
+Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions. Embedded-source `test` automatically tries this profile after profile `9` when no explicit profile is supplied. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
 
 Validation using `--serial` covers six samples: LOOPERS, LUNARiA, Summer Pockets, Summer Pockets Starter, and the Android/iOS versions of Summer Pockets Reflection Blue. All `1364` scenes have matching payloads; the complete PCKs for LOOPERS, Summer Pockets and Starter are byte-identical. API and overload coverage is limited to what appears in these samples. The `mobile_*` type names and codes `1000001`-`1000024` are internal placeholders for member resolution; the official object type codes remain unknown and these names must not be treated as official declarable types. Uses that emit these objects as bytecode values have not been verified.
 
@@ -1474,19 +1474,21 @@ With `--decompile`, the command reconstructs scripts from compiled scenes and pa
 #### Syntax
 
 ```bash
-siglus-ssu test [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu [--const-profile N] test [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>
 siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
 `--serial` disables parallel compilation during the rebuild step. Rebuilds are parallel by default.
 
-Directory tests process all `.pck` files sequentially and collect results after individual failures. Without `--decompile`, global `--const-profile` does not restrict the search, which starts at profile `0`. With `--decompile`, every input uses the explicitly selected profile.
+Directory tests process all `.pck` files sequentially and collect results after individual failures. An explicit global `--const-profile N` selects one attempt per input, without profile or charset fallback. Without an explicit profile, embedded-source tests keep the automatic search starting at profile `0`.
 
-`--report-json FILE` writes a top-level `decompile` flag and a `results` list. Each result contains `path`, `status`, `detail`, `elapsed`, `timings`, and `profile`. The `profile` field is `null` for failed or skipped files. The report path must not refer to an input `.pck`.
+`test --allow-invalid` requires an explicit `--const-profile` and embedded-source mode. It passes `--charset utf8 --allow-invalid` to the compiler, replacing invalid input bytes during UTF-8 decoding. Without this option, the selected profile uses normal source decoding. Decompile tests reject `--allow-invalid` and always decode reconstructed sources as strict UTF-8.
+
+`--report-json FILE` writes a top-level `decompile` flag and a `results` list. Each result contains `path`, `status`, `detail`, `elapsed`, `timings`, `profile`, and `allow_invalid`. The `profile` and `allow_invalid` fields are `null` for failed or skipped files. A successful `allow_invalid` value records whether replacement decoding was used. The report path must not refer to an input `.pck`.
 
 #### Workflow
 
-For each `.pck`, the default embedded-source test:
+For each `.pck`, the embedded-source test without an explicit profile:
 
 1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
 2. extracts the archive into a temporary test directory;
@@ -1498,9 +1500,9 @@ With `--decompile`, the command analyzes the PCK, reconstructs scripts under the
 
 #### Output
 
-Step log lines report status only. In the default embedded-source test, a completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. The `compile` and `payload` timings include all attempts across both rounds. Logs identify attempts using `--charset utf8 --allow-invalid`; this retry does not relax the comparison criteria.
+Step log lines report status only. In the default embedded-source test, a completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. The `compile` and `payload` timings include all executed attempts; an explicit profile runs only once. Logs identify attempts using `--charset utf8 --allow-invalid`; this retry does not relax the comparison criteria.
 
-In embedded-source tests, compile errors are kept quiet while attempts remain in either round. If neither round produces a matching rebuild, the file is marked as `FAIL`: the command reports the closest payload comparison, or the captured compile output if no attempt reached comparison.
+In automatic embedded-source tests, compile errors are kept quiet while attempts remain in either round. If neither round produces a matching rebuild, the file is marked as `FAIL`: the command reports the closest payload comparison, or the captured compile output if no attempt reached comparison.
 
 Decompile tests include a `decompile` timing in place of `extract` and report decompilation, compilation, or payload errors for the selected profile without retrying.
 
@@ -1514,6 +1516,7 @@ The command exits with `0` when at least one file is `EXACT` or `PAYLOAD_SAME` a
 siglus-ssu test /path/to/Scene.pck
 siglus-ssu test /path/to/pck_dir/
 siglus-ssu test --report-json /path/to/profiles.json /path/to/pck_dir/
+siglus-ssu --const-profile 2 test --allow-invalid /path/to/Scene.pck
 siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 ```
 

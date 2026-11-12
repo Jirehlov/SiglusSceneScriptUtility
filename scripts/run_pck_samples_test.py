@@ -57,11 +57,11 @@ def _tree_entries(repo: str, ref: str):
     return entries
 
 
-def _pck_entries(repo: str, ref: str, subdir: str):
+def _pck_entries(tree, subdir: str):
     prefix = subdir.strip("/").replace("\\", "/")
     prefix = f"{prefix}/" if prefix else ""
     entries = []
-    for item in _tree_entries(repo, ref):
+    for item in tree:
         path = str(item.get("path") or "")
         if not path.startswith(prefix):
             continue
@@ -80,7 +80,7 @@ def _pck_entries(repo: str, ref: str, subdir: str):
         )
     entries.sort(key=lambda item: item["path"].casefold())
     if not entries:
-        raise RuntimeError(f"No .pck files found under {repo}@{ref}:{subdir}")
+        raise RuntimeError(f"No .pck files found under {subdir}")
     return entries
 
 
@@ -181,7 +181,24 @@ def _drop_stale_samples(entries, work_dir: Path, subdir: str) -> Path:
 
 
 def _prepare_samples(repo: str, ref: str, subdir: str, work_dir: Path) -> Path:
-    entries = _pck_entries(repo, ref, subdir)
+    tree = _tree_entries(repo, ref)
+    entries = _pck_entries(tree, subdir)
+    profile_entry = next(
+        (
+            item
+            for item in tree
+            if item.get("path") == "profiles.json" and item.get("type") == "blob"
+        ),
+        None,
+    )
+    if profile_entry is None:
+        raise RuntimeError(f"No profiles.json found in {repo}@{ref}")
+    _download_file(
+        _raw_url(repo, ref, "profiles.json"),
+        work_dir / "profiles.json",
+        int(profile_entry.get("size") or 0),
+        str(profile_entry.get("sha") or ""),
+    )
     samples_dir = _drop_stale_samples(entries, work_dir, subdir)
     total_size = sum(int(item["size"]) for item in entries)
     print(
@@ -266,36 +283,28 @@ def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
     return 0
 
 
-def _profiles_from_report(report_path: str, pcks: list[Path]) -> dict[Path, int]:
+def _profiles_from_manifest(
+    manifest_path: str, pcks: list[Path]
+) -> dict[Path, tuple[int, bool]]:
     from siglus_ssu import CONST_PROFILE_IDS
 
-    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
-    if not isinstance(report, dict) or report.get("decompile") is not False:
-        raise ValueError("--profiles-from requires an embedded-source test JSON report")
-    results = report.get("results")
-    if not isinstance(results, list):
-        raise ValueError("profile report has no results list")
+    manifest_path = Path(manifest_path).resolve()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise ValueError("--profiles-from requires a sample profile mapping")
     profiles = {}
-    for result in results:
-        if not isinstance(result, dict):
-            raise ValueError("invalid profile report result")
-        if result.get("status") not in ("EXACT", "PAYLOAD_SAME"):
-            continue
-        profile = result.get("profile")
-        if type(profile) is not int or profile not in CONST_PROFILE_IDS:
-            raise ValueError("profile report contains an invalid successful profile")
-        path = result.get("path")
-        if not isinstance(path, str) or not path:
-            raise ValueError("profile report contains an invalid sample path")
-        path = Path(path).resolve()
-        if path in profiles:
-            raise ValueError(f"profile report contains duplicate results for {path}")
-        profiles[path] = profile
     for path in pcks:
-        if path not in profiles:
-            raise ValueError(
-                f"no successful embedded-source profile recorded for {path}"
-            )
+        key = path.relative_to(manifest_path.parent).as_posix()
+        entry = manifest.get(key)
+        if not isinstance(entry, dict):
+            raise ValueError(f"no preset profile recorded for {key}")
+        profile = entry.get("profile")
+        allow_invalid = entry.get("allow_invalid", False)
+        if type(profile) is not int or profile not in CONST_PROFILE_IDS:
+            raise ValueError(f"invalid preset profile for {key}")
+        if type(allow_invalid) is not bool:
+            raise ValueError(f"invalid allow_invalid setting for {key}")
+        profiles[path] = (profile, allow_invalid)
     return profiles
 
 
@@ -320,24 +329,21 @@ def _run_siglus_test(
         and any(report_path.samefile(path) for path in pcks)
     ):
         raise ValueError("--report-json must not overwrite an input .pck")
+    if profiles_from and report_path == Path(profiles_from).resolve():
+        raise ValueError("--report-json must not overwrite the profile mapping")
     report_results = []
-    profiles = {}
-    if decompile:
-        profiles = (
-            _profiles_from_report(profiles_from, pcks)
-            if profiles_from
-            else dict.fromkeys(pcks, const_profile)
-        )
+    profiles = (
+        _profiles_from_manifest(profiles_from, pcks)
+        if profiles_from
+        else dict.fromkeys(pcks, (const_profile, False))
+    )
     for index, path in enumerate(pcks, 1):
+        profile, allow_invalid = profiles[path]
+        cmd = prefix + ["--const-profile", str(profile), "test"]
         if decompile:
-            cmd = prefix + [
-                "--const-profile",
-                str(profiles[path]),
-                "test",
-                "--decompile",
-            ]
-        else:
-            cmd = prefix + ["test"]
+            cmd.append("--decompile")
+        elif allow_invalid:
+            cmd.append("--allow-invalid")
         if serial:
             cmd.append("--serial")
         if report_path is not None:
@@ -392,21 +398,18 @@ def main(argv=None) -> int:
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--download-only", action="store_true")
     args = parser.parse_args(argv)
-    if args.decompile:
-        if args.const_profile is None and not args.profiles_from:
-            parser.error("--decompile requires --const-profile or --profiles-from")
-        if args.report_json:
-            parser.error(
-                "--report-json is only used to record embedded-source profiles"
-            )
-    elif args.const_profile is not None or args.profiles_from:
-        parser.error("--const-profile and --profiles-from require --decompile")
+    from siglus_ssu import CONST_PROFILE_IDS
+
+    if args.const_profile is not None and args.const_profile not in CONST_PROFILE_IDS:
+        parser.error("invalid --const-profile")
+    if args.decompile and args.report_json:
+        parser.error("--report-json is only used to record embedded-source profiles")
 
     if args.samples_dir:
         samples_dir = Path(args.samples_dir).resolve()
     else:
         if args.list_only:
-            entries = _pck_entries(args.repo, args.ref, args.subdir)
+            entries = _pck_entries(_tree_entries(args.repo, args.ref), args.subdir)
             for item in entries:
                 print(f"{item['path']}\t{item['size']}\t{item['sha']}")
             print(f"total={len(entries)}")
@@ -430,7 +433,12 @@ def main(argv=None) -> int:
         args.expected_status,
         decompile=bool(args.decompile),
         const_profile=args.const_profile,
-        profiles_from=args.profiles_from,
+        profiles_from=args.profiles_from
+        or (
+            str(samples_dir.parent / "profiles.json")
+            if args.const_profile is None
+            else ""
+        ),
         report_json=args.report_json,
     )
 

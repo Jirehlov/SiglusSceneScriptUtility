@@ -155,13 +155,14 @@ def _usage():
         "    --allow-partial   Write a language patch even when part of the selected preset is unavailable\n"
         "\n"
         "Test mode:\n"
-        f"  {p} [--const-profile N] test [--decompile] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
+        f"  {p} [--const-profile N] test [--decompile] [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
         "    input_dir      Tests .pck files directly under the directory\n"
         "    --decompile    Require --const-profile N; decompile and rebuild only that profile, checking payload equality\n"
+        "    --allow-invalid With explicit --const-profile, recompile embedded sources as UTF-8 with replacement decoding; no fallback\n"
         "    --serial       Disable parallel compilation during rebuild\n"
         "    --report-json  Write per-file results and successful profiles as JSON\n"
         "    output         Reports EXACT/PAYLOAD_SAME/SKIP/FAIL and timings; --decompile success is always PAYLOAD_SAME\n"
-        f"    const-profile  Embedded-source tests try profiles {', '.join(map(str, CONST_PROFILE_IDS))}, then retry with --charset utf8 --allow-invalid; --decompile has no fallback\n"
+        f"    const-profile  Explicit N selects one configuration without fallback; otherwise embedded-source tests try profiles {', '.join(map(str, CONST_PROFILE_IDS))}, then retry with --charset utf8 --allow-invalid\n"
     )
     sys.stdout.write(text)
 

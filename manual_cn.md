@@ -120,7 +120,7 @@ Rust 扩展可用且支持所选操作时，编译、场景反汇编、反编译
 | `-V`, `--version` | 显示程序版本并退出。 |
 | `--legacy` | 强制使用 Python 编译 backend，但仍保留 LZSS 等 native helper。可用于比较编译行为。 |
 | `--legacy-full` | 禁用全部 Rust 原生加速，并在可用处使用纯 Python 回退实现。可用于排查 native 扩展问题。 |
-| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`10`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。不带 `--decompile` 时，`test` 即使收到此选项也会搜索所有 profile。`test --decompile` 必须显式指定 profile，并且只使用该 profile。 |
+| `--const-profile N` | 选择内置的 `const.py` profile（`0`-`10`，默认 `0`），控制 form / element 表、命令的消息块、已读标记与选择块规则、是否允许 command 外局部 property、逻辑运算优先级、z-label 上限、具名整数引用参数，以及默认场景字符串 XOR 乘数。各 profile 的适用引擎见下表。不能与 `-c --tmp` 同用。`test` 在显式指定 profile 后只使用该 profile，不再回退尝试其他 profile 或解码设置。`test --decompile` 必须显式指定 profile。 |
 | `--string-xor-multiplier N` | 覆盖编码和解码场景字符串时使用的 XOR key 乘数，计算方式为 `(string_index * N) & 0xFFFF`（profile `3`、`5` 和 `8` 默认 `0`，其他 profile 默认 `0x7087`）。显式传入的值优先于 profile 默认值。在编译模式下，一个值作用于全部场景；修改该值会使 `--tmp` 中已编译的场景缓存失效。对于直接以 UTF-16LE 存储且不使用 XOR 的场景字符串，可设为 `0`。有效范围为 `0` 至 `0xFFFF`，支持十进制和 `0x` 十六进制写法。 |
 
 全局选项可放在模式之前或之后，但必须放在 `--` 之前。`--const-profile=N` 和 `--string-xor-multiplier=N` 的写法也有效。
@@ -155,7 +155,7 @@ Profile `8` 独立、完整地定义全部配置。其命令返回类型、消�
 
 Profile `9` 独立、完整地定义全部配置表。它与 profile `2` 的唯一元素差异，是将编号 `47` 定义为 `worldlist` 类型的 `global.world` 属性，替代 `global.msgbtn`；同一编号的两种不兼容含义由不同 profile 隔离。它保留 profile `2` 的命令返回类型、消息块、已读标记与选择块规则、默认乘数 `0x7087`、`&&` 高于 `||` 的优先级和 `1000` 项 z-label 表，禁止 command 外局部 property，且具名整数引用参数表为空。Python 与 Rust 共用这些包内定义；升级程序会同步更新所有 profile。
 
-Profile `10` 是为 FlixEngine（移动端 SiglusEngine）高度重建的 profile，依据 PCK 内嵌源码与原始 DAT 的对应关系反推。该 profile 独立保存与 profile `0` 相同的基础规则，补充移动端 UI、触摸、联网、商店与扩展资源接口，并将 `global.message_box` 改为返回 `int`、支持具名参数 `title_str`。Python 与 Rust 共用这些定义，普通源码回编 `test` 会在 profile `9` 之后自动尝试该 profile。可用 `siglus-ssu --const-profile 10 -c src out.pck` 显式选择。
+Profile `10` 是为 FlixEngine（移动端 SiglusEngine）高度重建的 profile，依据 PCK 内嵌源码与原始 DAT 的对应关系反推。该 profile 独立保存与 profile `0` 相同的基础规则，补充移动端 UI、触摸、联网、商店与扩展资源接口，并将 `global.message_box` 改为返回 `int`、支持具名参数 `title_str`。Python 与 Rust 共用这些定义。未显式指定 profile 的源码回编 `test` 会在 profile `9` 之后自动尝试该 profile。可用 `siglus-ssu --const-profile 10 -c src out.pck` 显式选择。
 
 该 profile 已在 `--serial` 回编中通过 LOOPERS、LUNARiA、Summer Pockets、Summer Pockets Starter，以及 Summer Pockets Reflection Blue 的 Android / iOS 六份样本验证，共 `1364` 个场景的 payload 一致；其中 LOOPERS、Summer Pockets 和 Starter 的整个 PCK 字节一致。覆盖范围限于样本中出现的接口与重载。`mobile_*` 类型名及 `1000001`-`1000024` 编号是供成员解析使用的内部占位标识，官方对象类型编号尚未恢复；不要将其当作官方可声明类型。将此类对象作为值写入字节码的用法尚未验证。
 
@@ -1474,19 +1474,21 @@ LOC   : enabled (original function, func=0x22BF20)
 #### 语法
 
 ```bash
-siglus-ssu test [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu [--const-profile N] test [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>
 siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
 `--serial` 会在回编阶段禁用并行编译；默认使用并行编译。
 
-目录测试会顺序处理全部 `.pck`，并在单个文件失败后继续收集结果。不带 `--decompile` 时，全局 `--const-profile` 不限制搜索范围，搜索始终从 profile `0` 开始。带 `--decompile` 时，每个输入都使用显式指定的 profile。
+目录测试会顺序处理全部 `.pck`，并在单个文件失败后继续收集结果。显式指定全局 `--const-profile N` 后，每个输入只尝试一次指定配置，不再回退尝试其他 profile 或解码设置。未显式指定 profile 的内嵌源码测试保留从 profile `0` 开始的自动搜索。
 
-`--report-json FILE` 写出顶层 `decompile` 标志及 `results` 列表。每条结果包含 `path`、`status`、`detail`、`elapsed`、`timings` 和 `profile`。失败或跳过文件的 `profile` 字段为 `null`。报告路径不能指向输入 `.pck`。
+`test --allow-invalid` 仅适用于显式指定 `--const-profile` 的内嵌源码测试，会向编译器传入 `--charset utf8 --allow-invalid`，以替换无效字节的方式解码 UTF-8。未提供该选项时，指定 profile 按通常方式解码源码。反编译测试不接受 `--allow-invalid`，始终按严格 UTF-8 解码重建源码。
+
+`--report-json FILE` 写出顶层 `decompile` 标志及 `results` 列表。每条结果包含 `path`、`status`、`detail`、`elapsed`、`timings`、`profile` 和 `allow_invalid`。失败或跳过文件的 `profile` 和 `allow_invalid` 字段为 `null`。成功结果的 `allow_invalid` 字段记录是否使用了替换解码。报告路径不能指向输入 `.pck`。
 
 #### 流程
 
-普通回编测试会对每个 `.pck` 执行以下步骤：
+未显式指定 profile 的内嵌源码回编测试会对每个 `.pck` 执行以下步骤：
 
 1. 分析文件头，检查 `original_source_header_size` 是否表示存在 OS 区段；
 2. 将 archive 解压到临时测试目录；
@@ -1498,9 +1500,9 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 
 #### 输出
 
-分步骤日志只显示状态。普通回编测试会将回编 `.pck` 字节完全一致的结果记为 `EXACT`，将字节不一致但规范化 payload 一致的结果记为 `PAYLOAD_SAME`。不再使用 `PASS` 分类。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。`compile` 和 `payload` 耗时包括两轮中的全部尝试。日志会标明使用了 `--charset utf8 --allow-invalid` 的尝试；重试不放宽比较标准。
+分步骤日志只显示状态。普通回编测试会将回编 `.pck` 字节完全一致的结果记为 `EXACT`，将字节不一致但规范化 payload 一致的结果记为 `PAYLOAD_SAME`。不再使用 `PASS` 分类。`total` 行和最终汇总会记录已执行步骤的耗时，包括 `analyze`、`extract`、`compile`、`payload` 和 `cleanup`。`compile` 和 `payload` 耗时包括实际执行的全部尝试；显式指定 profile 时只有一次。日志会标明使用了 `--charset utf8 --allow-invalid` 的尝试；重试不放宽比较标准。
 
-普通回编测试会先静默捕获编译错误，在两轮都未得到匹配结果时将文件标记为 `FAIL`，并报告最接近的 payload 比较结果或捕获的编译输出。
+自动搜索 profile 的回编测试会先静默捕获编译错误，在两轮都未得到匹配结果时将文件标记为 `FAIL`，并报告最接近的 payload 比较结果或捕获的编译输出。
 
 反编译测试通过 `decompile` 记录提取和重建源码的耗时，不单独记录 `extract`，并直接报告指定 profile 下的反编译、编译或 payload 错误，不进行重试。
 
@@ -1514,6 +1516,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 siglus-ssu test /path/to/Scene.pck
 siglus-ssu test /path/to/pck_dir/
 siglus-ssu test --report-json /path/to/profiles.json /path/to/pck_dir/
+siglus-ssu --const-profile 2 test --allow-invalid /path/to/Scene.pck
 siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 ```
 
