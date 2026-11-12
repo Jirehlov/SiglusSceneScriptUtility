@@ -811,7 +811,7 @@ impl<'a> BytecodeBuilder<'a> {
 pub fn compile_root(
     root: &AstNode,
     ia_data: &IaData,
-    strings: impl Into<Vec<String>>,
+    strings: Vec<String>,
     label_count: usize,
     call_property_names: Vec<String>,
     read_flag_atoms: Option<&mut Vec<i32>>,
@@ -832,13 +832,9 @@ pub fn compile_root(
         default_arg_fills: 0,
     };
     builder.compile_node(root)?;
-    let user_properties = ia_data
-        .property_list
-        .iter()
-        .skip(ia_data.inc_property_cnt.max(0) as usize);
     let mut scn_prop_list = Vec::new();
     let mut scn_prop_name_list = Vec::new();
-    for property in user_properties {
+    for property in &ia_data.property_list {
         let form = ia_data
             .form_table
             .form_code_of(&property.form)
@@ -853,7 +849,7 @@ pub fn compile_root(
         .map(|command| command.name.clone())
         .collect();
     let scene = SceneDatInput {
-        str_list: strings.into(),
+        str_list: strings,
         scn_bytes: builder.stream,
         label_list: builder.label_list,
         z_label_list: builder.z_label_list,

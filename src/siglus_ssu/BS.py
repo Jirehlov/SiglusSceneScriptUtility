@@ -124,7 +124,7 @@ def copy_ia_data(base):
         "name_set": set(base["name_set"]),
         "macro_defs": list(base["macro_defs"]),
         "macro_map": dict(base["macro_map"]),
-        "property_list": [copy.deepcopy(p) for p in base["property_list"]],
+        "property_list": list(base["property_list"]),
         "command_list": [copy.deepcopy(c) for c in base["command_list"]],
         "property_cnt": base["property_cnt"],
         "command_cnt": base["command_cnt"],
@@ -630,7 +630,7 @@ def _mk_index_list(strings):
     idx = []
     ofs = 0
     for s in strings:
-        n = len(_u16(s))
+        n = len(s.encode("utf-16le", "surrogatepass")) // 2
         idx.append((ofs, n))
         ofs += n
     return idx
@@ -645,9 +645,6 @@ class BinaryStream:
     def size(s):
         return len(s.buf)
 
-    def to_bytes(s):
-        return bytes(s.buf)
-
     def push_u8(s, v):
         s.buf.extend(struct.pack("<B", int(v) & 0xFF))
 
@@ -656,7 +653,7 @@ class BinaryStream:
 
 
 def build_scn_dat(plad, out_scn):
-    b = bytearray(b"\0" * C.SCN_HDR_SIZE)
+    b = bytearray(C.SCN_HDR_SIZE)
     h = {"header_size": C.SCN_HDR_SIZE}
 
     def sec(ok, ck, ofs, cnt):
@@ -674,15 +671,13 @@ def build_scn_dat(plad, out_scn):
             _MSR.shuffle(order)
     idx_src = out_scn.get("str_index_list")
     use_idx = isinstance(idx_src, (list, tuple)) and len(idx_src) == n
-    idx = [(0, 0)] * n
     u16_map = {}
     if use_idx:
-        for i in range(n):
-            it = idx_src[i]
-            idx[i] = (int(it[0]), int(it[1]))
+        idx = idx_src
         for orig in order:
             u16_map[orig] = _u16(sl[orig])
     else:
+        idx = [(0, 0)] * n
         ofs = 0
         for orig in order:
             u = _u16(sl[orig])
@@ -696,7 +691,7 @@ def build_scn_dat(plad, out_scn):
         k = scene_string_xor_key(orig)
         for w in u16_map[orig]:
             write_u16_le(b, (w ^ k) & 0xFFFF)
-    scn = bytes(out_scn.get("scn_bytes") or b"")
+    scn = out_scn.get("scn_bytes") or b""
     sec("scn_ofs", "scn_size", len(b), len(scn))
     b.extend(scn)
     label_list = out_scn.get("label_list") or []
@@ -1653,7 +1648,7 @@ class BS:
             str_index_list = [(0, 0)] * str_cnt
             out_scn["str_list"] = [sl[i] for i in str_sort_index]
             for orig in str_sort_index:
-                ln = len(_u16(sl[orig]))
+                ln = len(sl[orig].encode("utf-16le", "surrogatepass")) // 2
                 str_index_list[orig] = (ofs, ln)
                 ofs += ln
             out_scn["str_index_list"] = str_index_list
@@ -1673,7 +1668,7 @@ class BS:
             ofs = 0
             idx = []
             for nm in out_scn["scn_prop_name_list"]:
-                ln = len(_u16(nm))
+                ln = len(nm.encode("utf-16le", "surrogatepass")) // 2
                 idx.append((ofs, ln))
                 ofs += ln
             out_scn["scn_prop_name_index_list"] = idx
@@ -1682,7 +1677,7 @@ class BS:
             ofs = 0
             idx = []
             for nm in out_scn["scn_cmd_name_list"]:
-                ln = len(_u16(nm))
+                ln = len(nm.encode("utf-16le", "surrogatepass")) // 2
                 idx.append((ofs, ln))
                 ofs += ln
             out_scn["scn_cmd_name_index_list"] = idx
@@ -1690,14 +1685,14 @@ class BS:
             ofs = 0
             idx = []
             for nm in out_scn["call_prop_name_list"]:
-                ln = len(_u16(nm))
+                ln = len(nm.encode("utf-16le", "surrogatepass")) // 2
                 idx.append((ofs, ln))
                 ofs += ln
             out_scn["call_prop_name_index_list"] = idx
             s.out_scn = out_scn
             if not s.bs_ss(psad["root"]):
                 return 0
-            out_scn["scn_bytes"] = out_scn["scn"].to_bytes()
+            out_scn["scn_bytes"] = out_scn["scn"].buf
             out = build_scn_dat(plad, out_scn)
         except Exception:
             return 0

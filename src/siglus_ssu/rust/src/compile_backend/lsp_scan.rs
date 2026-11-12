@@ -679,7 +679,7 @@ pub fn lsp_scan_document(
     read_flags: bool,
 ) -> PyResult<Py<PyDict>> {
     let source_text = text.replace('\r', "");
-    let mut ia_data = project.base_ia.clone();
+    let mut ia_data = project.base_ia.for_scene();
     let mut ca = CharacterAnalyzer::new(true);
     let file1 = match ca.analyze_file_1(&source_text) {
         Ok(value) => value,
@@ -753,7 +753,7 @@ pub fn lsp_scan_document(
         && compile_root(
             &root,
             &ia_data,
-            lex.str_list.as_slice(),
+            Vec::new(),
             lex.label_list.len(),
             call_property_names,
             read_flag_atoms.as_mut(),

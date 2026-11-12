@@ -542,7 +542,7 @@ def _py_smd5_digest(data: bytes) -> bytes:
             nokori = 0
             data_cnt = 0
         else:
-            blk = bytes(add_data[:64])
+            blk = add_data[:64]
         X = struct.unpack("<16I", blk)
         a, b, c, d = st
         for i in range(64):

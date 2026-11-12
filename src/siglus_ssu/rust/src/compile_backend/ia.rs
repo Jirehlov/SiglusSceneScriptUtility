@@ -35,11 +35,16 @@ pub struct IncCommand {
     pub is_defined: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
+pub struct MacroUsage {
+    pub decl_type: &'static str,
+    pub used_count: usize,
+}
+
 pub struct IaData {
     pub replace_tree: ReplaceTree,
     pub name_set: Arc<HashSet<String>>,
-    pub macro_defs: Vec<Replacement>,
+    pub macro_usage: Vec<MacroUsage>,
     pub macro_map: HashMap<String, usize>,
     pub property_cnt: i32,
     pub command_cnt: i32,
@@ -111,7 +116,7 @@ impl IaData {
         Self {
             replace_tree: ReplaceTree::default(),
             name_set: Arc::new(defined_names.into_iter().collect()),
-            macro_defs: Vec::new(),
+            macro_usage: Vec::new(),
             macro_map: HashMap::new(),
             property_cnt: 0,
             command_cnt: 0,
@@ -125,6 +130,24 @@ impl IaData {
         }
     }
 
+    pub fn for_scene(&self) -> Self {
+        Self {
+            replace_tree: self.replace_tree.clone(),
+            name_set: self.name_set.clone(),
+            macro_usage: self.macro_usage.clone(),
+            macro_map: self.macro_map.clone(),
+            property_cnt: self.property_cnt,
+            command_cnt: self.command_cnt,
+            inc_property_cnt: self.inc_property_cnt,
+            inc_command_cnt: self.inc_command_cnt,
+            property_list: Vec::new(),
+            command_list: self.command_list.clone(),
+            command_indices: self.command_indices.clone(),
+            form_table: self.form_table.clone(),
+            codes: self.codes.clone(),
+        }
+    }
+
     pub fn add_command(&mut self, command: IncCommand) {
         Arc::make_mut(&mut self.command_indices)
             .entry(command.name.clone())
@@ -133,12 +156,15 @@ impl IaData {
     }
 
     fn add_replacement<const TRACK_USAGE: bool>(&mut self, replacement: Replacement) {
-        // Expansion uses the tree; the duplicate definitions and index serve statistics.
         if TRACK_USAGE {
-            self.replace_tree.add(replacement.clone());
-            self.macro_map
-                .insert(replacement.name.clone(), self.macro_defs.len());
-            self.macro_defs.push(replacement);
+            let usage = MacroUsage {
+                decl_type: replacement.decl_type,
+                used_count: 0,
+            };
+            let name = replacement.name.clone();
+            self.replace_tree.add(replacement);
+            self.macro_map.insert(name, self.macro_usage.len());
+            self.macro_usage.push(usage);
         } else {
             self.replace_tree.add(replacement);
         }
@@ -146,9 +172,9 @@ impl IaData {
 
     pub fn record_named_usage(&mut self, name: &str) {
         if let Some(index) = self.macro_map.get(name).copied()
-            && let Some(replacement) = self.macro_defs.get_mut(index)
+            && let Some(usage) = self.macro_usage.get_mut(index)
         {
-            replacement.used_count += 1;
+            usage.used_count += 1;
         }
     }
 
@@ -937,24 +963,19 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             } else {
                 "define"
             };
+            self.record_decl(record_kind, &name, line, name_start, name_end);
             iad.add_replacement::<TRACK_USAGE>(Replacement {
                 kind: if kind == "replace" {
                     ReplaceKind::Replace
                 } else {
                     ReplaceKind::Define
                 },
-                name: name.clone(),
+                name,
                 after,
                 args: Vec::new(),
-                used_count: 0,
-                decl_type: if TRACK_USAGE {
-                    kind.to_string()
-                } else {
-                    String::new()
-                },
+                decl_type: if TRACK_USAGE { kind } else { "" },
                 source: self.take_replacement_source(record_kind),
             });
-            self.record_decl(record_kind, &name, line, name_start, name_end);
             return Ok((next, line2));
         }
         if kind == "macro" {
@@ -973,20 +994,15 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 return self.err(line2, format!("{name} is declared twice."));
             }
             Arc::make_mut(&mut iad.name_set).insert(name.clone());
+            self.record_decl("macro", &name, line, name_start, name_end);
             iad.add_replacement::<TRACK_USAGE>(Replacement {
                 kind: ReplaceKind::Macro,
-                name: name.clone(),
+                name,
                 after,
                 args,
-                used_count: 0,
-                decl_type: if TRACK_USAGE {
-                    "macro".to_string()
-                } else {
-                    String::new()
-                },
+                decl_type: if TRACK_USAGE { "macro" } else { "" },
                 source: self.take_replacement_source("macro"),
             });
-            self.record_decl("macro", &name, line, name_start, name_end);
             return Ok((next, line2));
         }
         if kind == "property" {

@@ -341,7 +341,7 @@ def parallel_compile(
 
 def _lzss_compress_task(
     args: tuple[str, bytes, str, bytes],
-) -> tuple[str, bytes, bytes, Exception | None]:
+) -> tuple[str, bytes, bytes | bytearray, Exception | None]:
     nm, dat, lz_path, easy_code = args
     try:
         from .linker import compress_scene_dat
@@ -354,7 +354,7 @@ def _lzss_compress_task(
 
 def parallel_lzss_compress(
     ctx: dict, scn_names: list[str], bs_dir: str
-) -> tuple[list[bytes], list[bytes]]:
+) -> tuple[list[bytes], list[bytes | bytearray]]:
     from .common import format_scene_name, read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""

@@ -26,8 +26,7 @@ pub struct Replacement {
     pub name: String,
     pub after: String,
     pub args: Vec<MacroArg>,
-    pub used_count: usize,
-    pub decl_type: String,
+    pub decl_type: &'static str,
     pub source: Option<Arc<ReplacementSource>>,
 }
 
@@ -751,12 +750,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                 name: arg.name.clone(),
                 after: expanded.text,
                 args: Vec::new(),
-                used_count: 0,
-                decl_type: if TRACK_USAGE {
-                    "parameter".to_string()
-                } else {
-                    String::new()
-                },
+                decl_type: if TRACK_USAGE { "parameter" } else { "" },
                 source: expanded.map.map(|map| {
                     Arc::new(ReplacementSource {
                         map,

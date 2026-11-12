@@ -51,11 +51,11 @@ impl<'a> OutputLog<'a> {
     }
 }
 
-struct SceneTask {
-    name: String,
+struct SceneTask<'a> {
+    name: &'a str,
     key: String,
-    display_name: String,
-    status_display_name: String,
+    display_name: &'a str,
+    status_display_name: &'a str,
     path: PathBuf,
 }
 
@@ -345,11 +345,14 @@ fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, String> {
-    let name = file_name(path);
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
     config
         .context
         .source_texts
-        .get(&name)
+        .get(name)
         .map(String::as_str)
         .ok_or_else(|| format!("source text not loaded: {}", path.display()))
 }
@@ -398,7 +401,7 @@ fn line_error(prefix: &str, line: usize, message: &str) -> String {
     format!("{prefix} line({line}): {message}")
 }
 
-fn scene_display_name(config: &CompileConfig, name: &str) -> String {
+fn scene_display_name<'a>(config: &'a CompileConfig, name: &'a str) -> &'a str {
     let base_name = Path::new(name)
         .file_name()
         .and_then(|value| value.to_str())
@@ -407,26 +410,22 @@ fn scene_display_name(config: &CompileConfig, name: &str) -> String {
         .context
         .scene_display_names
         .get(base_name)
-        .cloned()
-        .unwrap_or_else(|| base_name.to_string())
+        .map(String::as_str)
+        .unwrap_or(base_name)
 }
 
-fn scene_compile_display_name(config: &CompileConfig, name: &str, workers: usize) -> String {
+fn scene_compile_display_name<'a>(
+    config: &'a CompileConfig,
+    name: &'a str,
+    workers: usize,
+) -> &'a str {
     if workers > 1 {
         return Path::new(name)
             .file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or(name)
-            .to_string();
+            .unwrap_or(name);
     }
     scene_display_name(config, name)
-}
-
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_string()
 }
 
 fn lower_file_name(name: &str) -> String {
@@ -558,20 +557,6 @@ fn max_counter(
     }
 }
 
-fn macro_decl_kind(decl_type: &str, kind: &super::ca::ReplaceKind) -> &'static str {
-    match decl_type {
-        "replace" => "replace",
-        "define" => "define",
-        "define_s" => "define_s",
-        "macro" => "macro",
-        _ => match kind {
-            super::ca::ReplaceKind::Replace => "replace",
-            super::ca::ReplaceKind::Define => "define",
-            super::ca::ReplaceKind::Macro => "macro",
-        },
-    }
-}
-
 fn empty_macro_stats() -> MacroStats {
     let mut stats = MacroStats::default();
     for kind in ["replace", "define", "define_s", "macro"] {
@@ -593,23 +578,22 @@ fn merge_macro_stats(dst: &mut MacroStats, src: &MacroStats) {
 
 fn scene_macro_stats(ia_data: &IaData, base_ia: &IaData) -> (MacroStats, BTreeMap<usize, usize>) {
     let mut counts = empty_macro_stats();
-    let base_count = base_ia.macro_defs.len();
-    for replacement in ia_data.macro_defs.iter().skip(base_count) {
-        let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
+    let base_count = base_ia.macro_usage.len();
+    for usage in ia_data.macro_usage.iter().skip(base_count) {
         let bucket = counts
             .buckets
-            .get_mut(kind)
+            .get_mut(usage.decl_type)
             .expect("initialized macro bucket");
         bucket.total += 1;
-        if replacement.used_count == 0 {
+        if usage.used_count == 0 {
             bucket.unused += 1;
         }
     }
     let mut usage_delta = BTreeMap::new();
-    for (index, replacement) in base_ia.macro_defs.iter().enumerate() {
-        let before = replacement.used_count;
+    for (index, usage) in base_ia.macro_usage.iter().enumerate() {
+        let before = usage.used_count;
         let after = ia_data
-            .macro_defs
+            .macro_usage
             .get(index)
             .map(|value| value.used_count)
             .unwrap_or_default();
@@ -626,15 +610,14 @@ fn collect_macro_stats(
     global_usage_delta: &BTreeMap<usize, usize>,
 ) -> MacroStats {
     let mut counts = empty_macro_stats();
-    for (index, replacement) in base_ia.macro_defs.iter().enumerate() {
-        let kind = macro_decl_kind(&replacement.decl_type, &replacement.kind);
+    for (index, usage) in base_ia.macro_usage.iter().enumerate() {
         let bucket = counts
             .buckets
-            .get_mut(kind)
+            .get_mut(usage.decl_type)
             .expect("initialized macro bucket");
         bucket.total += 1;
         let extra = global_usage_delta.get(&index).copied().unwrap_or_default();
-        if replacement.used_count + extra == 0 {
+        if usage.used_count + extra == 0 {
             bucket.unused += 1;
         }
     }
@@ -731,7 +714,12 @@ fn finalize_source_stats(stats: &mut SourceStats, ia_data: &IaData) {
     );
 }
 
-fn operator_symbol(codes: &RuntimeCodes, operator: i32, unary: bool) -> String {
+fn inc_operator_counter<const ASSIGNMENT: bool>(
+    counter: &mut BTreeMap<String, usize>,
+    codes: &RuntimeCodes,
+    operator: i32,
+    unary: bool,
+) {
     let unary_pairs = [
         (codes.op.plus, "+"),
         (codes.op.minus, "-"),
@@ -762,17 +750,18 @@ fn operator_symbol(codes: &RuntimeCodes, operator: i32, unary: bool) -> String {
     let pairs: &[(i32, &str)] = if unary { &unary_pairs } else { &binary_pairs };
     for (code, symbol) in pairs {
         if operator == *code {
-            return symbol.to_string();
+            if ASSIGNMENT {
+                inc_counter(counter, format!("{symbol}="), 1);
+            } else {
+                inc_counter(counter, *symbol, 1);
+            }
+            return;
         }
     }
-    format!("op{operator}")
-}
-
-fn assign_operator_symbol(codes: &RuntimeCodes, operator: i32) -> String {
-    if operator == codes.op.none {
-        "=".to_string()
+    if ASSIGNMENT {
+        inc_counter(counter, format!("op{operator}="), 1);
     } else {
-        format!("{}=", operator_symbol(codes, operator, false))
+        inc_counter(counter, format!("op{operator}"), 1);
     }
 }
 
@@ -940,29 +929,26 @@ fn visit_expression_stats(root: &AstNode, stats: &mut SourceStats, codes: &Runti
     while let Some((node, depth)) = pending.pop() {
         match &node.payload {
             AstPayload::Assign { operator, .. } => {
-                inc_counter(
-                    &mut stats.assign_ops,
-                    assign_operator_symbol(codes, *operator),
-                    1,
-                );
+                if *operator == codes.op.none {
+                    inc_counter(&mut stats.assign_ops, "=", 1);
+                } else {
+                    inc_operator_counter::<true>(&mut stats.assign_ops, codes, *operator, false);
+                }
             }
             AstPayload::Unary { operators, .. } => {
                 inc_counter(&mut stats.expressions, "unary_ops", operators.len());
                 for (operator, _) in operators {
-                    inc_counter(
+                    inc_operator_counter::<false>(
                         &mut stats.unary_op_kinds,
-                        operator_symbol(codes, *operator, true),
-                        1,
+                        codes,
+                        *operator,
+                        true,
                     );
                 }
             }
             AstPayload::Binary { operator, .. } => {
                 inc_counter(&mut stats.expressions, "binary_ops", 1);
-                inc_counter(
-                    &mut stats.binary_op_kinds,
-                    operator_symbol(codes, *operator, false),
-                    1,
-                );
+                inc_operator_counter::<false>(&mut stats.binary_op_kinds, codes, *operator, false);
             }
             AstPayload::Goto { args, .. } => {
                 inc_counter(&mut stats.expressions, "named_args", args.named_count);
@@ -1338,7 +1324,7 @@ fn build_original_source_chunks(
         let mut out = Vec::new();
         for (name, path) in sources {
             let stage_start = Instant::now();
-            log_stage(log, "OS", &scene_display_name(config, &name))?;
+            log_stage(log, "OS", scene_display_name(config, &name))?;
             let owned_source;
             let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
                 raw.as_slice()
@@ -1394,7 +1380,11 @@ fn build_global_ia<const FULL_STATS: bool>(
     let mut scratch_list = Vec::new();
     for name in &config.context.inc_list {
         let path = source_path(base, name);
-        let display_name = file_name(&path);
+        let display_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_string();
         log_stage(log, "IA", &display_name)?;
         let text = read_source(config, &path)?;
         let mut analyzer = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
@@ -1439,7 +1429,7 @@ fn prepare_scene<const FULL_STATS: bool>(
     warnings: &mut Vec<String>,
 ) -> Result<PreparedScene, String> {
     let source = read_source(config, source_path)?;
-    let mut ia_data = base_ia.clone();
+    let mut ia_data = base_ia.for_scene();
     let mut ca = CharacterAnalyzer::<FULL_STATS>::new_with_usage_tracking(false);
     if let Some(log) = log.as_mut() {
         log_stage(log, "CA", display_name)?;
@@ -1765,7 +1755,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         .scn_list
         .iter()
         .map(|name| SceneTask {
-            name: name.clone(),
+            name: name.as_str(),
             key: lower_file_name(name),
             display_name: scene_compile_display_name(config, name, compile_workers),
             status_display_name: scene_display_name(config, name),
@@ -1792,12 +1782,12 @@ fn compile_project_inner<const FULL_STATS: bool>(
             || MsvcRand::new(1),
             |worker_rand, task| {
                 let key = task.key.as_str();
-                let status = task.status_display_name.as_str();
+                let status = task.status_display_name;
                 let mut warnings = Vec::new();
                 let result = match prepare_scene::<FULL_STATS>(
                     config,
                     &task.path,
-                    &task.display_name,
+                    task.display_name,
                     &base_ia,
                     None,
                     None,
@@ -1805,7 +1795,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 ) {
                     Ok(mut scene) => {
                         if scene.stem.is_empty() {
-                            scene.stem = scene_stem(&task.name);
+                            scene.stem = scene_stem(task.name);
                         }
                         Ok(finalize_scene(config, scene, worker_rand))
                     }
@@ -1848,14 +1838,14 @@ fn compile_project_inner<const FULL_STATS: bool>(
             let mut scene = prepare_scene::<FULL_STATS>(
                 config,
                 &task.path,
-                &task.display_name,
+                task.display_name,
                 &base_ia,
                 Some(&mut *stdout),
                 Some(stage_times),
                 &mut Vec::new(),
             )?;
             if scene.stem.is_empty() {
-                scene.stem = scene_stem(&task.name);
+                scene.stem = scene_stem(task.name);
             }
             compiled.push((task.key.as_str(), finalize_scene(config, scene, &mut rand)));
         }
@@ -1893,7 +1883,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 compiled: true,
             }
         } else {
-            let stem = scene_stem(&task.name);
+            let stem = scene_stem(task.name);
             let key = stem.to_ascii_lowercase();
             let dat_path = config
                 .cache
@@ -2053,7 +2043,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 log_stage(
                     stdout,
                     "LZSS",
-                    &scene_display_name(config, &format!("{stem}.ss")),
+                    scene_display_name(config, &format!("{stem}.ss")),
                 )?;
                 lzss_results.insert(stem, packed);
                 record_stage_time(stage_times, "LZSS", stage_start);

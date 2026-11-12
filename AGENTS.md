@@ -13,3 +13,5 @@
 11. Code comments are prohibited.
 12. Do not document scripts/ or CI in either manual or the changelog; they are outside the project's scope.
 13. Do not modify changelog entries for released versions.
+14. Avoid pure forwarding functions with only a few references.
+15. Unsafe Rust is prohibited.

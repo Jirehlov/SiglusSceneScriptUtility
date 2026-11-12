@@ -66,9 +66,8 @@ def compress_scene_dat(dat, lz_path, easy_code):
         raise RuntimeError("ctx.easy_angou_code is not set")
     packed = bytearray(lzss_pack(dat))
     xor_cycle_inplace(packed, easy_code, 0)
-    result = bytes(packed)
-    write_bytes(lz_path, result)
-    return result
+    write_bytes(lz_path, packed)
+    return packed
 
 
 def _load_scene_data(ctx, scn_names, lzss_mode):
@@ -148,7 +147,7 @@ def _build_index_list_for_strings(strs):
         idx.append((ofs_units, n))
         blob.extend(raw)
         ofs_units += n
-    return idx, bytes(blob)
+    return idx, blob
 
 
 def _build_pack_bytes(
@@ -182,7 +181,7 @@ def _build_pack_bytes(
     for blob in scn_data_list:
         scn_data_idx.append((scn_data_size, len(blob)))
         scn_data_size += len(blob)
-    b = bytearray(b"\0" * C.PACK_HDR_SIZE)
+    b = bytearray(C.PACK_HDR_SIZE)
 
     def _push(sec):
         ofs = len(b)
@@ -345,7 +344,7 @@ def link_pack(ctx):
         for blob in noangou_scene_data:
             b = bytearray(blob)
             xor_cycle_inplace(b, exe_el, 0)
-            scene_data.append(bytes(b))
+            scene_data.append(b)
     pack = _build_pack_bytes(
         inc_props,
         inc_cmd_name_list,

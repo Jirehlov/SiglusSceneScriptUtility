@@ -139,9 +139,9 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
         raise ValueError("source_angou_encrypt: missing header_size")
     lz = lzss_pack(data)
     lzsz = len(lz)
-    b = bytearray(lz)
-    xor_cycle_inplace(b, eg, int(sa.get("easy_index", 0)))
-    lz = bytes(b)
+    lzb = bytearray(lz)
+    xor_cycle_inplace(lzb, eg, int(sa.get("easy_index", 0)))
+    lz = bytes(lzb)
     smd5 = smd5_digest(lz)
     smd5_code = bytearray(68)
     smd5_code[: len(smd5)] = smd5
@@ -152,7 +152,7 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
         smd5_code, sa, mg, lzsz
     )
-    lzb = bytearray(lz) + bytearray(mapt * 2 - lzsz)
+    lzb.extend(bytearray(mapt * 2 - lzsz))
     cnt = len(lzb) - lzsz
     if cnt > 0:
         ind = int(sa.get("gomi_index", 0))
@@ -288,9 +288,7 @@ def _compile_cache_state(
                         full_compile = True
                         break
         bs_dir = os.path.join(tmp_dir, "bs")
-        if full_compile:
-            compile_list = list(ss or [])
-        else:
+        if not full_compile:
             old_ss = old.get("ss") or {}
             comp = set()
             for p in ss or []:
@@ -860,7 +858,7 @@ def _native_compile_constants_config():
                     [int(C._FORM_CODE.get(parent, 0) or 0), element_code]
                 )
     return {
-        "form_code": dict(C._FORM_CODE),
+        "form_code": C._FORM_CODE,
         "form_names": {
             name: str(getattr(C, name))
             for name in (
@@ -882,7 +880,7 @@ def _native_compile_constants_config():
                 "FM_STRREF",
             )
         },
-        "la_type": {str(name): int(value) for name, value in C.LA_T.items()},
+        "la_type": C.LA_T,
         "op_code": {
             name: int(getattr(C, name)) for name in dir(C) if name.startswith("OP_")
         },
@@ -913,7 +911,7 @@ def _native_compile_constants_config():
         "exe_org": bytes(C.EXE_ORG),
         "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
         "exe_angou_b_idx": [int(x) for x in C.EXE_ANGOU_B_IDX],
-        "source_angou": dict(C.SOURCE_ANGOU),
+        "source_angou": C.SOURCE_ANGOU,
         "message_block_command_codes": [
             [int(parent), int(code)] for parent, code in C.MESSAGE_BLOCK_COMMAND_CODES
         ],
@@ -944,7 +942,7 @@ def _native_compile_config(
     if not args.tmp_dir and not args.debug:
         tmp_dir = ""
     scene_display_names = {}
-    for scn_name in list(ctx.get("scn_list") or []):
+    for scn_name in ctx.get("scn_list") or []:
         scene_display_names[os.path.basename(str(scn_name))] = format_scene_name(
             scn_name, ctx
         )
@@ -982,11 +980,11 @@ def _native_compile_config(
                 and not angou_content
                 else b""
             ),
-            "scn_list": list(ctx.get("scn_list") or []),
+            "scn_list": ctx.get("scn_list") or [],
             "scene_display_names": scene_display_names,
-            "inc_list": list(ctx.get("inc_list") or []),
-            "ini_list": list(ctx.get("ini_list") or []),
-            "source_texts": dict(ctx.get("source_texts") or {}),
+            "inc_list": ctx.get("inc_list") or [],
+            "ini_list": ctx.get("ini_list") or [],
+            "source_texts": ctx.get("source_texts") or {},
             "source_bytes": ctx["source_bytes"],
             "utf8": bool(ctx.get("utf8")),
             "debug_outputs": bool(ctx.get("debug_outputs")),
