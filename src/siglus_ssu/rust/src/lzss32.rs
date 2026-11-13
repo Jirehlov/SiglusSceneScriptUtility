@@ -111,7 +111,6 @@ impl LzssTree {
 
 struct LzssTreeFind<'a> {
     src: &'a [u32],
-    src_cnt: usize,
     window_size: usize,
     max_match_len: usize,
     src_index: usize,
@@ -125,7 +124,6 @@ impl<'a> LzssTreeFind<'a> {
     fn new(src: &'a [u32], window_size: usize, look_ahead_size: usize) -> Self {
         Self {
             src,
-            src_cnt: src.len(),
             window_size,
             max_match_len: look_ahead_size,
             src_index: 0,
@@ -145,7 +143,7 @@ impl<'a> LzssTreeFind<'a> {
             let mut target = self.tree.get_root_big();
             self.match_size = 0;
             let mut matching_loop_cnt = self.max_match_len;
-            let src_left = self.src_cnt.saturating_sub(self.src_index);
+            let src_left = self.src.len().saturating_sub(self.src_index);
             if src_left == 0 {
                 return;
             }
@@ -211,13 +209,13 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
     let bit_mask = [1u8, 2, 4, 8, 16, 32, 64, 128];
 
     loop {
-        if tree_find.src_index >= tree_find.src_cnt {
+        if tree_find.src_index >= tree_find.src.len() {
             break;
         }
         if replace_cnt > 0 {
             tree_find.proc(replace_cnt);
         }
-        if tree_find.src_index >= tree_find.src_cnt {
+        if tree_find.src_index >= tree_find.src.len() {
             break;
         }
         if tree_find.match_size == BREAK_EVEN {

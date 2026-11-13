@@ -30,7 +30,7 @@ pub type SourceBinding = (SourceBindingKind, String, bool, bool);
 pub struct SemanticAnalyzer<'a> {
     pub ia_data: &'a mut IaData,
     strings: &'a mut Vec<String>,
-    codes: Arc<RuntimeCodes>,
+    codes: &'a RuntimeCodes,
     pub last: Option<SemanticErrorInfo>,
     pub call_property_names: Vec<String>,
     pub current_call_property_count: i32,
@@ -41,8 +41,11 @@ pub struct SemanticAnalyzer<'a> {
 }
 
 impl<'a> SemanticAnalyzer<'a> {
-    pub fn new(ia_data: &'a mut IaData, strings: &'a mut Vec<String>) -> Self {
-        let codes = ia_data.codes.clone();
+    pub fn new(
+        ia_data: &'a mut IaData,
+        strings: &'a mut Vec<String>,
+        codes: &'a RuntimeCodes,
+    ) -> Self {
         Self {
             ia_data,
             strings,
@@ -150,26 +153,24 @@ impl<'a> SemanticAnalyzer<'a> {
         self.codes.element_type.command
     }
 
-    fn check_argument_list(&mut self, info: &ElementInfo, real: &mut ArgumentList) -> Option<i32> {
-        let mut ids: Vec<i32> = info
-            .arg_map
-            .keys()
-            .copied()
-            .filter(|id| *id != -1)
-            .collect();
-        ids.sort_unstable();
-        for id in ids {
-            let Some(expected) = info.arg_map.get(&id) else {
-                continue;
-            };
+    fn check_argument_list<'src>(
+        &mut self,
+        info: &ElementInfo,
+        real: &mut ArgumentList<'src>,
+    ) -> Option<i32> {
+        for (id, expected) in &info.arg_lists {
             if self.check_positional_arguments(&expected.arg_list, real) {
-                return self.check_named_arguments(info, real).then_some(id);
+                return self.check_named_arguments(info, real).then_some(*id);
             }
         }
         None
     }
 
-    fn check_positional_arguments(&self, expected: &[ArgInfo], real: &mut ArgumentList) -> bool {
+    fn check_positional_arguments<'src>(
+        &self,
+        expected: &[ArgInfo],
+        real: &mut ArgumentList<'src>,
+    ) -> bool {
         let positional_count = real.args.len().saturating_sub(real.named_count);
         let mut matched = 0usize;
         let mut variadic_form = None;
@@ -227,16 +228,20 @@ impl<'a> SemanticAnalyzer<'a> {
         true
     }
 
-    fn check_named_arguments(&mut self, info: &ElementInfo, real: &mut ArgumentList) -> bool {
+    fn check_named_arguments<'src>(
+        &mut self,
+        info: &ElementInfo,
+        real: &mut ArgumentList<'src>,
+    ) -> bool {
         if real.named_count == 0 {
             return true;
         }
-        let Some(named_list) = info.arg_map.get(&-1) else {
+        let Some(named_list) = info.named_args.as_ref() else {
             return false;
         };
         let named_start = real.args.len() - real.named_count;
         for argument in &mut real.args[named_start..] {
-            let name = argument.name.as_deref().unwrap_or_default();
+            let name = argument.name.unwrap_or_default();
             let Some(expected) = named_list.arg_list.iter().find(|item| item.name == name) else {
                 return false;
             };
@@ -260,13 +265,6 @@ impl<'a> SemanticAnalyzer<'a> {
             argument.name_id = expected.id;
         }
         true
-    }
-
-    fn is_selection_command(&self, parent: &str, element_code: i32) -> bool {
-        self.codes.selection_command_codes.contains(&(
-            self.codes.form_bytecode[&self.form_code(parent)],
-            element_code,
-        ))
     }
 
     fn binary_result(&self, left: i32, right: i32, operator: i32) -> i32 {
@@ -320,7 +318,7 @@ impl<'a> SemanticAnalyzer<'a> {
         self.codes.forms.void.code
     }
 
-    fn simple_form(&self, node: &mut AstNode) -> Option<i32> {
+    fn simple_form<'src>(&self, node: &mut AstNode<'src>) -> Option<i32> {
         let form = match &node.payload {
             AstPayload::Literal { atom } => {
                 if atom.atom_type == self.codes.la.val_int {
@@ -347,7 +345,7 @@ impl<'a> SemanticAnalyzer<'a> {
         Some(form)
     }
 
-    fn bounded_expression(node: &AstNode, remaining: &mut usize) -> bool {
+    fn bounded_expression<'src>(node: &AstNode<'src>, remaining: &mut usize) -> bool {
         if *remaining == 0
             || !matches!(
                 node.payload,
@@ -372,9 +370,9 @@ impl<'a> SemanticAnalyzer<'a> {
         valid
     }
 
-    fn try_expression(
+    fn try_expression<'src>(
         &mut self,
-        node: &mut AstNode,
+        node: &mut AstNode<'src>,
         selection: &mut bool,
     ) -> Option<Result<i32, ()>> {
         if let Some(form) = self.simple_form(node) {
@@ -383,17 +381,18 @@ impl<'a> SemanticAnalyzer<'a> {
         Self::bounded_expression(node, &mut 64).then(|| self.small_expression(node, selection))
     }
 
-    fn prepare_element_expression(
+    fn prepare_element_expression<'src, T>(
         &mut self,
-        node: &mut AstNode,
+        node: &mut AstNode<'src>,
         allow_bare_string: bool,
-    ) -> Result<Option<String>, ()> {
-        let (first_name, first_atom, single_plain) = match &node.payload {
+        resolved: impl FnOnce(&Arc<ElementInfo>, i32) -> T,
+    ) -> Result<Option<(&'a str, T)>, ()> {
+        let (first_name, first_element, single_plain) = match &node.payload {
             AstPayload::ElementExpression { elements, .. } => {
                 let first = elements.first();
                 (
-                    first.and_then(|element| element.name.as_deref()),
-                    first.and_then(|element| element.name_atom.as_ref()),
+                    first.and_then(|element| element.name),
+                    first,
                     elements.len() == 1
                         && first.is_some_and(|element| {
                             element.array_index.is_none() && element.args.args.is_empty()
@@ -403,23 +402,35 @@ impl<'a> SemanticAnalyzer<'a> {
             _ => return self.fail("TNMSERR_MA_ELEMENT_UNKNOWN", node.line, None),
         };
         let first_name = first_name.unwrap_or_default();
-        if let Some((_, parent)) = self.ia_data.form_table.find(first_name) {
-            return Ok(Some(parent.to_string()));
+        for parent in [
+            &self.codes.forms.call,
+            &self.codes.forms.scene,
+            &self.codes.forms.global,
+        ] {
+            if let Some(info) = self.ia_data.form_table.get(&parent.name, first_name) {
+                return Ok(Some((parent.name.as_str(), resolved(info, parent.code))));
+            }
         }
         if allow_bare_string
             && single_plain
             && !first_name.contains('@')
             && !first_name.contains('$')
         {
-            let mut atom = first_atom.cloned().unwrap_or(Atom {
-                id: 0,
-                line: node.line,
+            let (id, line, subopt) = first_element
+                .and_then(|element| {
+                    element
+                        .name_atom
+                        .as_ref()
+                        .map(|atom| (atom.id, element.line, atom.subopt))
+                })
+                .unwrap_or((0, node.line, 0));
+            let atom = Atom {
+                id,
+                line,
                 atom_type: self.codes.la.val_str,
-                opt: 0,
-                subopt: 0,
-            });
-            atom.atom_type = self.codes.la.val_str;
-            atom.opt = self.strings.len() as i32;
+                opt: self.strings.len() as i32,
+                subopt,
+            };
             self.strings.push(first_name.to_string());
             node.payload = AstPayload::Literal { atom };
             node.form = self.codes.forms.str_.code;
@@ -433,21 +444,24 @@ impl<'a> SemanticAnalyzer<'a> {
         )
     }
 
-    fn element_parent(&self, form: i32) -> String {
-        self.ia_data
-            .form_table
-            .code_form
-            .get(&form)
-            .cloned()
-            .unwrap_or_else(|| self.codes.forms.void.name.clone())
+    fn element_parent(&self, form: i32) -> (&'a str, i32) {
+        self.codes
+            .form_names
+            .get(form as usize)
+            .map(|name| (name.as_str(), form))
+            .unwrap_or((
+                self.codes.forms.void.name.as_str(),
+                self.codes.forms.void.code,
+            ))
     }
 
-    fn prepare_named_element(
+    fn prepare_named_element<'src>(
         &mut self,
         parent: &str,
-        element: &mut ElementPart,
+        parent_form: i32,
+        element: &mut ElementPart<'src>,
     ) -> Result<Arc<ElementInfo>, ()> {
-        let name = element.name.as_deref().expect("named element");
+        let name = element.name.expect("named element");
         let Some(info) = self.ia_data.form_table.get(parent, name).cloned() else {
             return self.fail(
                 "TNMSERR_MA_ELEMENT_UNKNOWN",
@@ -460,7 +474,7 @@ impl<'a> SemanticAnalyzer<'a> {
             ElementKind::Property => self.codes.element_type.property,
             ElementKind::Command => self.codes.element_type.command,
         };
-        element.parent_form = self.form_code(parent);
+        element.parent_form = parent_form;
         element.form = self.form_code(&info.form);
         if let Some(atom) = element.name_atom.as_ref() {
             self.record_binding(atom.id, parent, &info);
@@ -468,10 +482,9 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(info)
     }
 
-    fn finish_command_element(
+    fn finish_command_element<'src>(
         &mut self,
-        parent: &str,
-        element: &mut ElementPart,
+        element: &mut ElementPart<'src>,
         info: &ElementInfo,
         argument_selection: bool,
         selection: &mut bool,
@@ -483,16 +496,19 @@ impl<'a> SemanticAnalyzer<'a> {
             return self.fail("TNMSERR_MA_ARG_TYPE_NO_MATCH", element.line, None);
         };
         element.arg_list_id = argument_list_id;
-        if self.is_selection_command(parent, info.code) {
+        if self.codes.selection_command_codes.contains(&(
+            self.codes.form_bytecode[element.parent_form as usize],
+            info.code,
+        )) {
             *selection = true;
         }
         Ok(())
     }
 
-    fn finish_array_element(
+    fn finish_array_element<'src>(
         &mut self,
-        parent: &str,
-        element: &mut ElementPart,
+        parent_form: i32,
+        element: &mut ElementPart<'src>,
         info: &ElementInfo,
         index_form: i32,
         index_selection: bool,
@@ -509,26 +525,31 @@ impl<'a> SemanticAnalyzer<'a> {
             ElementKind::Property => self.codes.element_type.property,
             ElementKind::Command => self.codes.element_type.command,
         };
-        element.parent_form = self.form_code(parent);
+        element.parent_form = parent_form;
         element.form = self.form_code(&info.form);
         Ok((element.form, element.element_type))
     }
 
-    fn small_element(
+    fn small_element<'src, F>(
         &mut self,
         parent: &str,
-        element: &mut ElementPart,
+        parent_form: i32,
+        element: &mut ElementPart<'src>,
         selection: &mut bool,
-    ) -> Result<(i32, i32), ()> {
+        resolve: F,
+    ) -> Result<(i32, i32), ()>
+    where
+        F: FnOnce(&mut Self, &str, i32, &mut ElementPart<'src>) -> Result<Arc<ElementInfo>, ()>,
+    {
         if element.name.is_some() {
-            let info = self.prepare_named_element(parent, element)?;
+            let info = resolve(self, parent, parent_form, element)?;
             if info.kind == ElementKind::Command {
                 let mut argument_selection = false;
                 for argument in &mut element.args.args {
                     argument.value.temp_form =
                         self.small_expression(&mut argument.value, &mut argument_selection)?;
                 }
-                self.finish_command_element(parent, element, &info, argument_selection, selection)?;
+                self.finish_command_element(element, &info, argument_selection, selection)?;
             }
             return Ok((element.form, element.element_type));
         }
@@ -540,16 +561,20 @@ impl<'a> SemanticAnalyzer<'a> {
         };
         let mut index_selection = false;
         let index_form = self.small_expression(index, &mut index_selection)?;
-        self.finish_array_element(parent, element, &info, index_form, index_selection)
+        self.finish_array_element(parent_form, element, &info, index_form, index_selection)
     }
 
-    fn small_element_expression(
+    fn small_element_expression<'src>(
         &mut self,
-        node: &mut AstNode,
+        node: &mut AstNode<'src>,
         selection: &mut bool,
         allow_bare_string: bool,
     ) -> Result<i32, ()> {
-        let Some(mut parent) = self.prepare_element_expression(node, allow_bare_string)? else {
+        let Some((parent, (info, parent_form))) =
+            self.prepare_element_expression(node, allow_bare_string, |info, parent_form| {
+                (Arc::clone(info), parent_form)
+            })?
+        else {
             return Ok(self.codes.forms.str_.code);
         };
         let AstPayload::ElementExpression {
@@ -562,10 +587,37 @@ impl<'a> SemanticAnalyzer<'a> {
         let mut current_form = self.codes.forms.void.code;
         let mut current_type = 0;
         if let Some((first, rest)) = elements.split_first_mut() {
-            (current_form, current_type) = self.small_element(&parent, first, selection)?;
+            (current_form, current_type) = self.small_element(
+                parent,
+                parent_form,
+                first,
+                selection,
+                move |analyzer: &mut Self,
+                      parent: &str,
+                      parent_form: i32,
+                      element: &mut ElementPart<'src>| {
+                    element.element_code = info.code;
+                    element.element_type = match info.kind {
+                        ElementKind::Property => analyzer.codes.element_type.property,
+                        ElementKind::Command => analyzer.codes.element_type.command,
+                    };
+                    element.parent_form = parent_form;
+                    element.form = analyzer.form_code(&info.form);
+                    if let Some(atom) = element.name_atom.as_ref() {
+                        analyzer.record_binding(atom.id, parent, &info);
+                    }
+                    Ok(info)
+                },
+            )?;
             for element in rest {
-                parent = self.element_parent(current_form);
-                (current_form, current_type) = self.small_element(&parent, element, selection)?;
+                let (parent, parent_form) = self.element_parent(current_form);
+                (current_form, current_type) = self.small_element(
+                    parent,
+                    parent_form,
+                    element,
+                    selection,
+                    Self::prepare_named_element,
+                )?;
             }
         }
         *element_type = current_type;
@@ -577,7 +629,11 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(current_form)
     }
 
-    fn small_expression(&mut self, node: &mut AstNode, selection: &mut bool) -> Result<i32, ()> {
+    fn small_expression<'src>(
+        &mut self,
+        node: &mut AstNode<'src>,
+        selection: &mut bool,
+    ) -> Result<i32, ()> {
         if let Some(form) = self.simple_form(node) {
             return Ok(form);
         }
@@ -636,7 +692,7 @@ impl<'a> SemanticAnalyzer<'a> {
         Ok(form)
     }
 
-    pub fn analyze(&mut self, root: AstNode) -> Result<AstNode, ()> {
+    pub fn analyze<'src>(&mut self, root: AstNode<'src>) -> Result<AstNode<'src>, ()> {
         self.last = None;
         let executor = Executor::new();
         let session = Box::new(SemanticSession { analyzer: self });
@@ -659,7 +715,7 @@ macro_rules! semantic_try {
 
 macro_rules! semantic_step {
     ($state:ident, $executor:ident, analyze_node($node:expr, $selection:expr $(,)?)) => {{
-        let node: &mut AstNode = &mut *($node);
+        let node: &mut AstNode<'_> = &mut *($node);
         let selection: &mut bool = &mut *($selection);
         if let Some(result) = $state.analyzer.try_expression(node, selection) {
             result
@@ -678,7 +734,7 @@ macro_rules! semantic_step {
         }
     }};
     ($state:ident, $executor:ident, analyze_statements($statements:expr $(,)?)) => {{
-        let statements: &mut Vec<AstNode> = &mut *($statements);
+        let statements: &mut Vec<AstNode<'_>> = &mut *($statements);
         let (result, (analyzed_statements,), session) = $state
             .analyze_statements($executor.clone(), std::mem::take(statements))
             .await;
@@ -687,7 +743,7 @@ macro_rules! semantic_step {
         result
     }};
     ($state:ident, $executor:ident, analyze_form($form:expr $(,)?)) => {{
-        let form: &mut FormSpec = &mut *($form);
+        let form: &mut FormSpec<'_> = &mut *($form);
         let (result, (analyzed_form,), session) = $state
             .analyze_form($executor.clone(), std::mem::take(form))
             .await;
@@ -697,8 +753,8 @@ macro_rules! semantic_step {
     }};
     ($state:ident, $executor:ident, add_call_property($line:expr, $name:expr, $form:expr, $property_id:expr $(,)?)) => {{
         let line = $line;
-        let name: String = ($name).to_owned();
-        let form: &mut FormSpec = &mut *($form);
+        let name: String = str::to_owned($name);
+        let form: &mut FormSpec<'_> = &mut *($form);
         let property_id: &mut i32 = &mut *($property_id);
         let (result, (analyzed_form, resolved_property_id), session) = $state
             .add_call_property(
@@ -715,7 +771,7 @@ macro_rules! semantic_step {
         result
     }};
     ($state:ident, $executor:ident, analyze_parameter($parameter:expr $(,)?)) => {{
-        let parameter: &mut Parameter = &mut *($parameter);
+        let parameter: &mut Parameter<'_> = &mut *($parameter);
         let (result, (analyzed_parameter,), session) = $state
             .analyze_parameter($executor.clone(), std::mem::take(parameter))
             .await;
@@ -724,7 +780,7 @@ macro_rules! semantic_step {
         result
     }};
     ($state:ident, $executor:ident, analyze_arguments($arguments:expr, $selection:expr $(,)?)) => {{
-        let arguments: &mut ArgumentList = &mut *($arguments);
+        let arguments: &mut ArgumentList<'_> = &mut *($arguments);
         let selection: &mut bool = &mut *($selection);
         let (result, (analyzed_arguments, analyzed_selection), session) = $state
             .analyze_arguments(
@@ -739,7 +795,7 @@ macro_rules! semantic_step {
         result
     }};
     ($state:ident, $executor:ident, analyze_element_expression($node:expr, $selection:expr, $allow_bare_string:expr $(,)?)) => {{
-        let node: &mut AstNode = &mut *($node);
+        let node: &mut AstNode<'_> = &mut *($node);
         let selection: &mut bool = &mut *($selection);
         let allow_bare_string = $allow_bare_string;
         if SemanticAnalyzer::bounded_expression(node, &mut 64) {
@@ -761,14 +817,16 @@ macro_rules! semantic_step {
             result
         }
     }};
-    ($state:ident, $executor:ident, analyze_element($parent:expr, $element:expr, $selection:expr $(,)?)) => {{
-        let parent: String = ($parent).to_owned();
-        let element: &mut ElementPart = &mut *($element);
+    ($state:ident, $executor:ident, analyze_element($parent:expr, $parent_form:expr, $element:expr, $selection:expr $(,)?)) => {{
+        let parent = $parent;
+        let parent_form = $parent_form;
+        let element: &mut ElementPart<'_> = &mut *($element);
         let selection: &mut bool = &mut *($selection);
         let (result, (analyzed_element, analyzed_selection), session) = $state
             .analyze_element(
                 $executor.clone(),
                 parent,
+                parent_form,
                 std::mem::take(element),
                 std::mem::take(selection),
             )
@@ -785,11 +843,11 @@ struct SemanticSession<'a, 'data> {
 }
 
 impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
-    async fn analyze_statements(
+    async fn analyze_statements<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        statements: Vec<AstNode>,
-    ) -> (Result<(), ()>, (Vec<AstNode>,), Box<Self>) {
+        statements: Vec<AstNode<'src>>,
+    ) -> (Result<(), ()>, (Vec<AstNode<'src>>,), Box<Self>) {
         let mut input = (statements,);
         let result = {
             let statements = &mut input.0;
@@ -822,11 +880,11 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_form(
+    async fn analyze_form<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        form: FormSpec,
-    ) -> (Result<(), ()>, (FormSpec,), Box<Self>) {
+        form: FormSpec<'src>,
+    ) -> (Result<(), ()>, (FormSpec<'src>,), Box<Self>) {
         let mut input = (form,);
         let result = {
             let form = &mut input.0;
@@ -854,14 +912,14 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn add_call_property(
+    async fn add_call_property<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
         line: usize,
         name: String,
-        form: FormSpec,
+        form: FormSpec<'src>,
         property_id: i32,
-    ) -> (Result<(), ()>, (FormSpec, i32), Box<Self>) {
+    ) -> (Result<(), ()>, (FormSpec<'src>, i32), Box<Self>) {
         let mut input = (form, property_id);
         let result = {
             let form = &mut input.0;
@@ -903,7 +961,8 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                     code,
                     name: name.clone(),
                     form: form.name.clone(),
-                    arg_map: Default::default(),
+                    arg_lists: Vec::new(),
+                    named_args: None,
                     origin: "call".to_string(),
                 },
             );
@@ -916,11 +975,11 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_parameter(
+    async fn analyze_parameter<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        parameter: Parameter,
-    ) -> (Result<(), ()>, (Parameter,), Box<Self>) {
+        parameter: Parameter<'src>,
+    ) -> (Result<(), ()>, (Parameter<'src>,), Box<Self>) {
         let mut input = (parameter,);
         let result = {
             let parameter = &mut input.0;
@@ -954,12 +1013,12 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_node(
+    async fn analyze_node<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        node: AstNode,
+        node: AstNode<'src>,
         selection: bool,
-    ) -> (Result<i32, ()>, (AstNode, bool), Box<Self>) {
+    ) -> (Result<i32, ()>, (AstNode<'src>, bool), Box<Self>) {
         let mut input = (node, selection);
         let result = {
             let node = &mut input.0;
@@ -1025,7 +1084,7 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                         } else {
                             SourceBindingKind::LocalCommand
                         };
-                        bindings.insert(name_atom.id, (kind, name.clone(), true, false));
+                        bindings.insert(name_atom.id, (kind, (*name).to_owned(), true, false));
                     }
                     for parameter in parameters {
                         semantic_try!(
@@ -1462,12 +1521,12 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_arguments(
+    async fn analyze_arguments<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        arguments: ArgumentList,
+        arguments: ArgumentList<'src>,
         selection: bool,
-    ) -> (Result<(), ()>, (ArgumentList, bool), Box<Self>) {
+    ) -> (Result<(), ()>, (ArgumentList<'src>, bool), Box<Self>) {
         let mut input = (arguments, selection);
         let result = {
             let arguments = &mut input.0;
@@ -1485,22 +1544,25 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_element_expression(
+    async fn analyze_element_expression<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        node: AstNode,
+        node: AstNode<'src>,
         selection: bool,
         allow_bare_string: bool,
-    ) -> (Result<i32, ()>, (AstNode, bool), Box<Self>) {
+    ) -> (Result<i32, ()>, (AstNode<'src>, bool), Box<Self>) {
         let mut input = (node, selection);
         let result = {
             let node = &mut input.0;
             let selection = &mut input.1;
-            let Some(mut parent) = semantic_try!(
+            let Some((parent, parent_form)) = semantic_try!(
                 self,
                 input,
-                self.analyzer
-                    .prepare_element_expression(node, allow_bare_string)
+                self.analyzer.prepare_element_expression(
+                    node,
+                    allow_bare_string,
+                    |_, parent_form| parent_form
+                )
             ) else {
                 return (Ok(self.analyzer.codes.forms.str_.code), input, self);
             };
@@ -1517,17 +1579,21 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                 (current_form, current_type) = semantic_try!(
                     self,
                     input,
-                    semantic_step!(self, executor, analyze_element(&parent, first, selection))
+                    semantic_step!(
+                        self,
+                        executor,
+                        analyze_element(parent, parent_form, first, selection)
+                    )
                 );
                 for element in rest {
-                    parent = self.analyzer.element_parent(current_form);
+                    let (parent, parent_form) = self.analyzer.element_parent(current_form);
                     (current_form, current_type) = semantic_try!(
                         self,
                         input,
                         semantic_step!(
                             self,
                             executor,
-                            analyze_element(&parent, element, selection)
+                            analyze_element(parent, parent_form, element, selection)
                         )
                     );
                 }
@@ -1543,23 +1609,24 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
         (result, input, self)
     }
 
-    async fn analyze_element(
+    async fn analyze_element<'src: 'a>(
         mut self: Box<Self>,
         executor: Executor<'a>,
-        parent: String,
-        element: ElementPart,
+        parent: &'data str,
+        parent_form: i32,
+        element: ElementPart<'src>,
         selection: bool,
-    ) -> (Result<(i32, i32), ()>, (ElementPart, bool), Box<Self>) {
+    ) -> (Result<(i32, i32), ()>, (ElementPart<'src>, bool), Box<Self>) {
         let mut input = (element, selection);
         let result = {
-            let parent = parent.as_str();
             let element = &mut input.0;
             let selection = &mut input.1;
             if element.name.is_some() {
                 let info = semantic_try!(
                     self,
                     input,
-                    self.analyzer.prepare_named_element(parent, element)
+                    self.analyzer
+                        .prepare_named_element(parent, parent_form, element)
                 );
                 if info.kind == ElementKind::Command {
                     let mut argument_selection = false;
@@ -1576,7 +1643,6 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                         self,
                         input,
                         self.analyzer.finish_command_element(
-                            parent,
                             element,
                             &info,
                             argument_selection,
@@ -1610,8 +1676,13 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                 input,
                 semantic_step!(self, executor, analyze_node(index, &mut index_selection))
             );
-            self.analyzer
-                .finish_array_element(parent, element, &info, index_form, index_selection)
+            self.analyzer.finish_array_element(
+                parent_form,
+                element,
+                &info,
+                index_form,
+                index_selection,
+            )
         };
         (result, input, self)
     }

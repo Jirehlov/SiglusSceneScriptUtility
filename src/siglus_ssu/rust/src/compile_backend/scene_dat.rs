@@ -128,6 +128,7 @@ pub fn build_scn_dat(
     layout: &ScnHeaderLayout<'_>,
     input: &SceneDatInput,
     string_xor_multiplier: u16,
+    string_units: impl FnOnce(usize),
 ) -> Vec<u8> {
     let mut out = vec![0u8; layout.header_size];
     let mut header: HashMap<&'static str, i32> = HashMap::new();
@@ -145,7 +146,8 @@ pub fn build_scn_dat(
         n,
     );
     out.resize(index_ofs + n * 8, 0);
-    section(&mut header, "str_list_ofs", "str_cnt", out.len(), n);
+    let string_data_ofs = out.len();
+    section(&mut header, "str_list_ofs", "str_cnt", string_data_ofs, n);
     let mut ofs = 0i32;
     for &orig in order {
         let start = out.len();
@@ -160,6 +162,8 @@ pub fn build_scn_dat(
         out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
         ofs = ofs.wrapping_add(len);
     }
+
+    string_units((out.len() - string_data_ofs) / 2);
 
     section(
         &mut header,

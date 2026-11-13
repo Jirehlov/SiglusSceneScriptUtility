@@ -224,7 +224,7 @@ fn label_symbol_id(path_identity: &str, name: &str) -> String {
     format!("label:{path_identity}:{}", name.to_ascii_lowercase())
 }
 
-fn format_arg_list(args: &[Parameter]) -> String {
+fn format_arg_list(args: &[Parameter<'_>]) -> String {
     if args.is_empty() {
         return "()".to_string();
     }
@@ -232,7 +232,7 @@ fn format_arg_list(args: &[Parameter]) -> String {
         .iter()
         .enumerate()
         .map(|(index, parameter)| {
-            let name = parameter.name.as_str();
+            let name = parameter.name;
             let form = parameter.form.name.as_str();
             if name.is_empty() {
                 format!("arg{index}: {form}")
@@ -252,7 +252,7 @@ fn label_name(lex: &LexResult, index: usize) -> String {
 }
 
 fn collect_definitions_node(
-    node: &AstNode,
+    node: &AstNode<'_>,
     lex: &LexResult,
     path: &str,
     current_command: &str,
@@ -275,7 +275,7 @@ fn collect_definitions_node(
                     line: node.line.max(1),
                     kind: "label".to_string(),
                     symbol_id: String::new(),
-                    atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
+                    atom_id: node.first_atom_id.unwrap_or(-1),
                     detail: "normal label".to_string(),
                     scope: String::new(),
                     signature: String::new(),
@@ -292,7 +292,7 @@ fn collect_definitions_node(
                     line: node.line.max(1),
                     kind: "z_label".to_string(),
                     symbol_id: String::new(),
-                    atom_id: node.first_atom().map(|atom| atom.id).unwrap_or(-1),
+                    atom_id: node.first_atom_id.unwrap_or(-1),
                     detail: "z label".to_string(),
                     scope: String::new(),
                     signature: String::new(),
@@ -311,7 +311,7 @@ fn collect_definitions_node(
             } => {
                 let signature = format!("{}{} -> {}", name, format_arg_list(parameters), form.name);
                 let record = LspDefinition {
-                    name: name.clone(),
+                    name: (*name).to_owned(),
                     path: path.to_string(),
                     line: name_atom.line.max(1),
                     kind: "command".to_string(),
@@ -326,7 +326,7 @@ fn collect_definitions_node(
                 document_symbols.push(record);
                 for parameter in parameters {
                     let record = LspDefinition {
-                        name: parameter.name.clone(),
+                        name: parameter.name.to_owned(),
                         path: path.to_string(),
                         line: parameter.name_atom.line.max(1),
                         kind: "property".to_string(),
@@ -341,7 +341,7 @@ fn collect_definitions_node(
                     document_symbols.push(record);
                 }
                 for item in body {
-                    children.push((item, name.as_str()));
+                    children.push((item, *name));
                 }
             }
             AstPayload::DefProperty {
@@ -356,7 +356,7 @@ fn collect_definitions_node(
                     format!("command {current_command}")
                 };
                 let record = LspDefinition {
-                    name: name.clone(),
+                    name: (*name).to_owned(),
                     path: path.to_string(),
                     line: name_atom.line.max(1),
                     kind: "property".to_string(),
@@ -731,13 +731,14 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let mut syntax = SyntaxAnalyzer::new(&lex, &ia_data.codes);
+    let mut syntax = SyntaxAnalyzer::new(&lex, &lex.unknown_list, &ia_data.codes);
     let root = match syntax.analyze(&mut ia_data) {
         Ok(value) => value,
         Err(()) => return diagnostic_result(py),
     };
     let (root, call_property_names, bindings) = {
-        let mut semantic = SemanticAnalyzer::new(&mut ia_data, &mut lex.str_list);
+        let mut semantic =
+            SemanticAnalyzer::new(&mut ia_data, &mut lex.str_list, &project.base_ia.codes);
         semantic.bindings = Some(HashMap::new());
         match semantic.analyze(root) {
             Ok(value) => (

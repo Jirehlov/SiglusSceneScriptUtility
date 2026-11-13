@@ -108,7 +108,6 @@ impl LzssTree {
 
 struct LzssTreeFind<'a> {
     src: &'a [u8],
-    src_cnt: usize,
     src_index: usize,
     match_target: usize,
     match_size: usize,
@@ -120,7 +119,6 @@ impl<'a> LzssTreeFind<'a> {
     fn new(src: &'a [u8]) -> Self {
         Self {
             src,
-            src_cnt: src.len(),
             src_index: 0,
             match_target: 0,
             match_size: 0,
@@ -139,7 +137,7 @@ impl<'a> LzssTreeFind<'a> {
             let mut target = self.tree.nodes[ROOT_NODE].big;
             self.match_size = 0;
 
-            let src_left = self.src_cnt.saturating_sub(self.src_index);
+            let src_left = self.src.len().saturating_sub(self.src_index);
             if src_left == 0 {
                 return;
             }
@@ -202,7 +200,7 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
     const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 
     loop {
-        if tree_find.src_index >= tree_find.src_cnt {
+        if tree_find.src_index >= tree_find.src.len() {
             if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
                 pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
             }
@@ -213,7 +211,7 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
             tree_find.proc(replace_cnt);
         }
 
-        if tree_find.src_index >= tree_find.src_cnt {
+        if tree_find.src_index >= tree_find.src.len() {
             if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
                 pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
             }

@@ -14,7 +14,6 @@ use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat};
 use super::source_angou::{encrypt_source, exe_angou_element};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 use std::time::Instant;
@@ -93,7 +92,7 @@ pub struct MacroBucket {
 
 #[derive(Default)]
 pub struct MacroStats {
-    pub buckets: BTreeMap<String, MacroBucket>,
+    pub buckets: BTreeMap<&'static str, MacroBucket>,
 }
 
 #[derive(Clone)]
@@ -155,13 +154,13 @@ pub struct ReadFlagStats {
 #[derive(Default)]
 pub struct SourceStats {
     pub scene_count: usize,
-    pub preprocess: BTreeMap<String, usize>,
-    pub inc: BTreeMap<String, usize>,
-    pub directives: BTreeMap<String, usize>,
-    pub strings: BTreeMap<String, usize>,
-    pub statements: BTreeMap<String, usize>,
-    pub labels: BTreeMap<String, usize>,
-    pub expressions: BTreeMap<String, usize>,
+    pub preprocess: BTreeMap<&'static str, usize>,
+    pub inc: BTreeMap<&'static str, usize>,
+    pub directives: BTreeMap<&'static str, usize>,
+    pub strings: BTreeMap<&'static str, usize>,
+    pub statements: BTreeMap<&'static str, usize>,
+    pub labels: BTreeMap<&'static str, usize>,
+    pub expressions: BTreeMap<&'static str, usize>,
     pub assign_ops: BTreeMap<String, usize>,
     pub unary_op_kinds: BTreeMap<String, usize>,
     pub binary_op_kinds: BTreeMap<String, usize>,
@@ -182,15 +181,13 @@ pub struct BinarySizeStats {
 struct StatementStatContext<'a> {
     strings: &'a [String],
     inc_command_cnt: i32,
-    label_defs: &'a mut BTreeSet<i32>,
+    label_def_count: &'a mut usize,
     z_defs: &'a mut BTreeSet<i32>,
-    codes: &'a RuntimeCodes,
 }
 
 struct SceneSourceInputs<'a> {
-    name: &'a str,
     preprocess: &'a PreprocessStats,
-    root: &'a AstNode,
+    root: &'a AstNode<'a>,
     strings: &'a [String],
     source_label_count: usize,
     scene_inc_properties: usize,
@@ -304,44 +301,6 @@ fn format_path_error(path: &Path, error: std::io::Error) -> String {
     } else {
         error.to_string()
     }
-}
-
-#[cfg(windows)]
-fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            lp_existing_file_name: *const u16,
-            lp_new_file_name: *const u16,
-            dw_flags: u32,
-        ) -> i32;
-    }
-
-    let from_w = from
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let to_w = to
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect::<Vec<_>>();
-    let ok = unsafe { MoveFileExW(from_w.as_ptr(), to_w.as_ptr(), MOVEFILE_REPLACE_EXISTING) };
-    if ok == 0 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(windows))]
-fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-    fs::rename(from, to)
 }
 
 fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, String> {
@@ -533,9 +492,9 @@ fn parse_command_labels(config: &CompileConfig, dat: &[u8]) -> Vec<(i32, i32)> {
     out
 }
 
-fn inc_counter(
-    map: &mut BTreeMap<String, usize>,
-    key: impl Into<String> + AsRef<str>,
+fn inc_counter<K: Ord + std::borrow::Borrow<str>>(
+    map: &mut BTreeMap<K, usize>,
+    key: impl Into<K> + AsRef<str>,
     amount: usize,
 ) {
     if let Some(entry) = map.get_mut(key.as_ref()) {
@@ -545,24 +504,18 @@ fn inc_counter(
     }
 }
 
-fn max_counter(
-    map: &mut BTreeMap<String, usize>,
-    key: impl Into<String> + AsRef<str>,
-    value: usize,
-) {
-    if let Some(entry) = map.get_mut(key.as_ref()) {
+fn max_counter(map: &mut BTreeMap<&'static str, usize>, key: &'static str, value: usize) {
+    if let Some(entry) = map.get_mut(key) {
         *entry = (*entry).max(value);
     } else {
-        map.insert(key.into(), value);
+        map.insert(key, value);
     }
 }
 
 fn empty_macro_stats() -> MacroStats {
     let mut stats = MacroStats::default();
     for kind in ["replace", "define", "define_s", "macro"] {
-        stats
-            .buckets
-            .insert(kind.to_string(), MacroBucket::default());
+        stats.buckets.insert(kind, MacroBucket::default());
     }
     stats
 }
@@ -693,25 +646,18 @@ fn finalize_source_stats(stats: &mut SourceStats, ia_data: &IaData) {
         .unwrap_or_default();
     stats
         .directives
-        .insert("global_inc_properties".to_string(), global_props);
+        .insert("global_inc_properties", global_props);
+    stats.directives.insert("global_inc_commands", global_cmds);
     stats
         .directives
-        .insert("global_inc_commands".to_string(), global_cmds);
-    stats.directives.insert(
-        "property_directives_total".to_string(),
-        global_props + scene_props,
-    );
-    stats.directives.insert(
-        "command_directives_total".to_string(),
-        global_cmds + scene_cmds,
-    );
+        .insert("property_directives_total", global_props + scene_props);
+    stats
+        .directives
+        .insert("command_directives_total", global_cmds + scene_cmds);
+    stats.strings.insert("unique", stats.unique_strings.len());
     stats
         .strings
-        .insert("unique".to_string(), stats.unique_strings.len());
-    stats.strings.insert(
-        "unique_speaker_names".to_string(),
-        stats.unique_speakers.len(),
-    );
+        .insert("unique_speaker_names", stats.unique_speakers.len());
 }
 
 fn inc_operator_counter<const ASSIGNMENT: bool>(
@@ -720,43 +666,62 @@ fn inc_operator_counter<const ASSIGNMENT: bool>(
     operator: i32,
     unary: bool,
 ) {
-    let unary_pairs = [
-        (codes.op.plus, "+"),
-        (codes.op.minus, "-"),
-        (codes.op.tilde, "~"),
-    ];
-    let binary_pairs = [
-        (codes.op.plus, "+"),
-        (codes.op.minus, "-"),
-        (codes.op.multiple, "*"),
-        (codes.op.divide, "/"),
-        (codes.op.remainder, "%"),
-        (codes.op.equal, "=="),
-        (codes.op.not_equal, "!="),
-        (codes.op.greater, ">"),
-        (codes.op.greater_equal, ">="),
-        (codes.op.less, "<"),
-        (codes.op.less_equal, "<="),
-        (codes.op.logical_and, "&&"),
-        (codes.op.logical_or, "||"),
-        (codes.op.and, "&"),
-        (codes.op.or, "|"),
-        (codes.op.hat, "^"),
-        (codes.op.sl, "<<"),
-        (codes.op.sr, ">>"),
-        (codes.op.sr3, ">>>"),
-        (codes.op.tilde, "~"),
-    ];
-    let pairs: &[(i32, &str)] = if unary { &unary_pairs } else { &binary_pairs };
-    for (code, symbol) in pairs {
-        if operator == *code {
-            if ASSIGNMENT {
-                inc_counter(counter, format!("{symbol}="), 1);
-            } else {
-                inc_counter(counter, *symbol, 1);
-            }
-            return;
+    let symbol = if unary {
+        if operator == codes.op.plus {
+            Some(if ASSIGNMENT { "+=" } else { "+" })
+        } else if operator == codes.op.minus {
+            Some(if ASSIGNMENT { "-=" } else { "-" })
+        } else if operator == codes.op.tilde {
+            Some(if ASSIGNMENT { "~=" } else { "~" })
+        } else {
+            None
         }
+    } else if operator == codes.op.plus {
+        Some(if ASSIGNMENT { "+=" } else { "+" })
+    } else if operator == codes.op.minus {
+        Some(if ASSIGNMENT { "-=" } else { "-" })
+    } else if operator == codes.op.multiple {
+        Some(if ASSIGNMENT { "*=" } else { "*" })
+    } else if operator == codes.op.divide {
+        Some(if ASSIGNMENT { "/=" } else { "/" })
+    } else if operator == codes.op.remainder {
+        Some(if ASSIGNMENT { "%=" } else { "%" })
+    } else if operator == codes.op.equal {
+        Some(if ASSIGNMENT { "===" } else { "==" })
+    } else if operator == codes.op.not_equal {
+        Some(if ASSIGNMENT { "!==" } else { "!=" })
+    } else if operator == codes.op.greater {
+        Some(if ASSIGNMENT { ">=" } else { ">" })
+    } else if operator == codes.op.greater_equal {
+        Some(if ASSIGNMENT { ">==" } else { ">=" })
+    } else if operator == codes.op.less {
+        Some(if ASSIGNMENT { "<=" } else { "<" })
+    } else if operator == codes.op.less_equal {
+        Some(if ASSIGNMENT { "<==" } else { "<=" })
+    } else if operator == codes.op.logical_and {
+        Some(if ASSIGNMENT { "&&=" } else { "&&" })
+    } else if operator == codes.op.logical_or {
+        Some(if ASSIGNMENT { "||=" } else { "||" })
+    } else if operator == codes.op.and {
+        Some(if ASSIGNMENT { "&=" } else { "&" })
+    } else if operator == codes.op.or {
+        Some(if ASSIGNMENT { "|=" } else { "|" })
+    } else if operator == codes.op.hat {
+        Some(if ASSIGNMENT { "^=" } else { "^" })
+    } else if operator == codes.op.sl {
+        Some(if ASSIGNMENT { "<<=" } else { "<<" })
+    } else if operator == codes.op.sr {
+        Some(if ASSIGNMENT { ">>=" } else { ">>" })
+    } else if operator == codes.op.sr3 {
+        Some(if ASSIGNMENT { ">>>=" } else { ">>>" })
+    } else if operator == codes.op.tilde {
+        Some(if ASSIGNMENT { "~=" } else { "~" })
+    } else {
+        None
+    };
+    if let Some(symbol) = symbol {
+        inc_counter(counter, symbol, 1);
+        return;
     }
     if ASSIGNMENT {
         inc_counter(counter, format!("op{operator}="), 1);
@@ -766,7 +731,7 @@ fn inc_operator_counter<const ASSIGNMENT: bool>(
 }
 
 fn visit_statement_stats(
-    node: &AstNode,
+    node: &AstNode<'_>,
     stats: &mut SourceStats,
     ctx: &mut StatementStatContext<'_>,
 ) {
@@ -779,9 +744,9 @@ fn visit_statement_stats(
                     children.push(item);
                 }
             }
-            AstPayload::Label { index } => {
+            AstPayload::Label { .. } => {
                 inc_counter(&mut stats.statements, "label", 1);
-                ctx.label_defs.insert(*index as i32);
+                *ctx.label_def_count += 1;
             }
             AstPayload::ZLabel { z_index, .. } => {
                 inc_counter(&mut stats.statements, "z_label", 1);
@@ -884,46 +849,13 @@ fn visit_statement_stats(
     }
 }
 
-fn visit_label_refs(
-    node: &AstNode,
-    ctx: &StatementStatContext<'_>,
+fn visit_expression_stats(
+    root: &AstNode<'_>,
+    stats: &mut SourceStats,
+    codes: &RuntimeCodes,
     label_refs: &mut Vec<i32>,
     z_refs: &mut Vec<i32>,
 ) {
-    let mut pending = vec![node];
-    while let Some(node) = pending.pop() {
-        match &node.payload {
-            AstPayload::Goto { target, .. } => {
-                if target.atom_type == ctx.codes.la.z_label {
-                    z_refs.push(target.opt);
-                } else if target.atom_type == ctx.codes.la.label {
-                    label_refs.push(target.opt);
-                }
-            }
-            AstPayload::Literal { atom } if atom.atom_type == ctx.codes.la.label => {
-                label_refs.push(atom.opt);
-            }
-            _ => {}
-        }
-        let children_start = pending.len();
-        if let AstPayload::DefCommand {
-            parameters, body, ..
-        } = &node.payload
-        {
-            for parameter in parameters {
-                if let Some(index) = parameter.form.index.as_deref() {
-                    pending.push(index);
-                }
-            }
-            pending.extend(body.iter());
-        } else {
-            node.payload.visit_children(|child| pending.push(child));
-        }
-        pending[children_start..].reverse();
-    }
-}
-
-fn visit_expression_stats(root: &AstNode, stats: &mut SourceStats, codes: &RuntimeCodes) {
     let mut pending = vec![(root, 0usize)];
     let mut max_depth = 0usize;
     while let Some((node, depth)) = pending.pop() {
@@ -950,8 +882,16 @@ fn visit_expression_stats(root: &AstNode, stats: &mut SourceStats, codes: &Runti
                 inc_counter(&mut stats.expressions, "binary_ops", 1);
                 inc_operator_counter::<false>(&mut stats.binary_op_kinds, codes, *operator, false);
             }
-            AstPayload::Goto { args, .. } => {
+            AstPayload::Goto { target, args, .. } => {
                 inc_counter(&mut stats.expressions, "named_args", args.named_count);
+                if target.atom_type == codes.la.z_label {
+                    z_refs.push(target.opt);
+                } else if target.atom_type == codes.la.label {
+                    label_refs.push(target.opt);
+                }
+            }
+            AstPayload::Literal { atom } if atom.atom_type == codes.la.label => {
+                label_refs.push(atom.opt);
             }
             AstPayload::ElementExpression { elements, .. } => {
                 for element in elements {
@@ -1008,70 +948,59 @@ fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
         ("excluded_lines", input.preprocess.excluded_lines),
         ("max_ifdef_depth", input.preprocess.max_ifdef_depth),
     ] {
-        stats.preprocess.insert(key.to_string(), value);
+        stats.preprocess.insert(key, value);
     }
     for (key, value) in [
         ("blocks", input.preprocess.inc_start),
         ("ends", input.preprocess.inc_end),
         ("lines", input.preprocess.inc_lines),
     ] {
-        stats.inc.insert(key.to_string(), value);
+        stats.inc.insert(key, value);
     }
-    stats.directives.insert(
-        "scene_inc_properties".to_string(),
-        input.scene_inc_properties,
-    );
     stats
         .directives
-        .insert("scene_inc_commands".to_string(), input.scene_inc_commands);
-    let utf16_units = input
-        .strings
-        .iter()
-        .map(|value| value.encode_utf16().count())
-        .sum();
+        .insert("scene_inc_properties", input.scene_inc_properties);
     stats
-        .strings
-        .insert("entries".to_string(), input.strings.len());
-    stats.strings.insert("utf16_units".to_string(), utf16_units);
-    stats.top_string_scenes.push(TopCount {
-        name: input.name.to_string(),
-        value: utf16_units,
-        entries: input.strings.len(),
-    });
-    stats.unique_strings.extend(input.strings.iter().cloned());
-    let mut label_defs = BTreeSet::new();
+        .directives
+        .insert("scene_inc_commands", input.scene_inc_commands);
+    stats.strings.insert("entries", input.strings.len());
+    let mut label_def_count = 0;
     let mut z_defs = BTreeSet::new();
     let mut label_refs = Vec::new();
     let mut z_refs = Vec::new();
     let mut ctx = StatementStatContext {
         strings: input.strings,
         inc_command_cnt: input.ia_data.inc_command_cnt,
-        label_defs: &mut label_defs,
+        label_def_count: &mut label_def_count,
         z_defs: &mut z_defs,
-        codes: &input.ia_data.codes,
     };
     visit_statement_stats(input.root, &mut stats, &mut ctx);
-    visit_label_refs(input.root, &ctx, &mut label_refs, &mut z_refs);
-    visit_expression_stats(input.root, &mut stats, &input.ia_data.codes);
+    visit_expression_stats(
+        input.root,
+        &mut stats,
+        &input.ia_data.codes,
+        &mut label_refs,
+        &mut z_refs,
+    );
     let label_ref_set = label_refs.iter().copied().collect::<BTreeSet<_>>();
     let z_ref_set = z_refs.iter().copied().collect::<BTreeSet<_>>();
-    stats.labels.insert("defs".to_string(), label_defs.len());
-    stats.labels.insert("refs".to_string(), label_refs.len());
+    stats.labels.insert("defs", label_def_count);
+    stats.labels.insert("refs", label_refs.len());
     stats.labels.insert(
-        "unused".to_string(),
-        label_defs.difference(&label_ref_set).count(),
+        "unused",
+        label_def_count.saturating_sub(label_ref_set.len()),
     );
-    stats.labels.insert("z_defs".to_string(), z_defs.len());
-    stats.labels.insert("z_refs".to_string(), z_refs.len());
+    stats.labels.insert("z_defs", z_defs.len());
+    stats.labels.insert("z_refs", z_refs.len());
     stats.labels.insert(
-        "z_unused".to_string(),
+        "z_unused",
         z_defs
             .iter()
             .filter(|value| **value != 0 && !z_ref_set.contains(value))
             .count(),
     );
     stats.labels.insert(
-        "generated".to_string(),
+        "generated",
         input
             .scene
             .label_list
@@ -1080,7 +1009,7 @@ fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
     );
     stats
         .expressions
-        .insert("default_arg_fills".to_string(), input.default_arg_fills);
+        .insert("default_arg_fills", input.default_arg_fills);
     stats
 }
 
@@ -1498,7 +1427,7 @@ fn prepare_scene<const FULL_STATS: bool>(
         log_stage(log, "SA", display_name)?;
     }
     let stage_start = Instant::now();
-    let mut syntax = SyntaxAnalyzer::new(&lex, &ia_data.codes);
+    let mut syntax = SyntaxAnalyzer::new(&lex, &lex.unknown_list, &ia_data.codes);
     let syntax_result = syntax.analyze(&mut ia_data);
     for (atom, message) in &syntax.warnings {
         let warning = format!("warning: {}", scene_error(message, display_name, atom.line));
@@ -1534,7 +1463,7 @@ fn prepare_scene<const FULL_STATS: bool>(
     }
     let stage_start = Instant::now();
     let (root, call_property_names) = {
-        let mut semantic = SemanticAnalyzer::new(&mut ia_data, &mut lex.str_list);
+        let mut semantic = SemanticAnalyzer::new(&mut ia_data, &mut lex.str_list, &base_ia.codes);
         let semantic_result = semantic.analyze(root);
         if let Some(times) = stage_times.as_mut() {
             record_stage_time(times, "MA", stage_start);
@@ -1568,10 +1497,6 @@ fn prepare_scene<const FULL_STATS: bool>(
     let (scene_macro_counts, global_macro_usage_delta, source_stats) = if FULL_STATS {
         let (scene_macro_counts, global_macro_usage_delta) = scene_macro_stats(&ia_data, base_ia);
         let source_stats = collect_scene_source_stats(SceneSourceInputs {
-            name: source_path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or_default(),
             preprocess: &file2.stats,
             root: &root,
             strings: &bs_output.scene.str_list,
@@ -1607,7 +1532,7 @@ fn prepare_scene<const FULL_STATS: bool>(
     })
 }
 
-fn finalize_scene(
+fn finalize_scene<const FULL_STATS: bool>(
     config: &CompileConfig,
     mut prepared: PreparedScene,
     rand: &mut MsvcRand,
@@ -1633,7 +1558,26 @@ fn finalize_scene(
         &layout,
         &prepared.scene,
         config.constants.scene_string_xor_multiplier,
+        |utf16_units| {
+            if FULL_STATS {
+                prepared
+                    .source_stats
+                    .strings
+                    .insert("utf16_units", utf16_units);
+                prepared.source_stats.top_string_scenes.push(TopCount {
+                    name: prepared.stem.clone(),
+                    value: utf16_units,
+                    entries: string_count,
+                });
+            }
+        },
     );
+    if FULL_STATS {
+        prepared
+            .source_stats
+            .unique_strings
+            .extend(prepared.scene.str_list);
+    }
     FinalizedScene {
         stem: prepared.stem,
         dat,
@@ -1658,7 +1602,7 @@ fn write_digest_cache(config: &CompileConfig) -> Result<(), String> {
     let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
     fs::write(&tmp_path, config.cache.pending_digests_json.as_bytes())
         .map_err(|error| format_path_error(&tmp_path, error))?;
-    replace_file(&tmp_path, path).map_err(|error| {
+    fs::rename(&tmp_path, path).map_err(|error| {
         let _ = fs::remove_file(&tmp_path);
         format_path_error(path, error)
     })
@@ -1797,7 +1741,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                         if scene.stem.is_empty() {
                             scene.stem = scene_stem(task.name);
                         }
-                        Ok(finalize_scene(config, scene, worker_rand))
+                        Ok(finalize_scene::<FULL_STATS>(config, scene, worker_rand))
                     }
                     Err(message) => Err(message),
                 };
@@ -1847,7 +1791,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
             if scene.stem.is_empty() {
                 scene.stem = scene_stem(task.name);
             }
-            compiled.push((task.key.as_str(), finalize_scene(config, scene, &mut rand)));
+            compiled.push((
+                task.key.as_str(),
+                finalize_scene::<FULL_STATS>(config, scene, &mut rand),
+            ));
         }
     }
     let mut compiled_map = compiled

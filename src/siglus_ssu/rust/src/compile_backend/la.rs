@@ -419,9 +419,14 @@ fn lex_scene_text_inner<const WITH_SPANS: bool>(
                     atom.subopt = idx;
                 } else {
                     atom.subopt = label_list.len() as i32;
-                    label_map.insert(name.clone(), atom.subopt);
+                    let label_name = if WITH_SPANS {
+                        name.clone()
+                    } else {
+                        String::new()
+                    };
+                    label_map.insert(name, atom.subopt);
                     label_list.push(LabelDef {
-                        name,
+                        name: label_name,
                         line: cur_line,
                     });
                 }
@@ -431,9 +436,14 @@ fn lex_scene_text_inner<const WITH_SPANS: bool>(
                     atom.opt = idx;
                 } else {
                     atom.opt = label_list.len() as i32;
-                    label_map.insert(name.clone(), atom.opt);
+                    let label_name = if WITH_SPANS {
+                        name.clone()
+                    } else {
+                        String::new()
+                    };
+                    label_map.insert(name, atom.opt);
                     label_list.push(LabelDef {
-                        name,
+                        name: label_name,
                         line: cur_line,
                     });
                 }

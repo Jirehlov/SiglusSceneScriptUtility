@@ -4,7 +4,7 @@ use super::frontend_common::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, PartialEq)]
@@ -965,7 +965,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
     }
 }
 
-static CP932_ENCODE_MAP: OnceLock<HashMap<char, u16>> = OnceLock::new();
+static CP932_ENCODE_MAP: OnceLock<Box<[u16]>> = OnceLock::new();
 
 pub(super) fn initialize_cp932(py: Python<'_>) -> PyResult<()> {
     if CP932_ENCODE_MAP.get().is_some() {
@@ -977,23 +977,23 @@ pub(super) fn initialize_cp932(py: Python<'_>) -> PyResult<()> {
         .collect();
     let data = PyString::new(py, &text).call_method1("encode", ("cp932", "replace"))?;
     let bytes = data.cast::<PyBytes>()?.as_bytes();
-    let mut map = HashMap::new();
-    map.insert('\0', 0);
+    let mut map = vec![u16::MAX; 0x10000];
+    map[0] = 0;
     for (ch, encoded) in (1..=0xFFFF)
         .filter_map(char::from_u32)
         .zip(bytes.split(|byte| *byte == 0))
     {
         match encoded {
             [byte] if *byte != b'?' || ch == '?' => {
-                map.insert(ch, u16::from(*byte));
+                map[ch as usize] = u16::from(*byte);
             }
             [high, low] => {
-                map.insert(ch, u16::from_be_bytes([*high, *low]));
+                map[ch as usize] = u16::from_be_bytes([*high, *low]);
             }
             _ => {}
         }
     }
-    let _ = CP932_ENCODE_MAP.set(map);
+    let _ = CP932_ENCODE_MAP.set(map.into_boxed_slice());
     Ok(())
 }
 
@@ -1001,8 +1001,9 @@ pub(crate) fn cp932_code(ch: char) -> Option<u16> {
     CP932_ENCODE_MAP
         .get()
         .expect("CP932 map must be initialized before compilation")
-        .get(&ch)
+        .get(ch as usize)
         .copied()
+        .filter(|encoded| *encoded != u16::MAX)
 }
 
 pub(crate) fn is_zen(ch: char) -> bool {

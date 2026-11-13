@@ -15,7 +15,7 @@ const SMD5_K: [u32; 64] = [
     0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
 ];
 
-pub fn digest(data: &[u8]) -> Vec<u8> {
+pub fn digest(data: &[u8]) -> [u8; 16] {
     let total = data.len();
     let alpha = (total + 1) & 0x3F;
     let add_cnt = if alpha <= 56 {
@@ -40,26 +40,24 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
     let mut off = 0usize;
 
     loop {
-        let blk: [u8; 64];
+        let block: [u8; 64];
+        let blk: &[u8; 64];
 
         if nokori >= 64 {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(&data[off..off + 64]);
-            blk = block;
+            blk = data[off..off + 64].try_into().unwrap();
             off += 64;
             nokori -= 64;
             data_cnt -= 64;
         } else if nokori > 0 {
-            let mut block = [0u8; 64];
-            block[..nokori].copy_from_slice(&data[off..off + nokori]);
-            block[nokori..].copy_from_slice(&add_data[..64 - nokori]);
-            blk = block;
+            let mut tail = [0u8; 64];
+            tail[..nokori].copy_from_slice(&data[off..off + nokori]);
+            tail[nokori..].copy_from_slice(&add_data[..64 - nokori]);
+            block = tail;
+            blk = &block;
             nokori = 0;
             data_cnt = 0;
         } else {
-            let mut block = [0u8; 64];
-            block.copy_from_slice(&add_data[..64]);
-            blk = block;
+            blk = (&add_data[..64]).try_into().unwrap();
         }
 
         let mut x = [0u32; 16];
@@ -102,9 +100,9 @@ pub fn digest(data: &[u8]) -> Vec<u8> {
         }
     }
 
-    let mut result = Vec::with_capacity(16);
-    for &word in &st {
-        result.extend_from_slice(&word.to_le_bytes());
+    let mut result = [0u8; 16];
+    for (bytes, word) in result.as_chunks_mut::<4>().0.iter_mut().zip(st) {
+        bytes.copy_from_slice(&word.to_le_bytes());
     }
     result
 }

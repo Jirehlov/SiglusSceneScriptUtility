@@ -8,39 +8,49 @@ pub enum GotoKind {
 }
 
 #[derive(Default)]
-pub struct FormSpec {
+pub struct FormSpec<'src> {
     pub name: String,
-    pub index: Option<Box<AstNode>>,
+    pub index: Option<Box<AstNode<'src>>>,
     pub open_bracket_line: usize,
 }
 
-pub struct Parameter {
+pub struct NameAtom {
+    pub id: i32,
     pub line: usize,
-    pub name: String,
-    pub name_atom: Atom,
-    pub form: FormSpec,
+}
+
+pub struct Parameter<'src> {
+    pub line: usize,
+    pub name: &'src str,
+    pub name_atom: NameAtom,
+    pub form: FormSpec<'src>,
     pub property_id: i32,
 }
 
-pub struct Argument {
-    pub name: Option<String>,
-    pub value: AstNode,
+pub struct Argument<'src> {
+    pub name: Option<&'src str>,
+    pub value: AstNode<'src>,
     pub name_id: i32,
 }
 
 #[derive(Default)]
-pub struct ArgumentList {
-    pub args: Vec<Argument>,
+pub struct ArgumentList<'src> {
+    pub args: Vec<Argument<'src>>,
     pub named_count: usize,
 }
 
+pub struct ElementNameAtom {
+    pub id: i32,
+    pub subopt: i32,
+}
+
 #[derive(Default)]
-pub struct ElementPart {
+pub struct ElementPart<'src> {
     pub line: usize,
-    pub name: Option<String>,
-    pub name_atom: Option<Atom>,
-    pub args: ArgumentList,
-    pub array_index: Option<Box<AstNode>>,
+    pub name: Option<&'src str>,
+    pub name_atom: Option<ElementNameAtom>,
+    pub args: ArgumentList<'src>,
+    pub array_index: Option<Box<AstNode<'src>>>,
     pub element_code: i32,
     pub element_type: i32,
     pub parent_form: i32,
@@ -48,20 +58,20 @@ pub struct ElementPart {
     pub arg_list_id: i32,
 }
 
-pub struct IfBranch {
+pub struct IfBranch<'src> {
     pub line: usize,
-    pub condition: Option<AstNode>,
-    pub body: Vec<AstNode>,
+    pub condition: Option<AstNode<'src>>,
+    pub body: Vec<AstNode<'src>>,
 }
 
-pub struct SwitchCase {
+pub struct SwitchCase<'src> {
     pub line: usize,
-    pub value: AstNode,
-    pub body: Vec<AstNode>,
+    pub value: AstNode<'src>,
+    pub body: Vec<AstNode<'src>>,
 }
 
-pub enum AstPayload {
-    Root(Vec<AstNode>),
+pub enum AstPayload<'src> {
+    Root(Vec<AstNode<'src>>),
     Label {
         index: usize,
     },
@@ -70,58 +80,58 @@ pub enum AstPayload {
         label_index: usize,
     },
     DefProperty {
-        name: String,
-        name_atom: Atom,
-        form: FormSpec,
+        name: &'src str,
+        name_atom: NameAtom,
+        form: FormSpec<'src>,
         property_id: i32,
     },
     DefCommand {
-        name: String,
-        name_atom: Atom,
-        form: FormSpec,
+        name: &'src str,
+        name_atom: NameAtom,
+        form: FormSpec<'src>,
         command_id: i32,
-        parameters: Vec<Parameter>,
-        body: Vec<AstNode>,
+        parameters: Vec<Parameter<'src>>,
+        body: Vec<AstNode<'src>>,
     },
     Goto {
         kind: GotoKind,
         target: Atom,
-        args: ArgumentList,
+        args: ArgumentList<'src>,
     },
     Return {
-        value: Option<Box<AstNode>>,
+        value: Option<Box<AstNode<'src>>>,
     },
     If {
-        branches: Vec<IfBranch>,
+        branches: Vec<IfBranch<'src>>,
     },
     For {
-        init: Vec<AstNode>,
-        condition: Box<AstNode>,
-        update: Vec<AstNode>,
-        body: Vec<AstNode>,
+        init: Vec<AstNode<'src>>,
+        condition: Box<AstNode<'src>>,
+        update: Vec<AstNode<'src>>,
+        body: Vec<AstNode<'src>>,
     },
     While {
-        condition: Box<AstNode>,
-        body: Vec<AstNode>,
+        condition: Box<AstNode<'src>>,
+        body: Vec<AstNode<'src>>,
     },
     Continue,
     Break,
     Switch {
-        condition: Box<AstNode>,
-        cases: Vec<SwitchCase>,
-        default_body: Option<Vec<AstNode>>,
+        condition: Box<AstNode<'src>>,
+        cases: Vec<SwitchCase<'src>>,
+        default_body: Option<Vec<AstNode<'src>>>,
     },
     Assign {
-        left: Box<AstNode>,
+        left: Box<AstNode<'src>>,
         operator: i32,
         operator_line: usize,
-        right: Box<AstNode>,
+        right: Box<AstNode<'src>>,
         equal_form: i32,
         set_flag: bool,
         assignment_list_id: i32,
     },
     Command {
-        expression: Box<AstNode>,
+        expression: Box<AstNode<'src>>,
         end_line: usize,
     },
     Text {
@@ -132,10 +142,10 @@ pub enum AstPayload {
     },
     Eof,
     Paren {
-        expression: Box<AstNode>,
+        expression: Box<AstNode<'src>>,
     },
     ExpressionList {
-        values: Vec<AstNode>,
+        values: Vec<AstNode<'src>>,
         forms: Vec<i32>,
     },
     Literal {
@@ -143,30 +153,30 @@ pub enum AstPayload {
     },
     Unary {
         operators: Vec<(i32, usize)>,
-        value: Box<AstNode>,
+        value: Box<AstNode<'src>>,
     },
     Binary {
         operator: i32,
         operator_line: usize,
-        left: Box<AstNode>,
-        right: Box<AstNode>,
+        left: Box<AstNode<'src>>,
+        right: Box<AstNode<'src>>,
     },
     ElementExpression {
-        elements: Vec<ElementPart>,
+        elements: Vec<ElementPart<'src>>,
         element_type: i32,
     },
 }
 
-pub struct AstNode {
+pub struct AstNode<'src> {
     pub line: usize,
     pub form: i32,
     pub temp_form: i32,
     pub include_selection: bool,
-    pub first_atom: Option<Atom>,
-    pub payload: AstPayload,
+    pub first_atom_id: Option<i32>,
+    pub payload: AstPayload<'src>,
 }
 
-impl Drop for AstNode {
+impl<'src> Drop for AstNode<'src> {
     fn drop(&mut self) {
         if matches!(
             self.payload,
@@ -190,25 +200,21 @@ impl Drop for AstNode {
     }
 }
 
-impl AstNode {
-    pub fn from_atom(atom: Atom, payload: AstPayload) -> Self {
+impl<'src> AstNode<'src> {
+    pub fn from_atom(atom: Atom, payload: AstPayload<'src>) -> Self {
         Self {
             line: atom.line,
             form: 0,
             temp_form: 0,
             include_selection: false,
-            first_atom: Some(atom),
+            first_atom_id: Some(atom.id),
             payload,
         }
     }
-
-    pub fn first_atom(&self) -> Option<&Atom> {
-        self.first_atom.as_ref()
-    }
 }
 
-impl AstPayload {
-    pub(super) fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a AstNode)) {
+impl<'src> AstPayload<'src> {
+    pub(super) fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a AstNode<'src>)) {
         match self {
             AstPayload::Root(values) | AstPayload::ExpressionList { values, .. } => {
                 for child in values.iter() {
@@ -321,7 +327,7 @@ impl AstPayload {
         }
     }
 
-    fn visit_children_mut<'a>(&'a mut self, mut visit: impl FnMut(&'a mut AstNode)) {
+    fn visit_children_mut<'a>(&'a mut self, mut visit: impl FnMut(&'a mut AstNode<'src>)) {
         match self {
             AstPayload::Root(values) | AstPayload::ExpressionList { values, .. } => {
                 for child in values.iter_mut() {
@@ -435,31 +441,25 @@ impl AstPayload {
     }
 }
 
-impl Default for AstNode {
+impl<'src> Default for AstNode<'src> {
     fn default() -> Self {
         Self {
             line: 0,
             form: 0,
             temp_form: 0,
             include_selection: false,
-            first_atom: None,
+            first_atom_id: None,
             payload: AstPayload::Eof,
         }
     }
 }
 
-impl Default for Parameter {
+impl<'src> Default for Parameter<'src> {
     fn default() -> Self {
         Self {
             line: 0,
-            name: String::new(),
-            name_atom: Atom {
-                id: 0,
-                line: 0,
-                atom_type: 0,
-                opt: 0,
-                subopt: 0,
-            },
+            name: "",
+            name_atom: NameAtom { id: 0, line: 0 },
             form: FormSpec::default(),
             property_id: 0,
         }

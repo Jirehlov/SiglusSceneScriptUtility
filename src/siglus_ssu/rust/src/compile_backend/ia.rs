@@ -1211,8 +1211,6 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 arg_list: args,
                 is_defined: false,
             });
-            let mut arg_map = HashMap::new();
-            arg_map.insert(0, ArgList { arg_list: arg_info });
             iad.form_table.add(
                 &self.parent_form,
                 ElementInfo {
@@ -1220,7 +1218,8 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                     code: create_elm_code(iad.codes.elm.owner_user_cmd, 0, id),
                     name: name.clone(),
                     form,
-                    arg_map,
+                    arg_lists: vec![(0, ArgList { arg_list: arg_info })],
+                    named_args: None,
                     origin: "inc".to_string(),
                 },
             );
@@ -1265,7 +1264,8 @@ pub fn add_user_property_to_form_table(
             code,
             name,
             form,
-            arg_map: HashMap::new(),
+            arg_lists: Vec::new(),
+            named_args: None,
             origin: "inc".to_string(),
         },
     );

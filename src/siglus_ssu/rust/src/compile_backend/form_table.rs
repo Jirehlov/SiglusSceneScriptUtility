@@ -27,7 +27,8 @@ pub struct ElementInfo {
     pub code: i32,
     pub name: String,
     pub form: String,
-    pub arg_map: HashMap<i32, ArgList>,
+    pub arg_lists: Vec<(i32, ArgList)>,
+    pub named_args: Option<ArgList>,
     pub origin: String,
 }
 
@@ -42,26 +43,16 @@ pub struct FormTable {
     pub form_map_by_name: HashMap<String, Arc<FormInfo>>,
     pub call_base: Option<Arc<FormInfo>>,
     pub form_code: Arc<HashMap<String, i32>>,
-    pub code_form: Arc<HashMap<i32, String>>,
     pub call_form: String,
-    pub scene_form: String,
-    pub global_form: String,
     pub command_element_type: i32,
 }
 
 impl FormTable {
     pub fn new(constants: &CompileConstants) -> Result<Self, String> {
         let form_code = constants.form_ids.clone();
-        let code_form = form_code
-            .iter()
-            .map(|(name, code)| (*code, name.clone()))
-            .collect();
         Ok(Self {
             form_code: Arc::new(form_code),
-            code_form: Arc::new(code_form),
             call_form: constants.form_name("FM_CALL")?.to_string(),
-            scene_form: constants.form_name("FM_SCENE")?.to_string(),
-            global_form: constants.form_name("FM_GLOBAL")?.to_string(),
             command_element_type: constants.element_type("ET_COMMAND")?,
             form_map_by_name: HashMap::new(),
             call_base: None,
@@ -108,22 +99,6 @@ impl FormTable {
             .and_then(|info| info.element_map_by_name.get(name))
     }
 
-    pub fn get_element_by_code(&self, form_code: i32, code: i32) -> Option<&Arc<ElementInfo>> {
-        let form_name = self.code_form.get(&form_code)?;
-        self.form_map_by_name
-            .get(form_name)
-            .and_then(|info| info.element_map_by_code.get(&code))
-    }
-
-    pub fn find(&self, name: &str) -> Option<(&Arc<ElementInfo>, &str)> {
-        for form in [&self.call_form, &self.scene_form, &self.global_form] {
-            if let Some(element) = self.get(form, name) {
-                return Some((element, form));
-            }
-        }
-        None
-    }
-
     pub fn reset_call(&mut self) {
         let base = self.call_base.clone().unwrap_or_default();
         self.form_map_by_name.insert(self.call_form.clone(), base);
@@ -136,25 +111,28 @@ impl FormTable {
             table.ensure_form(form);
         }
         for source in &constants.system_elements {
-            let mut arg_map = HashMap::new();
+            let mut arg_lists = Vec::new();
+            let mut named_args = None;
             for source_list in &source.arg_map {
-                arg_map.insert(
-                    source_list.id,
-                    ArgList {
-                        arg_list: source_list
-                            .args
-                            .iter()
-                            .map(|arg| ArgInfo {
-                                id: arg.id,
-                                name: arg.name.clone(),
-                                form: table.form_code_of(&arg.form).unwrap_or(void_form),
-                                def_int: arg.def_int,
-                                def_exist: arg.def_exist,
-                                preserve_int_reference: arg.preserve_int_reference,
-                            })
-                            .collect(),
-                    },
-                );
+                let args = ArgList {
+                    arg_list: source_list
+                        .args
+                        .iter()
+                        .map(|arg| ArgInfo {
+                            id: arg.id,
+                            name: arg.name.clone(),
+                            form: table.form_code_of(&arg.form).unwrap_or(void_form),
+                            def_int: arg.def_int,
+                            def_exist: arg.def_exist,
+                            preserve_int_reference: arg.preserve_int_reference,
+                        })
+                        .collect(),
+                };
+                if source_list.id == -1 {
+                    named_args = Some(args);
+                } else {
+                    arg_lists.push((source_list.id, args));
+                }
             }
             table.add(
                 &source.parent,
@@ -167,7 +145,8 @@ impl FormTable {
                     code: source.code,
                     name: source.name.clone(),
                     form: source.form.clone(),
-                    arg_map,
+                    arg_lists,
+                    named_args,
                     origin: source.origin.clone(),
                 },
             );

@@ -1,13 +1,12 @@
 use super::Executor;
 use super::ast::{
-    Argument, ArgumentList, AstNode, AstPayload, ElementPart, FormSpec, GotoKind, IfBranch,
-    Parameter, SwitchCase,
+    Argument, ArgumentList, AstNode, AstPayload, ElementNameAtom, ElementPart, FormSpec, GotoKind,
+    IfBranch, NameAtom, Parameter, SwitchCase,
 };
 use super::codes::{LexCodes, OperatorCodes, RuntimeCodes};
 use super::form_table::{ArgInfo, ArgList, ElementInfo, ElementKind, create_elm_code};
 use super::ia::{CommandArg, IaData, IncCommand};
 use super::la::{Atom, LexResult};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 type ParseResult<T> = Result<Option<(usize, T)>, ()>;
@@ -30,11 +29,11 @@ struct SyntaxCodes {
     logical_and_precedence: i32,
 }
 
-pub struct SyntaxAnalyzer<'lex> {
+pub struct SyntaxAnalyzer<'lex, 'src> {
     codes: SyntaxCodes,
     atoms: &'lex [Atom],
     string_count: usize,
-    unknowns: &'lex [String],
+    unknowns: &'src [String],
     labels: Vec<LabelState>,
     z_labels: Vec<LabelState>,
     pub last: Option<SyntaxErrorInfo>,
@@ -43,8 +42,8 @@ pub struct SyntaxAnalyzer<'lex> {
     expression_heights: Vec<usize>,
 }
 
-impl<'lex> SyntaxAnalyzer<'lex> {
-    pub fn new(lex: &'lex LexResult, codes: &RuntimeCodes) -> Self {
+impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
+    pub fn new(lex: &'lex LexResult, unknowns: &'src [String], codes: &RuntimeCodes) -> Self {
         let z_label_count = codes.la.z_label_count;
         Self {
             codes: SyntaxCodes {
@@ -54,7 +53,7 @@ impl<'lex> SyntaxAnalyzer<'lex> {
             },
             atoms: &lex.atom_list,
             string_count: lex.str_list.len(),
-            unknowns: &lex.unknown_list,
+            unknowns,
             labels: lex
                 .label_list
                 .iter()
@@ -140,15 +139,15 @@ impl<'lex> SyntaxAnalyzer<'lex> {
         }
     }
 
-    fn node(&self, start: usize, payload: AstPayload) -> AstNode {
+    fn node(&self, start: usize, payload: AstPayload<'src>) -> AstNode<'src> {
         let first = self.atom(start);
         AstNode::from_atom(first, payload)
     }
 
-    fn unknown_name(&self, atom: &Atom) -> String {
+    fn unknown_name(&self, atom: &Atom) -> &'src str {
         self.unknowns
             .get(atom.opt.max(0) as usize)
-            .cloned()
+            .map(String::as_str)
             .unwrap_or_default()
     }
 
@@ -161,7 +160,7 @@ impl<'lex> SyntaxAnalyzer<'lex> {
         }
     }
 
-    fn parse_label(&mut self, index: usize) -> ParseResult<AstNode> {
+    fn parse_label(&mut self, index: usize) -> ParseResult<AstNode<'src>> {
         let Some((next, atom)) = self.accept(index, self.codes.la.label) else {
             return Ok(None);
         };
@@ -179,7 +178,7 @@ impl<'lex> SyntaxAnalyzer<'lex> {
         )))
     }
 
-    fn parse_z_label(&mut self, index: usize) -> ParseResult<AstNode> {
+    fn parse_z_label(&mut self, index: usize) -> ParseResult<AstNode<'src>> {
         let Some((next, atom)) = self.accept(index, self.codes.la.z_label) else {
             return Ok(None);
         };
@@ -227,7 +226,7 @@ impl<'lex> SyntaxAnalyzer<'lex> {
         }
     }
 
-    fn parse_name(&mut self, index: usize) -> ParseResult<AstNode> {
+    fn parse_name(&mut self, index: usize) -> ParseResult<AstNode<'src>> {
         let Some((next, open)) = self.accept(index, self.codes.la.open_sumi) else {
             return Ok(None);
         };
@@ -268,55 +267,82 @@ impl<'lex> SyntaxAnalyzer<'lex> {
 
     fn binary_operator(&self, index: usize) -> Option<(usize, i32, i32)> {
         let atom_type = self.atom_type(index);
-        [
-            (self.codes.la.logical_or, self.codes.op.logical_or, 1),
-            (
-                self.codes.la.logical_and,
+        if atom_type == self.codes.la.logical_or {
+            Some((index + 1, self.codes.op.logical_or, 1))
+        } else if atom_type == self.codes.la.logical_and {
+            Some((
+                index + 1,
                 self.codes.op.logical_and,
                 self.codes.logical_and_precedence,
-            ),
-            (self.codes.la.or, self.codes.op.or, 3),
-            (self.codes.la.hat, self.codes.op.hat, 4),
-            (self.codes.la.and, self.codes.op.and, 5),
-            (self.codes.la.equal, self.codes.op.equal, 6),
-            (self.codes.la.not_equal, self.codes.op.not_equal, 6),
-            (self.codes.la.greater, self.codes.op.greater, 7),
-            (self.codes.la.greater_equal, self.codes.op.greater_equal, 7),
-            (self.codes.la.less, self.codes.op.less, 7),
-            (self.codes.la.less_equal, self.codes.op.less_equal, 7),
-            (self.codes.la.sl, self.codes.op.sl, 8),
-            (self.codes.la.sr, self.codes.op.sr, 8),
-            (self.codes.la.sr3, self.codes.op.sr3, 8),
-            (self.codes.la.plus, self.codes.op.plus, 9),
-            (self.codes.la.minus, self.codes.op.minus, 9),
-            (self.codes.la.multiple, self.codes.op.multiple, 10),
-            (self.codes.la.divide, self.codes.op.divide, 10),
-            (self.codes.la.percent, self.codes.op.remainder, 10),
-        ]
-        .into_iter()
-        .find_map(|(token, operator, precedence)| {
-            (atom_type == token).then_some((index + 1, operator, precedence))
-        })
+            ))
+        } else if atom_type == self.codes.la.or {
+            Some((index + 1, self.codes.op.or, 3))
+        } else if atom_type == self.codes.la.hat {
+            Some((index + 1, self.codes.op.hat, 4))
+        } else if atom_type == self.codes.la.and {
+            Some((index + 1, self.codes.op.and, 5))
+        } else if atom_type == self.codes.la.equal {
+            Some((index + 1, self.codes.op.equal, 6))
+        } else if atom_type == self.codes.la.not_equal {
+            Some((index + 1, self.codes.op.not_equal, 6))
+        } else if atom_type == self.codes.la.greater {
+            Some((index + 1, self.codes.op.greater, 7))
+        } else if atom_type == self.codes.la.greater_equal {
+            Some((index + 1, self.codes.op.greater_equal, 7))
+        } else if atom_type == self.codes.la.less {
+            Some((index + 1, self.codes.op.less, 7))
+        } else if atom_type == self.codes.la.less_equal {
+            Some((index + 1, self.codes.op.less_equal, 7))
+        } else if atom_type == self.codes.la.sl {
+            Some((index + 1, self.codes.op.sl, 8))
+        } else if atom_type == self.codes.la.sr {
+            Some((index + 1, self.codes.op.sr, 8))
+        } else if atom_type == self.codes.la.sr3 {
+            Some((index + 1, self.codes.op.sr3, 8))
+        } else if atom_type == self.codes.la.plus {
+            Some((index + 1, self.codes.op.plus, 9))
+        } else if atom_type == self.codes.la.minus {
+            Some((index + 1, self.codes.op.minus, 9))
+        } else if atom_type == self.codes.la.multiple {
+            Some((index + 1, self.codes.op.multiple, 10))
+        } else if atom_type == self.codes.la.divide {
+            Some((index + 1, self.codes.op.divide, 10))
+        } else if atom_type == self.codes.la.percent {
+            Some((index + 1, self.codes.op.remainder, 10))
+        } else {
+            None
+        }
     }
 
     fn assign_operator(&self, index: usize) -> Option<(usize, i32)> {
         let atom_type = self.atom_type(index);
-        [
-            (self.codes.la.assign, self.codes.op.none),
-            (self.codes.la.plus_assign, self.codes.op.plus),
-            (self.codes.la.minus_assign, self.codes.op.minus),
-            (self.codes.la.multiple_assign, self.codes.op.multiple),
-            (self.codes.la.divide_assign, self.codes.op.divide),
-            (self.codes.la.percent_assign, self.codes.op.remainder),
-            (self.codes.la.and_assign, self.codes.op.and),
-            (self.codes.la.or_assign, self.codes.op.or),
-            (self.codes.la.hat_assign, self.codes.op.hat),
-            (self.codes.la.sl_assign, self.codes.op.sl),
-            (self.codes.la.sr_assign, self.codes.op.sr),
-            (self.codes.la.sr3_assign, self.codes.op.sr3),
-        ]
-        .into_iter()
-        .find_map(|(token, operator)| (atom_type == token).then_some((index + 1, operator)))
+        if atom_type == self.codes.la.assign {
+            Some((index + 1, self.codes.op.none))
+        } else if atom_type == self.codes.la.plus_assign {
+            Some((index + 1, self.codes.op.plus))
+        } else if atom_type == self.codes.la.minus_assign {
+            Some((index + 1, self.codes.op.minus))
+        } else if atom_type == self.codes.la.multiple_assign {
+            Some((index + 1, self.codes.op.multiple))
+        } else if atom_type == self.codes.la.divide_assign {
+            Some((index + 1, self.codes.op.divide))
+        } else if atom_type == self.codes.la.percent_assign {
+            Some((index + 1, self.codes.op.remainder))
+        } else if atom_type == self.codes.la.and_assign {
+            Some((index + 1, self.codes.op.and))
+        } else if atom_type == self.codes.la.or_assign {
+            Some((index + 1, self.codes.op.or))
+        } else if atom_type == self.codes.la.hat_assign {
+            Some((index + 1, self.codes.op.hat))
+        } else if atom_type == self.codes.la.sl_assign {
+            Some((index + 1, self.codes.op.sl))
+        } else if atom_type == self.codes.la.sr_assign {
+            Some((index + 1, self.codes.op.sr))
+        } else if atom_type == self.codes.la.sr3_assign {
+            Some((index + 1, self.codes.op.sr3))
+        } else {
+            None
+        }
     }
 
     fn validate(&mut self, iad: &IaData) -> Result<(), ()> {
@@ -357,7 +383,7 @@ impl<'lex> SyntaxAnalyzer<'lex> {
         Ok(())
     }
 
-    pub fn analyze(&mut self, iad: &mut IaData) -> Result<AstNode, ()> {
+    pub fn analyze(&mut self, iad: &mut IaData) -> Result<AstNode<'src>, ()> {
         self.last = None;
         self.warnings.clear();
         let session = Box::new(SyntaxSession { syntax: self, iad });
@@ -415,16 +441,16 @@ macro_rules! parse_step {
     }};
 }
 
-struct SyntaxSession<'a, 'lex> {
-    syntax: &'a mut SyntaxAnalyzer<'lex>,
+struct SyntaxSession<'a, 'lex, 'src> {
+    syntax: &'a mut SyntaxAnalyzer<'lex, 'src>,
     iad: &'a mut IaData,
 }
 
-impl<'a, 'lex> SyntaxSession<'a, 'lex> {
+impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
     async fn parse_root(
         mut self: Box<Self>,
         executor: Executor<'a>,
-    ) -> (Result<AstNode, ()>, Box<Self>) {
+    ) -> (Result<AstNode<'src>, ()>, Box<Self>) {
         let result = {
             let mut index = 0usize;
             let mut statements = Vec::new();
@@ -452,7 +478,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<Vec<AstNode>>, Box<Self>) {
+    ) -> (ParseResult<Vec<AstNode<'src>>>, Box<Self>) {
         let result = {
             let Some((mut pos, _open)) = self.syntax.accept(index, self.syntax.codes.la.open_brace)
             else {
@@ -499,7 +525,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         no_open_kind: &'static str,
         illegal_kind: &'static str,
         no_close_kind: &'static str,
-    ) -> (ParseResult<Vec<AstNode>>, Box<Self>) {
+    ) -> (ParseResult<Vec<AstNode<'src>>>, Box<Self>) {
         let result = {
             let Some((mut pos, _open)) = self.syntax.accept(index, self.syntax.codes.la.open_brace)
             else {
@@ -537,7 +563,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             if self.syntax.nesting >= 64 {
                 self.syntax
@@ -555,7 +581,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let atom_type = self.syntax.atom_type(index);
             let result = if atom_type == self.syntax.codes.la.label {
@@ -629,13 +655,13 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<FormSpec>, Box<Self>) {
+    ) -> (ParseResult<FormSpec<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, atom)) = self.syntax.accept(index, self.syntax.codes.la.unknown)
             else {
                 return (Ok(None), self);
             };
-            let name = self.syntax.unknown_name(&atom);
+            let name = self.syntax.unknown_name(&atom).to_owned();
             if self.iad.form_table.form_code_of(&name).is_none() {
                 return (
                     self.syntax.fail("TNMSERR_SA_DEF_PROP_ILLEGAL_FORM", pos),
@@ -687,7 +713,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, _property)) =
                 self.syntax.accept(index, self.syntax.codes.la.property)
@@ -725,7 +751,10 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                     index,
                     AstPayload::DefProperty {
                         name,
-                        name_atom,
+                        name_atom: NameAtom {
+                            id: name_atom.id,
+                            line: name_atom.line,
+                        },
                         form,
                         property_id: 0,
                     },
@@ -739,7 +768,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, _command)) = self.syntax.accept(index, self.syntax.codes.la.command)
             else {
@@ -835,7 +864,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
             };
             pos = after_body;
 
-            let existing = self.iad.command_indices.get(&name).copied();
+            let existing = self.iad.command_indices.get(name).copied();
             let command_id = if let Some(command_index) = existing {
                 let command = &self.iad.command_list[command_index];
                 let id = command.id;
@@ -885,8 +914,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                         def_exist: false,
                     })
                     .collect();
-                let mut arg_map = HashMap::new();
-                arg_map.insert(
+                let arg_lists = vec![(
                     0,
                     ArgList {
                         arg_list: command_args
@@ -905,23 +933,24 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                             })
                             .collect(),
                     },
-                );
+                )];
                 self.iad.add_command(IncCommand {
                     id,
                     form: form.name.clone(),
-                    name: name.clone(),
+                    name: name.to_owned(),
                     arg_list: command_args,
                     is_defined: true,
                 });
-                Arc::make_mut(&mut self.iad.name_set).insert(name.clone());
+                Arc::make_mut(&mut self.iad.name_set).insert(name.to_owned());
                 self.iad.form_table.add(
                     self.iad.codes.forms.scene.name.as_str(),
                     ElementInfo {
                         kind: ElementKind::Command,
                         code: create_elm_code(self.iad.codes.elm.owner_user_cmd, 0, id),
-                        name: name.clone(),
+                        name: name.to_owned(),
                         form: form.name.clone(),
-                        arg_map,
+                        arg_lists,
+                        named_args: None,
                         origin: "user".to_string(),
                     },
                 );
@@ -933,7 +962,10 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                     index,
                     AstPayload::DefCommand {
                         name,
-                        name_atom,
+                        name_atom: NameAtom {
+                            id: name_atom.id,
+                            line: name_atom.line,
+                        },
                         form,
                         command_id,
                         parameters,
@@ -949,7 +981,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let (mut pos, keyword, kind) = if let Some((next, atom)) =
                 self.syntax.accept(index, self.syntax.codes.la.goto)
@@ -998,7 +1030,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, keyword)) = self.syntax.accept(index, self.syntax.codes.la.return_)
             else {
@@ -1050,7 +1082,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             if self.syntax.atom_type(index) != self.syntax.codes.la.if_ {
                 return (Ok(None), self);
@@ -1153,7 +1185,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, keyword)) = self.syntax.accept(index, self.syntax.codes.la.for_)
             else {
@@ -1272,7 +1304,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, keyword)) = self.syntax.accept(index, self.syntax.codes.la.while_)
             else {
@@ -1343,7 +1375,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, keyword)) = self.syntax.accept(index, self.syntax.codes.la.switch)
             else {
@@ -1457,7 +1489,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<SwitchCase>, Box<Self>) {
+    ) -> (ParseResult<SwitchCase<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, keyword)) = self.syntax.accept(index, self.syntax.codes.la.case)
             else {
@@ -1529,7 +1561,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<Vec<AstNode>>, Box<Self>) {
+    ) -> (ParseResult<Vec<AstNode<'src>>>, Box<Self>) {
         let result = {
             let Some((mut pos, _keyword)) = self.syntax.accept(index, self.syntax.codes.la.default)
             else {
@@ -1564,7 +1596,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, expression)) = parse_try!(
                 self,
@@ -1626,7 +1658,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         executor: Executor<'a>,
         index: usize,
         minimum_precedence: i32,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             self.syntax.start_expression(index);
             let result = parse_step!(
@@ -1646,7 +1678,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         executor: Executor<'a>,
         index: usize,
         minimum_precedence: i32,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let (mut pos, mut expression) = if self.syntax.unary_operator(index).is_some() {
                 let mut operators = Vec::new();
@@ -1727,7 +1759,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             if let Some((next, open)) = self.syntax.accept(index, self.syntax.codes.la.open_paren) {
                 let Some((after_expression, expression)) = parse_try!(
@@ -1791,7 +1823,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let Some((mut pos, open)) = self.syntax.accept(index, self.syntax.codes.la.open_bracket)
         else {
             return (Ok(None), self);
@@ -1850,7 +1882,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<AstNode>, Box<Self>) {
+    ) -> (ParseResult<AstNode<'src>>, Box<Self>) {
         let result = {
             let Some((mut pos, first)) = parse_try!(
                 self,
@@ -1894,7 +1926,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         executor: Executor<'a>,
         index: usize,
         top: bool,
-    ) -> (ParseResult<ElementPart>, Box<Self>) {
+    ) -> (ParseResult<ElementPart<'src>>, Box<Self>) {
         let result = {
             if !top {
                 if let Some((next, _open)) =
@@ -1963,7 +1995,10 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
                 ElementPart {
                     line: name_atom.line,
                     name: Some(name),
-                    name_atom: Some(name_atom),
+                    name_atom: Some(ElementNameAtom {
+                        id: name_atom.id,
+                        subopt: name_atom.subopt,
+                    }),
                     args,
                     array_index: None,
                     element_code: 0,
@@ -1981,7 +2016,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (Result<(usize, ArgumentList), ()>, Box<Self>) {
+    ) -> (Result<(usize, ArgumentList<'src>), ()>, Box<Self>) {
         let result = {
             let Some((mut pos, _open)) = self.syntax.accept(index, self.syntax.codes.la.open_paren)
             else {
@@ -2030,7 +2065,7 @@ impl<'a, 'lex> SyntaxSession<'a, 'lex> {
         mut self: Box<Self>,
         executor: Executor<'a>,
         index: usize,
-    ) -> (ParseResult<Argument>, Box<Self>) {
+    ) -> (ParseResult<Argument<'src>>, Box<Self>) {
         let result = {
             let previous_error = self.syntax.last.clone();
             if let Some((next, name_atom)) = self.syntax.accept(index, self.syntax.codes.la.unknown)

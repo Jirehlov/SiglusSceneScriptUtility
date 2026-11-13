@@ -7,6 +7,7 @@ mod smd5;
 mod tile;
 mod xor;
 
+use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
@@ -43,9 +44,14 @@ fn lzss32_unpack(py: Python<'_>, data: &[u8]) -> PyResult<Py<PyBytes>> {
 }
 
 #[pyfunction]
-fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) {
-    let data_slice = unsafe { data.as_bytes_mut() };
-    xor::cycle_inplace(data_slice, code, start);
+fn xor_cycle_inplace(data: Bound<'_, PyByteArray>, code: &[u8], start: usize) -> PyResult<()> {
+    if data.is_empty() || code.is_empty() {
+        return Ok(());
+    }
+    let buffer = PyBuffer::<u8>::get(data.as_any())?;
+    let mut bytes = buffer.to_vec(data.py())?;
+    xor::cycle_inplace(&mut bytes, code, start);
+    buffer.copy_from_slice(data.py(), &bytes)
 }
 
 #[pyfunction]
@@ -74,9 +80,14 @@ fn tile_copy(
     repy: i32,
     rev: bool,
     lim: u8,
-) {
-    let dst_slice = unsafe { dst.as_bytes_mut() };
-    tile::copy(dst_slice, src, bx, by, mask, tx, ty, repx, repy, rev, lim);
+) -> PyResult<()> {
+    if dst.is_empty() || src.is_empty() || tx == 0 || ty == 0 || bx == 0 || by == 0 {
+        return Ok(());
+    }
+    let buffer = PyBuffer::<u8>::get(dst.as_any())?;
+    let mut bytes = buffer.to_vec(dst.py())?;
+    tile::copy(&mut bytes, src, bx, by, mask, tx, ty, repx, repy, rev, lim);
+    buffer.copy_from_slice(dst.py(), &bytes)
 }
 
 #[pyfunction]

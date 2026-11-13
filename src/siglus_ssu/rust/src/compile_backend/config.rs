@@ -1,7 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyDict, PyList};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub struct SystemArgConfig {
     pub id: i32,
@@ -274,20 +274,11 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
     let source_angou_dict = extract_item::<Bound<'_, PyDict>>(&constants_dict, "source_angou")?;
     let form_code: HashMap<String, i32> = extract_item(&constants_dict, "form_code")?;
     let mut form_ids = HashMap::with_capacity(form_code.len());
-    let mut seen_codes = HashSet::with_capacity(form_code.len());
-    let mut next_id = form_code.values().copied().max().unwrap_or(0);
     let mut form_names: Vec<_> = form_code.keys().collect();
     form_names.sort_unstable();
-    for name in form_names {
-        let code = form_code[name];
-        let id = if seen_codes.insert(code) {
-            code
-        } else {
-            next_id = next_id
-                .checked_add(1)
-                .ok_or_else(|| PyValueError::new_err("native compile form id out of range"))?;
-            next_id
-        };
+    for (index, name) in form_names.into_iter().enumerate() {
+        let id = i32::try_from(index)
+            .map_err(|_| PyValueError::new_err("native compile form id out of range"))?;
         form_ids.insert(name.clone(), id);
     }
     Ok(CompileConstants {

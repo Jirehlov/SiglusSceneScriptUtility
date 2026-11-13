@@ -30,57 +30,57 @@ struct BytecodeBuilder<'a> {
     default_arg_fills: usize,
 }
 
-struct SwitchPlan<'a> {
+struct SwitchPlan<'a, 'src> {
     form: i32,
-    cases: &'a [super::ast::SwitchCase],
-    default_body: Option<&'a [AstNode]>,
+    cases: &'a [super::ast::SwitchCase<'src>],
+    default_body: Option<&'a [AstNode<'src>]>,
     labels: Vec<i32>,
     default_label: Option<i32>,
     out_label: i32,
     index: usize,
 }
 
-enum CompileStep<'a> {
-    Node(&'a AstNode),
-    Statement(&'a AstNode),
-    Statements(std::slice::Iter<'a, AstNode>),
-    Expression(&'a AstNode, bool),
-    ElementExpression(&'a AstNode, bool),
-    Elements(&'a AstNode, usize),
-    Element(&'a ElementPart, &'a AstNode),
-    ElementProperty(&'a ElementPart),
-    ElementEnd(&'a AstNode, bool),
-    ElementCommand(&'a ElementPart, &'a AstNode),
-    Arguments(&'a ArgumentList, bool),
-    Property(&'a FormSpec, i32),
+enum CompileStep<'a, 'src> {
+    Node(&'a AstNode<'src>),
+    Statement(&'a AstNode<'src>),
+    Statements(std::slice::Iter<'a, AstNode<'src>>),
+    Expression(&'a AstNode<'src>, bool),
+    ElementExpression(&'a AstNode<'src>, bool),
+    Elements(&'a AstNode<'src>, usize),
+    Element(&'a ElementPart<'src>, &'a AstNode<'src>),
+    ElementProperty(&'a ElementPart<'src>),
+    ElementEnd(&'a AstNode<'src>, bool),
+    ElementCommand(&'a ElementPart<'src>, &'a AstNode<'src>),
+    Arguments(&'a ArgumentList<'src>, bool),
+    Property(&'a FormSpec<'src>, i32),
     DeclareProperty(i32, i32),
-    Parameters(std::slice::Iter<'a, super::ast::Parameter>),
+    Parameters(std::slice::Iter<'a, super::ast::Parameter<'src>>),
     CommandEnd(i32, i32, i32),
-    Gosub(GotoKind, &'a Atom, &'a ArgumentList, bool),
-    GosubEnd(GotoKind, &'a Atom, &'a ArgumentList, bool),
-    AssignmentLeft(&'a AstNode),
-    AssignmentRight(&'a AstNode),
+    Gosub(GotoKind, &'a Atom, &'a ArgumentList<'src>, bool),
+    GosubEnd(GotoKind, &'a Atom, &'a ArgumentList<'src>, bool),
+    AssignmentLeft(&'a AstNode<'src>),
+    AssignmentRight(&'a AstNode<'src>),
     Return(i32),
     Pop(i32),
     Byte(i32),
     Label(i32),
     Goto(i32, i32),
-    If(&'a [super::ast::IfBranch], i32),
-    ForUpdate(&'a AstNode, i32, i32, i32),
-    ForCondition(&'a AstNode, i32, i32, i32),
+    If(&'a [super::ast::IfBranch<'src>], i32),
+    ForUpdate(&'a AstNode<'src>, i32, i32, i32),
+    ForCondition(&'a AstNode<'src>, i32, i32, i32),
     LoopEnd(i32, i32),
-    SwitchTest(SwitchPlan<'a>),
-    SwitchCompared(SwitchPlan<'a>),
-    SwitchBodies(SwitchPlan<'a>),
+    SwitchTest(SwitchPlan<'a, 'src>),
+    SwitchCompared(SwitchPlan<'a, 'src>),
+    SwitchBodies(SwitchPlan<'a, 'src>),
     Unary(&'a [(i32, usize)], i32),
     Binary(i32, i32, i32),
 }
 
 impl<'a> BytecodeBuilder<'a> {
-    fn error(code: &'static str, node: &AstNode) -> Result<(), BsError> {
+    fn error(code: &'static str, node: &AstNode<'_>) -> Result<(), BsError> {
         Err(BsError {
             code,
-            line: node.first_atom().map(|atom| atom.line).unwrap_or(node.line),
+            line: node.line,
         })
     }
 
@@ -93,7 +93,7 @@ impl<'a> BytecodeBuilder<'a> {
     }
 
     fn push_form(&mut self, form: i32) {
-        self.push_i32(self.codes.form_bytecode[&form]);
+        self.push_i32(self.codes.form_bytecode[form as usize]);
     }
 
     fn is_value(&self, form: i32) -> bool {
@@ -142,7 +142,7 @@ impl<'a> BytecodeBuilder<'a> {
         self.push_i32(line as i32);
     }
 
-    fn compile_node(&mut self, root: &AstNode) -> Result<(), BsError> {
+    fn compile_node(&mut self, root: &AstNode<'_>) -> Result<(), BsError> {
         let mut pending = vec![CompileStep::Node(root)];
         while let Some(step) = pending.pop() {
             match step {
@@ -416,7 +416,7 @@ impl<'a> BytecodeBuilder<'a> {
                     if *element_type == self.codes.element_type.command
                         && let Some(element) = elements.last()
                         && self.codes.message_block_command_codes.contains(&(
-                            self.codes.form_bytecode[&element.parent_form],
+                            self.codes.form_bytecode[element.parent_form as usize],
                             element.element_code,
                         ))
                     {
@@ -462,7 +462,7 @@ impl<'a> BytecodeBuilder<'a> {
                     if *element_type == self.codes.element_type.command
                         && let Some(element) = elements.last()
                         && self.codes.read_flag_command_codes.contains(&(
-                            self.codes.form_bytecode[&element.parent_form],
+                            self.codes.form_bytecode[element.parent_form as usize],
                             element.element_code,
                         ))
                     {
@@ -510,8 +510,15 @@ impl<'a> BytecodeBuilder<'a> {
                     let ia_data = self.ia_data;
                     let missing = ia_data
                         .form_table
-                        .get_element_by_code(element.parent_form, element.element_code)
-                        .and_then(|info| info.arg_map.get(&element.arg_list_id))
+                        .form_map_by_name
+                        .get(&self.codes.form_names[element.parent_form as usize])
+                        .and_then(|info| info.element_map_by_code.get(&element.element_code))
+                        .and_then(|info| {
+                            info.arg_lists
+                                .binary_search_by_key(&element.arg_list_id, |(id, _)| *id)
+                                .ok()
+                                .map(|index| &info.arg_lists[index].1)
+                        })
                         .and_then(|list| list.arg_list.get(argument_count..))
                         .unwrap_or_default();
                     for argument in missing {
@@ -765,7 +772,7 @@ impl<'a> BytecodeBuilder<'a> {
                         self.current_read_flag += 1;
                         self.read_flag_list.push(node.line as i32);
                         if let Some(atoms) = self.read_flag_atoms.as_mut() {
-                            atoms.push(node.first_atom().map_or(-1, |atom| atom.id));
+                            atoms.push(node.first_atom_id.unwrap_or(-1));
                         }
                     }
                     AstPayload::Name { string_index } => {
@@ -809,7 +816,7 @@ impl<'a> BytecodeBuilder<'a> {
 }
 
 pub fn compile_root(
-    root: &AstNode,
+    root: &AstNode<'_>,
     ia_data: &IaData,
     strings: Vec<String>,
     label_count: usize,
@@ -839,7 +846,7 @@ pub fn compile_root(
             .form_table
             .form_code_of(&property.form)
             .unwrap_or(builder.codes.forms.int.code);
-        scn_prop_list.push((builder.codes.form_bytecode[&form], property.size));
+        scn_prop_list.push((builder.codes.form_bytecode[form as usize], property.size));
         scn_prop_name_list.push(property.name.clone());
     }
     let scn_cmd_name_list = ia_data

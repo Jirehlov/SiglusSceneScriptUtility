@@ -276,11 +276,11 @@ impl DecompileFrontend {
             .map_err(|_| ca.error_str.clone())?;
         let mut lex = la::lex_scene_text(&expanded, &self.codes.la, None, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
-        let mut syntax = sa::SyntaxAnalyzer::new(&lex, &self.codes);
+        let mut syntax = sa::SyntaxAnalyzer::new(&lex, &lex.unknown_list, &self.codes);
         let root = syntax
             .analyze(&mut data)
             .map_err(|_| format!("{:?}", syntax.last))?;
-        let mut semantic = ma::SemanticAnalyzer::new(&mut data, &mut lex.str_list);
+        let mut semantic = ma::SemanticAnalyzer::new(&mut data, &mut lex.str_list, &self.codes);
         semantic
             .analyze(root)
             .map_err(|_| format!("{:?}", semantic.last))?;
@@ -363,11 +363,11 @@ fn decompile_goto_reference(text: &str) -> Option<(usize, usize, String)> {
 
 fn usize_map_to_dict<'py>(
     py: Python<'py>,
-    map: &std::collections::BTreeMap<String, usize>,
+    map: &std::collections::BTreeMap<impl AsRef<str>, usize>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     for (key, value) in map {
-        dict.set_item(key, *value)?;
+        dict.set_item(key.as_ref(), *value)?;
     }
     Ok(dict)
 }

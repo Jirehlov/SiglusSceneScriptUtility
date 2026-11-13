@@ -1,5 +1,5 @@
 use super::config::CompileConstants;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub struct FormValue {
@@ -165,7 +165,8 @@ pub struct ElementTypeCodes {
 
 pub struct RuntimeCodes {
     pub forms: FormCodes,
-    pub form_bytecode: HashMap<i32, i32>,
+    pub form_bytecode: Vec<i32>,
+    pub form_names: Vec<String>,
     pub selection_command_codes: HashSet<(i32, i32)>,
     pub message_block_command_codes: HashSet<(i32, i32)>,
     pub read_flag_command_codes: HashSet<(i32, i32)>,
@@ -180,6 +181,12 @@ pub struct RuntimeCodes {
 
 impl RuntimeCodes {
     pub fn from_constants(constants: &CompileConstants) -> Result<Arc<Self>, String> {
+        let mut form_bytecode = vec![0; constants.form_ids.len()];
+        let mut form_names = vec![String::new(); constants.form_ids.len()];
+        for (name, id) in &constants.form_ids {
+            form_bytecode[*id as usize] = constants.form_code[name];
+            form_names[*id as usize] = name.clone();
+        }
         Ok(Arc::new(Self {
             forms: FormCodes {
                 argsref: form_value(constants, "FM___ARGSREF")?,
@@ -199,11 +206,8 @@ impl RuntimeCodes {
                 strlistref: form_value(constants, "FM_STRLISTREF")?,
                 strref: form_value(constants, "FM_STRREF")?,
             },
-            form_bytecode: constants
-                .form_ids
-                .iter()
-                .map(|(name, id)| (*id, constants.form_code[name]))
-                .collect(),
+            form_bytecode,
+            form_names,
             la: LexCodes {
                 z_label_count: constants.z_label_count,
                 none: constants.la("NONE")?,
