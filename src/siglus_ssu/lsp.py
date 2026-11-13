@@ -192,6 +192,20 @@ class SymbolOccurrence:
     definition: bool = False
     renamable: bool = False
 
+    def __reduce__(self):
+        return type(self), (
+            self.symbol_id,
+            self.path,
+            self.line,
+            self.start_char,
+            self.end_char,
+            self.kind,
+            self.semantic_type,
+            self.name,
+            self.definition,
+            self.renamable,
+        )
+
 
 @dataclass(slots=True)
 class StringSemanticRange:
@@ -1380,7 +1394,7 @@ def _native_definition_record(
 ) -> DefinitionRecord:
     return DefinitionRecord(
         name=str(item.get("name", "") or ""),
-        path=os.path.abspath(str(item.get("path", "") or fallback_path)),
+        path=str(item.get("path", "") or fallback_path),
         line=max(1, _native_int_field(item, "line", 1)),
         kind=str(item.get("kind", "") or ""),
         symbol_id=str(item.get("symbol_id", "") or ""),
@@ -1397,7 +1411,7 @@ def _native_symbol_occurrence(
 ) -> SymbolOccurrence:
     return SymbolOccurrence(
         symbol_id=str(item.get("symbol_id", "") or ""),
-        path=os.path.abspath(str(item.get("path", "") or fallback_path)),
+        path=str(item.get("path", "") or fallback_path),
         line=max(0, int(item.get("line", 0) or 0)),
         start_char=max(0, int(item.get("start_char", 0) or 0)),
         end_char=max(0, int(item.get("end_char", 0) or 0)),
@@ -1791,7 +1805,12 @@ def occurrences_for_result(result: AnalysisResult) -> list[SymbolOccurrence]:
 
 
 def _occurrence_position(item: SymbolOccurrence) -> tuple[str, int, int, int]:
-    return _path_identity(item.path), item.line, item.start_char, item.end_char
+    return (
+        windows_filename_key(item.path),
+        item.line,
+        item.start_char,
+        item.end_char,
+    )
 
 
 def _index_occurrences(
@@ -2538,7 +2557,7 @@ def _cache_file_name(value: Any) -> str:
 
 
 def _cache_file_name_from_path(path: str) -> str:
-    return _cache_file_name(os.path.basename(os.path.abspath(path)))
+    return _cache_file_name(os.path.basename(path))
 
 
 def _cache_dict_list(value: Any) -> list[dict[str, Any]]:
@@ -2758,12 +2777,34 @@ def _write_lsp_index_cache(
 ) -> None:
     path = _lsp_index_cache_path(directory, inputs)
     tmp_path = path + f".{os.getpid()}.tmp"
+    encoder = json.JSONEncoder(
+        ensure_ascii=False, separators=(",", ":"), check_circular=False
+    )
+
+    def chunks(value: Any) -> Iterable[str]:
+        if isinstance(value, dict):
+            yield "{"
+            for index, (key, item) in enumerate(value.items()):
+                if index:
+                    yield ","
+                yield encoder.encode(key)
+                yield ":"
+                yield from chunks(item)
+            yield "}"
+        elif isinstance(value, list):
+            yield "["
+            for index, item in enumerate(value):
+                if index:
+                    yield ","
+                yield encoder.encode(item)
+            yield "]"
+        else:
+            yield encoder.encode(value)
+
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(
-                data, f, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            )
+            f.writelines(chunks(data))
         os.replace(tmp_path, path)
     except (OSError, ValueError):
         try:

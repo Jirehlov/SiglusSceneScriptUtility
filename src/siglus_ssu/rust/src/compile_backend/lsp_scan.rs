@@ -10,12 +10,13 @@ use super::ma::{SemanticAnalyzer, SourceBindingKind};
 use super::sa::SyntaxAnalyzer;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedStr;
 use pyo3::types::{PyAny, PyDict, PyList};
 use std::collections::{HashMap, HashSet};
 
-struct LspDefinition {
+struct LspDefinition<'a> {
     name: String,
-    path: String,
+    path: &'a PyBackedStr,
     line: usize,
     kind: String,
     symbol_id: String,
@@ -27,14 +28,14 @@ struct LspDefinition {
     end_char: isize,
 }
 
-struct LspOccurrence {
+struct LspOccurrence<'a> {
     symbol_id: String,
-    path: String,
+    path: &'a PyBackedStr,
     line: usize,
     start_char: usize,
     end_char: usize,
-    kind: String,
-    semantic_type: String,
+    kind: &'static str,
+    semantic_type: &'static str,
     name: String,
     definition: bool,
     renamable: bool,
@@ -51,7 +52,7 @@ struct SourceToken {
 #[pyclass]
 pub struct NativeLspProject {
     base_ia: IaData,
-    source_files: Vec<(String, Vec<Vec<char>>)>,
+    source_files: Vec<(PyBackedStr, Vec<Vec<char>>)>,
 }
 
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
@@ -68,7 +69,7 @@ fn build_inc_project(mut data: IaData, inc_docs: &Bound<'_, PyList>) -> Result<I
     let mut scratch_list = Vec::new();
     for (source_id, item) in inc_docs.iter().enumerate() {
         let item = item.cast::<PyDict>().map_err(|error| error.to_string())?;
-        let path: String = extract_item(item, "path").map_err(|error| error.to_string())?;
+        let path: PyBackedStr = extract_item(item, "path").map_err(|error| error.to_string())?;
         let text: String = extract_item(item, "text").map_err(|error| error.to_string())?;
         let mut analyzer =
             IncAnalyzer::new_with_sidecar(&text, data.codes.forms.global.name.as_str(), Vec::new());
@@ -121,10 +122,10 @@ pub fn lsp_build_project(
     )
 }
 
-fn record_to_py<'py>(py: Python<'py>, record: &LspDefinition) -> PyResult<Bound<'py, PyDict>> {
+fn record_to_py<'py>(py: Python<'py>, record: &LspDefinition<'_>) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("name", &record.name)?;
-    dict.set_item("path", &record.path)?;
+    dict.set_item("path", record.path)?;
     dict.set_item("line", record.line)?;
     dict.set_item("kind", &record.kind)?;
     dict.set_item("symbol_id", &record.symbol_id)?;
@@ -138,16 +139,16 @@ fn record_to_py<'py>(py: Python<'py>, record: &LspDefinition) -> PyResult<Bound<
 
 fn occurrence_to_py<'py>(
     py: Python<'py>,
-    occurrence: &LspOccurrence,
+    occurrence: &LspOccurrence<'_>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let dict = PyDict::new(py);
     dict.set_item("symbol_id", &occurrence.symbol_id)?;
-    dict.set_item("path", &occurrence.path)?;
+    dict.set_item("path", occurrence.path)?;
     dict.set_item("line", occurrence.line)?;
     dict.set_item("start_char", occurrence.start_char)?;
     dict.set_item("end_char", occurrence.end_char)?;
-    dict.set_item("kind", &occurrence.kind)?;
-    dict.set_item("semantic_type", &occurrence.semantic_type)?;
+    dict.set_item("kind", occurrence.kind)?;
+    dict.set_item("semantic_type", occurrence.semantic_type)?;
     dict.set_item("name", &occurrence.name)?;
     dict.set_item("definition", occurrence.definition)?;
     dict.set_item("renamable", occurrence.renamable)?;
@@ -251,12 +252,12 @@ fn label_name(lex: &LexResult, index: usize) -> String {
         .unwrap_or_else(|| "#".to_string())
 }
 
-fn collect_definitions_node(
+fn collect_definitions_node<'a>(
     node: &AstNode<'_>,
     lex: &LexResult,
-    path: &str,
+    path: &'a PyBackedStr,
     current_command: &str,
-    document_symbols: &mut Vec<LspDefinition>,
+    document_symbols: &mut Vec<LspDefinition<'a>>,
 ) {
     let mut pending = vec![(node, current_command)];
     while let Some((node, current_command)) = pending.pop() {
@@ -271,7 +272,7 @@ fn collect_definitions_node(
                 let name = label_name(lex, *index);
                 let record = LspDefinition {
                     name: name.clone(),
-                    path: path.to_string(),
+                    path,
                     line: node.line.max(1),
                     kind: "label".to_string(),
                     symbol_id: String::new(),
@@ -288,7 +289,7 @@ fn collect_definitions_node(
                 let name = format!("#z{z_index}");
                 let record = LspDefinition {
                     name: name.clone(),
-                    path: path.to_string(),
+                    path,
                     line: node.line.max(1),
                     kind: "z_label".to_string(),
                     symbol_id: String::new(),
@@ -312,7 +313,7 @@ fn collect_definitions_node(
                 let signature = format!("{}{} -> {}", name, format_arg_list(parameters), form.name);
                 let record = LspDefinition {
                     name: (*name).to_owned(),
-                    path: path.to_string(),
+                    path,
                     line: name_atom.line.max(1),
                     kind: "command".to_string(),
                     symbol_id: String::new(),
@@ -327,7 +328,7 @@ fn collect_definitions_node(
                 for parameter in parameters {
                     let record = LspDefinition {
                         name: parameter.name.to_owned(),
-                        path: path.to_string(),
+                        path,
                         line: parameter.name_atom.line.max(1),
                         kind: "property".to_string(),
                         symbol_id: String::new(),
@@ -357,7 +358,7 @@ fn collect_definitions_node(
                 };
                 let record = LspDefinition {
                     name: (*name).to_owned(),
-                    path: path.to_string(),
+                    path,
                     line: name_atom.line.max(1),
                     kind: "property".to_string(),
                     symbol_id: String::new(),
@@ -420,22 +421,24 @@ fn collect_definitions_node(
 struct CollectOccurrencesInput<'a> {
     project: &'a NativeLspProject,
     lex: &'a LexResult,
-    source_files: &'a [(&'a str, &'a [Vec<char>])],
+    source_files: &'a [(&'a PyBackedStr, &'a [Vec<char>])],
     path_identity: &'a str,
     bindings: &'a HashMap<i32, super::ma::SourceBinding>,
     replace_uses: &'a [ReplaceUse],
     inc_replace_uses: &'a [ReplaceUse],
-    document_symbols: &'a [LspDefinition],
+    document_symbols: &'a [LspDefinition<'a>],
 }
 
-fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence>, Vec<String>) {
+fn collect_occurrences<'a>(
+    input: CollectOccurrencesInput<'a>,
+) -> (Vec<LspOccurrence<'a>>, Vec<String>) {
     let mut out = Vec::new();
     let mut unmapped_bindings = Vec::new();
     let mut seen = HashSet::new();
     let mut append = |token: Option<SourceToken>,
                       symbol_id: String,
-                      kind: &str,
-                      semantic_type: &str,
+                      kind: &'static str,
+                      semantic_type: &'static str,
                       declaration: bool,
                       renamable: bool| {
         let Some(token) = token else {
@@ -451,7 +454,7 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
             return;
         }
         if !seen.insert((
-            *path,
+            path.as_str(),
             token.line,
             token.start_char,
             token.end_char,
@@ -462,12 +465,12 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
         }
         out.push(LspOccurrence {
             symbol_id,
-            path: path.to_string(),
+            path,
             line: token.line,
             start_char: token.start_char,
             end_char: token.end_char,
-            kind: kind.to_string(),
-            semantic_type: semantic_type.to_string(),
+            kind,
+            semantic_type,
             name: token.text,
             definition: declaration,
             renamable,
@@ -576,12 +579,12 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
         }
         out.push(LspOccurrence {
             symbol_id: record.symbol_id.clone(),
-            path: record.path.clone(),
+            path: record.path,
             line: record.line - 1,
             start_char: record.start_char as usize,
             end_char: record.end_char as usize,
-            kind: "macro".to_string(),
-            semantic_type: "macro".to_string(),
+            kind: "macro",
+            semantic_type: "macro",
             name: record.name.clone(),
             definition: true,
             renamable: false,
@@ -589,14 +592,14 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
     }
     out.sort_by(|left, right| {
         (
-            &left.path,
+            left.path.as_str(),
             left.line,
             left.start_char,
             left.end_char,
             &left.symbol_id,
         )
             .cmp(&(
-                &right.path,
+                right.path.as_str(),
                 right.line,
                 right.start_char,
                 right.end_char,
@@ -606,10 +609,10 @@ fn collect_occurrences(input: CollectOccurrencesInput<'_>) -> (Vec<LspOccurrence
     (out, unmapped_bindings)
 }
 
-fn add_inline_inc_definitions(
-    document_symbols: &mut Vec<LspDefinition>,
+fn add_inline_inc_definitions<'a>(
+    document_symbols: &mut Vec<LspDefinition<'a>>,
     sidecar: &IncSidecar,
-    source_files: &[(&str, &[Vec<char>])],
+    source_files: &[(&'a PyBackedStr, &[Vec<char>])],
     path_identity: &str,
 ) {
     for decl in &sidecar.decls {
@@ -621,7 +624,7 @@ fn add_inline_inc_definitions(
         }
         document_symbols.push(LspDefinition {
             name: decl.name.clone(),
-            path: path.to_string(),
+            path,
             line: decl.line.max(1),
             kind: decl.kind.clone(),
             symbol_id: if matches!(decl.kind.as_str(), "macro" | "define" | "replace") {
@@ -647,7 +650,7 @@ fn add_inline_inc_definitions(
     }
 }
 
-fn scene_commands(document_symbols: &[LspDefinition]) -> Vec<&LspDefinition> {
+fn scene_commands<'a, 's>(document_symbols: &'s [LspDefinition<'a>]) -> Vec<&'s LspDefinition<'a>> {
     let mut out = document_symbols
         .iter()
         .filter(|record| record.kind == "command" && record.scope == "scene")
@@ -672,7 +675,7 @@ fn scene_commands(document_symbols: &[LspDefinition]) -> Vec<&LspDefinition> {
 pub fn lsp_scan_document(
     py: Python<'_>,
     project: PyRef<'_, NativeLspProject>,
-    path: &str,
+    path: &PyBackedStr,
     path_identity: &str,
     text: &str,
     run_bs: bool,
@@ -774,7 +777,7 @@ pub fn lsp_scan_document(
         project
             .source_files
             .iter()
-            .map(|(path, lines)| (path.as_str(), lines.as_slice())),
+            .map(|(path, lines)| (path, lines.as_slice())),
     );
     add_inline_inc_definitions(
         &mut document_symbols,
@@ -794,7 +797,7 @@ pub fn lsp_scan_document(
                     source_files.get(token.source_id as usize)
                 && token_matches_text(source_lines, &token)
             {
-                record.path = source_path.to_string();
+                record.path = source_path;
                 record.line = token.line + 1;
                 record.start_char = token.start_char as isize;
                 record.end_char = token.end_char as isize;

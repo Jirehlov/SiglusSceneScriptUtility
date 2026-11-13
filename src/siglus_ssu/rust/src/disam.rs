@@ -52,6 +52,11 @@ impl Text {
     fn eq_str(&self, text: &str) -> bool {
         self.chars.iter().copied().eq(text.chars().map(u32::from))
     }
+    fn starts_with(&self, text: &str) -> bool {
+        let mut chars = self.chars.iter().copied();
+        text.chars()
+            .all(|code| chars.next() == Some(u32::from(code)))
+    }
     fn hash_chars(chars: &[u32]) -> u64 {
         let mut state = std::collections::hash_map::DefaultHasher::new();
         chars.hash(&mut state);
@@ -435,32 +440,39 @@ pub struct NativeValue {
 
 #[pymethods]
 impl NativeValue {
-    #[getter]
-    fn retained_bytes(&self) -> usize {
+    fn retained_bytes(&self, maximum: usize) -> Option<usize> {
         let V::Native(value) = &self.inner else {
-            return 0;
+            return Some(0);
         };
         let NativeObject::Scene(scene) = value.as_ref() else {
-            return 0;
+            return Some(0);
         };
+        let base = scene.annotations.borrow().len() * std::mem::size_of::<Annotation>()
+            + scene.events.len()
+                * (std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>());
+        if base > maximum {
+            return None;
+        }
         let arguments = |args: &[Argument]| -> usize {
-            let mut pending = vec![args.iter()];
+            let mut pending = Vec::new();
+            let mut iter = args.iter();
             let mut bytes = 0usize;
-            while let Some(iter) = pending.last_mut() {
+            loop {
                 if let Some(arg) = iter.next() {
                     bytes = bytes.saturating_add(std::mem::size_of::<Argument>());
                     if !arg.sub.is_empty() {
-                        pending.push(arg.sub.iter());
+                        pending.push(iter);
+                        iter = arg.sub.iter();
                     }
+                } else if let Some(parent) = pending.pop() {
+                    iter = parent;
                 } else {
-                    pending.pop();
+                    break;
                 }
             }
             bytes
         };
-        scene.annotations.borrow().len() * std::mem::size_of::<Annotation>()
-            + scene.events.len()
-                * (std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>())
+        let retained = base
             + scene
                 .events
                 .iter()
@@ -478,7 +490,8 @@ impl NativeValue {
                 .labels
                 .iter()
                 .map(|labels| labels.len() * std::mem::size_of::<SceneLabel>())
-                .sum::<usize>()
+                .sum::<usize>();
+        (retained <= maximum).then_some(retained)
     }
 }
 
@@ -3729,23 +3742,28 @@ impl ExpressionState {
         Ok(out)
     }
 }
-fn trim_source(text: &SourceText) -> SourceText {
-    let start = text
-        .chars
+fn trim_source_chars(chars: &[u32]) -> &[u32] {
+    let start = chars
         .iter()
         .position(|code| !is_space(*code))
-        .unwrap_or(text.chars.len());
-    let end = text
-        .chars
+        .unwrap_or(chars.len());
+    let end = chars[start..]
         .iter()
         .rposition(|code| !is_space(*code))
-        .map(|index| index + 1)
+        .map(|index| start + index + 1)
         .unwrap_or(start);
-    if start == 0 && end == text.chars.len() {
+    &chars[start..end]
+}
+fn trim_source_slice(text: &SourceText, start: usize, end: usize) -> SourceText {
+    let chars = trim_source_chars(&text.chars[start..end]);
+    if chars.len() == text.chars.len() {
         text.clone()
     } else {
-        Rc::new(Text::new(text.chars[start..end].to_vec()))
+        Rc::new(Text::new(chars.to_vec()))
     }
+}
+fn trim_source(text: &SourceText) -> SourceText {
+    trim_source_slice(text, 0, text.chars.len())
 }
 
 enum NativeObject {
@@ -5642,26 +5660,28 @@ fn native_line_postprocess(
             lines = out;
         }
         LinePass::TerminalLabel(eof) => {
-            let eof = Some(eof);
-            let references = line_references(rt, &lines)?;
-            let last = lines.iter().rposition(|line| line.target.is_some());
-            lines = lines
-                .into_iter()
-                .enumerate()
-                .filter_map(|(index, line)| {
-                    if Some(index) == last
-                        && line.target.is_some()
-                        && line.target == eof
-                        && let Some(label) = label_definition(&line.text)
-                        && !label.label.z
-                        && !definition_has_tail(&line.text, label)
-                        && !references.contains(&definition_token(&line.text, label))
-                    {
-                        return None;
-                    }
-                    Some(line)
-                })
-                .collect();
+            let Some(last) = lines.iter().rposition(|line| line.target.is_some()) else {
+                return Ok(lines);
+            };
+            let line = &lines[last];
+            if line.target != Some(eof) {
+                return Ok(lines);
+            }
+            let Some(label) = label_definition(&line.text)
+                .filter(|label| !label.label.z && !definition_has_tail(&line.text, *label))
+            else {
+                return Ok(lines);
+            };
+            let token = definition_token(&line.text, label);
+            for line in &lines {
+                if label_references(rt, &line.text)?
+                    .iter()
+                    .any(|reference| reference.label == token)
+                {
+                    return Ok(lines);
+                }
+            }
+            lines.remove(last);
         }
         LinePass::DedupeLabels => {
             let mut best: HashMap<SourceText, ((bool, bool), usize)> = HashMap::new();
@@ -5693,13 +5713,6 @@ fn native_line_postprocess(
         }
         LinePass::RestoreLabels => {
             let scene = &instance.scene;
-            let mut insertions = LineInsertions::new(&lines);
-            let mut events = HashMap::new();
-            for (index, labels) in scene.labels.iter().enumerate() {
-                for label in labels.iter().filter(|label| !label.z) {
-                    events.entry(label.token()).or_insert(index);
-                }
-            }
             let mut definitions = lines
                 .iter()
                 .filter_map(|line| {
@@ -5713,7 +5726,17 @@ fn native_line_postprocess(
                 .difference(&definitions)
                 .cloned()
                 .collect::<std::collections::HashSet<_>>();
-            while !pending.is_empty() {
+            if pending.is_empty() {
+                return Ok(lines);
+            }
+            let mut insertions = LineInsertions::new(&lines);
+            let mut events = HashMap::new();
+            for (index, labels) in scene.labels.iter().enumerate() {
+                for label in labels.iter().filter(|label| !label.z) {
+                    events.entry(label.token()).or_insert(index);
+                }
+            }
+            loop {
                 let mut missing = pending.drain().collect::<Vec<_>>();
                 missing.sort_by_key(|label| {
                     let mut id = 0i64;
@@ -5742,6 +5765,9 @@ fn native_line_postprocess(
                     );
                 }
                 pending.retain(|label| !definitions.contains(label));
+                if pending.is_empty() {
+                    break;
+                }
             }
             lines = insertions.finish(lines);
         }
@@ -5756,19 +5782,19 @@ fn native_line_postprocess(
             }
             let mut out: Vec<SourceLine> = vec![];
             for (index, line) in lines.into_iter().enumerate() {
-                let stripped = trim_source(&line.text);
+                let stripped = trim_source_chars(&line.text.chars);
                 if !line.text.chars.is_empty()
                     && line.target.is_none()
-                    && (stripped.chars.starts_with(&source("}elseif(").chars)
-                        || stripped.chars.starts_with(&source("}else{").chars))
+                    && (stripped.starts_with(&[125, 101, 108, 115, 101, 105, 102, 40])
+                        || stripped.starts_with(&[125, 101, 108, 115, 101, 123]))
                     && let Some(previous) = out.last_mut().filter(|previous| {
                         !previous.text.chars.is_empty() && previous.target.is_some()
                     })
                 {
-                    append_source_text(&mut previous.text, &stripped.chars);
+                    append_source_text(&mut previous.text, stripped);
                     continue;
                 }
-                if stripped.chars[..] == [125]
+                if stripped == [125]
                     && let Some(previous) = out.last_mut()
                 {
                     let label = label_definition(&previous.text);
@@ -5939,19 +5965,19 @@ fn rewrite_source_references(
     Ok(Rc::new(Text::new(chars)))
 }
 fn next_source_statement(lines: &[SourceLine], index: usize) -> Option<usize> {
-    (index..lines.len()).find(|index| !trim_source(&lines[*index].text).chars.is_empty())
+    (index..lines.len()).find(|index| lines[*index].text.chars.iter().any(|code| !is_space(*code)))
 }
 fn previous_source_statement(lines: &[SourceLine], index: usize) -> Option<usize> {
     (0..index)
         .rev()
-        .find(|index| !trim_source(&lines[*index].text).chars.is_empty())
+        .find(|index| lines[*index].text.chars.iter().any(|code| !is_space(*code)))
 }
 fn source_label_offset(scene: &DecompileScene, label: &SourceText) -> Option<i64> {
     let (offsets, start) = if label.chars.starts_with(&[35, 108]) {
         (&scene.label_offsets, 2)
     } else if label.chars.starts_with(&[35, 122]) {
         (&scene.z_labels, 2)
-    } else if label.chars.starts_with(&source("#__gap_l").chars) {
+    } else if label.starts_with("#__gap_l") {
         (&scene.label_offsets, 8)
     } else {
         return None;
@@ -5975,12 +6001,12 @@ fn synthetic_definition(text: &SourceText) -> Option<(usize, usize, Option<usize
         index += 1;
     }
     let indent = index;
-    let first = source("#__gap_l");
-    let second = source("#__cdnl_gap_");
-    if chars[index..].starts_with(&first.chars) {
-        index += first.chars.len();
-    } else if chars[index..].starts_with(&second.chars) {
-        index += second.chars.len();
+    let first = [35, 95, 95, 103, 97, 112, 95, 108];
+    let second = [35, 95, 95, 99, 100, 110, 108, 95, 103, 97, 112, 95];
+    if chars[index..].starts_with(&first) {
+        index += first.len();
+    } else if chars[index..].starts_with(&second) {
+        index += second.len();
     } else {
         return None;
     }
@@ -6002,8 +6028,7 @@ fn synthetic_definition(text: &SourceText) -> Option<(usize, usize, Option<usize
     Some((indent, end, tail))
 }
 fn plain_goto_label(text: &SourceText) -> Option<SourceText> {
-    let text = trim_source(text);
-    let chars = &text.chars;
+    let chars = trim_source_chars(&text.chars);
     if !chars.starts_with(&[103, 111, 116, 111]) {
         return None;
     }
@@ -6171,7 +6196,6 @@ fn native_late_line_pass(
         }
         LateLinePass::DropRedundantZ => {
             let mut inherited = std::collections::HashSet::new();
-            let mut raw: HashMap<i64, std::collections::HashSet<SceneLabel>> = HashMap::new();
             for (index, event) in scene.events.iter().enumerate() {
                 let Some(line) = event.line.filter(|line| *line > 0) else {
                     continue;
@@ -6180,16 +6204,9 @@ fn native_late_line_pass(
                 if labels.is_empty() {
                     continue;
                 }
-                raw.entry(line).or_default().extend(labels.iter().copied());
-                let z = labels
-                    .iter()
-                    .filter(|label| label.z)
-                    .map(|label| label.id)
-                    .collect::<std::collections::HashSet<_>>();
-                for label in labels
-                    .iter()
-                    .filter(|label| !label.z && z.contains(&label.id))
-                {
+                for label in labels.iter().filter(|label| {
+                    !label.z && scene.z_labels.get(label.id as usize) == Some(&event.offset)
+                }) {
                     inherited.insert((line, label.id));
                 }
             }
@@ -6202,15 +6219,7 @@ fn native_late_line_pass(
                         .filter(|target| inherited.contains(&(*target, label.label.id)))
                 {
                     let token = definition_token(&line.text, label);
-                    if definition_has_tail(&line.text, label)
-                        && !references.contains(&token)
-                        && raw.get(&target).is_some_and(|labels| {
-                            labels.contains(&SceneLabel {
-                                z: true,
-                                id: label.label.id,
-                            })
-                        })
-                    {
+                    if definition_has_tail(&line.text, label) && !references.contains(&token) {
                         out.push(SourceLine {
                             text: definition_without_label(&line.text, label),
                             target: line.target,
@@ -7764,7 +7773,7 @@ impl<'a> SourceParser<'a> {
         let structured = texts.first().is_some_and(|text| {
             ["if(", "elseif(", "else{", "while(", "for("]
                 .iter()
-                .any(|prefix| text.chars.starts_with(&source(prefix).chars))
+                .any(|prefix| text.starts_with(prefix))
         });
         if !texts.is_empty()
             && texts[0].chars.last() == Some(&123)
@@ -7837,8 +7846,8 @@ impl<'a> SourceParser<'a> {
                 }
                 if label_definition(&text).is_some()
                     || text.has_line_feed
-                    || text.chars.starts_with(&source("switch(").chars)
-                    || text.chars.starts_with(&source("command ").chars)
+                    || text.starts_with("switch(")
+                    || text.starts_with("command ")
                 {
                     valid = false;
                     break;
@@ -8898,48 +8907,52 @@ fn source_slice(text: &SourceText, start: usize, end: usize) -> SourceText {
         Rc::new(Text::new(text.chars[start..end].to_vec()))
     }
 }
-fn source_top_positions(chars: &[u32]) -> Vec<usize> {
-    let mut positions = vec![];
+fn source_top_positions(chars: &[u32]) -> impl Iterator<Item = usize> + '_ {
     let mut depth = 0i64;
     let mut quoted = false;
     let mut escape = false;
-    for (index, code) in chars.iter().copied().enumerate() {
-        if quoted {
-            if escape {
-                escape = false;
-            } else if code == 92 {
-                escape = true;
-            } else if code == 34 {
-                quoted = false;
+    chars
+        .iter()
+        .copied()
+        .enumerate()
+        .filter_map(move |(index, code)| {
+            if quoted {
+                if escape {
+                    escape = false;
+                } else if code == 92 {
+                    escape = true;
+                } else if code == 34 {
+                    quoted = false;
+                }
+                return None;
             }
-            continue;
-        }
-        if code == 34 {
-            quoted = true;
-            continue;
-        }
-        if matches!(code, 40 | 91 | 123) {
-            depth += 1;
-        } else if matches!(code, 41 | 93 | 125) {
-            depth -= 1;
-        }
-        if depth == 0 {
-            positions.push(index);
-        }
-    }
-    positions
+            if code == 34 {
+                quoted = true;
+                return None;
+            }
+            if matches!(code, 40 | 91 | 123) {
+                depth += 1;
+            } else if matches!(code, 41 | 93 | 125) {
+                depth -= 1;
+            }
+            (depth == 0).then_some(index)
+        })
 }
 fn source_strip_parens(text: &SourceText) -> SourceText {
-    let mut text = trim_source(text);
-    while text.chars.first() == Some(&40) && text.chars.last() == Some(&41) {
-        if source_top_positions(&text.chars).iter().any(|index| {
-            matches!(text.chars[*index], 41 | 93 | 125) && *index + 1 != text.chars.len()
-        }) {
+    let mut chars = trim_source_chars(&text.chars);
+    while chars.first() == Some(&40) && chars.last() == Some(&41) {
+        if source_top_positions(chars)
+            .any(|index| matches!(chars[index], 41 | 93 | 125) && index + 1 != chars.len())
+        {
             break;
         }
-        text = trim_source(&source_slice(&text, 1, text.chars.len() - 1));
+        chars = trim_source_chars(&chars[1..chars.len() - 1]);
     }
-    text
+    if chars.len() == text.chars.len() {
+        text.clone()
+    } else {
+        Rc::new(Text::new(chars.to_vec()))
+    }
 }
 fn source_split_assign(text: &SourceText) -> Option<(SourceText, SourceText)> {
     let text = trim_source(text);
@@ -8954,8 +8967,8 @@ fn source_split_assign(text: &SourceText) -> Option<(SourceText, SourceText)> {
         {
             continue;
         }
-        let left = trim_source(&source_slice(&text, 0, index));
-        let right = trim_source(&source_slice(&text, index + 1, text.chars.len()));
+        let left = trim_source_slice(&text, 0, index);
+        let right = trim_source_slice(&text, index + 1, text.chars.len());
         if !left.chars.is_empty() && !right.chars.is_empty() {
             return Some((left, right));
         }
@@ -8973,12 +8986,8 @@ fn source_split_binary(
         {
             continue;
         }
-        let left = trim_source(&source_slice(&text, 0, index));
-        let right = trim_source(&source_slice(
-            &text,
-            index + operator.chars.len(),
-            text.chars.len(),
-        ));
+        let left = trim_source_slice(&text, 0, index);
+        let right = trim_source_slice(&text, index + operator.chars.len(), text.chars.len());
         if !left.chars.is_empty() && !right.chars.is_empty() {
             return Some((left, right));
         }

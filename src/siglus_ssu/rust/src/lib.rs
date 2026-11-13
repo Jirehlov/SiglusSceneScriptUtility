@@ -504,7 +504,7 @@ fn lsp_build_project(
 fn lsp_scan_document(
     py: Python<'_>,
     project: PyRef<'_, compile_backend::NativeLspProject>,
-    path: &str,
+    path: pyo3::pybacked::PyBackedStr,
     path_identity: &str,
     text: &str,
     run_bs: bool,
@@ -514,7 +514,7 @@ fn lsp_scan_document(
         compile_backend::lsp_scan_document(
             py,
             project,
-            path,
+            &path,
             path_identity,
             text,
             run_bs,

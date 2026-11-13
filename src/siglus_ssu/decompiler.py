@@ -759,8 +759,8 @@ def build_decompile_hints(bundles, status):
             nonlocal remaining_bytes
             for bundle in bundles:
                 status(bundle)
-                retained_bytes = bundle["trace"].retained_bytes
-                if retained_bytes <= remaining_bytes:
+                retained_bytes = bundle["trace"].retained_bytes(remaining_bytes)
+                if retained_bytes is not None:
                     cached_bundles[bundle["dat_path"]] = bundle
                     remaining_bytes -= retained_bytes
                 yield bundle

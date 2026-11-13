@@ -257,7 +257,9 @@ def dat_disassembly_bundle(
         str_idx = meta["str_index_list"]
         str_blob_end = meta["str_blob_end"]
         str_list = None
-        if payload_trace and str_idx:
+        if str_idx and (
+            payload_trace or (trace_profile == "decompile" and not emit_text)
+        ):
             from .native_ops import decode_payload_strings_native
 
             str_list = decode_payload_strings_native(

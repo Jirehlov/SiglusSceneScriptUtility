@@ -49,7 +49,8 @@ def scan_lsp_document_native(
         return None
     from .path_policy import windows_filename_key
 
-    path_identity = windows_filename_key(os.path.abspath(path))
+    path = os.path.abspath(path)
+    path_identity = windows_filename_key(path)
     return native_accel.lsp_scan_document(
         project, path, path_identity, text, bool(run_bs), bool(read_flags)
     )
