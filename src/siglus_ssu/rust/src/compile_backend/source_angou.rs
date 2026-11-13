@@ -97,61 +97,57 @@ pub fn encrypt_source(
         bytes.copy_from_slice(&unit.to_le_bytes());
     }
     crate::xor::cycle_inplace(name_bytes, &config.name_code, config.name_index);
-    let data_offset_2 = data_offset_1 + map_bytes;
-    let source_offset_1 = 0;
-    let source_offset_2 = half_bytes;
-    crate::tile::copy(
-        &mut output[data_offset_1..data_offset_1 + map_bytes],
-        &padded[source_offset_1..source_offset_1 + map_bytes],
-        map_width,
-        map_height,
-        &mask,
-        mask_width,
-        mask_height,
-        config.tile_repx,
-        config.tile_repy,
-        false,
-        config.tile_limit,
-    );
-    crate::tile::copy(
-        &mut output[data_offset_1..data_offset_1 + map_bytes],
-        &padded[source_offset_2..source_offset_2 + map_bytes],
-        map_width,
-        map_height,
-        &mask,
-        mask_width,
-        mask_height,
-        config.tile_repx,
-        config.tile_repy,
-        true,
-        config.tile_limit,
-    );
-    crate::tile::copy(
-        &mut output[data_offset_2..data_offset_2 + map_bytes],
-        &padded[source_offset_1..source_offset_1 + map_bytes],
-        map_width,
-        map_height,
-        &mask,
-        mask_width,
-        mask_height,
-        config.tile_repx,
-        config.tile_repy,
-        true,
-        config.tile_limit,
-    );
-    crate::tile::copy(
-        &mut output[data_offset_2..data_offset_2 + map_bytes],
-        &padded[source_offset_2..source_offset_2 + map_bytes],
-        map_width,
-        map_height,
-        &mask,
-        mask_width,
-        mask_height,
-        config.tile_repx,
-        config.tile_repy,
-        false,
-        config.tile_limit,
-    );
+    let source_first = &padded[..map_bytes];
+    let source_second = &padded[half_bytes..half_bytes + map_bytes];
+    let (first, second) = output[data_offset_1..].split_at_mut(map_bytes);
+    if map_width > 0 && mask_width > 0 && mask_height > 0 {
+        let x0 = if config.tile_repx <= 0 {
+            config.tile_repx.unsigned_abs() as usize % mask_width
+        } else {
+            (mask_width - (config.tile_repx as usize % mask_width)) % mask_width
+        };
+        let mut mask_y = if config.tile_repy <= 0 {
+            config.tile_repy.unsigned_abs() as usize % mask_height
+        } else {
+            (mask_height - (config.tile_repy as usize % mask_height)) % mask_height
+        };
+        let row_bytes = map_width.saturating_mul(4);
+        for (((first, second), source_first), source_second) in first
+            .chunks_exact_mut(row_bytes)
+            .zip(second.chunks_exact_mut(row_bytes))
+            .zip(source_first.chunks_exact(row_bytes))
+            .zip(source_second.chunks_exact(row_bytes))
+        {
+            let mask_row = mask_y * mask_width;
+            let mut mask_x = x0;
+            for (((first, second), source_first), source_second) in first
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(second.as_chunks_mut::<4>().0)
+                .zip(source_first.as_chunks::<4>().0)
+                .zip(source_second.as_chunks::<4>().0)
+            {
+                if let Some(value) = mask.get(mask_row + mask_x) {
+                    if *value >= config.tile_limit {
+                        first.copy_from_slice(source_first);
+                        second.copy_from_slice(source_second);
+                    } else {
+                        first.copy_from_slice(source_second);
+                        second.copy_from_slice(source_first);
+                    }
+                }
+                mask_x += 1;
+                if mask_x == mask_width {
+                    mask_x = 0;
+                }
+            }
+            mask_y += 1;
+            if mask_y == mask_height {
+                mask_y = 0;
+            }
+        }
+    }
     crate::xor::cycle_inplace(&mut output, &config.last_code, config.last_index);
     Ok(output)
 }

@@ -9,77 +9,98 @@ const UNUSED_NODE: usize = WINDOW_SIZE + 1;
 
 #[derive(Clone, Copy)]
 struct LzssNode {
-    parent: usize,
-    sml: usize,
-    big: usize,
+    parent: u32,
+    sml: u16,
+    big: u16,
 }
 
 struct LzssTree {
-    nodes: Vec<LzssNode>,
+    nodes: Box<[LzssNode; WINDOW_SIZE + 2]>,
 }
 
 impl LzssTree {
     fn new() -> Self {
-        let mut nodes = vec![
+        let mut nodes: Box<[LzssNode; WINDOW_SIZE + 2]> = match vec![
             LzssNode {
-                parent: UNUSED_NODE,
-                sml: UNUSED_NODE,
-                big: UNUSED_NODE,
+                parent: UNUSED_NODE as u32,
+                sml: UNUSED_NODE as u16,
+                big: UNUSED_NODE as u16,
             };
             WINDOW_SIZE + 2
-        ];
-        nodes[0].parent = ROOT_NODE;
+        ]
+        .into_boxed_slice()
+        .try_into()
+        {
+            Ok(nodes) => nodes,
+            Err(_) => unreachable!(),
+        };
+        nodes[0].parent = ROOT_NODE as u32;
         nodes[ROOT_NODE].parent = 0;
         nodes[ROOT_NODE].big = 0;
         Self { nodes }
     }
 
+    #[inline(never)]
     fn connect(&mut self, target: usize) {
         let node = self.nodes[target];
-        if node.parent == UNUSED_NODE {
+        if node.parent == UNUSED_NODE as u32 {
             return;
         }
-        let parent = node.parent;
-        if node.big == UNUSED_NODE {
-            let next = node.sml;
-            self.nodes[next].parent = parent;
-            if self.nodes[parent].big == target {
-                self.nodes[parent].big = next;
+        let parent = node.parent as usize;
+        if node.big == UNUSED_NODE as u16 {
+            let next = node.sml as usize;
+            self.nodes[next].parent = parent as u32;
+            if self.nodes[parent].big == target as u16 {
+                self.nodes[parent].big = next as u16;
             } else {
-                self.nodes[parent].sml = next;
+                self.nodes[parent].sml = next as u16;
             }
-            self.nodes[target].parent = UNUSED_NODE;
-        } else if node.sml == UNUSED_NODE {
-            let next = node.big;
-            self.nodes[next].parent = parent;
-            if self.nodes[parent].big == target {
-                self.nodes[parent].big = next;
+            self.nodes[target].parent = UNUSED_NODE as u32;
+        } else if node.sml == UNUSED_NODE as u16 {
+            let next = node.big as usize;
+            self.nodes[next].parent = parent as u32;
+            if self.nodes[parent].big == target as u16 {
+                self.nodes[parent].big = next as u16;
             } else {
-                self.nodes[parent].sml = next;
+                self.nodes[parent].sml = next as u16;
             }
-            self.nodes[target].parent = UNUSED_NODE;
+            self.nodes[target].parent = UNUSED_NODE as u32;
         } else {
-            let mut next = node.sml;
-            while self.nodes[next].big != UNUSED_NODE {
-                next = self.nodes[next].big;
+            let mut next = node.sml as usize;
+            while self.nodes[next].big != UNUSED_NODE as u16 {
+                next = self.nodes[next].big as usize;
             }
-            self.connect(next);
+            self.detach_predecessor(next);
             self.replace(target, next);
         }
     }
 
+    #[inline(never)]
+    fn detach_predecessor(&mut self, target: usize) {
+        let node = &self.nodes[target];
+        let parent = node.parent as usize;
+        let next = node.sml as usize;
+        self.nodes[next].parent = parent as u32;
+        if self.nodes[parent].big == target as u16 {
+            self.nodes[parent].big = next as u16;
+        } else {
+            self.nodes[parent].sml = next as u16;
+        }
+    }
+
+    #[inline(never)]
     fn replace(&mut self, target: usize, next: usize) {
         let node = self.nodes[target];
-        let parent = node.parent;
-        if self.nodes[parent].sml == target {
-            self.nodes[parent].sml = next;
+        let parent = node.parent as usize;
+        if self.nodes[parent].sml == target as u16 {
+            self.nodes[parent].sml = next as u16;
         } else {
-            self.nodes[parent].big = next;
+            self.nodes[parent].big = next as u16;
         }
         self.nodes[next] = node;
-        self.nodes[node.sml].parent = next;
-        self.nodes[node.big].parent = next;
-        self.nodes[target].parent = UNUSED_NODE;
+        self.nodes[node.sml as usize].parent = next as u32;
+        self.nodes[node.big as usize].parent = next as u32;
+        self.nodes[target].parent = UNUSED_NODE as u32;
     }
 
     fn additional_connect(
@@ -93,14 +114,14 @@ impl LzssTree {
         } else {
             &mut self.nodes[target].sml
         };
-        if *child != UNUSED_NODE {
-            return (false, *child);
+        if *child != UNUSED_NODE as u16 {
+            return (false, *child as usize);
         }
-        *child = next;
+        *child = next as u16;
         self.nodes[next] = LzssNode {
-            parent: target,
-            sml: UNUSED_NODE,
-            big: UNUSED_NODE,
+            parent: target as u32,
+            sml: UNUSED_NODE as u16,
+            big: UNUSED_NODE as u16,
         };
         (true, target)
     }
@@ -109,9 +130,6 @@ impl LzssTree {
 struct LzssTreeFind<'a> {
     src: &'a [u8],
     src_index: usize,
-    match_target: usize,
-    match_size: usize,
-    window_top: usize,
     tree: LzssTree,
 }
 
@@ -120,67 +138,65 @@ impl<'a> LzssTreeFind<'a> {
         Self {
             src,
             src_index: 0,
-            match_target: 0,
-            match_size: 0,
-            window_top: 0,
             tree: LzssTree::new(),
         }
     }
 
-    fn proc(&mut self, replace_cnt: usize) {
-        for _ in 0..replace_cnt {
-            self.src_index += 1;
-            let src_page = self.src_index / WINDOW_SIZE;
-            self.window_top = (self.window_top + 1) % WINDOW_SIZE;
-            self.tree.connect(self.window_top);
+    #[inline(always)]
+    fn proc<const TRACK_MATCH: bool>(&mut self) -> (usize, usize) {
+        self.src_index += 1;
+        let window_top = self.src_index % WINDOW_SIZE;
+        self.tree.connect(window_top);
 
-            let mut target = self.tree.nodes[ROOT_NODE].big;
-            self.match_size = 0;
+        let mut target = self.tree.nodes[ROOT_NODE].big as usize;
+        let mut match_size = 0;
+        let mut match_target = window_top;
 
-            let src_left = self.src.len().saturating_sub(self.src_index);
-            if src_left == 0 {
-                return;
-            }
+        if self.src_index >= self.src.len() {
+            return (0, window_top);
+        }
+        let source = &self.src[self.src_index..];
+        let matching_loop_cnt = LOOK_AHEAD.min(source.len());
 
-            let matching_loop_cnt = LOOK_AHEAD.min(src_left);
+        loop {
+            let offset = self.src_index.wrapping_sub(target) % WINDOW_SIZE;
+            let p2 = self.src_index.wrapping_sub(offset);
 
-            loop {
-                let p1 = self.src_index;
-                let mut p2 = src_page * WINDOW_SIZE + target;
-                if target > self.src_index % WINDOW_SIZE {
-                    p2 = p2.wrapping_sub(WINDOW_SIZE);
-                }
+            let mut matching_counter = 0;
+            let mut matching_result = 0i32;
 
-                let mut matching_counter = 0;
-                let mut matching_result = 0i32;
-
-                while matching_counter < matching_loop_cnt {
-                    matching_result = self.src[p1 + matching_counter] as i32
-                        - self.src[p2 + matching_counter] as i32;
-                    if matching_result != 0 {
-                        break;
-                    }
-                    matching_counter += 1;
-                }
-
-                if matching_counter > self.match_size {
-                    self.match_size = matching_counter;
-                    self.match_target = target;
-                    if self.match_size == matching_loop_cnt {
-                        self.tree.replace(target, self.window_top);
-                        break;
-                    }
-                }
-
-                let (done, new_target) =
-                    self.tree
-                        .additional_connect(target, self.window_top, matching_result);
-                if done {
+            while matching_counter < matching_loop_cnt {
+                matching_result =
+                    source[matching_counter] as i32 - self.src[p2 + matching_counter] as i32;
+                if matching_result != 0 {
                     break;
                 }
-                target = new_target;
+                matching_counter += 1;
             }
+
+            if TRACK_MATCH {
+                if matching_counter > match_size {
+                    match_size = matching_counter;
+                    match_target = target;
+                    if match_size == matching_loop_cnt {
+                        self.tree.replace(target, window_top);
+                        break;
+                    }
+                }
+            } else if matching_counter == matching_loop_cnt {
+                self.tree.replace(target, window_top);
+                break;
+            }
+
+            let (done, new_target) =
+                self.tree
+                    .additional_connect(target, window_top, matching_result);
+            if done {
+                break;
+            }
+            target = new_target;
         }
+        (match_size, match_target)
     }
 }
 
@@ -193,23 +209,17 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
 
     let mut pack_buf = vec![0u8; 8];
     let mut pack_data = [0u8; 1 + 2 * 8];
-    let mut pack_bit_count = 0usize;
-    let mut pack_data_count = 1usize;
-    let mut replace_cnt = 0usize;
-
-    const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+    pack_data[0] = 1;
+    pack_data[1] = src[0];
+    let mut pack_bit = 2u8;
+    let mut pack_data_count = 2usize;
+    let mut replace_cnt = 1usize;
 
     loop {
-        if tree_find.src_index >= tree_find.src.len() {
-            if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
-                pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
-            }
-            break;
+        for _ in 1..replace_cnt {
+            tree_find.proc::<false>();
         }
-
-        if replace_cnt > 0 {
-            tree_find.proc(replace_cnt);
-        }
+        let (match_size, match_target) = tree_find.proc::<true>();
 
         if tree_find.src_index >= tree_find.src.len() {
             if pack_data_count > 1 || (pack_data_count == 1 && !suppress_empty_tail_group) {
@@ -218,25 +228,25 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
             break;
         }
 
-        if tree_find.match_size <= BREAK_EVEN {
+        if match_size <= BREAK_EVEN {
             replace_cnt = 1;
-            pack_data[0] |= BIT_MASK[pack_bit_count];
+            pack_data[0] |= pack_bit;
             pack_data[pack_data_count] = src[tree_find.src_index];
             pack_data_count += 1;
         } else {
-            replace_cnt = tree_find.match_size;
-            let offset = (tree_find.window_top.wrapping_sub(tree_find.match_target)) % WINDOW_SIZE;
-            let tok = (offset << LENGTH_BITS) | (tree_find.match_size - BREAK_EVEN - 1);
+            replace_cnt = match_size;
+            let offset = (tree_find.src_index.wrapping_sub(match_target)) % WINDOW_SIZE;
+            let tok = (offset << LENGTH_BITS) | (match_size - BREAK_EVEN - 1);
             pack_data[pack_data_count] = tok as u8;
             pack_data[pack_data_count + 1] = (tok >> 8) as u8;
             pack_data_count += 2;
         }
 
-        pack_bit_count += 1;
+        pack_bit <<= 1;
 
-        if pack_bit_count == 8 {
+        if pack_bit == 0 {
             pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
-            pack_bit_count = 0;
+            pack_bit = 1;
             pack_data_count = 1;
             pack_data[0] = 0;
         }

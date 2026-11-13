@@ -270,50 +270,46 @@ impl<'a> SemanticAnalyzer<'a> {
     fn binary_result(&self, left: i32, right: i32, operator: i32) -> i32 {
         if self.is_int(left)
             && self.is_int(right)
-            && [
-                self.codes.op.plus,
-                self.codes.op.minus,
-                self.codes.op.multiple,
-                self.codes.op.divide,
-                self.codes.op.remainder,
-                self.codes.op.equal,
-                self.codes.op.not_equal,
-                self.codes.op.greater,
-                self.codes.op.greater_equal,
-                self.codes.op.less,
-                self.codes.op.less_equal,
-                self.codes.op.logical_and,
-                self.codes.op.logical_or,
-                self.codes.op.and,
-                self.codes.op.or,
-                self.codes.op.hat,
-                self.codes.op.sl,
-                self.codes.op.sr,
-                self.codes.op.sr3,
-            ]
-            .contains(&operator)
+            && (operator == self.codes.op.plus
+                || operator == self.codes.op.minus
+                || operator == self.codes.op.multiple
+                || operator == self.codes.op.divide
+                || operator == self.codes.op.remainder
+                || operator == self.codes.op.equal
+                || operator == self.codes.op.not_equal
+                || operator == self.codes.op.greater
+                || operator == self.codes.op.greater_equal
+                || operator == self.codes.op.less
+                || operator == self.codes.op.less_equal
+                || operator == self.codes.op.logical_and
+                || operator == self.codes.op.logical_or
+                || operator == self.codes.op.and
+                || operator == self.codes.op.or
+                || operator == self.codes.op.hat
+                || operator == self.codes.op.sl
+                || operator == self.codes.op.sr
+                || operator == self.codes.op.sr3)
         {
             return self.codes.forms.int.code;
         }
-        if self.is_str(left) && self.is_str(right) {
-            if operator == self.codes.op.plus {
+        if self.is_str(left) {
+            if self.is_str(right) {
+                if operator == self.codes.op.plus {
+                    return self.codes.forms.str_.code;
+                }
+                if operator == self.codes.op.equal
+                    || operator == self.codes.op.not_equal
+                    || operator == self.codes.op.greater
+                    || operator == self.codes.op.greater_equal
+                    || operator == self.codes.op.less
+                    || operator == self.codes.op.less_equal
+                {
+                    return self.codes.forms.int.code;
+                }
+            }
+            if self.is_int(right) && operator == self.codes.op.multiple {
                 return self.codes.forms.str_.code;
             }
-            if [
-                self.codes.op.equal,
-                self.codes.op.not_equal,
-                self.codes.op.greater,
-                self.codes.op.greater_equal,
-                self.codes.op.less,
-                self.codes.op.less_equal,
-            ]
-            .contains(&operator)
-            {
-                return self.codes.forms.int.code;
-            }
-        }
-        if self.is_str(left) && self.is_int(right) && operator == self.codes.op.multiple {
-            return self.codes.forms.str_.code;
         }
         self.codes.forms.void.code
     }
