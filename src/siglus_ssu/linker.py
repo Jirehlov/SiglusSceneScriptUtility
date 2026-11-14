@@ -78,7 +78,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
 
         start = time.time()
         dat_list, lzss_list = parallel_lzss_compress(ctx, scn_names, bs_dir)
-        set_stage_time(ctx, "LZSS", time.time() - start)
+        record_stage_time(ctx, "LZSS", time.time() - start)
         return dat_list, lzss_list
     dat_list = []
     lzss_list = []

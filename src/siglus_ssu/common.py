@@ -25,26 +25,32 @@ MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 def iterative_method(function):
     @wraps(function)
     def run(instance, *args, **kwargs):
-        pending = [function(instance, *args, **kwargs)]
+        current = function(instance, *args, **kwargs)
+        pending = []
         result = None
         try:
-            while pending:
+            while True:
                 try:
-                    method, *arguments = pending[-1].send(result)
+                    call = current.send(result)
                 except StopIteration as finished:
-                    pending.pop()
                     result = finished.value
+                    if not pending:
+                        return result
+                    current = pending.pop()
                 else:
+                    method = call[0]
                     body = getattr(method, "__wrapped__", None)
                     if body is None:
-                        result = method(*arguments)
+                        result = method(*call[1:])
                     else:
-                        pending.append(body(method.__self__, *arguments))
+                        child = body(method.__self__, *call[1:])
+                        pending.append(current)
+                        current = child
                         result = None
         finally:
+            current.close()
             while pending:
                 pending.pop().close()
-        return result
 
     return run
 

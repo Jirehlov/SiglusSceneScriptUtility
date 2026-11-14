@@ -3,49 +3,71 @@ from .CA import is_zen
 from .common import to_i32
 
 
-_LA_SYMBOLS = (
-    (">>>=", "SR3_ASSIGN"),
-    (">>>", "SR3"),
-    ("<<=", "SL_ASSIGN"),
-    (">>=", "SR_ASSIGN"),
-    ("+=", "PLUS_ASSIGN"),
-    ("-=", "MINUS_ASSIGN"),
-    ("*=", "MULTIPLE_ASSIGN"),
-    ("/=", "DIVIDE_ASSIGN"),
-    ("%=", "PERCENT_ASSIGN"),
-    ("&=", "AND_ASSIGN"),
-    ("|=", "OR_ASSIGN"),
-    ("^=", "HAT_ASSIGN"),
-    ("<<", "SL"),
-    (">>", "SR"),
-    ("==", "EQUAL"),
-    ("!=", "NOT_EQUAL"),
-    (">=", "GREATER_EQUAL"),
-    ("<=", "LESS_EQUAL"),
-    ("&&", "LOGICAL_AND"),
-    ("||", "LOGICAL_OR"),
-    ("=", "ASSIGN"),
-    ("+", "PLUS"),
-    ("-", "MINUS"),
-    ("*", "MULTIPLE"),
-    ("/", "DIVIDE"),
-    ("%", "PERCENT"),
-    ("&", "AND"),
-    ("|", "OR"),
-    ("^", "HAT"),
-    (">", "GREATER"),
-    ("<", "LESS"),
-    ("~", "TILDE"),
-    (".", "DOT"),
-    (",", "COMMA"),
-    (":", "COLON"),
-    ("(", "OPEN_PAREN"),
-    (")", "CLOSE_PAREN"),
-    ("[", "OPEN_BRACKET"),
-    ("]", "CLOSE_BRACKET"),
-    ("{", "OPEN_BRACE"),
-    ("}", "CLOSE_BRACE"),
-)
+_LA_SYMBOLS = {
+    ">": (
+        (">>>=", "SR3_ASSIGN"),
+        (">>>", "SR3"),
+        (">>=", "SR_ASSIGN"),
+        (">>", "SR"),
+        (">=", "GREATER_EQUAL"),
+        (">", "GREATER"),
+    ),
+    "<": (
+        ("<<=", "SL_ASSIGN"),
+        ("<<", "SL"),
+        ("<=", "LESS_EQUAL"),
+        ("<", "LESS"),
+    ),
+    "+": (
+        ("+=", "PLUS_ASSIGN"),
+        ("+", "PLUS"),
+    ),
+    "-": (
+        ("-=", "MINUS_ASSIGN"),
+        ("-", "MINUS"),
+    ),
+    "*": (
+        ("*=", "MULTIPLE_ASSIGN"),
+        ("*", "MULTIPLE"),
+    ),
+    "/": (
+        ("/=", "DIVIDE_ASSIGN"),
+        ("/", "DIVIDE"),
+    ),
+    "%": (
+        ("%=", "PERCENT_ASSIGN"),
+        ("%", "PERCENT"),
+    ),
+    "&": (
+        ("&=", "AND_ASSIGN"),
+        ("&&", "LOGICAL_AND"),
+        ("&", "AND"),
+    ),
+    "|": (
+        ("|=", "OR_ASSIGN"),
+        ("||", "LOGICAL_OR"),
+        ("|", "OR"),
+    ),
+    "^": (
+        ("^=", "HAT_ASSIGN"),
+        ("^", "HAT"),
+    ),
+    "=": (
+        ("==", "EQUAL"),
+        ("=", "ASSIGN"),
+    ),
+    "!": (("!=", "NOT_EQUAL"),),
+    "~": (("~", "TILDE"),),
+    ".": ((".", "DOT"),),
+    ",": ((",", "COMMA"),),
+    ":": ((":", "COLON"),),
+    "(": (("(", "OPEN_PAREN"),),
+    ")": ((")", "CLOSE_PAREN"),),
+    "[": (("[", "OPEN_BRACKET"),),
+    "]": (("]", "CLOSE_BRACKET"),),
+    "{": (("{", "OPEN_BRACE"),),
+    "}": (("}", "CLOSE_BRACE"),),
+}
 
 
 KEYWORDS = {
@@ -279,7 +301,7 @@ def la_analize(pcad):
                     a["opt"] = idx
         else:
             symbol_type = None
-            for symbol, type_name in _LA_SYMBOLS:
+            for symbol, type_name in _LA_SYMBOLS.get(c, ()):
                 if s.startswith(symbol, i):
                     symbol_type = C.LA_T[type_name]
                     i += len(symbol)

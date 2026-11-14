@@ -341,15 +341,15 @@ def parallel_compile(
 
 def _lzss_compress_task(
     args: tuple[str, bytes, str, bytes],
-) -> tuple[str, bytes, bytes | bytearray, Exception | None]:
+) -> tuple[str, bytes | bytearray, str | None]:
     nm, dat, lz_path, easy_code = args
     try:
         from .linker import compress_scene_dat
 
         lz = compress_scene_dat(dat, lz_path, easy_code)
-        return (nm, dat, lz, None)
+        return (nm, lz, None)
     except Exception as e:
-        return (nm, b"", b"", e)
+        return (nm, b"", str(e))
 
 
 def parallel_lzss_compress(
@@ -358,9 +358,11 @@ def parallel_lzss_compress(
     from .common import format_scene_name, read_bytes
 
     easy_code = ctx.get("easy_angou_code") or b""
-    results = {}
+    results = ctx.pop("compressed_scenes", {})
     tasks = []
     for nm in scn_names:
+        if nm in results:
+            continue
         dat_path = os.path.join(bs_dir, nm + ".dat")
         try:
             dat_path = resolve_read_path(dat_path, kind="file")
@@ -384,17 +386,29 @@ def parallel_lzss_compress(
             dat_list.append(dat)
             lzss_list.append(lz)
         return (dat_list, lzss_list)
-    workers = get_max_workers(None)
+    workers = min(get_max_workers(None), len(tasks))
     errors = []
     print(f"[PARALLEL] LZSS compressing {len(tasks)} scenes with {workers} workers...")
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [executor.submit(_lzss_compress_task, task) for task in tasks]
+    gil_enabled = getattr(sys, "_is_gil_enabled", None)
+    executor_context = (
+        ThreadPoolExecutor(max_workers=workers)
+        if (
+            workers == 1
+            or is_native_available()
+            or (gil_enabled is not None and not gil_enabled())
+        )
+        else process_pool(workers)
+    )
+    with executor_context as executor:
+        futures = {
+            executor.submit(_lzss_compress_task, task): task[1] for task in tasks
+        }
         for future in as_completed(futures):
-            nm, dat, lz, error = future.result()
-            if error:
+            nm, lz, error = future.result()
+            if error is not None:
                 errors.append((nm, error))
             else:
-                results[nm] = (dat, lz)
+                results[nm] = (futures[future], lz)
                 print(f"  LZSS: {format_scene_name(nm + '.ss', ctx)}")
     if errors:
         raise RuntimeError(str(errors[0][1]))
@@ -410,7 +424,7 @@ def parallel_lzss_compress(
 
 def _source_encrypt_task(
     args: tuple[str, bytes | None, str, str, dict, bool],
-) -> tuple[str, int, bytes, Exception | None]:
+) -> tuple[str, int, bytes, str | None]:
     rel, raw, src_path, cache_path, source_angou, skip = args
     try:
         from .common import read_bytes, write_cached_bytes
@@ -429,7 +443,7 @@ def _source_encrypt_task(
         chunk = enc_blob if not skip else b""
         return (rel, size, chunk, None)
     except Exception as e:
-        return (rel, 0, b"", e)
+        return (rel, 0, b"", str(e))
 
 
 def parallel_source_encrypt(
@@ -454,15 +468,25 @@ def parallel_source_encrypt(
                 skip,
             )
         )
-    workers = get_max_workers(None)
+    workers = min(get_max_workers(None), len(tasks))
     results = {}
     errors = []
     print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    gil_enabled = getattr(sys, "_is_gil_enabled", None)
+    executor_context = (
+        ThreadPoolExecutor(max_workers=workers)
+        if (
+            workers == 1
+            or is_native_available()
+            or (gil_enabled is not None and not gil_enabled())
+        )
+        else process_pool(workers)
+    )
+    with executor_context as executor:
         futures = [executor.submit(_source_encrypt_task, task) for task in tasks]
         for future in as_completed(futures):
             rel, size, chunk, error = future.result()
-            if error:
+            if error is not None:
                 errors.append((rel, error))
             elif size > 0:
                 results[rel] = (size, chunk)

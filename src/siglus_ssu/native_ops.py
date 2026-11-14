@@ -175,133 +175,122 @@ def compare_payload_traces_native(left, right):
     return native_accel.compare_payload_traces(left, right)
 
 
-class _LzssTree:
-    def ready(self, tree_size: int):
-        self.root = tree_size
-        self.unused = tree_size + 1
-        n = tree_size + 2
-        self.parent = [self.unused] * n
-        self.sml = [self.unused] * n
-        self.big = [self.unused] * n
-        self.parent[0] = self.root
-        self.parent[self.root] = 0
-        self.big[self.root] = 0
-
-    def connect(self, target: int):
-        if self.parent[target] == self.unused:
-            return
-        parent = self.parent[target]
-        if self.big[target] == self.unused:
-            nxt = self.sml[target]
-            self.parent[nxt] = parent
-            if self.big[parent] == target:
-                self.big[parent] = nxt
-            else:
-                self.sml[parent] = nxt
-            self.parent[target] = self.unused
-        elif self.sml[target] == self.unused:
-            nxt = self.big[target]
-            self.parent[nxt] = parent
-            if self.big[parent] == target:
-                self.big[parent] = nxt
-            else:
-                self.sml[parent] = nxt
-            self.parent[target] = self.unused
-        else:
-            nxt = self.sml[target]
-            while self.big[nxt] != self.unused:
-                nxt = self.big[nxt]
-            self.connect(nxt)
-            self.replace(target, nxt)
-
-    def replace(self, target: int, nxt: int):
-        parent = self.parent[target]
-        if self.sml[parent] == target:
-            self.sml[parent] = nxt
-        else:
-            self.big[parent] = nxt
-        self.parent[nxt] = self.parent[target]
-        self.sml[nxt] = self.sml[target]
-        self.big[nxt] = self.big[target]
-        self.parent[self.sml[target]] = nxt
-        self.parent[self.big[target]] = nxt
-        self.parent[target] = self.unused
-
-    def additional_connect(self, target: int, nxt: int, matching_result: int):
-        if matching_result >= 0:
-            child = self.big
-        else:
-            child = self.sml
-        child_idx = child[target]
-        if child_idx != self.unused:
-            return False, child_idx
-        child[target] = nxt
-        self.parent[nxt] = target
-        self.big[nxt] = self.unused
-        self.sml[nxt] = self.unused
-        return True, target
-
-    def get_root_big(self):
-        return self.big[self.root]
-
-
-class _LzssTreeFind:
-    def ready(
-        self,
-        src: memoryview,
-        src_cnt: int,
-        window_size: int,
-        look_ahead_size: int,
-    ):
-        self.src = src
-        self.src_cnt = src_cnt
-        self.window_size = window_size
-        self.max_match_len = look_ahead_size
-        self.src_index = 0
-        self.match_size = 0
-        self.window_top = 0
-        self.tree = _LzssTree()
-        self.tree.ready(window_size)
-
-    def proc(self, replace_cnt: int):
-        for _ in range(replace_cnt):
-            self.src_index += 1
-            src_page = self.src_index // self.window_size
-            self.window_top = (self.window_top + 1) % self.window_size
-            self.tree.connect(self.window_top)
-            target = self.tree.get_root_big()
-            self.match_size = 0
-            matching_loop_cnt = self.max_match_len
-            src_left = self.src_cnt - self.src_index
+def _lzss_matches(src, window_size, max_match_len):
+    src_cnt = len(src)
+    root = window_size
+    unused = window_size + 1
+    parent = [unused] * (window_size + 2)
+    sml = [unused] * (window_size + 2)
+    big = [unused] * (window_size + 2)
+    parent[0] = root
+    parent[root] = 0
+    big[root] = 0
+    heads = [src[0]] * window_size
+    offsets = [0] * window_size
+    src_index = 0
+    window_top = 0
+    match_size = 0
+    match_target = 0
+    while src_index < src_cnt:
+        yield src_index, match_size, window_top, match_target
+        replace_cnt = match_size or 1
+        for step in range(replace_cnt):
+            src_index += 1
+            window_top = (window_top + 1) % window_size
+            node_parent = parent[window_top]
+            if node_parent != unused:
+                if big[window_top] == unused:
+                    following = sml[window_top]
+                elif sml[window_top] == unused:
+                    following = big[window_top]
+                else:
+                    predecessor = sml[window_top]
+                    while big[predecessor] != unused:
+                        predecessor = big[predecessor]
+                    predecessor_parent = parent[predecessor]
+                    following = sml[predecessor]
+                    parent[following] = predecessor_parent
+                    if big[predecessor_parent] == predecessor:
+                        big[predecessor_parent] = following
+                    else:
+                        sml[predecessor_parent] = following
+                    if sml[node_parent] == window_top:
+                        sml[node_parent] = predecessor
+                    else:
+                        big[node_parent] = predecessor
+                    parent[predecessor] = node_parent
+                    sml[predecessor] = sml[window_top]
+                    big[predecessor] = big[window_top]
+                    parent[sml[window_top]] = predecessor
+                    parent[big[window_top]] = predecessor
+                    parent[window_top] = unused
+                    node_parent = unused
+                if node_parent != unused:
+                    parent[following] = node_parent
+                    if big[node_parent] == window_top:
+                        big[node_parent] = following
+                    else:
+                        sml[node_parent] = following
+                    parent[window_top] = unused
+            match_size = 0
+            src_left = src_cnt - src_index
             if src_left == 0:
-                return
+                break
+            matching_loop_cnt = max_match_len
             if matching_loop_cnt > src_left:
                 matching_loop_cnt = src_left
+            target = big[root]
+            offsets[window_top] = src_index
+            first = src[src_index]
+            heads[window_top] = first
+            prefix_len = 1 if step + 1 == replace_cnt else matching_loop_cnt
+            prefix = src[src_index : src_index + prefix_len] if prefix_len > 1 else None
             while True:
-                p1 = self.src_index
-                p2 = src_page * self.window_size + target
-                if target > self.src_index % self.window_size:
-                    p2 -= self.window_size
-                matching_counter = 0
-                matching_result = 0
-                while matching_counter < matching_loop_cnt:
-                    matching_result = int(self.src[p1 + matching_counter]) - int(
-                        self.src[p2 + matching_counter]
-                    )
-                    if matching_result != 0:
+                if prefix_len == 1:
+                    result = first - heads[target]
+                else:
+                    other = offsets[target]
+                    other_prefix = src[other : other + prefix_len]
+                    if prefix > other_prefix:
+                        result = 1
+                    elif prefix < other_prefix:
+                        result = -1
+                    else:
+                        result = 0
+                if result == 0:
+                    other = offsets[target]
+                    matched = prefix_len
+                    while matched < matching_loop_cnt:
+                        result = src[src_index + matched] - src[other + matched]
+                        if result:
+                            break
+                        matched += 1
+                    match_size = matched
+                    match_target = target
+                    if matched == matching_loop_cnt:
+                        node_parent = parent[target]
+                        if sml[node_parent] == target:
+                            sml[node_parent] = window_top
+                        else:
+                            big[node_parent] = window_top
+                        parent[window_top] = node_parent
+                        sml[window_top] = sml[target]
+                        big[window_top] = big[target]
+                        parent[sml[target]] = window_top
+                        parent[big[target]] = window_top
+                        parent[target] = unused
                         break
-                    matching_counter += 1
-                if matching_counter > self.match_size:
-                    self.match_size = matching_counter
-                    self.match_target = target
-                    if self.match_size == matching_loop_cnt:
-                        self.tree.replace(target, self.window_top)
-                        break
-                done, target = self.tree.additional_connect(
-                    target, self.window_top, matching_result
-                )
-                if done:
+                    prefix_len = matched + 1
+                    prefix = src[src_index : src_index + prefix_len]
+                children = big if result >= 0 else sml
+                child = children[target]
+                if child == unused:
+                    children[target] = window_top
+                    parent[window_top] = target
+                    big[window_top] = unused
+                    sml[window_top] = unused
                     break
+                target = child
 
 
 def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
@@ -312,53 +301,31 @@ def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
     LENGTH_BITS = 16 - INDEX_BITS
     LOOK_AHEAD = (1 << LENGTH_BITS) + BREAK_EVEN
     WINDOW_SIZE = 1 << INDEX_BITS
-    tree_find = _LzssTreeFind()
-    mv = memoryview(src)
-    tree_find.ready(mv, len(src), WINDOW_SIZE, LOOK_AHEAD)
     pack_buf = bytearray(b"\0" * 8)
     pack_data = bytearray(1 + (3 * 8))
     pack_bit_count = 0
     pack_data_count = 1
-    replace_cnt = 0
     bit_mask = (1, 2, 4, 8, 16, 32, 64, 128)
-
-    def make_pack_data():
-        nonlocal replace_cnt, pack_bit_count, pack_data_count
-        if tree_find.src_index >= tree_find.src_cnt:
-            return False
-        if replace_cnt > 0:
-            tree_find.proc(replace_cnt)
-        if tree_find.src_index >= tree_find.src_cnt:
-            return False
-        if tree_find.match_size <= BREAK_EVEN:
-            replace_cnt = 1
+    for src_index, match_size, window_top, match_target in _lzss_matches(
+        src, WINDOW_SIZE, LOOK_AHEAD
+    ):
+        if match_size <= BREAK_EVEN:
             pack_data[0] |= bit_mask[pack_bit_count]
-            pack_data[pack_data_count] = mv[tree_find.src_index]
+            pack_data[pack_data_count] = src[src_index]
             pack_data_count += 1
         else:
-            replace_cnt = tree_find.match_size
-            tok = (
-                (tree_find.window_top - tree_find.match_target) % WINDOW_SIZE
-            ) << LENGTH_BITS
-            tok |= tree_find.match_size - BREAK_EVEN - 1
+            tok = ((window_top - match_target) % WINDOW_SIZE) << LENGTH_BITS
+            tok |= match_size - BREAK_EVEN - 1
             pack_data[pack_data_count : pack_data_count + 2] = tok.to_bytes(2, "little")
             pack_data_count += 2
         pack_bit_count += 1
-        return True
-
-    while True:
-        if make_pack_data():
-            if pack_bit_count == 8:
-                pack_buf.extend(pack_data[:pack_data_count])
-                pack_bit_count = 0
-                pack_data_count = 1
-                pack_data[0] = 0
-        else:
-            if pack_data_count > 1 or (
-                pack_data_count == 1 and not suppress_empty_tail_group
-            ):
-                pack_buf.extend(pack_data[:pack_data_count])
-            break
+        if pack_bit_count == 8:
+            pack_buf.extend(pack_data[:pack_data_count])
+            pack_bit_count = 0
+            pack_data_count = 1
+            pack_data[0] = 0
+    if pack_data_count > 1 or (pack_data_count == 1 and not suppress_empty_tail_group):
+        pack_buf.extend(pack_data[:pack_data_count])
     struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
     return bytes(pack_buf)
 
@@ -375,35 +342,24 @@ def _py_lzss32_pack(src: bytes) -> bytes:
     LENGTH_BITS = 16 - INDEX_BITS
     LOOK_AHEAD = (1 << LENGTH_BITS) + BREAK_EVEN
     WINDOW_SIZE = 1 << INDEX_BITS
-    tree_find = _LzssTreeFind()
-    tree_find.ready(dwords, src_cnt, WINDOW_SIZE, LOOK_AHEAD)
     pack_buf = bytearray(b"\0" * 8)
     pack_data = bytearray(1 + (3 * 8))
     pack_bit_count = 0
     pack_data_count = 1
-    replace_cnt = 0
     bit_mask = (1, 2, 4, 8, 16, 32, 64, 128)
-    while True:
-        if tree_find.src_index >= tree_find.src_cnt:
-            break
-        if replace_cnt > 0:
-            tree_find.proc(replace_cnt)
-        if tree_find.src_index >= tree_find.src_cnt:
-            break
-        if tree_find.match_size <= BREAK_EVEN:
-            replace_cnt = 1
+    for src_index, match_size, window_top, match_target in _lzss_matches(
+        dwords, WINDOW_SIZE, LOOK_AHEAD
+    ):
+        if match_size <= BREAK_EVEN:
             pack_data[0] |= bit_mask[pack_bit_count]
-            v = dwords[tree_find.src_index]
+            v = dwords[src_index]
             pack_data[pack_data_count] = v & 0xFF
             pack_data[pack_data_count + 1] = (v >> 8) & 0xFF
             pack_data[pack_data_count + 2] = (v >> 16) & 0xFF
             pack_data_count += 3
         else:
-            replace_cnt = tree_find.match_size
-            tok = (
-                (tree_find.window_top - tree_find.match_target) % WINDOW_SIZE
-            ) << LENGTH_BITS
-            tok |= tree_find.match_size - BREAK_EVEN - 1
+            tok = ((window_top - match_target) % WINDOW_SIZE) << LENGTH_BITS
+            tok |= match_size - BREAK_EVEN - 1
             pack_data[pack_data_count : pack_data_count + 2] = tok.to_bytes(2, "little")
             pack_data_count += 2
         pack_bit_count += 1

@@ -4,6 +4,8 @@ import copy
 import sys
 import time
 from collections import Counter
+from concurrent.futures import as_completed
+from contextlib import nullcontext
 from . import const as C
 from .CA import CharacterAnalizer, copy_replace_tree, new_replace_tree
 from .IA import IncAnalyzer
@@ -125,7 +127,7 @@ def copy_ia_data(base):
         "macro_defs": list(base["macro_defs"]),
         "macro_map": dict(base["macro_map"]),
         "property_list": list(base["property_list"]),
-        "command_list": [copy.deepcopy(c) for c in base["command_list"]],
+        "command_list": [dict(c) for c in base["command_list"]],
         "property_cnt": base["property_cnt"],
         "command_cnt": base["command_cnt"],
         "inc_property_cnt": base["inc_property_cnt"],
@@ -646,7 +648,7 @@ class BinaryStream:
         return len(s.buf)
 
     def push_u8(s, v):
-        s.buf.extend(struct.pack("<B", int(v) & 0xFF))
+        s.buf.append(int(v) & 0xFF)
 
     def push_i32(s, v):
         s.buf.extend(struct.pack("<i", int(v)))
@@ -1847,6 +1849,7 @@ def compile_one_pipeline(
         "scene_macro_counts": scene_macro_counts,
         "global_macro_usage_delta": global_macro_usage_delta,
         "source_stats": source_stats,
+        "out_scn": bsd["out_scn"],
     }
 
 
@@ -1861,12 +1864,48 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
         result = parallel_compile(ctx, ss_files, max_workers)
         set_stage_time(ctx, "Compiling", time.time() - start)
         return result
+    from .native_ops import is_native_available
+    from .parallel import _lzss_compress_task, get_max_workers, process_pool
+
+    pack_workers = min(get_max_workers(None) - 1, len(ss_files))
+    gil_enabled = getattr(sys, "_is_gil_enabled", None)
+    pipeline = (
+        pack_workers > 0
+        and len(ss_files) > 1
+        and ctx.get("lzss_mode", True)
+        and not ctx.get("easy_link")
+        and not is_native_available()
+        and (gil_enabled is None or gil_enabled())
+    )
     scene_macro_counts = empty_macro_stat_counts()
     source_stats = empty_source_stat_counts()
-    for p in ss_files:
-        res = compile_one_pipeline(ctx, p, debug_outputs=True, record_time=True)
-        merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
-        merge_source_stat_counts(source_stats, res["source_stats"])
+    executor_context = process_pool(pack_workers) if pipeline else nullcontext()
+    with executor_context as executor:
+        futures = {}
+        lzss_started = None
+        for p in ss_files:
+            res = compile_one_pipeline(ctx, p, debug_outputs=True, record_time=True)
+            merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
+            merge_source_stat_counts(source_stats, res["source_stats"])
+            if executor is not None:
+                nm = os.path.splitext(os.path.basename(p))[0]
+                lz_path = os.path.join(ctx["tmp_path"], "bs", nm + ".lzss")
+                if lzss_started is None:
+                    lzss_started = time.time()
+                future = executor.submit(
+                    _lzss_compress_task,
+                    (nm, res["out_scn"], lz_path, ctx.get("easy_angou_code") or b""),
+                )
+                futures[future] = res["out_scn"]
+        if futures:
+            compressed = {}
+            for future in as_completed(futures):
+                nm, lz, error = future.result()
+                if error is not None:
+                    raise RuntimeError(error)
+                compressed[nm] = (futures[future], lz)
+            ctx["compressed_scenes"] = compressed
+            set_stage_time(ctx, "LZSS", time.time() - lzss_started)
     return {
         "parallel": False,
         "scene_macro_counts": scene_macro_counts,

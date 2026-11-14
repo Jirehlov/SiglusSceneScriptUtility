@@ -77,6 +77,20 @@ def build_replace_tree(replacements):
     return tree
 
 
+def _replacement_prefix_pattern(tree):
+    if not tree:
+        return "(?!)"
+    pending = [(tree, "")]
+    prefixes = []
+    while pending:
+        node, prefix = pending.pop()
+        if node["r"] is not None or len(prefix) == 3:
+            prefixes.append(re.escape(prefix))
+        else:
+            pending.extend((child, prefix + ch) for ch, child in node["c"].items())
+    return "|".join(prefixes) if prefixes else "(?!)"
+
+
 def search_replace_tree(rt, text, pos):
     n = rt
     best = None
@@ -88,16 +102,18 @@ def search_replace_tree(rt, text, pos):
     else:
         value, start, limit = text, 0, length
     while True:
-        if n.get("r") is not None:
-            best = n["r"]
+        replacement = n["r"]
+        if replacement is not None:
+            best = replacement
         if i >= length:
             break
         ch = value[start + i] if i < limit else text[i]
         if ch == "\0":
             break
-        if ch not in n["c"]:
+        child = n["c"].get(ch)
+        if child is None:
             break
-        n = n["c"][ch]
+        n = child
         i += 1
     return best
 
@@ -656,10 +672,23 @@ class CharacterAnalizer:
         points = _ExpansionBuffer(points + [None] * 256) if points is not None else None
         loop = 0
         rest_min = len(text)
+        pattern = self._replacement_pattern
+        if added_rt and added_rt["c"]:
+            pattern += "|" + _replacement_prefix_pattern(added_rt)
+        stops = re.compile(pattern)
+        empty_name = any(
+            tree and tree["r"] is not None for tree in (default_rt, added_rt)
+        )
         while text[0] != "\0":
-            consumed = self._replace_head(text, default_rt, added_rt, points)
-            if consumed is None:
-                return None
+            consumed = 0
+            if not empty_name and len(text) <= rest_min:
+                value, start, end = text.pieces[-1]
+                match = stops.search(value, start, end)
+                consumed = max(0, min(match.start() if match else end, end - 2) - start)
+            if not consumed:
+                consumed = self._replace_head(text, default_rt, added_rt, points)
+                if consumed is None:
+                    return None
             text.advance(consumed)
             if points is not None:
                 points.advance(consumed)
@@ -742,15 +771,18 @@ class CharacterAnalizer:
         self.m_line = 1
         loop = 0
         rest_min = len(t)
-        stops = re.compile(
-            "[" + re.escape("".join(self.iad["replace_tree"]["c"])) + "\0]"
-        )
+        tree = self.iad["replace_tree"]
+        if tree["r"] is not None:
+            self._replacement_pattern = "[" + re.escape("".join(tree["c"])) + "\0]"
+        else:
+            self._replacement_pattern = "\0|" + _replacement_prefix_pattern(tree)
+        stops = re.compile(self._replacement_pattern)
         while t[0] != "\0":
             consumed = 0
             if len(t) <= rest_min:
                 value, start, end = t.pieces[-1]
                 match = stops.search(value, start, end)
-                consumed = (match.start() if match else end) - start
+                consumed = max(0, min(match.start() if match else end, end - 2) - start)
                 if consumed:
                     self.m_line += value.count("\n", start, start + consumed)
             if not consumed:

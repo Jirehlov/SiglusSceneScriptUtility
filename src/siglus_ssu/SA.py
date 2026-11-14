@@ -4,9 +4,7 @@ from .common import iterative_method, normalize_atom
 
 
 def N(ln, **k):
-    d = {"node_line": ln, "node_form": 0, "node_type": 0, "node_sub_type": 0}
-    d.update(k)
-    return d
+    return {"node_line": ln, "node_form": 0, "node_type": 0, "node_sub_type": 0, **k}
 
 
 class SA:
@@ -72,19 +70,29 @@ class SA:
             C.LA_T["PERCENT"]: (C.OP_AMARI, 10),
         }
 
+        s._unary_operators = {
+            C.LA_T["PLUS"]: C.OP_PLUS,
+            C.LA_T["MINUS"]: C.OP_MINUS,
+            C.LA_T["TILDE"]: C.OP_TILDE,
+        }
+        s._assign_operators = {
+            C.LA_T["ASSIGN"]: C.OP_NONE,
+            C.LA_T["PLUS_ASSIGN"]: C.OP_PLUS,
+            C.LA_T["MINUS_ASSIGN"]: C.OP_MINUS,
+            C.LA_T["MULTIPLE_ASSIGN"]: C.OP_MULTIPLE,
+            C.LA_T["DIVIDE_ASSIGN"]: C.OP_DIVIDE,
+            C.LA_T["PERCENT_ASSIGN"]: C.OP_AMARI,
+            C.LA_T["AND_ASSIGN"]: C.OP_AND,
+            C.LA_T["OR_ASSIGN"]: C.OP_OR,
+            C.LA_T["HAT_ASSIGN"]: C.OP_HAT,
+            C.LA_T["SL_ASSIGN"]: C.OP_SL,
+            C.LA_T["SR_ASSIGN"]: C.OP_SR,
+            C.LA_T["SR3_ASSIGN"]: C.OP_SR3,
+        }
+
     def warn(s, message, i):
         if message not in s.warnings:
             s.warnings[message] = normalize_atom(s._a(i))
-
-    @iterative_method
-    def _parse(s, parse, i, *args):
-        if s.nesting >= 64:
-            s.warn("analysis nesting depth exceeds 64; continuing", i)
-        s.nesting += 1
-        try:
-            return (yield (parse, i, *args))
-        finally:
-            s.nesting -= 1
 
     def _a(s, i):
         return (
@@ -149,69 +157,71 @@ class SA:
 
     @iterative_method
     def sa_sentence(s, i):
-        return (yield (s._parse, s._sa_sentence, i))
-
-    @iterative_method
-    def _sa_sentence(s, i):
-        p = i
-        err = s.last
-        sen = N(
-            s._a(p).get("line", 0),
-            block=None,
-            label=None,
-            z_label=None,
-            def_cmd=None,
-            def_prop=None,
-            Goto=None,
-            Return=None,
-            If=None,
-            For=None,
-            While=None,
-            Continue=None,
-            Break=None,
-            Switch=None,
-            assign=None,
-            command=None,
-            name=None,
-            text=None,
-            eof=None,
-            is_include_sel=False,
-        )
-        parser = s._sentence_parsers.get(s._a(p).get("type"))
-        if parser is not None:
-            fn, nt, ky = parser
-            ok, p2, x = yield (getattr(s, fn), p)
+        if s.nesting >= 64:
+            s.warn("analysis nesting depth exceeds 64; continuing", i)
+        s.nesting += 1
+        try:
+            p = i
+            err = s.last
+            sen = N(
+                s._a(p).get("line", 0),
+                block=None,
+                label=None,
+                z_label=None,
+                def_cmd=None,
+                def_prop=None,
+                Goto=None,
+                Return=None,
+                If=None,
+                For=None,
+                While=None,
+                Continue=None,
+                Break=None,
+                Switch=None,
+                assign=None,
+                command=None,
+                name=None,
+                text=None,
+                eof=None,
+                is_include_sel=False,
+            )
+            parser = s._sentence_parsers.get(s._a(p).get("type"))
+            if parser is not None:
+                fn, nt, ky = parser
+                ok, p2, x = yield (getattr(s, fn), p)
+                if ok:
+                    sen[ky] = x
+                    sen["node_type"] = nt
+                    s.last = err
+                    return 1, p2, sen
+            ok, p2, cmd, asn = s.sa_command_or_assign(p)
             if ok:
-                sen[ky] = x
-                sen["node_type"] = nt
+                sen["command"] = cmd
+                sen["assign"] = asn
+                sen["node_type"] = C.NT_S_COMMAND if cmd else C.NT_S_ASSIGN
                 s.last = err
                 return 1, p2, sen
-        ok, p2, cmd, asn = s.sa_command_or_assign(p)
-        if ok:
-            sen["command"] = cmd
-            sen["assign"] = asn
-            sen["node_type"] = C.NT_S_COMMAND if cmd else C.NT_S_ASSIGN
-            s.last = err
-            return 1, p2, sen
-        ok, p2, nm = s.sa_name(p)
-        if ok:
-            sen["name"] = nm
-            sen["node_type"] = C.NT_S_NAME
-            s.last = err
-            return 1, p2, sen
-        ok, p2, tx = s.sa_atom(p, C.LA_T["VAL_STR"])
-        if ok:
-            sen["text"] = tx
-            sen["node_type"] = C.NT_S_TEXT
-            s.last = err
-            return 1, p2, sen
-        ok, p2, ef = s.sa_atom(p, C.LA_T["EOF"])
-        if ok:
-            sen["eof"] = ef
-            sen["node_type"] = C.NT_S_EOF
-            s.last = err
-            return 1, p2, sen
-        return s.error("TNMSERR_SA_SENTENCE_ILLEGAL", s._a(p)), i, None
+            ok, p2, nm = s.sa_name(p)
+            if ok:
+                sen["name"] = nm
+                sen["node_type"] = C.NT_S_NAME
+                s.last = err
+                return 1, p2, sen
+            ok, p2, tx = s.sa_atom(p, C.LA_T["VAL_STR"])
+            if ok:
+                sen["text"] = tx
+                sen["node_type"] = C.NT_S_TEXT
+                s.last = err
+                return 1, p2, sen
+            ok, p2, ef = s.sa_atom(p, C.LA_T["EOF"])
+            if ok:
+                sen["eof"] = ef
+                sen["node_type"] = C.NT_S_EOF
+                s.last = err
+                return 1, p2, sen
+            return s.error("TNMSERR_SA_SENTENCE_ILLEGAL", s._a(p)), i, None
+        finally:
+            s.nesting -= 1
 
     def sa_label(s, i):
         p = i
@@ -886,77 +896,77 @@ class SA:
     @iterative_method
     def sa_exp(s, i, pri):
         s.expression_heights.append(0)
+        result = (0, i, None)
         try:
             if s.nesting >= 64:
                 s.warn("analysis nesting depth exceeds 64; continuing", i)
             s.nesting += 1
             try:
-                result = yield (s._sa_exp, i, pri)
+                p = i
+                err = s.last
+                ok, p, op = s.sa_operator_1(p)
+                if ok:
+                    ok, p, x = yield (s.sa_exp, p, C.SA_PRI_MAX)
+                    if not ok:
+                        result = s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
+                        return result
+                    exp = N(
+                        s._a(i).get("line", 0),
+                        smp_exp=None,
+                        opr=op,
+                        exp_1=x,
+                        exp_2=None,
+                        node_type=C.NT_EXP_OPR1,
+                        pri=pri,
+                    )
+                else:
+                    ok, p, smp = yield (s.sa_smp_exp, p)
+                    if not ok:
+                        result = 0, i, None
+                        return result
+                    exp = N(
+                        s._a(i).get("line", 0),
+                        smp_exp=smp,
+                        opr=None,
+                        exp_1=None,
+                        exp_2=None,
+                        node_type=C.NT_EXP_SIMPLE,
+                        pri=pri,
+                    )
+                while 1:
+                    ok, p2, op, npri = s.sa_operator_2(p, pri)
+                    if not ok:
+                        break
+                    height = s.expression_heights[-1] + 1
+                    ok, p3, rhs = yield (s.sa_exp, p2, npri)
+                    if not ok:
+                        result = s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p2)), i, None
+                        return result
+                    height = max(height, s.expression_heights[-1])
+                    if height > 128:
+                        s.warn("expression tree height exceeds 128; continuing", p)
+                    s.expression_heights[-1] = height
+                    exp = N(
+                        s._a(i).get("line", 0),
+                        smp_exp=None,
+                        opr=op,
+                        exp_1=exp,
+                        exp_2=rhs,
+                        node_type=C.NT_EXP_OPR2,
+                        pri=npri,
+                    )
+                    p = p3
+                s.last = err
+                result = 1, p, exp
+                return result
             finally:
                 s.nesting -= 1
         finally:
             height = s.expression_heights.pop()
-        if result[0] and height > 128:
-            s.warn("expression tree height exceeds 128; continuing", i)
-        if result[0] and s.expression_heights:
-            s.expression_heights[-1] = max(s.expression_heights[-1], height + 1)
-        return result
-
-    @iterative_method
-    def _sa_exp(s, i, pri):
-        p = i
-        err = s.last
-        ok, p, op = s.sa_operator_1(p)
-        if ok:
-            ok, p, x = yield (s.sa_exp, p, C.SA_PRI_MAX)
-            if not ok:
-                return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
-            exp = N(
-                s._a(i).get("line", 0),
-                smp_exp=None,
-                opr=op,
-                exp_1=x,
-                exp_2=None,
-                node_type=C.NT_EXP_OPR1,
-                pri=pri,
-            )
-        else:
-            ok, p, smp = yield (s.sa_smp_exp, p)
-            if not ok:
-                return 0, i, None
-            exp = N(
-                s._a(i).get("line", 0),
-                smp_exp=smp,
-                opr=None,
-                exp_1=None,
-                exp_2=None,
-                node_type=C.NT_EXP_SIMPLE,
-                pri=pri,
-            )
-        while 1:
-            ok, p2, op, npri = s.sa_operator_2(p, pri)
-            if not ok:
-                break
-            height = s.expression_heights[-1] + 1
-            ok, p3, rhs = yield (s.sa_exp, p2, npri)
-            if not ok:
-                return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p2)), i, None
-            height = max(height, s.expression_heights[-1])
-            if height > 128:
-                s.warn("expression tree height exceeds 128; continuing", p)
-            s.expression_heights[-1] = height
-            exp = N(
-                s._a(i).get("line", 0),
-                smp_exp=None,
-                opr=op,
-                exp_1=exp,
-                exp_2=rhs,
-                node_type=C.NT_EXP_OPR2,
-                pri=npri,
-            )
-            p = p3
-        s.last = err
-        return 1, p, exp
+            if result[0] and height > 128:
+                s.warn("expression tree height exceeds 128; continuing", i)
+            if result[0] and s.expression_heights:
+                s.expression_heights[-1] = max(s.expression_heights[-1], height + 1)
 
     @iterative_method
     def sa_smp_exp(s, i):
@@ -1187,10 +1197,14 @@ class SA:
     def sa_arg(s, i):
         p = i
         err = s.last
-        ok, p, a = yield (s.sa_named_arg, p)
-        if ok:
-            s.last = err
-            return 1, p, a
+        if (
+            s._a(p).get("type") == C.LA_T["UNKNOWN"]
+            and s._a(p + 1).get("type") == C.LA_T["ASSIGN"]
+        ):
+            ok, p, a = yield (s.sa_named_arg, p)
+            if ok:
+                s.last = err
+                return 1, p, a
         ok, p, x = yield (s.sa_exp, p, 0)
         if not ok:
             return s.error("TNMSERR_SA_EXP_ILLEGAL", s._a(p)), i, None
@@ -1251,23 +1265,19 @@ class SA:
         return 1, p, N(s._a(i).get("line", 0), open_s=os, close_s=cs, name=nm)
 
     def sa_literal(s, i):
-        for t in (C.LA_T["VAL_INT"], C.LA_T["VAL_STR"], C.LA_T["LABEL"]):
-            ok, p, x = s.sa_atom(i, t)
-            if ok:
-                return 1, p, x
-        return 0, i, None
+        tp = s._a(i).get("type")
+        if tp not in (C.LA_T["VAL_INT"], C.LA_T["VAL_STR"], C.LA_T["LABEL"]):
+            return 0, i, None
+        return s.sa_atom(i, tp)
 
     def sa_operator_1(s, i):
-        for tp, op in (
-            (C.LA_T["PLUS"], C.OP_PLUS),
-            (C.LA_T["MINUS"], C.OP_MINUS),
-            (C.LA_T["TILDE"], C.OP_TILDE),
-        ):
-            ok, p, x = s.sa_atom(i, tp)
-            if ok:
-                x["atom"]["opt"] = op
-                return 1, p, x
-        return 0, i, None
+        tp = s._a(i).get("type")
+        op = s._unary_operators.get(tp)
+        if op is None:
+            return 0, i, None
+        _, p, x = s.sa_atom(i, tp)
+        x["atom"]["opt"] = op
+        return 1, p, x
 
     def sa_operator_2(s, i, lastp):
         tp = s._a(i).get("type")
@@ -1280,25 +1290,13 @@ class SA:
         return 1, p, x, precedence
 
     def sa_assign_operator(s, i):
-        for tp, op in (
-            (C.LA_T["ASSIGN"], C.OP_NONE),
-            (C.LA_T["PLUS_ASSIGN"], C.OP_PLUS),
-            (C.LA_T["MINUS_ASSIGN"], C.OP_MINUS),
-            (C.LA_T["MULTIPLE_ASSIGN"], C.OP_MULTIPLE),
-            (C.LA_T["DIVIDE_ASSIGN"], C.OP_DIVIDE),
-            (C.LA_T["PERCENT_ASSIGN"], C.OP_AMARI),
-            (C.LA_T["AND_ASSIGN"], C.OP_AND),
-            (C.LA_T["OR_ASSIGN"], C.OP_OR),
-            (C.LA_T["HAT_ASSIGN"], C.OP_HAT),
-            (C.LA_T["SL_ASSIGN"], C.OP_SL),
-            (C.LA_T["SR_ASSIGN"], C.OP_SR),
-            (C.LA_T["SR3_ASSIGN"], C.OP_SR3),
-        ):
-            ok, p, x = s.sa_atom(i, tp)
-            if ok:
-                x["atom"]["opt"] = op
-                return 1, p, x
-        return 0, i, None
+        tp = s._a(i).get("type")
+        op = s._assign_operators.get(tp)
+        if op is None:
+            return 0, i, None
+        _, p, x = s.sa_atom(i, tp)
+        x["atom"]["opt"] = op
+        return 1, p, x
 
     def analize(s):
         for _ in range(256):
