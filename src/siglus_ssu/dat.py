@@ -242,6 +242,7 @@ def dat_disassembly_bundle(
     scene_name=None,
     emit_text=True,
     trace_profile=None,
+    annotation_budget=None,
     with_trace=True,
 ):
     try:
@@ -293,6 +294,7 @@ def dat_disassembly_bundle(
             with_trace=with_trace,
             emit_text=emit_text,
             trace_profile=trace_profile,
+            annotation_budget=annotation_budget,
             parse_status=parse_status,
         )
         dis, trace = result if with_trace else (result, None)
@@ -481,6 +483,7 @@ def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
     failed_paths = []
 
     def iter_bundles():
+        annotation_budget = None
         for item in items:
             dat_path = item["dat_path"]
             blob = item["blob"]
@@ -496,6 +499,7 @@ def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
                 scene_name=item.get("scene_name"),
                 with_trace=decompile,
                 trace_profile="decompile" if decompile else None,
+                annotation_budget=annotation_budget,
                 emit_text=emit_text,
             )
             add_elapsed_seconds(
@@ -535,7 +539,7 @@ def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
                         "scene_name": item.get("scene_name"),
                     }
                 )
-            yield bundle
+            annotation_budget = yield bundle
             del bundle
 
     bundles = iter_bundles()

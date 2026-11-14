@@ -189,6 +189,7 @@ fn drop_values(mut pending: Vec<V>) {
 }
 
 thread_local! { static BYTE_CHARACTERS:Vec<Rc<Text>>=(0..256).map(|code|Rc::new(Text::new(vec![code]))).collect(); }
+thread_local! { static EMPTY_SOURCE:Rc<Text>=Rc::new(Text::new(Vec::new())); }
 
 impl V {
     fn s(text: &str) -> Self {
@@ -1033,7 +1034,7 @@ pub(crate) mod decompiler {
             let tail = if info.size > 0 && (form.eq_str("intlist") || form.eq_str("strlist")) {
                 source(&format!("[{}]", info.size))
             } else {
-                source("")
+                empty_source()
             };
             lines.push(property_source(&source("#property"), &name, &form, &tail));
         }
@@ -1046,7 +1047,7 @@ pub(crate) mod decompiler {
                 .layout
                 .as_ref()
                 .map(|layout| format_argument_layout(rt, layout))
-                .unwrap_or_else(|| source(""));
+                .unwrap_or_else(empty_source);
             let form =
                 declaration_form_source(rt, info.ret_form.unwrap_or(rt.native_tables.int), None);
             let name = if info.name.chars.is_empty() {
@@ -1130,7 +1131,7 @@ pub(crate) mod decompiler {
             let tail = if size > 0 && (form.eq_str("intlist") || form.eq_str("strlist")) {
                 source(&format!("[{size}]"))
             } else {
-                source("")
+                empty_source()
             };
             out.push(property_source(&source("#property"), &name, &form, &tail));
         }
@@ -1198,7 +1199,7 @@ pub(crate) mod decompiler {
         context: RenderContext,
     ) -> SourceText {
         let event = &scene.events[index];
-        let name = trim_source(&event.name.clone().unwrap_or_else(|| source("")));
+        let name = trim_source(&event.name.clone().unwrap_or_else(empty_source));
         let name = if name.chars.is_empty() {
             source(&format!("arg_{id}"))
         } else {
@@ -1209,13 +1210,13 @@ pub(crate) mod decompiler {
         let size = annotation.and_then(|annotation| annotation.size);
         let size_expr = annotation
             .and_then(|annotation| annotation.size_expr.clone())
-            .unwrap_or_else(|| source(""));
+            .unwrap_or_else(empty_source);
         let form = declaration_form_source(
             rt,
             event.form.unwrap_or(0),
             size.or_else(|| (!size_expr.chars.is_empty()).then_some(0)),
         );
-        let mut tail = source("");
+        let mut tail = empty_source();
         if form.eq_str("intlist") || form.eq_str("strlist") {
             let expr = native_expression_source(rt, &size_expr, context.compound, false);
             let parsed = source_strip_parens(&expr);
@@ -1865,12 +1866,16 @@ type SourceText = Rc<Text>;
 fn source_text(value: &V) -> Result<SourceText, Failure> {
     match value {
         V::Str(text) => Ok(text.clone()),
-        V::None => Ok(source("")),
+        V::None => Ok(empty_source()),
         _ => Err(Failure("native text required".into())),
     }
 }
 fn source(text: &str) -> SourceText {
     Text::shared(text.chars().map(u32::from).collect())
+}
+
+fn empty_source() -> SourceText {
+    EMPTY_SOURCE.with(Rc::clone)
 }
 
 fn source_concat(parts: &[&[u32]]) -> SourceText {
@@ -2589,7 +2594,7 @@ impl ElementResolver {
                         .and_then(|values| values.get(&index))
                 })
                 .cloned()
-                .unwrap_or_else(|| source(""));
+                .unwrap_or_else(empty_source);
             let qualified = if name.chars.is_empty() {
                 source(&format!("__cmd_{index}"))
             } else {
@@ -3148,7 +3153,7 @@ impl ExpressionState {
     fn render_path(&self, items: &[StackValue], path: &ResolvedPath) -> Option<SourceText> {
         let mut parent = self.tables.global;
         let mut index = 0;
-        let mut base = source("");
+        let mut base = empty_source();
         let mut suffix = Vec::new();
         while index < items.len() {
             let item = &items[index];
@@ -3191,7 +3196,7 @@ impl ExpressionState {
                     && parent == self.tables.global
                     && info.ret == Some(self.tables.call)
                 {
-                    base = source("");
+                    base = empty_source();
                 } else if !name.chars.is_empty() && !self.qualified_root {
                     base = name;
                 } else {
@@ -3487,7 +3492,7 @@ impl ExpressionState {
                 self.resolver.scope.borrow_mut().declare(
                     &self.tables,
                     form,
-                    event.name.clone().unwrap_or_else(|| source("")),
+                    event.name.clone().unwrap_or_else(empty_source),
                 );
             }
             Opcode::GotoTrue | Opcode::GotoFalse => {
@@ -3972,7 +3977,7 @@ fn trace_instruction(
                     ("size", optional_int(annotation.size)),
                     (
                         "name",
-                        V::Str(event.name.clone().unwrap_or_else(|| source(""))),
+                        V::Str(event.name.clone().unwrap_or_else(empty_source)),
                     ),
                 ]);
             }
@@ -4320,7 +4325,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         })
         .collect::<Result<std::collections::HashSet<_>, Failure>>()?;
     let properties = record_get(parameters, "scn_prop_defs")?;
-    let commands = record_get(parameters, "scn_cmd_names")?;
+    let commands = native_optional_values(&record_get(parameters, "scn_cmd_names")?)?;
     let call_names = native_optional_values(&record_get(parameters, "call_prop_names")?)?
         .iter()
         .map(source_text)
@@ -4362,7 +4367,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     let pack = rt.pack_state(&context)?;
     let resolver_props = resolver_properties(&properties, "code", global_property_count)?;
     let mut resolver_commands = HashMap::new();
-    for (id, name) in native_optional_values(&commands)?.iter().enumerate() {
+    for (id, name) in commands.iter().enumerate() {
         let id = global_command_count + id as i64;
         if pack
             .commands
@@ -4386,7 +4391,10 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         && profile
             .as_ref()
             .is_some_and(|value| value.eq_str("decompile"));
-    let annotate = decompile && !emit_text;
+    let decompile_style = decompile && !emit_text;
+    let annotate = decompile_style
+        && record_int(parameters, "annotation_budget")
+            .is_none_or(|budget| scn.len() <= budget.max(0) as usize / 2);
     let mut annotation_commands = HashMap::new();
     if annotate {
         annotation_commands = (*pack.commands).clone();
@@ -4399,8 +4407,12 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     }
     let formatter = Rc::new(ItemFormatter {
         tables: rt.native_tables.clone(),
-        strings: strings.clone(),
-        with_code: !annotate,
+        strings: if emit_text || annotate || mode.command_values {
+            strings.clone()
+        } else {
+            Vec::new()
+        },
+        with_code: !decompile_style,
     });
     let mut state = ExpressionState {
         tables: rt.native_tables.clone(),
@@ -4409,10 +4421,10 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         stack: vec![],
         points: vec![],
         render: emit_text || annotate,
-        result_receivers: annotate,
-        qualified_root: !annotate,
-        gosub_expressions: annotate,
-        command_fallback: annotate,
+        result_receivers: decompile_style,
+        qualified_root: !decompile_style,
+        gosub_expressions: decompile_style,
+        command_fallback: decompile_style,
         cache: HashMap::new(),
         cache_version: u64::MAX,
     };
@@ -4483,7 +4495,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                             .ok()
                             .and_then(|id| call_names.get(id))
                             .cloned()
-                            .unwrap_or_else(|| source("")),
+                            .unwrap_or_else(empty_source),
                     );
                 }
                 Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
@@ -4702,6 +4714,8 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             .value()
         } else if decompile {
             NativeObject::Scene(Rc::new(DecompileScene::from_events(DecodedScene {
+                prepare_output: emit_text || annotate,
+                has_commands: !command_starts.is_empty() || !commands.is_empty(),
                 tables: rt.native_tables.clone(),
                 scene_annotations,
                 annotation_commands,
@@ -4739,6 +4753,8 @@ impl SceneLabel {
     }
 }
 struct DecodedScene {
+    prepare_output: bool,
+    has_commands: bool,
     tables: Rc<NativeTables>,
     scene_annotations: Vec<Annotation>,
     annotation_commands: HashMap<i64, SourceText>,
@@ -4774,6 +4790,8 @@ struct DecompileScene {
 impl DecompileScene {
     fn from_events(input: DecodedScene) -> Self {
         let DecodedScene {
+            prepare_output,
+            has_commands,
             tables,
             scene_annotations,
             annotation_commands,
@@ -4785,29 +4803,40 @@ impl DecompileScene {
             z_labels,
         } = input;
         let mut labels_at: HashMap<i64, Vec<SceneLabel>> = HashMap::new();
-        for (z, offsets) in [(false, &label_offsets), (true, &z_labels)] {
-            for (id, offset) in offsets.iter().enumerate() {
-                labels_at
-                    .entry(*offset)
-                    .or_default()
-                    .push(SceneLabel { z, id: id as i64 });
+        if prepare_output {
+            for (z, offsets) in [(false, &label_offsets), (true, &z_labels)] {
+                for (id, offset) in offsets.iter().enumerate() {
+                    labels_at
+                        .entry(*offset)
+                        .or_default()
+                        .push(SceneLabel { z, id: id as i64 });
+                }
             }
         }
         let events = Rc::new(events);
-        let labels = Rc::new(
+        let labels = Rc::new(if prepare_output {
             events
                 .iter()
                 .map(|event| labels_at.get(&event.offset).cloned().unwrap_or_default())
-                .collect::<Vec<_>>(),
-        );
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        });
         let annotations = Rc::new(RefCell::new(scene_annotations));
         let offsets = events.iter().map(|event| event.offset).collect::<Vec<_>>();
-        let index = offsets
-            .iter()
-            .enumerate()
-            .map(|(index, offset)| (*offset, index))
-            .collect();
+        let index = if prepare_output || has_commands {
+            offsets
+                .iter()
+                .enumerate()
+                .map(|(index, offset)| (*offset, index))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         let next = |opcode| {
+            if !prepare_output {
+                return Vec::new();
+            }
             let mut next = events.len();
             let mut out = vec![next; events.len()];
             for (index, event) in events.iter().enumerate().rev() {
@@ -4822,29 +4851,33 @@ impl DecompileScene {
         let next_goto = next(Opcode::Goto);
         let next_false = next(Opcode::GotoFalse);
         let next_true = next(Opcode::GotoTrue);
-        let active_z = z_labels
-            .iter()
-            .enumerate()
-            .rfind(|(index, offset)| *index == 0 || **offset != 0)
-            .map(|(index, _)| index + 1)
-            .unwrap_or(0);
-        let mut for_blockers = Vec::with_capacity(events.len() + 1);
-        for_blockers.push(0);
-        let mut blockers = 0;
-        for event in events.iter() {
-            if matches!(
-                event.op,
-                Opcode::DecProp
-                    | Opcode::Goto
-                    | Opcode::GotoTrue
-                    | Opcode::GotoFalse
-                    | Opcode::Return
-                    | Opcode::Text
-                    | Opcode::Name
-            ) {
-                blockers += 1;
+        let mut active_z = 0;
+        let mut for_blockers = Vec::new();
+        if prepare_output {
+            active_z = z_labels
+                .iter()
+                .enumerate()
+                .rfind(|(index, offset)| *index == 0 || **offset != 0)
+                .map(|(index, _)| index + 1)
+                .unwrap_or(0);
+            for_blockers.reserve(events.len() + 1);
+            for_blockers.push(0);
+            let mut blockers = 0;
+            for event in events.iter() {
+                if matches!(
+                    event.op,
+                    Opcode::DecProp
+                        | Opcode::Goto
+                        | Opcode::GotoTrue
+                        | Opcode::GotoFalse
+                        | Opcode::Return
+                        | Opcode::Text
+                        | Opcode::Name
+                ) {
+                    blockers += 1;
+                }
+                for_blockers.push(blockers);
             }
-            for_blockers.push(blockers);
         }
         Self {
             for_blockers,
@@ -4871,6 +4904,20 @@ impl DecompileScene {
     }
     fn end(&self, offset: i64) -> usize {
         self.offsets.partition_point(|value| *value < offset)
+    }
+    fn newline_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        std::iter::successors(
+            self.next_nl
+                .first()
+                .copied()
+                .filter(|index| *index < self.events.len()),
+            |index| {
+                self.next_nl
+                    .get(index + 1)
+                    .copied()
+                    .filter(|index| *index < self.events.len())
+            },
+        )
     }
     fn skip_selection(&self, index: usize, end: i64) -> usize {
         if self
@@ -5152,7 +5199,7 @@ fn materialize_source_lines(lines: Vec<SourceLine>) -> Vec<SourceText> {
             continue;
         }
         if let Some(target) = line.target.filter(|target| *target > current) {
-            out.resize(out.len() + (target - current) as usize, source(""));
+            out.resize(out.len() + (target - current) as usize, empty_source());
             current = target;
         }
         out.push(line.text);
@@ -5192,11 +5239,18 @@ fn preserved_scene_labels(
 ) -> Result<std::collections::HashSet<SourceText>, Failure> {
     let scene = &instance.scene;
     let mut labels = std::collections::HashSet::new();
-    for (index, event) in scene.events.iter().enumerate() {
-        if matches!(event.op, Opcode::Goto | Opcode::Return)
-            && index > 0
-            && scene.events[index - 1].op == Opcode::Nl
-        {
+    for index in scene.newline_indices().flat_map(|index| {
+        let next = index + 1;
+        std::iter::once(index).chain(
+            scene
+                .events
+                .get(next)
+                .filter(|event| matches!(event.op, Opcode::Goto | Opcode::Return))
+                .map(|_| next),
+        )
+    }) {
+        let event = &scene.events[index];
+        if matches!(event.op, Opcode::Goto | Opcode::Return) {
             labels.extend(
                 scene
                     .active_labels(instance, index)?
@@ -5415,7 +5469,9 @@ struct LabelDefinition {
     tail: Option<usize>,
 }
 fn label_definition(text: &SourceText) -> Option<LabelDefinition> {
-    let chars = &text.chars;
+    label_definition_chars(&text.chars, text.has_line_feed)
+}
+fn label_definition_chars(chars: &[u32], has_line_feed: bool) -> Option<LabelDefinition> {
     let mut position = 0;
     while chars.get(position).is_some_and(|code| is_space(*code)) {
         position += 1;
@@ -5448,7 +5504,7 @@ fn label_definition(text: &SourceText) -> Option<LabelDefinition> {
     } else {
         return None;
     };
-    if text.has_line_feed && tail.is_some_and(|start| chars[start..].contains(&10)) {
+    if has_line_feed && tail.is_some_and(|start| chars[start..].contains(&10)) {
         return None;
     }
     Some(LabelDefinition {
@@ -5587,12 +5643,13 @@ enum LateLinePass {
 fn standalone_label_targets(instance: &DecompilerState) -> HashMap<SourceText, i64> {
     let scene = &instance.scene;
     let mut out = HashMap::new();
-    for index in 1..scene.events.len() {
-        let previous = &scene.events[index - 1];
-        let event = &scene.events[index];
-        if previous.op != Opcode::Nl
-            || !matches!(event.op, Opcode::Nl | Opcode::Goto | Opcode::Return)
-        {
+    for previous_index in scene.newline_indices() {
+        let index = previous_index + 1;
+        let previous = &scene.events[previous_index];
+        let Some(event) = scene.events.get(index) else {
+            continue;
+        };
+        if !matches!(event.op, Opcode::Nl | Opcode::Goto | Opcode::Return) {
             continue;
         }
         let labels = &scene.labels[index];
@@ -5705,6 +5762,9 @@ fn native_line_postprocess(
                     }
                 }
             }
+            if dropped.is_empty() {
+                return Ok(lines);
+            }
             lines = lines
                 .into_iter()
                 .enumerate()
@@ -5804,8 +5864,9 @@ fn native_line_postprocess(
                         && (line.target.is_none() || line.target == previous.target)
                     {
                         if let Some(label) = label {
-                            if definition_has_tail(&previous.text, label)
-                                && definition_tail(&previous.text, label).chars.contains(&123)
+                            if label
+                                .tail
+                                .is_some_and(|start| previous.text.chars[start..].contains(&123))
                             {
                                 append_source_text(&mut previous.text, &[125]);
                                 continue;
@@ -6027,8 +6088,8 @@ fn synthetic_definition(text: &SourceText) -> Option<(usize, usize, Option<usize
     };
     Some((indent, end, tail))
 }
-fn plain_goto_label(text: &SourceText) -> Option<SourceText> {
-    let chars = trim_source_chars(&text.chars);
+fn plain_goto_label(chars: &[u32]) -> Option<SourceText> {
+    let chars = trim_source_chars(chars);
     if !chars.starts_with(&[103, 111, 116, 111]) {
         return None;
     }
@@ -6117,7 +6178,7 @@ fn native_late_line_pass(
                 }
                 if current - 1 < target {
                     lines.push(SourceLine {
-                        text: source(""),
+                        text: empty_source(),
                         target: Some(target),
                     });
                 }
@@ -6129,12 +6190,11 @@ fn native_late_line_pass(
             let mut label_specs: HashMap<SourceText, usize> = HashMap::new();
             let mut mapping = HashMap::new();
             let mut seen = std::collections::HashSet::new();
-            for index in 1..scene.events.len() {
+            for index in scene.newline_indices().filter(|index| *index > 0) {
                 let previous = &scene.events[index - 1];
                 let event = &scene.events[index];
                 let labels = &scene.labels[index];
                 if previous.op != Opcode::Nl
-                    || event.op != Opcode::Nl
                     || labels.is_empty()
                     || labels.iter().any(|label| label.z)
                     || scene.labels[index - 1].iter().any(|label| label.z)
@@ -6211,6 +6271,9 @@ fn native_late_line_pass(
                 }
             }
             let references = line_references(rt, &lines)?;
+            if inherited.is_empty() {
+                return Ok(lines);
+            }
             let mut out = vec![];
             for (index, line) in lines.iter().enumerate() {
                 if let Some(label) = label_definition(&line.text).filter(|label| !label.label.z)
@@ -6248,25 +6311,25 @@ fn native_late_line_pass(
         }
         LateLinePass::NormalizeClusters => {
             let references = line_references(rt, &lines)?;
-            let kept = lines.clone();
-            for (index, line) in kept.iter().enumerate() {
+            for index in 0..lines.len() {
+                let line = &lines[index];
                 if let Some(label) = label_definition(&line.text).filter(|label| {
                     !label.label.z
                         && !definition_has_tail(&line.text, *label)
                         && !references.contains(&definition_token(&line.text, *label))
                 }) {
                     let _ = label;
-                    if let Some(next) = next_source_statement(&kept, index + 1)
+                    if let Some(next) = next_source_statement(&lines, index + 1)
                         && line.target.is_some()
-                        && kept[next].target == line.target
-                        && label_definition(&kept[next].text).is_some_and(|label| {
-                            label.label.z && !definition_has_tail(&kept[next].text, label)
+                        && lines[next].target == line.target
+                        && label_definition(&lines[next].text).is_some_and(|label| {
+                            label.label.z && !definition_has_tail(&lines[next].text, label)
                         })
                     {
-                        lines[index] = kept[next].clone();
+                        lines[index] = lines[next].clone();
                         lines[next] = SourceLine {
-                            text: source(""),
-                            target: kept[next].target,
+                            text: empty_source(),
+                            target: lines[next].target,
                         };
                     }
                 }
@@ -6327,6 +6390,9 @@ fn native_late_line_pass(
                 }
                 rewrites.insert(next, definition_without_label(&lines[next].text, label));
             }
+            if rewrites.is_empty() && mapping.is_empty() {
+                return Ok(lines);
+            }
             for (index, line) in lines.iter_mut().enumerate() {
                 if let Some(text) = rewrites.remove(&index) {
                     line.text = text;
@@ -6365,6 +6431,9 @@ fn native_late_line_pass(
                 }
             }
             let headers = instance.for_headers.borrow();
+            if aliases.is_empty() {
+                return Ok(lines);
+            }
             let mut out = vec![];
             for mut line in lines {
                 let label = label_definition(&line.text);
@@ -6421,6 +6490,9 @@ fn native_late_line_pass(
                     mapping.insert(reference, head.clone());
                 }
             }
+            if mapping.is_empty() {
+                return Ok(lines);
+            }
             for line in &mut lines {
                 line.text = rewrite_source_references(rt, &line.text, &mapping)?;
             }
@@ -6438,7 +6510,9 @@ fn native_late_line_pass(
                 let line = &lines[index];
                 if let Some(label) = label_definition(&line.text)
                     .filter(|label| !label.label.z && line.target.is_some())
-                    && let Some(alias) = plain_goto_label(&definition_tail(&line.text, label))
+                    && let Some(alias) = plain_goto_label(
+                        &line.text.chars[label.tail.unwrap_or(line.text.chars.len())..],
+                    )
                     && let Some(next) = next_source_statement(&lines, index + 1)
                     && lines[next].target == line.target
                     && label_definition(&lines[next].text)
@@ -6607,7 +6681,7 @@ impl PayloadEvent {
                 form: event.form.unwrap_or(0),
                 id: event.value.unwrap_or(0),
                 size,
-                name: event.name.unwrap_or_else(|| source("")),
+                name: event.name.unwrap_or_else(empty_source),
             },
             Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
                 PayloadData::Jump(event.label.unwrap_or(0))
@@ -6860,46 +6934,44 @@ fn native_render_line(
         } else {
             annotations[index].expr.as_ref().map(ExpressionText::source)
         }
-        .unwrap_or_else(|| source(""));
+        .unwrap_or_else(empty_source);
         native_expression_source(rt, &expr, compound, condition)
     };
-    let sequence = (start..end)
-        .filter(|index| scene.events[*index].op != Opcode::Eof)
-        .collect::<Vec<_>>();
-    if sequence.len() >= 2 {
-        let tail = *sequence.last().unwrap();
-        let previous = sequence[sequence.len() - 2];
-        if scene.events[tail].op == Opcode::Goto
-            && scene.events.get(tail + 1).map(|event| event.offset) == scene.events[tail].target
-            && scene.events[previous].op == Opcode::Pop
+    let mut sequence = (start..end)
+        .rev()
+        .filter(|index| scene.events[*index].op != Opcode::Eof);
+    if let (Some(tail), Some(previous)) = (sequence.next(), sequence.next())
+        && scene.events[tail].op == Opcode::Goto
+        && scene.events.get(tail + 1).map(|event| event.offset) == scene.events[tail].target
+        && scene.events[previous].op == Opcode::Pop
+    {
+        let expr = expression(previous, context.compound, false);
+        if !expr.chars.is_empty()
+            && (start..previous).all(|index| {
+                matches!(
+                    scene.events[index].op,
+                    Opcode::ElmPoint
+                        | Opcode::Push
+                        | Opcode::Property
+                        | Opcode::Copy
+                        | Opcode::CopyElm
+                        | Opcode::Operate1
+                        | Opcode::Operate2
+                        | Opcode::Arg
+                        | Opcode::SelStart
+                        | Opcode::SelEnd
+                        | Opcode::Command
+                        | Opcode::Gosub
+                        | Opcode::GosubStr
+                        | Opcode::Eof
+                )
+            })
         {
-            let expr = expression(previous, context.compound, false);
-            if !expr.chars.is_empty()
-                && sequence[..sequence.len() - 2].iter().all(|index| {
-                    matches!(
-                        scene.events[*index].op,
-                        Opcode::ElmPoint
-                            | Opcode::Push
-                            | Opcode::Property
-                            | Opcode::Copy
-                            | Opcode::CopyElm
-                            | Opcode::Operate1
-                            | Opcode::Operate2
-                            | Opcode::Arg
-                            | Opcode::SelStart
-                            | Opcode::SelEnd
-                            | Opcode::Command
-                            | Opcode::Gosub
-                            | Opcode::GosubStr
-                    )
-                })
-            {
-                return Ok(source_concat(&[
-                    &source("switch(").chars,
-                    &expr.chars,
-                    &source("){}").chars,
-                ]));
-            }
+            return Ok(source_concat(&[
+                &source("switch(").chars,
+                &expr.chars,
+                &source("){}").chars,
+            ]));
         }
     }
     let assign_compound =
@@ -6907,16 +6979,12 @@ fn native_render_line(
     let macros = &instance.hints.name_macros;
     let mut parts: Vec<SourceText> = vec![];
     let mut saw_command = false;
-    let mut eof_only = true;
     for index in start..end {
         let event = &scene.events[index];
-        if event.op != Opcode::Eof {
-            eof_only = false;
-        }
         let part = match event.op {
-            Opcode::Text => source_quote(&event.name.clone().unwrap_or_else(|| source(""))),
+            Opcode::Text => source_quote(&event.name.clone().unwrap_or_else(empty_source)),
             Opcode::Name => {
-                let name = event.name.clone().unwrap_or_else(|| source(""));
+                let name = event.name.clone().unwrap_or_else(empty_source);
                 let text = macros
                     .get(&name)
                     .filter(|name| !name.chars.is_empty())
@@ -6932,14 +7000,14 @@ fn native_render_line(
                 } else if parts.is_empty() {
                     source("return")
                 } else {
-                    source("")
+                    continue;
                 }
             }
             Opcode::Goto => {
                 if scene.events.get(index + 1).map(|event| event.offset) != event.target {
                     native_render_goto(scene, index, Some(context))?
                 } else {
-                    source("")
+                    continue;
                 }
             }
             Opcode::GotoTrue | Opcode::GotoFalse => {
@@ -6966,7 +7034,7 @@ fn native_render_line(
             Opcode::Pop => {
                 let mut part = expression(index, context.compound, false);
                 if !part.chars.is_empty() && !saw_command {
-                    part = source("");
+                    part = empty_source();
                 }
                 if part.chars.is_empty()
                     && index > start
@@ -6981,30 +7049,28 @@ fn native_render_line(
             }
             Opcode::Command => {
                 saw_command = true;
-                if event.element_code == Some(rt.native_tables.message_block) {
-                    source("")
-                } else {
-                    let next = (index + 1..end)
-                        .find(|index| native_meaningful_op(scene.events[*index].op));
-                    if event.ret == rt.native_tables.void
-                        && next.is_none_or(|next| scene.events[next].op != Opcode::Pop)
-                    {
-                        expression(index, context.compound, false)
-                    } else {
-                        source("")
-                    }
+                if event.element_code == Some(rt.native_tables.message_block)
+                    || event.ret != rt.native_tables.void
+                {
+                    continue;
                 }
+                let next =
+                    (index + 1..end).find(|index| native_meaningful_op(scene.events[*index].op));
+                if next.is_some_and(|next| scene.events[next].op == Opcode::Pop) {
+                    continue;
+                }
+                expression(index, context.compound, false)
             }
-            _ => source(""),
+            _ => continue,
         };
         if !part.chars.is_empty() && parts.last() != Some(&part) {
             parts.push(part);
         }
     }
-    Ok(if eof_only {
-        source("")
-    } else {
-        source_join(&parts, "\t")
+    Ok(match parts.len() {
+        0 => empty_source(),
+        1 => parts.pop().unwrap(),
+        _ => source_join(&parts, "\t"),
     })
 }
 
@@ -7019,8 +7085,8 @@ impl LabelRows {
     fn new(lines: Vec<SourceLine>) -> Self {
         let mut targets: HashMap<i64, Vec<usize>> = HashMap::new();
         let mut labels: HashMap<SourceText, Vec<usize>> = HashMap::new();
-        let mut definitions = vec![];
-        let mut tokens = vec![];
+        let mut definitions = Vec::with_capacity(lines.len());
+        let mut tokens = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             if let Some(target) = line.target {
                 targets.entry(target).or_default().push(index);
@@ -7087,11 +7153,12 @@ fn native_restore_empty_lines(
     let statements = lines
         .iter()
         .filter_map(|line| {
-            let text = trim_source(&line.text);
-            (!text.chars.is_empty()
-                && label_definition(&text).is_none_or(|label| definition_has_tail(&text, label)))
-            .then_some(line.target)
-            .flatten()
+            let target = line.target?;
+            let chars = trim_source_chars(&line.text.chars);
+            (!chars.is_empty()
+                && label_definition_chars(chars, line.text.has_line_feed)
+                    .is_none_or(|label| label.tail.is_some_and(|start| start < chars.len())))
+            .then_some(target)
         })
         .collect::<std::collections::HashSet<_>>();
     let mut rows = LabelRows::new(lines);
@@ -7102,8 +7169,9 @@ fn native_restore_empty_lines(
         .collect::<std::collections::HashSet<_>>();
     let mut keep = std::collections::HashSet::new();
     let mut gaps: Vec<(i64, Vec<SourceText>)> = vec![];
-    for (index, event) in scene.events.iter().enumerate() {
-        if event.op != Opcode::Nl || event.line.unwrap_or(0) <= 0 {
+    for index in scene.newline_indices() {
+        let event = &scene.events[index];
+        if event.line.unwrap_or(0) <= 0 {
             continue;
         }
         let Some(next) = scene
@@ -7424,7 +7492,7 @@ fn native_build_hints(
             if event.op != Opcode::Name {
                 continue;
             }
-            let name = event.name.clone().unwrap_or_else(|| source(""));
+            let name = event.name.clone().unwrap_or_else(empty_source);
             if name.chars.is_empty()
                 || name.chars.iter().any(|code| {
                     matches!(*code, 0x3010 | 0x3011 | 9 | 10 | 13)
@@ -7584,7 +7652,7 @@ impl<'a> SourceParser<'a> {
         } else {
             annotations[index].expr.as_ref().map(ExpressionText::source)
         }
-        .unwrap_or_else(|| source(""));
+        .unwrap_or_else(empty_source);
         native_expression_source(self.rt, &expression, context.render.compound, condition)
     }
 
@@ -7624,7 +7692,7 @@ impl<'a> SourceParser<'a> {
             Opcode::DecProp => {
                 decompiler::render_param(self.rt, &self.scene, index, -1, context.render)
             }
-            _ => source(""),
+            _ => empty_source(),
         };
         Ok((
             self.with_event(
@@ -7666,7 +7734,7 @@ impl<'a> SourceParser<'a> {
                     context.render,
                 )?
             } else {
-                source("")
+                empty_source()
             },
         );
         self.scene
@@ -7693,7 +7761,7 @@ impl<'a> SourceParser<'a> {
         let (has_ops, line) = self.line(statement, next, context)?;
         if inline {
             if !has_ops {
-                return Ok((Some(source("")), vec![], next));
+                return Ok((Some(empty_source()), vec![], next));
             }
             let labels = self.scene.active_labels(self.instance, start)?;
             let suppressed = self
@@ -8810,7 +8878,7 @@ impl<'a> SourceParser<'a> {
         {
             let mut text = Vec::new();
             for (index, clause) in clauses.iter().enumerate() {
-                let condition = clause.condition.clone().unwrap_or_else(|| source(""));
+                let condition = clause.condition.clone().unwrap_or_else(empty_source);
                 let head = if index == 0 {
                     source_concat(&[&source("if(").chars, &condition.chars, &[41]])
                 } else if clause.condition.is_some() {
@@ -8830,7 +8898,7 @@ impl<'a> SourceParser<'a> {
         } else {
             let mut last_inline = false;
             for (index, clause) in clauses.iter().enumerate() {
-                let condition = clause.condition.clone().unwrap_or_else(|| source(""));
+                let condition = clause.condition.clone().unwrap_or_else(empty_source);
                 let last = index + 1 == clauses.len();
                 let inline = clause.inline.is_some() && clause.same_line;
                 let head = if index == 0 {

@@ -3,7 +3,7 @@ from bisect import bisect_left, bisect_right
 from collections import deque
 from itertools import groupby
 from contextlib import redirect_stdout
-from functools import lru_cache
+from functools import lru_cache, partial
 import io
 import json
 import os
@@ -1289,14 +1289,15 @@ def analyze_document(
         )
         return result
     if kind == "inc":
+        path_identity = _path_identity(abs_path)
         for inc_path, data in project.inc_iad2_by_path.items():
-            if _path_identity(inc_path) == _path_identity(abs_path):
+            if _path_identity(inc_path) == path_identity:
                 result.replace_uses = data.get("replace_uses", [])
                 result.directive_tokens = data.get("directive_tokens", [])
                 break
         for rec in project.definitions.values():
             for item in rec:
-                if _path_identity(item.path) == _path_identity(abs_path):
+                if _path_identity(item.path) == path_identity:
                     result.document_symbols.append(item)
         return result
     result = _analyze_ss_document(
@@ -1406,23 +1407,6 @@ def _native_definition_record(
     )
 
 
-def _native_symbol_occurrence(
-    item: dict[str, Any], fallback_path: str
-) -> SymbolOccurrence:
-    return SymbolOccurrence(
-        symbol_id=str(item.get("symbol_id", "") or ""),
-        path=str(item.get("path", "") or fallback_path),
-        line=max(0, int(item.get("line", 0) or 0)),
-        start_char=max(0, int(item.get("start_char", 0) or 0)),
-        end_char=max(0, int(item.get("end_char", 0) or 0)),
-        kind=str(item.get("kind", "") or ""),
-        semantic_type=str(item.get("semantic_type", "") or ""),
-        name=str(item.get("name", "") or ""),
-        definition=bool(item.get("definition", False)),
-        renamable=bool(item.get("renamable", False)),
-    )
-
-
 def _native_scan_document_result(
     native_project: Any, path: str, text: str, run_bs: bool, read_flags: bool = False
 ) -> dict[str, Any] | None:
@@ -1465,11 +1449,7 @@ def _native_link_scan_result(
                 for item in commands_raw
                 if isinstance(item, dict)
             ],
-            [
-                _native_symbol_occurrence(item, path)
-                for item in occurrences_raw
-                if isinstance(item, dict)
-            ],
+            [SymbolOccurrence(*item) for item in occurrences_raw],
             unmapped_raw,
         )
     except Exception:
@@ -1820,7 +1800,14 @@ def _index_occurrences(
     seen = set()
     for items in groups:
         for item in items:
-            marker = (*_occurrence_position(item), item.symbol_id, item.definition)
+            marker = (
+                item.path,
+                item.line,
+                item.start_char,
+                item.end_char,
+                item.symbol_id,
+                item.definition,
+            )
             if marker in seen:
                 continue
             seen.add(marker)
@@ -2470,7 +2457,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 27
+LSP_INDEX_CACHE_VERSION = 28
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -2536,7 +2523,7 @@ def _cache_optional_str(item: dict[str, Any]) -> str | None:
 
 def _cache_int(item: dict[str, Any], key: str) -> int:
     value = item.get(key)
-    if isinstance(value, bool) or not isinstance(value, int):
+    if type(value) is not int:
         raise ValueError(key)
     return value
 
@@ -2568,18 +2555,31 @@ def _cache_dict_list(value: Any) -> list[dict[str, Any]]:
     return value
 
 
-def _definition_record_from_cache(item: dict[str, Any], path: str) -> DefinitionRecord:
+def _cache_record_path(
+    item: dict[str, Any], directory: str, paths: dict[str, str]
+) -> str:
+    name = item.get("file")
+    path = paths.get(name)
+    if path is None:
+        path = os.path.join(directory, _cache_file_name(name))
+        paths[name] = path
+    return path
+
+
+def _definition_record_from_cache(
+    item: dict[str, Any], directory: str, paths: dict[str, str]
+) -> DefinitionRecord:
     return DefinitionRecord(
-        name=_cache_str(item, "name"),
-        path=os.path.join(os.path.dirname(path), _cache_file_name(item.get("file"))),
-        line=_cache_int(item, "line"),
-        kind=_cache_str(item, "kind"),
-        symbol_id=_cache_str(item, "symbol_id"),
-        detail=_cache_str(item, "detail"),
-        scope=_cache_str(item, "scope"),
-        signature=_cache_str(item, "signature"),
-        start_char=_cache_int(item, "start_char"),
-        end_char=_cache_int(item, "end_char"),
+        _cache_str(item, "name"),
+        _cache_record_path(item, directory, paths),
+        _cache_int(item, "line"),
+        _cache_str(item, "kind"),
+        _cache_str(item, "symbol_id"),
+        _cache_str(item, "detail"),
+        _cache_str(item, "scope"),
+        _cache_str(item, "signature"),
+        _cache_int(item, "start_char"),
+        _cache_int(item, "end_char"),
     )
 
 
@@ -2603,10 +2603,16 @@ def _source_diagnostic_from_cache(item: dict[str, Any], path: str) -> SourceDiag
     )
 
 
-def _symbol_occurrence_to_cache(occurrence: SymbolOccurrence) -> dict[str, Any]:
+def _symbol_occurrence_to_cache(
+    name_by_path: dict[str, str], occurrence: SymbolOccurrence
+) -> dict[str, Any]:
+    name = name_by_path.get(occurrence.path)
+    if name is None:
+        name = _cache_file_name_from_path(occurrence.path)
+        name_by_path[occurrence.path] = name
     return {
         "symbol_id": occurrence.symbol_id,
-        "file": _cache_file_name_from_path(occurrence.path),
+        "file": name,
         "line": occurrence.line,
         "start_char": occurrence.start_char,
         "end_char": occurrence.end_char,
@@ -2618,18 +2624,20 @@ def _symbol_occurrence_to_cache(occurrence: SymbolOccurrence) -> dict[str, Any]:
     }
 
 
-def _symbol_occurrence_from_cache(item: dict[str, Any], path: str) -> SymbolOccurrence:
+def _symbol_occurrence_from_cache(
+    item: dict[str, Any], directory: str, paths: dict[str, str]
+) -> SymbolOccurrence:
     return SymbolOccurrence(
-        symbol_id=_cache_str(item, "symbol_id"),
-        path=os.path.join(os.path.dirname(path), _cache_file_name(item.get("file"))),
-        line=_cache_int(item, "line"),
-        start_char=_cache_int(item, "start_char"),
-        end_char=_cache_int(item, "end_char"),
-        kind=_cache_str(item, "kind"),
-        semantic_type=_cache_str(item, "semantic_type"),
-        name=_cache_str(item, "name"),
-        definition=_cache_bool(item, "definition"),
-        renamable=_cache_bool(item, "renamable"),
+        _cache_str(item, "symbol_id"),
+        _cache_record_path(item, directory, paths),
+        _cache_int(item, "line"),
+        _cache_int(item, "start_char"),
+        _cache_int(item, "end_char"),
+        _cache_str(item, "kind"),
+        _cache_str(item, "semantic_type"),
+        _cache_str(item, "name"),
+        _cache_bool(item, "definition"),
+        _cache_bool(item, "renamable"),
     )
 
 
@@ -2773,12 +2781,18 @@ def _cache_file_unchanged_in_inputs(
 
 
 def _write_lsp_index_cache(
-    directory: str, inputs: dict[str, dict[str, str]], data: dict[str, Any]
+    directory: str,
+    inputs: dict[str, dict[str, str]],
+    data: dict[str, Any],
+    name_by_path: dict[str, str],
 ) -> None:
     path = _lsp_index_cache_path(directory, inputs)
     tmp_path = path + f".{os.getpid()}.tmp"
     encoder = json.JSONEncoder(
-        ensure_ascii=False, separators=(",", ":"), check_circular=False
+        ensure_ascii=False,
+        separators=(",", ":"),
+        check_circular=False,
+        default=partial(_symbol_occurrence_to_cache, name_by_path),
     )
 
     def chunks(value: Any) -> Iterable[str]:
@@ -2792,12 +2806,7 @@ def _write_lsp_index_cache(
                 yield from chunks(item)
             yield "}"
         elif isinstance(value, list):
-            yield "["
-            for index, item in enumerate(value):
-                if index:
-                    yield ","
-                yield encoder.encode(item)
-            yield "]"
+            yield from encoder.iterencode(value, _one_shot=True)
         else:
             yield encoder.encode(value)
 
@@ -2814,18 +2823,19 @@ def _write_lsp_index_cache(
 
 
 def _update_lsp_index_cache(
-    directory: str, inputs: dict[str, dict[str, str]], payload: dict[str, Any]
+    directory: str,
+    inputs: dict[str, dict[str, str]],
+    payload: dict[str, Any],
+    name_by_path: dict[str, str],
 ) -> None:
-    data = _read_lsp_index_cache_header(directory, inputs)
-    if data is None:
-        data = {
-            "version": LSP_INDEX_CACHE_VERSION,
-            "package": str(package_version() or ""),
-            "const": _lsp_index_const_signature(),
-            "cache": _lsp_index_cache_key(directory, inputs),
-        }
-    data["link"] = payload
-    _write_lsp_index_cache(directory, inputs, data)
+    data = {
+        "version": LSP_INDEX_CACHE_VERSION,
+        "package": str(package_version() or ""),
+        "const": _lsp_index_const_signature(),
+        "cache": _lsp_index_cache_key(directory, inputs),
+        "link": payload,
+    }
+    _write_lsp_index_cache(directory, inputs, data, name_by_path)
 
 
 @dataclass(slots=True)
@@ -3513,6 +3523,7 @@ class SSLanguageServer:
             file_unmapped_bindings: dict[str, list[str]] = {}
             diagnostics: dict[str, list[SourceDiagnostic]] = {}
             file_signatures: dict[str, tuple[Any, ...]] = {}
+            record_paths_by_directory: dict[str, dict[str, str]] = {}
             for name in cached_names:
                 path = current_path_by_name.get(name)
                 if path is None:
@@ -3528,14 +3539,18 @@ class SSLanguageServer:
                     or name not in raw_unmapped_by_name
                 ):
                     continue
+                source_directory = os.path.dirname(path)
+                record_paths = record_paths_by_directory.setdefault(
+                    source_directory, {}
+                )
                 commands = [
-                    _definition_record_from_cache(item, path)
+                    _definition_record_from_cache(item, source_directory, record_paths)
                     for item in raw_commands_by_name[name]
                 ]
                 file_commands[path] = commands
                 file_has_diagnostics[path] = raw_has_diagnostics_by_name[name]
                 occurrences_for_path = [
-                    _symbol_occurrence_from_cache(item, path)
+                    _symbol_occurrence_from_cache(item, source_directory, record_paths)
                     for item in raw_occurrences_by_name[name]
                 ]
                 file_occurrences[path] = occurrences_for_path
@@ -3604,10 +3619,7 @@ class SSLanguageServer:
                 for path in paths
             },
             "file_occurrences": {
-                name_by_path[path]: [
-                    _symbol_occurrence_to_cache(occurrence)
-                    for occurrence in entry.file_occurrences.get(path, [])
-                ]
+                name_by_path[path]: entry.file_occurrences.get(path, [])
                 for path in paths
             },
             "file_unmapped_bindings": {
@@ -3622,7 +3634,7 @@ class SSLanguageServer:
                 for path, diagnostics in entry.diagnostics.items()
             },
         }
-        _update_lsp_index_cache(directory, inputs, payload)
+        _update_lsp_index_cache(directory, inputs, payload, name_by_path)
 
     def project_for_directory(self, directory: str) -> ProjectCacheEntry:
         directory = os.path.abspath(directory or ".")

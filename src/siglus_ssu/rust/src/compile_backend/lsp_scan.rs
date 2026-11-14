@@ -41,8 +41,8 @@ struct LspOccurrence<'a> {
     renamable: bool,
 }
 
-struct SourceToken {
-    text: String,
+struct SourceToken<'a> {
+    text: &'a str,
     line: usize,
     start_char: usize,
     end_char: usize,
@@ -137,24 +137,6 @@ fn record_to_py<'py>(py: Python<'py>, record: &LspDefinition<'_>) -> PyResult<Bo
     Ok(dict)
 }
 
-fn occurrence_to_py<'py>(
-    py: Python<'py>,
-    occurrence: &LspOccurrence<'_>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("symbol_id", &occurrence.symbol_id)?;
-    dict.set_item("path", occurrence.path)?;
-    dict.set_item("line", occurrence.line)?;
-    dict.set_item("start_char", occurrence.start_char)?;
-    dict.set_item("end_char", occurrence.end_char)?;
-    dict.set_item("kind", occurrence.kind)?;
-    dict.set_item("semantic_type", occurrence.semantic_type)?;
-    dict.set_item("name", &occurrence.name)?;
-    dict.set_item("definition", occurrence.definition)?;
-    dict.set_item("renamable", occurrence.renamable)?;
-    Ok(dict)
-}
-
 fn diagnostic_result(py: Python<'_>) -> PyResult<Py<PyDict>> {
     let out = PyDict::new(py);
     out.set_item("handled", true)?;
@@ -162,26 +144,30 @@ fn diagnostic_result(py: Python<'_>) -> PyResult<Py<PyDict>> {
     Ok(out.unbind())
 }
 
-fn token_matches_text(source_lines: &[Vec<char>], token: &SourceToken) -> bool {
+fn token_matches_text(source_lines: &[Vec<char>], token: &SourceToken<'_>) -> bool {
     let Some(line) = source_lines.get(token.line) else {
         return false;
     };
     if token.start_char >= token.end_char || token.end_char > line.len() {
         return false;
     }
-    let text = line[token.start_char..token.end_char]
+    line[token.start_char..token.end_char]
         .iter()
-        .collect::<String>();
-    text.eq_ignore_ascii_case(&token.text)
+        .map(char::to_ascii_lowercase)
+        .eq(token.text.chars().map(|ch| ch.to_ascii_lowercase()))
 }
 
-fn token_span_from_atom(lex: &LexResult, atom: &Atom, name: &str) -> Option<SourceToken> {
+fn token_span_from_atom<'a>(
+    lex: &LexResult,
+    atom: &Atom,
+    name: &'a str,
+) -> Option<SourceToken<'a>> {
     let span = lex.atom_span_list.get(atom.id.max(0) as usize)?;
     if span.end_char <= span.start_char || span.line == 0 {
         return None;
     }
     Some(SourceToken {
-        text: name.to_string(),
+        text: name,
         line: span.line - 1,
         start_char: span.start_char,
         end_char: span.end_char,
@@ -198,16 +184,19 @@ fn binding_symbol_id(path_identity: &str, kind: &SourceBindingKind, identity: &s
         SourceBindingKind::CallProperty => "cproplocal:",
         SourceBindingKind::Element => "element:",
     };
-    if matches!(
+    let mut symbol_id = if matches!(
         kind,
         SourceBindingKind::LocalCommand
             | SourceBindingKind::LocalProperty
             | SourceBindingKind::CallProperty
     ) {
-        format!("{prefix}{path_identity}:{}", identity.to_ascii_lowercase())
+        format!("{prefix}{path_identity}:{identity}")
     } else {
-        format!("{prefix}{}", identity.to_ascii_lowercase())
-    }
+        format!("{prefix}{identity}")
+    };
+    let start = symbol_id.len() - identity.len();
+    symbol_id[start..].make_ascii_lowercase();
+    symbol_id
 }
 
 fn macro_symbol_id(kind: &str, name: &str) -> String {
@@ -257,6 +246,7 @@ fn collect_definitions_node<'a>(
     lex: &LexResult,
     path: &'a PyBackedStr,
     current_command: &str,
+    document_details: bool,
     document_symbols: &mut Vec<LspDefinition<'a>>,
 ) {
     let mut pending = vec![(node, current_command)];
@@ -325,21 +315,23 @@ fn collect_definitions_node<'a>(
                     end_char: -1,
                 };
                 document_symbols.push(record);
-                for parameter in parameters {
-                    let record = LspDefinition {
-                        name: parameter.name.to_owned(),
-                        path,
-                        line: parameter.name_atom.line.max(1),
-                        kind: "property".to_string(),
-                        symbol_id: String::new(),
-                        atom_id: parameter.name_atom.id,
-                        detail: format!("property {}: {}", parameter.name, parameter.form.name),
-                        scope: format!("command {name}"),
-                        signature: String::new(),
-                        start_char: -1,
-                        end_char: -1,
-                    };
-                    document_symbols.push(record);
+                if document_details {
+                    for parameter in parameters {
+                        let record = LspDefinition {
+                            name: parameter.name.to_owned(),
+                            path,
+                            line: parameter.name_atom.line.max(1),
+                            kind: "property".to_string(),
+                            symbol_id: String::new(),
+                            atom_id: parameter.name_atom.id,
+                            detail: format!("property {}: {}", parameter.name, parameter.form.name),
+                            scope: format!("command {name}"),
+                            signature: String::new(),
+                            start_char: -1,
+                            end_char: -1,
+                        };
+                        document_symbols.push(record);
+                    }
                 }
                 for item in body {
                     children.push((item, *name));
@@ -350,7 +342,7 @@ fn collect_definitions_node<'a>(
                 name_atom,
                 form,
                 ..
-            } => {
+            } if document_details => {
                 let scope = if current_command.is_empty() {
                     "scene".to_string()
                 } else {
@@ -435,7 +427,7 @@ fn collect_occurrences<'a>(
     let mut out = Vec::new();
     let mut unmapped_bindings = Vec::new();
     let mut seen = HashSet::new();
-    let mut append = |token: Option<SourceToken>,
+    let mut append = |token: Option<SourceToken<'_>>,
                       symbol_id: String,
                       kind: &'static str,
                       semantic_type: &'static str,
@@ -471,7 +463,7 @@ fn collect_occurrences<'a>(
             end_char: token.end_char,
             kind,
             semantic_type,
-            name: token.text,
+            name: token.text.to_owned(),
             definition: declaration,
             renamable,
         });
@@ -525,12 +517,11 @@ fn collect_occurrences<'a>(
                 .max(0) as usize,
             );
             let token = token_span_from_atom(input.lex, atom, &name);
-            let identity = if atom.atom_type == codes.z_label {
-                format!("#z{}", atom.opt)
+            let symbol_id = if atom.atom_type == codes.z_label {
+                label_symbol_id(input.path_identity, &format!("#z{}", atom.opt))
             } else {
-                name
+                label_symbol_id(input.path_identity, &name)
             };
-            let symbol_id = label_symbol_id(input.path_identity, &identity);
             let declaration = token.as_ref().is_some_and(|token| {
                 let positions = declaration_positions.get_or_insert_with(|| {
                     input
@@ -557,7 +548,7 @@ fn collect_occurrences<'a>(
         };
         append(
             Some(SourceToken {
-                text: item.name.clone(),
+                text: &item.name,
                 line: item.line - 1,
                 start_char: item.start_char,
                 end_char: item.end_char,
@@ -767,7 +758,7 @@ pub fn lsp_scan_document(
         return diagnostic_result(py);
     }
     let mut document_symbols = Vec::new();
-    collect_definitions_node(&root, &lex, path, "", &mut document_symbols);
+    collect_definitions_node(&root, &lex, path, "", run_bs, &mut document_symbols);
     let source_lines = source_text
         .split('\n')
         .map(|line| line.chars().collect::<Vec<_>>())
@@ -838,13 +829,26 @@ pub fn lsp_scan_document(
     out.set_item("commands", py_commands)?;
     let py_occurrences = PyList::empty(py);
     for occurrence in &occurrences {
-        py_occurrences.append(occurrence_to_py(py, occurrence)?)?;
+        py_occurrences.append((
+            &occurrence.symbol_id,
+            occurrence.path,
+            occurrence.line,
+            occurrence.start_char,
+            occurrence.end_char,
+            occurrence.kind,
+            occurrence.semantic_type,
+            &occurrence.name,
+            occurrence.definition,
+            occurrence.renamable,
+        ))?;
     }
     out.set_item("occurrences", py_occurrences)?;
     out.set_item("unmapped_bindings", unmapped_bindings)?;
     let py_document_symbols = PyList::empty(py);
-    for record in &document_symbols {
-        py_document_symbols.append(record_to_py(py, record)?)?;
+    if run_bs {
+        for record in &document_symbols {
+            py_document_symbols.append(record_to_py(py, record)?)?;
+        }
     }
     out.set_item("document_symbols", py_document_symbols)?;
     let read_flag_ranges = read_flag_atoms.map(|atoms| {

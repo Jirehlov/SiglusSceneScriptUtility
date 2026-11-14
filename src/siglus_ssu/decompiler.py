@@ -757,13 +757,18 @@ def build_decompile_hints(bundles, status):
 
         def native_bundles():
             nonlocal remaining_bytes
-            for bundle in bundles:
+            bundle = next(bundles, None)
+            while bundle is not None:
                 status(bundle)
                 retained_bytes = bundle["trace"].retained_bytes(remaining_bytes)
                 if retained_bytes is not None:
                     cached_bundles[bundle["dat_path"]] = bundle
                     remaining_bytes -= retained_bytes
                 yield bundle
+                try:
+                    bundle = bundles.send(remaining_bytes)
+                except StopIteration:
+                    return
 
         hints = build_decompile_hints_native(native_bundles())
         if hints is not None:
