@@ -66,6 +66,8 @@ def _gan_parse(blob, want_disasm=True):
         ofs0 = ofs
         code, ofs = read_i32_le_advancing(blob, ofs)
         if code is None:
+            out["ok"] = False
+            out["errors"].append(f"truncated at {hx(ofs0)}")
             break
         if code == 10100:
             ln, ofs = read_i32_le_advancing(blob, ofs)
@@ -110,6 +112,10 @@ def _gan_parse(blob, want_disasm=True):
                     out["errors"].append(f"truncated at {hx(ofs1)}")
                     return out
                 _add_ins(ofs1, c2, pat_cnt)
+                if pat_cnt < 0:
+                    out["ok"] = False
+                    out["errors"].append(f"invalid pat_cnt {pat_cnt!r} at {hx(ofs1)}")
+                    return out
                 s = {"total_time": 0, "pats": []}
                 keika = 0
                 for _pi in range(pat_cnt):
@@ -223,14 +229,13 @@ def gan(blob):
 def compare_gan(b1, b2):
     g1 = _gan_parse(b1, want_disasm=False)
     g2 = _gan_parse(b2, want_disasm=False)
-    if (not g1["ok"]) or (not g2["ok"]):
-        print("GAN parse failed; showing high-level differences only.")
-        if not g1["ok"]:
-            for e in g1["errors"]:
-                print(f"file1 error: {e}")
-        if not g2["ok"]:
-            for e in g2["errors"]:
-                print(f"file2 error: {e}")
+    if not g1["ok"] or not g2["ok"] or g1["warnings"] or g2["warnings"]:
+        print("GAN comparison unavailable: invalid or unsupported data.")
+        for label, info in (("file1", g1), ("file2", g2)):
+            for kind in ("errors", "warnings"):
+                for message in info[kind]:
+                    print(f"{label} {kind[:-1]}: {message}")
+        return 1
     diffs = []
 
     def _d(k, v1, v2):

@@ -24,6 +24,10 @@ def _parse(blob):
         return out
     out["max"] = int(read_i32_le(blob, 0, default=0) or 0)
     out["cnt"] = int(read_i32_le(blob, 4, default=0) or 0)
+    if out["cnt"] < 0:
+        out["ok"] = False
+        out["errors"].append(f"negative cnt ({out['cnt']:d})")
+        return out
     offs = struct.unpack_from(f"<{_OFFSET_COUNT:d}i", blob, 8)
     out["offsets"] = tuple(int(x) for x in offs)
     if int(out["cnt"]) > _OFFSET_COUNT:
@@ -114,6 +118,13 @@ def tcr(blob: bytes) -> int:
 def compare_tcr(b1: bytes, b2: bytes) -> int:
     a = _parse(b1)
     b = _parse(b2)
+    if not a["ok"] or not b["ok"] or a["warnings"] or b["warnings"]:
+        print("TCR comparison unavailable: invalid or unsupported data.")
+        for label, info in (("file1", a), ("file2", b)):
+            for kind in ("errors", "warnings"):
+                for message in info[kind]:
+                    print(f"{label} {kind[:-1]}: {message}")
+        return 1
     diffs = []
     append_diff(diffs, "max", int(a.get("max") or 0), int(b.get("max") or 0))
     append_diff(diffs, "cnt", int(a.get("cnt") or 0), int(b.get("cnt") or 0))

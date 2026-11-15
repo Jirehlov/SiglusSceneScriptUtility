@@ -267,12 +267,14 @@ def _consume_global_options(argv):
 
 def _run_mode(module_name, args, const_profile=None):
     module = import_module(f"siglus_ssu.{module_name}")
+    from .common import BinaryFormatError
+
     try:
         if module_name == "test":
             rc = module.main(args, const_profile=const_profile)
         else:
             rc = module.main(args)
-    except OSError as exc:
+    except (BinaryFormatError, OSError) as exc:
         sys.stderr.write(f"{_prog()}: error: {exc}\n")
         return 1
     if rc == 2:

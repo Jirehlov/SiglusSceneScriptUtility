@@ -144,6 +144,13 @@ def cgm(blob):
 def compare_cgm(b1, b2):
     a = decode_cgm(b1)
     b = decode_cgm(b2)
+    if not a["ok"] or not b["ok"] or a["warnings"] or b["warnings"]:
+        print("CGM comparison unavailable: invalid or unsupported data.")
+        for label, info in (("file1", a), ("file2", b)):
+            for kind in ("errors", "warnings"):
+                for message in info[kind]:
+                    print(f"{label} {kind[:-1]}: {message}")
+        return 1
     diffs = []
     append_diff(diffs, "head", a["head"], b["head"])
     append_diff(diffs, "cnt", a["cnt"], b["cnt"])

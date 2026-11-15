@@ -35,7 +35,8 @@ def main(argv):
         return 1
     ss_name = _strip_outer_quotes(ss_name)
     zlabel = _strip_outer_quotes(zlabel)
-    if os.path.basename(ss_name) != ss_name:
+    ss = ss_name[:-3] if ss_name.lower().endswith(".ss") else ss_name
+    if not ss.strip() or os.path.basename(ss_name) != ss_name:
         sys.stderr.write(f"Invalid scene name: {ss_name}\n")
         return 2
     label = str(zlabel).strip()
@@ -51,9 +52,6 @@ def main(argv):
         sys.stderr.write(f"Invalid zlabel: {zlabel}\n")
         return 2
     label = str(label_i)
-    ss = ss_name
-    if ss.lower().endswith(".ss"):
-        ss = ss[:-3]
     engine_dir = os.path.dirname(os.path.abspath(engine_path))
     work_dir = os.path.join(
         engine_dir, "work_" + datetime.datetime.now().strftime("%Y%m%d")

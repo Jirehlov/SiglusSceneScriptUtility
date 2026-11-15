@@ -12,6 +12,7 @@ from .native_ops import lzss_unpack, smd5_digest, xor_cycle_inplace
 from . import compiler
 from .word_count import count_text_units
 from .common import (
+    BinaryFormatError,
     hx,
     dn,
     I32_PAIR_STRUCT,
@@ -122,17 +123,58 @@ def looks_like_pck(blob):
     return looks_like_siglus_pck(blob) or bool(_parse_flix_pck(blob))
 
 
-def _pck_sections(blob, preview=False):
+def _pck_sections(blob, preview=False, input_pck=""):
     n = len(blob)
+
+    def require_range(field, offset, size):
+        if offset < 0 or offset > n:
+            offset_field = field if field in C.PACK_HDR_FIELDS else field + "_ofs"
+            raise BinaryFormatError(
+                input_pck,
+                offset_field,
+                C.PACK_HDR_FIELDS.index(offset_field) * 4,
+                f"offset within 0..{n}",
+                str(offset),
+            )
+        available = n - offset
+        if size > available:
+            raise BinaryFormatError(
+                input_pck,
+                field,
+                offset,
+                f"{size} bytes",
+                f"{available} bytes available",
+            )
+
+    require_range("pack_header", 0, C.PACK_HDR_SIZE)
 
     def _validate_header_size(hs, n, default):
         if hs != 0 and (hs < default or hs > n):
-            return default
+            raise BinaryFormatError(
+                input_pck, "header_size", 0, f"0 or {default}..{n} bytes", f"{hs} bytes"
+            )
         return hs
 
     h, hs, used, secs, sec, sec_fixed = build_sections(
         blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE, _validate_header_size
     )
+    for name, count in (
+        ("inc_prop_list", "inc_prop_cnt"),
+        ("inc_prop_name_index_list", "inc_prop_name_index_cnt"),
+        ("inc_cmd_list", "inc_cmd_cnt"),
+        ("inc_cmd_name_index_list", "inc_cmd_name_index_cnt"),
+        ("scn_name_index_list", "scn_name_index_cnt"),
+        ("scn_data_index_list", "scn_data_index_cnt"),
+    ):
+        if h[count] < 0:
+            raise BinaryFormatError(
+                input_pck,
+                count,
+                C.PACK_HDR_FIELDS.index(count) * 4,
+                "non-negative count",
+                str(h[count]),
+            )
+        require_range(name, h[name + "_ofs"], h[count] * I32_PAIR_STRUCT.size)
     sec(0, hs, "H", "pack_header")
     sec_fixed(
         h.get("inc_prop_list_ofs", 0), h.get("inc_prop_cnt", 0), 8, "P", "inc_prop_list"
@@ -189,6 +231,12 @@ def _pck_sections(blob, preview=False):
     ipp_end = h.get("inc_prop_name_list_ofs", 0) + max_pair_end(inc_prop_name_idx) * 2
     icn_end = h.get("inc_cmd_name_list_ofs", 0) + max_pair_end(inc_cmd_name_idx) * 2
     sn_end = h.get("scn_name_list_ofs", 0) + max_pair_end(scn_name_idx) * 2
+    for field, end in (
+        ("inc_prop_name_list_ofs", ipp_end),
+        ("inc_cmd_name_list_ofs", icn_end),
+        ("scn_name_list_ofs", sn_end),
+    ):
+        require_range(field, h[field], end - h[field])
     if h.get("inc_prop_name_list_ofs", 0) > 0 and ipp_end > h.get(
         "inc_prop_name_list_ofs", 0
     ):
@@ -206,6 +254,9 @@ def _pck_sections(blob, preview=False):
         I32_PAIR_STRUCT,
     )
     scn_data_end = h.get("scn_data_list_ofs", 0) + max_pair_end(scn_data_idx)
+    require_range(
+        "scn_data_list", h["scn_data_list_ofs"], scn_data_end - h["scn_data_list_ofs"]
+    )
     if h.get("scn_data_list_ofs", 0) > 0 and scn_data_end > h.get(
         "scn_data_list_ofs", 0
     ):
@@ -1176,10 +1227,7 @@ def pck(blob: bytes, input_pck: str = "", explicit_angou: str = "") -> int:
         print()
         print_sections(secs, len(blob))
         return 0
-    if len(blob) < C.PACK_HDR_SIZE:
-        print("too small for pck header")
-        return 1
-    secs, meta = _pck_sections(blob, preview=True)
+    secs, meta = _pck_sections(blob, preview=True, input_pck=input_pck)
     h = meta.get("header") or {}
     print("header:")
     print(f"  header_size={h.get('header_size', 0):d}")
@@ -1345,8 +1393,8 @@ def compare_pck(
     *,
     ignore_original_sources=False,
 ) -> int:
-    m1 = _pck_sections(b1, preview=False)[1]
-    m2 = _pck_sections(b2, preview=False)[1]
+    m1 = _pck_sections(b1, preview=False, input_pck=p1)[1]
+    m2 = _pck_sections(b2, preview=False, input_pck=p2)[1]
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [

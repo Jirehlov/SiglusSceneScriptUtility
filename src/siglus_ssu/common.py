@@ -22,6 +22,14 @@ KEY_TXT_NAME = "key.txt"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 
 
+class BinaryFormatError(ValueError):
+    def __init__(self, source, field, offset, expected, actual):
+        super().__init__(
+            f"{source or '<input>'}: invalid {field} at offset {offset:#x}: "
+            f"expected {expected}, actual {actual}"
+        )
+
+
 def iterative_method(function):
     @wraps(function)
     def run(instance, *args, **kwargs):

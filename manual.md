@@ -527,6 +527,10 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=
 
 For `.pck` and `.dat` comparisons, `text_only`, `real_diff`, missing scenes, and unavailable payloads are reported comparison results; exit status `0` alone does not establish equality. `INCOMPLETE` returns `1` even when both inputs contain the same incomplete data. The `.pck` check covers byte-identical scenes and scenes present on only one side. Input, key-source, and original-source decoding errors can also make the command fail.
 
+Structural comparison of `.gan`, `.cgm`, and `.tcr` requires complete parsing of both inputs. Any parse error or warning makes the command print diagnostics and return `1` without reporting equality.
+
+In analyze mode, malformed PCK headers and out-of-file index, name, or scene-data ranges produce a diagnostic with the input path, field, byte offset, and expected versus actual size or value. The command returns `1` without a traceback for these format errors. Unexpected internal exceptions retain their traceback.
+
 Keys derived from `暗号.dat` or `angou=text` use the same fixed CP932 rules described in the compilation notes and can differ from official Windows conversion. To match existing files exactly, supply the raw 16-byte `key=bytes` or the matching `SiglusEngine.exe` directly.
 
 Text keys in `key.txt` and `key=bytes` are parsed in this order: `0xNN` tokens, two-digit hexadecimal tokens, then one-to-three-digit decimal tokens. The first format with at least 16 matching tokens supplies its first 16 bytes. Thus sixteen `10` tokens mean sixteen `0x10` bytes, not decimal 10. Use explicit `0xNN` tokens to avoid ambiguity. An exactly 16-byte `key.txt` is read as raw binary.
@@ -905,7 +909,7 @@ siglus-ssu -e <path_to_engine> <scene_name> <label>
 | Parameter | Description |
 |---|---|
 | `<path_to_engine>` | Absolute or relative path to `SiglusEngine.exe`. Quotes are stripped automatically. |
-| `<scene_name>` | The script name without directory (e.g., `opening` or `opening.ss`). Must be a bare filename without path components. |
+| `<scene_name>` | The script name without directory (e.g., `opening` or `opening.ss`). Must be a bare filename without path components. The name remaining after removing surrounding quotes and the optional `.ss` extension must not be empty or consist only of whitespace. |
 | `<label>` | Non-negative decimal `#z` label number to jump to. The `#z` prefix is optional — `10`, `z10`, and `#z10` are all accepted. |
 
 #### How It Works
