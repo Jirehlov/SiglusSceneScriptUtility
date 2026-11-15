@@ -1663,7 +1663,7 @@ class BS:
             user_props = props[inc_prop_cnt:]
             user_cmds = cmds[inc_cmd_cnt:]
             out_scn["scn_prop_list"] = [
-                {"form": p.get("form", "int"), "size": int(p.get("size", 0) or 0)}
+                {"form": p.get("form", C.FM_INT), "size": int(p.get("size", 0) or 0)}
                 for p in user_props
             ]
             out_scn["scn_prop_name_list"] = [p.get("name", "") for p in user_props]

@@ -124,7 +124,7 @@ def _inject_lines_into_blank_run(lines, block_lines):
 
 
 def _form_name(form):
-    return scn_expression_tables(C.CONST_PROFILE).form_names.get(form, "int")
+    return scn_expression_tables(C.CONST_PROFILE).form_names.get(form, C.FM_INT)
 
 
 def _declaration_form_name(form, size):

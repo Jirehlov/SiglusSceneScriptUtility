@@ -13,10 +13,6 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Configure git for CRLF
-        run: |
-          git config --global core.autocrlf true
-          git config --global core.eol crlf
       - uses: actions/checkout@v7
 
       - name: Install Rust

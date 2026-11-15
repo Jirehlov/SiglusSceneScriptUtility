@@ -1274,6 +1274,8 @@ When the input is a directory, the player recursively scans `.nwa`/`.owp`/`.ogg`
 
 The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.ovk`.
 
+Interactive commands must contain only ASCII characters. The track index `N` must be a positive integer written using digits `0`–`9` only. Track names and file paths support Unicode characters.
+
 Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output. Existing output files are overwritten without confirmation. If multiple inputs or OVK entries in one batch map to the same output path under Windows filename case rules, the colliding write is rejected and reported as a failure. Other inputs continue processing, and the command returns failure if any input fails.
 
 ---

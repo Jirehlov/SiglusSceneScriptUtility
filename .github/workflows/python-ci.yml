@@ -15,10 +15,6 @@ jobs:
       pull-requests: write
       checks: write
     steps:
-      - name: Configure git for CRLF
-        run: |
-          git config --global core.autocrlf true
-          git config --global core.eol crlf
       - uses: actions/checkout@v7
 
       - name: Install uv
@@ -30,7 +26,6 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      # --- PR Checks ---
       - name: Lint check
         if: github.event_name == 'pull_request'
         run: uv run ruff check .
@@ -39,7 +34,6 @@ jobs:
         if: github.event_name == 'pull_request'
         run: uv run ruff format --check .
 
-      # --- Push Auto-Fixes (Auto-PR) ---
       - name: Apply Fixes
         id: apply_fixes
         if: github.event_name == 'push'

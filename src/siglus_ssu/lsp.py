@@ -103,21 +103,21 @@ DIRECTIVE_DOCS: dict[str, str] = {
     "#inc_end": "Ends an inline `inc` block.",
 }
 FORM_DOCS: dict[str, str] = {
-    "void": "Valueless type. A command may declare a `void` return type; a property may not be `void`.",
-    "int": "32-bit integer value. Integer arithmetic, conditions, and most bitwise operations use this type.",
-    "str": "String value. Supports `+` concatenation, comparison, and `str * int` repetition.",
-    "intlist": "List of integers. Elements can be accessed by array indexing.",
-    "strlist": "List of strings. Elements can be accessed by array indexing.",
-    "scene": "Root scene namespace.",
-    "global": "Root global namespace.",
-    "mwnd": "Message-window-related namespace.",
-    "label": "Internal form of a label value.",
-    "list": "Internal form of an expression list `[a, b, c]`.",
-    "call": "Current call-frame namespace.",
-    "intref": "Internal form of an integer reference. Not written directly in source code.",
-    "strref": "Internal form of a string reference. Not written directly in source code.",
-    "intlistref": "Internal form of an integer-list reference. Not written directly in source code.",
-    "strlistref": "Internal form of a string-list reference. Not written directly in source code.",
+    C.FM_VOID: "Valueless type. A command may declare a `void` return type; a property may not be `void`.",
+    C.FM_INT: "32-bit integer value. Integer arithmetic, conditions, and most bitwise operations use this type.",
+    C.FM_STR: "String value. Supports `+` concatenation, comparison, and `str * int` repetition.",
+    C.FM_INTLIST: "List of integers. Elements can be accessed by array indexing.",
+    C.FM_STRLIST: "List of strings. Elements can be accessed by array indexing.",
+    C.FM_SCENE: "Root scene namespace.",
+    C.FM_GLOBAL: "Root global namespace.",
+    C.FM_MWND: "Message-window-related namespace.",
+    C.FM_LABEL: "Internal form of a label value.",
+    C.FM_LIST: "Internal form of an expression list `[a, b, c]`.",
+    C.FM_CALL: "Current call-frame namespace.",
+    C.FM_INTREF: "Internal form of an integer reference. Not written directly in source code.",
+    C.FM_STRREF: "Internal form of a string reference. Not written directly in source code.",
+    C.FM_INTLISTREF: "Internal form of an integer-list reference. Not written directly in source code.",
+    C.FM_STRLISTREF: "Internal form of a string-list reference. Not written directly in source code.",
 }
 
 
@@ -1085,7 +1085,7 @@ def _collect_scene_symbols(
             node = sentence.get("def_prop") or {}
             name_atom = (node.get("name") or {}).get("atom") or {}
             name = _unknown_name(lad, name_atom)
-            scope = f"command {current_command}" if current_command else "scene"
+            scope = f"command {current_command}" if current_command else C.FM_SCENE
             rec = DefinitionRecord(
                 name=name,
                 path="",

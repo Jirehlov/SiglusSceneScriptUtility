@@ -1,6 +1,6 @@
 # Repository Rules
 
-1. Use CRLF except in lock files. Manually inspect line endings after each change; do not enforce them through configuration or CI. Keep lock files in their tool-generated format.
+1. Use CRLF except in lock files and `LICENSE`, which may use LF. Manually inspect line endings after each change; do not enforce them through configuration or CI. Keep lock files in their tool-generated format.
 2. Remove dead code, including code unreachable from the CLI. Unused constants in `const.py` are exempt.
 3. No unit or integration test code. Preserve the existing CLI `test` command and CI PCK regression checks.
 4. Before each developer build, refresh relevant lock files to the latest compatible dependency versions and explain blocked updates. CI need not refresh locks. Offline or `--locked` builds alone do not count as a refresh.
@@ -15,3 +15,4 @@
 13. Do not modify changelog entries for released versions.
 14. Avoid pure forwarding functions with only a few references.
 15. Unsafe Rust is prohibited.
+16. Do not duplicate constants defined in `const.py` elsewhere; always reference their definitions in `const.py`.

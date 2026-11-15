@@ -26,7 +26,7 @@ from .path_policy import (
 _VOICE_CALL_NAMES = frozenset(
     {
         f"{owner}.{name}"
-        for owner in ("global", "mwnd")
+        for owner in (C.FM_GLOBAL, C.FM_MWND)
         for name in (
             "koe",
             "koe_play_wait",

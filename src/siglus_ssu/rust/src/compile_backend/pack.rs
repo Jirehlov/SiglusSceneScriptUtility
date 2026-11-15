@@ -117,7 +117,6 @@ pub fn build_pack_bytes(layout: &PackHeaderLayout<'_>, input: &PackInput<'_>) ->
         out.extend_from_slice(chunk);
     }
 
-    // Zip preserves truncation when the output ends partway through a field.
     for (bytes, field) in out.chunks_mut(4).zip(layout.fields) {
         let value = header
             .get(field.as_str())

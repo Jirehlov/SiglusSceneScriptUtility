@@ -759,32 +759,34 @@ fn to_py(py: Python<'_>, value: &V) -> PyResult<Py<PyAny>> {
 fn declaration_form_source(rt: &Runtime, form: i64, size: Option<i64>) -> SourceText {
     if size.is_some() {
         if form == rt.native_tables.int_list {
-            return source("intlist");
+            return rt.native_tables.int_list_name.clone();
         }
         if form == rt.native_tables.string_list {
-            return source("strlist");
+            return rt.native_tables.string_list_name.clone();
         }
     }
     rt.native_tables
         .form_names
         .get(&form)
         .cloned()
-        .unwrap_or_else(|| source("int"))
+        .unwrap_or_else(|| rt.native_tables.int_name.clone())
 }
 fn property_source(
+    tables: &NativeTables,
     prefix: &SourceText,
     name: &SourceText,
     form: &SourceText,
     tail: &SourceText,
 ) -> SourceText {
     let head = source_concat(&[&prefix.chars, &[32], &name.chars]);
-    if form.eq_str("int") && tail.chars.is_empty() {
+    if form == &tables.int_name && tail.chars.is_empty() {
         head
     } else {
         source_concat(&[&head.chars, &source(" : ").chars, &form.chars, &tail.chars])
     }
 }
 fn command_source(
+    tables: &NativeTables,
     prefix: &SourceText,
     name: &SourceText,
     args: &SourceText,
@@ -795,7 +797,7 @@ fn command_source(
     if !args.chars.is_empty() {
         parts.extend([&[40], args.chars.as_slice(), &[41]]);
     }
-    if !form.eq_str("int") {
+    if form != &tables.int_name {
         parts.extend([suffix.chars.as_slice(), form.chars.as_slice()]);
     }
     source_concat(&parts)
@@ -809,7 +811,8 @@ fn format_argument_layout(rt: &Runtime, layout: &[Argument]) -> SourceText {
             frames.pop();
             if let Some((_, _, parts)) = frames.last_mut() {
                 parts.push(source_concat(&[
-                    &source("list[").chars,
+                    &rt.native_tables.list_name.chars,
+                    &[91],
                     &value.chars,
                     &[93],
                 ]));
@@ -1031,12 +1034,21 @@ pub(crate) mod decompiler {
             } else {
                 info.name.clone()
             };
-            let tail = if info.size > 0 && (form.eq_str("intlist") || form.eq_str("strlist")) {
+            let tail = if info.size > 0
+                && (form == rt.native_tables.int_list_name
+                    || form == rt.native_tables.string_list_name)
+            {
                 source(&format!("[{}]", info.size))
             } else {
                 empty_source()
             };
-            lines.push(property_source(&source("#property"), &name, &form, &tail));
+            lines.push(property_source(
+                &rt.native_tables,
+                &source("#property"),
+                &name,
+                &form,
+                &tail,
+            ));
         }
         for id in 0..hints.command_count {
             let info = hints
@@ -1055,7 +1067,13 @@ pub(crate) mod decompiler {
             } else {
                 info.name.clone()
             };
-            lines.push(command_source(&source("#command"), &name, &params, &form));
+            lines.push(command_source(
+                &rt.native_tables,
+                &source("#command"),
+                &name,
+                &params,
+                &form,
+            ));
         }
         Ok(lines)
     }
@@ -1128,12 +1146,21 @@ pub(crate) mod decompiler {
                 record_get(info, "form")?.int()?,
                 (size > 0).then_some(size),
             );
-            let tail = if size > 0 && (form.eq_str("intlist") || form.eq_str("strlist")) {
+            let tail = if size > 0
+                && (form == rt.native_tables.int_list_name
+                    || form == rt.native_tables.string_list_name)
+            {
                 source(&format!("[{size}]"))
             } else {
                 empty_source()
             };
-            out.push(property_source(&source("#property"), &name, &form, &tail));
+            out.push(property_source(
+                &rt.native_tables,
+                &source("#property"),
+                &name,
+                &form,
+                &tail,
+            ));
         }
         let offsets = native_optional_values(&record_get(meta, "scn_cmd_list")?)?
             .iter()
@@ -1151,6 +1178,7 @@ pub(crate) mod decompiler {
                 let ret = pick_return_form(rt, instance, command.id, info.range);
                 let form = declaration_form_source(rt, ret, None);
                 out.push(command_source(
+                    &rt.native_tables,
                     &source("#command"),
                     &command.name,
                     &params,
@@ -1217,7 +1245,7 @@ pub(crate) mod decompiler {
             size.or_else(|| (!size_expr.chars.is_empty()).then_some(0)),
         );
         let mut tail = empty_source();
-        if form.eq_str("intlist") || form.eq_str("strlist") {
+        if form == rt.native_tables.int_list_name || form == rt.native_tables.string_list_name {
             let expr = native_expression_source(rt, &size_expr, context.compound, false);
             let parsed = source_strip_parens(&expr);
             let value = integer_literal(&parsed);
@@ -1227,7 +1255,7 @@ pub(crate) mod decompiler {
                 tail = source(&format!("[{size}]"));
             }
         }
-        property_source(&source("property"), &name, &form, &tail)
+        property_source(&rt.native_tables, &source("property"), &name, &form, &tail)
     }
 
     pub(super) fn decompile_scene(
@@ -2115,6 +2143,10 @@ impl Element {
 
 struct NativeTables {
     form_names: HashMap<i64, SourceText>,
+    int_name: SourceText,
+    int_list_name: SourceText,
+    string_list_name: SourceText,
+    list_name: SourceText,
     global: i64,
     call: i64,
     void: i64,
@@ -2236,6 +2268,10 @@ impl NativeTables {
             .map(|(key, value)| Ok((key.int()?, value.int()?)))
             .collect::<Result<_, Failure>>()?;
         Ok(Self {
+            int_name: record_text(constants, "FM_INT")?,
+            int_list_name: record_text(constants, "FM_INTLIST")?,
+            string_list_name: record_text(constants, "FM_STRLIST")?,
+            list_name: record_text(constants, "FM_LIST")?,
             global: form("FM_GLOBAL")?,
             call: form("FM_CALL")?,
             void: form("FM_VOID")?,
@@ -2285,11 +2321,13 @@ impl NativeTables {
         let Some(form) = form else {
             return source("<?>");
         };
-        let name = self
-            .form_names
-            .get(&form)
-            .cloned()
-            .unwrap_or_else(|| source(if with_code { "form" } else { "int" }));
+        let name = self.form_names.get(&form).cloned().unwrap_or_else(|| {
+            if with_code {
+                source("form")
+            } else {
+                self.int_name.clone()
+            }
+        });
         if with_code {
             source_concat(&[&name.chars, &source(&format!("({form})")).chars])
         } else {
@@ -3888,7 +3926,8 @@ fn argument_source(tables: &NativeTables, args: &[Argument]) -> SourceText {
             frames.pop();
             if let Some((_, _, parts)) = frames.last_mut() {
                 parts.push(source_concat(&[
-                    &source("list[").chars,
+                    &tables.list_name.chars,
+                    &[91],
                     &value.chars,
                     &[93],
                 ]));
@@ -8074,6 +8113,7 @@ impl<'a> SourceParser<'a> {
             self.instance.string_pool_carrier.set(true);
         }
         let head = command_source(
+            &self.rt.native_tables,
             &source("command"),
             &parsed.info.name,
             &source_join(&params, ", "),

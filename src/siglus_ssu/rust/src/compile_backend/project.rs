@@ -2112,7 +2112,6 @@ where
 {
     let mut stdout = OutputLog { streamer };
     let mut stage_times = Vec::new();
-    // Specialize once so disabled statistics add no branches to macro expansion.
     let result = if config.cache.full_compile_stats {
         compile_project_inner::<true>(config, &mut stdout, &mut stage_times)
     } else {

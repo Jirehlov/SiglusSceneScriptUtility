@@ -15,10 +15,6 @@ jobs:
       pull-requests: write
       checks: write
     steps:
-      - name: Configure git for CRLF
-        run: |
-          git config --global core.autocrlf true
-          git config --global core.eol crlf
       - uses: actions/checkout@v7
 
       - name: Install Rust
@@ -26,7 +22,6 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      # --- PR Checks ---
       - name: Clippy check
         if: github.event_name == 'pull_request'
         run: cd src/siglus_ssu/rust && cargo clippy -- -D warnings
@@ -35,7 +30,6 @@ jobs:
         if: github.event_name == 'pull_request'
         run: cd src/siglus_ssu/rust && cargo fmt -- --check
 
-      # --- Push Auto-Fixes (Auto-PR) ---
       - name: Apply Fixes
         id: apply_fixes
         if: github.event_name == 'push'

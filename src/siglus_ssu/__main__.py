@@ -252,7 +252,7 @@ def _consume_global_options(argv):
                 f"invalid --const-profile value: {const_profile} (expected {', '.join(map(str, CONST_PROFILE_IDS))})"
             )
 
-    multiplier = 0x7087
+    multiplier = None
     if string_xor_multiplier is not None:
         multiplier = _parse_scene_string_xor_multiplier(string_xor_multiplier)
     return (
@@ -332,7 +332,7 @@ def main():
     argv = sys.argv[1:]
     _runtime._LEGACY_COMPILE = False
     _runtime._LEGACY_FULL = False
-    _runtime._SCENE_STRING_XOR_MULTIPLIER = 0x7087
+    _runtime._SCENE_STRING_XOR_MULTIPLIER = None
     _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = False
     try:
         (

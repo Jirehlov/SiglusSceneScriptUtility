@@ -814,7 +814,7 @@ def _format_playlist_help(has_playlist: bool) -> str:
             ]
             + parts[1:]
         )
-    return "commands: " + ", ".join(parts)
+    return "commands: " + ", ".join(parts) + " (ASCII only)"
 
 
 def _terminal_text_width(text: str) -> int:
@@ -874,7 +874,10 @@ def _tail_terminal_text(text: str, width: int) -> str:
 
 
 def _parse_player_command(command: str, has_playlist: bool):
-    text = str(command or "").strip()
+    text = str(command or "")
+    if not text.isascii():
+        raise ValueError("player commands accept ASCII characters only")
+    text = text.strip()
     if not text:
         return "noop", None
     parts = text.split()
@@ -905,10 +908,12 @@ def _parse_player_command(command: str, has_playlist: bool):
     if head in ("play", "go", "goto", "jump"):
         if len(parts) != 2:
             raise ValueError("play expects exactly one playlist index")
+        if not parts[1].isdecimal():
+            raise ValueError("play expects a decimal playlist index")
         try:
             index = int(parts[1])
         except ValueError as exc:
-            raise ValueError("play expects an integer playlist index") from exc
+            raise ValueError("play index is too large") from exc
         if index <= 0:
             raise ValueError("play index must be >= 1")
         return "play", index - 1
@@ -1214,7 +1219,7 @@ class _PlayerScreen:
         data = os.read(self._stdin_fd, 1)
         if not data:
             return "\x04"
-        text = data.decode("utf-8", "ignore")
+        text = data.decode("ascii", "replace")
         if text != "\x1b":
             return text
         deadline = time.monotonic() + 0.02

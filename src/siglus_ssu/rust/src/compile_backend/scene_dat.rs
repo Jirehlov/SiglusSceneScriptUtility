@@ -156,7 +156,6 @@ pub fn build_scn_dat(
             push_u16(&mut out, ((unit as u32 ^ key) & 0xffff) as u16);
         }
         let len = ((out.len() - start) / 2) as i32;
-        // The payload is shuffled, but index slots and XOR keys use original IDs.
         let entry = index_ofs + orig * 8;
         out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());
         out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
@@ -285,7 +284,6 @@ pub fn build_scn_dat(
     );
     push_i32_array(&mut out, &input.read_flag_list);
 
-    // Zip preserves truncation when the output ends partway through a field.
     for (bytes, field) in out.chunks_mut(4).zip(layout.fields) {
         let value = header
             .get(field.as_str())

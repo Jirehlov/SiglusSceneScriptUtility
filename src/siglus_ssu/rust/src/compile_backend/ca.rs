@@ -576,7 +576,6 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         let default = default_tree.search(text);
         let added = added_tree.search(text);
         match (default, added) {
-            // Both names are prefixes of the same text; a longer prefix sorts after a shorter one.
             (Some(left), Some(right)) => Some(if left.1 > right.1 { left } else { right }),
             (Some(replacement), None) | (None, Some(replacement)) => Some(replacement),
             (None, None) => None,

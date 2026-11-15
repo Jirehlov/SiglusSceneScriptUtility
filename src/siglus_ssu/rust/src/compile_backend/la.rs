@@ -4,7 +4,6 @@ use super::frontend_common::SourcePoint;
 use std::collections::HashMap;
 
 fn symbol_at(chars: &[char], pos: usize, codes: &LexCodes) -> Option<(i32, usize)> {
-    // Dispatch by the first character and retain longest-prefix matching.
     Some(match chars[pos] {
         '>' => match chars.get(pos + 1) {
             Some('>') => match chars.get(pos + 2) {
@@ -248,7 +247,6 @@ pub fn lex_scene_text(
     lex_scene_text_inner::<true>(text, codes, source_map, read_origins)
 }
 
-/// Compilation uses token lines, but does not consume editor column spans.
 pub fn lex_scene_text_for_compile(text: &str, codes: &LexCodes) -> Result<LexResult, LexError> {
     lex_scene_text_inner::<false>(text, codes, None, None)
 }
