@@ -419,19 +419,19 @@ def compare_files(
         print("Different types; structural compare is skipped.")
         print()
         print("--- Analyze file1 ---")
-        analyze_file(
+        rc1 = analyze_file(
             p1,
             dat_disam=dat_disam,
             explicit_angou=explicit_angou,
         )
         print()
         print("--- Analyze file2 ---")
-        analyze_file(
+        rc2 = analyze_file(
             p2,
             dat_disam=dat_disam,
             explicit_angou=explicit_angou,
         )
-        return 0
+        return rc1 or rc2
     if t1 == "gan":
         return gan.compare_gan(b1, b2)
     if t1 == "pck":

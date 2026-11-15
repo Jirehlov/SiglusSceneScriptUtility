@@ -16,3 +16,5 @@
 14. Avoid pure forwarding functions with only a few references.
 15. Unsafe Rust is prohibited.
 16. Do not duplicate constants defined in `const.py` elsewhere; always reference their definitions in `const.py`.
+17. Support only official PCK formats (those this project can generate); compatibility with nonstandard PCKs is not required.
+18. Record only major changes in the changelog.

@@ -1,8 +1,10 @@
 # SiglusSceneScriptUtility Manual
 
-**Version:** 0.5.8 (check the installed version with `siglus-ssu --version`)
+> **CLI only:** This project supports only the `siglus-ssu` command-line interface, provides no support for direct module imports or calls, and accepts no responsibility for any resulting issues.
 
-**Repository:** https://github.com/Jirehlov/SiglusSceneScriptUtility
+**Version:** 0.5.8
+
+**Repository:** [GitHub](https://github.com/Jirehlov/SiglusSceneScriptUtility)
 
 **Chinese Manual:** [manual_cn.md](manual_cn.md)
 
@@ -19,7 +21,6 @@
    - [Const Profiles](#const-profiles)
    - [Scene String XOR Multiplier](#scene-string-xor-multiplier)
    - [Command Aliases](#command-aliases)
-   - [Python Module API](#python-module-api)
    - [Getting Help](#getting-help)
 4. [Modes Reference](#modes-reference)
    - [-lsp — Start the Language Server](#-lsp--start-the-language-server)
@@ -35,27 +36,22 @@
    - [-v / --video — Work with `.omv` Video Files](#-v----video--work-with-omv-video-files)
    - [-p / --patch — Patch `SiglusEngine.exe`](#-p----patch--patch-siglusengineexe)
    - [test — Round-Trip Compile Test](#test--round-trip-compile-test)
-5. [SiglusSceneScript Language Specification (SiglusSS; as Defined by `-c`)](#siglusss-language-spec)
+5. [SiglusSceneScript Language Reference](#siglusss-language-spec)
 6. [Tips and Troubleshooting](#tips-and-troubleshooting)
 
 ---
 
 ## Overview
 
-**SiglusSceneScriptUtility** (abbreviated **SSSU** or invoked as **siglus-ssu**) is a command-line utility for working with files used by the **SiglusEngine** visual novel engine. It implements a SiglusSS compilation pipeline for the supported engine/resource set and provides a comprehensive set of tools for:
+SiglusSceneScriptUtility (`siglus-ssu`) is a command-line tool for SiglusEngine games. It can:
 
-- Extracting and recompiling `.pck` scene files
-- Analyzing binary formats (`.dat`, `.dbs`, `.gan`, `.sav`, `.cgm`, `.tcr`)
-- Disassembling `.dat` compiled scripts and decompiling scene `.pck` files into `.ss` / `.inc`
-- Exporting and applying text maps for translation work
-- Collecting and organizing character voice audio from `.ovk` files
-- Extracting and recompiling `.g00` image files
-- Decoding `.nwa` audio and extracting/rebuilding `.owp` / `.ovk` audio files
-- Extracting and recompiling `.omv` video files
-- Patching `SiglusEngine.exe` for alternative key or language settings
-- Providing an LSP for the SiglusSS language
+- Compile, extract, disassemble, and decompile scene scripts.
+- Export and apply translations, edit saves, and analyze game data.
+- Extract and rebuild images, audio, and video, and collect voices by character.
+- Patch engine keys and language settings.
+- Provide editor support through LSP.
 
-> **Compatibility Notice:** Profiles 3 through 9 target older scene formats, including those used by TheGodofDeath HD, the original Rewrite, nanami/Kisaragi, Karumaruka, Rurumi, Yamiiro, the Rewrite trial, and Rewrite Harvest festa! See Const Profiles below for their different element, command, string, local property, logical precedence, and z-label rules. Other old engine builds may use resource formats or constants that are not supported.
+Choose the game's [const profile](#const-profiles) when processing scene scripts. Unsupported engine variants may use different formats.
 
 ---
 
@@ -63,42 +59,26 @@
 
 ### Option 1: Install from PyPI
 
+Requires Python 3.12 or later:
+
 ```bash
 pip install siglus-ssu
 ```
 
-All wheels and source distributions include `const.py`. Constants are loaded only from the installed package, so no separate download or network access is needed after installation. Upgrade `siglus-ssu` to update the bundled constants.
-
-> **Note:** Python 3.12 or later is required. PyPI publishes platform wheels with the native Rust extension and a universal `py3-none-any` pure-Python fallback wheel. If no compatible native wheel is available, pip can install the pure-Python wheel; supported operations use Python fallbacks and may run more slowly. Build from source with Rust only when native acceleration is required on that platform.
-
-Starting with v0.5.0, `init` and `--init` are removed. Delete initialization steps from existing scripts. Old user-data copies at `%APPDATA%\siglus-ssu\const.py` or `$XDG_DATA_HOME/siglus-ssu/const.py` (default: `~/.local/share/siglus-ssu/const.py`) are ignored and left untouched for older installations. If the bundled file is missing, reinstall the package.
+Compatible platform wheels include Rust acceleration. Other platforms can use the slower pure-Python wheel or build from source for native acceleration. No initialization or separate constants download is needed.
 
 ### Option 2: Install from Source
 
-#### Prerequisites
+Requires Python 3.12+, [uv](https://github.com/astral-sh/uv), and [Rust 1.88+](https://rustup.rs/).
 
-- **Python 3.12+**
-- **uv** — project manager ([installation guide](https://github.com/astral-sh/uv))
-- **Rust 1.88+ toolchain** — required to build the native extension ([rustup.rs](https://rustup.rs/))
+Clone the repository, then run from its root:
 
-#### Steps
+```bash
+uv sync
+uv run siglus-ssu --help
+```
 
-1. Clone the repository.
-2. In the project root, run:
-
-   ```bash
-   uv sync
-   ```
-
-   This builds the Rust extension and installs all dependencies into a local virtual environment.
-
-3. Prefix all commands with `uv run`:
-
-   ```bash
-   uv run siglus-ssu --help
-   ```
-
-   Source-checkout runs use `src/siglus_ssu/const.py` directly. No separate initialization is required.
+Use `uv run siglus-ssu` for subsequent commands.
 
 ---
 
@@ -108,110 +88,77 @@ Starting with v0.5.0, `init` and `--init` are removed. Delete initialization ste
 siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [--string-xor-multiplier N] (-lsp|-c|-x|-a|-d|-k|-e|-m|-g|-s|-v|-p|test) [args]
 ```
 
-CLI text output uses the configured stream encoding and backslash-escapes characters that cannot be encoded, allowing file processing to continue.
-
-When the Rust extension is available and supports the selected operation, compilation, scene disassembly, decompilation, and payload comparison use native implementations. `--legacy` switches only compilation to Python and keeps native scene processing enabled. `--legacy-full` switches all of these operations to Python. The two decompilers target equal normalized payloads after recompilation; reconstructed source text need not match between backends.
+Native acceleration is used automatically when available.
 
 ### Global Options
 
 | Option | Description |
 |---|---|
-| `-h`, `--help` | Show the help message and exit. |
-| `-V`, `--version` | Show the program version and exit. |
-| `--legacy` | Force the Python compile backend while keeping native helpers such as LZSS enabled. Useful for comparing compile behavior. |
-| `--legacy-full` | Disable all Rust native acceleration and use the pure Python fallback implementation where available. Useful for debugging native extension issues. |
-| `--const-profile N` | Select one of the built-in `const.py` profiles (`0`-`10`, default: `0`). Profiles select form/element tables, command message-block, read-flag and selection-block rules, whether local properties are allowed outside commands, logical operator precedence, the z-label limit, named integer-reference arguments, and the default scene-string XOR multiplier. See the engine versions below. Cannot be combined with `-c --tmp`. `test` uses only an explicitly selected profile, without profile or charset fallback. `test --decompile` requires an explicit profile. |
-| `--string-xor-multiplier N` | Override the multiplier used to encode and decode scene string XOR keys as `(string_index * N) & 0xFFFF` (default: `0` for profiles `3`, `5`, and `8`, `0x7087` otherwise). An explicit value takes precedence over the profile default. In compile mode, one value applies to every scene; changing it invalidates the compiled-scene `--tmp` cache. Use `0` for scene strings stored as plain UTF-16LE. Values from `0` through `0xFFFF` are accepted in decimal or `0x` hexadecimal notation. |
+| `-h`, `--help` | Show help. |
+| `-V`, `--version` | Show the installed version. |
+| `--legacy` | Use Python compilation while retaining native helpers. |
+| `--legacy-full` | Disable all Rust acceleration. |
+| `--const-profile N` | Select the game's profile (`0`–`10`, default `0`). Cannot be combined with `-c --tmp`. An explicit profile disables automatic retries in `test`; `test --decompile` requires one. |
+| `--string-xor-multiplier N` | Override the scene-string XOR multiplier. Accepts `0`–`0xFFFF` in decimal or hexadecimal. Profiles `3`, `5`, and `8` default to `0`; all others default to `0x7087`. See [Scene String XOR Multiplier](#scene-string-xor-multiplier). |
 
-Global options may appear before or after the mode, but must precede `--`. The forms `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
+Global options may appear before or after the mode, but must precede `--`. `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
 
 ### Const Profiles
 
-| Profile | Type | Target engine |
-|---|---|---|
-| `0` | Reconstructed profile | Modern SiglusEngine scene formats; the default option. |
-| `1` | Official profile | Version `1.1.140.4`. |
-| `2` | Official profile | Version `1.1.137.0`. |
-| `3` | Reconstructed profile | Older engines with plain scene strings and no read-flag field on `global.koe`. |
-| `4` | Reconstructed profile | Older engines, including the command and selection-block format used by the original Rewrite. |
-| `5` | Reconstructed profile | Older engine variants used by nanami/Kisaragi, with plain scene strings, older command return types, and no automatic `msg_block` before `global.ruby`. |
-| `6` | Reconstructed profile | Older engines that allow local `property` declarations outside `command`, including Karumaruka. |
-| `7` | Reconstructed profile | Older engines used by Rurumi and Yamiiro, with equal `&&` / `||` precedence and a 100-entry z-label table. |
-| `8` | Reconstructed profile | The Rewrite trial, with legacy form codes, plain scene strings, and references preserved for the `key_skip` argument of `wipe` and `mask_wipe`. |
-| `9` | Reconstructed profile | Rewrite Harvest festa!, with the legacy global `world` property at element code 47 instead of the `msgbtn` command. |
-| `10` | Extensively reconstructed profile | FlixEngine (mobile SiglusEngine), with mobile API definitions recovered from the samples. |
+Profiles select built-in types, element codes, command signatures, and compilation rules. The table describes differences from the reference profile in each row; other compilation rules remain unchanged. Game names are compatibility examples.
 
-Profile `3` has the same form/element codes and command return types as profile `2`. It omits `global.koe` from its read table and defaults the string XOR multiplier to `0`. It retains automatic `msg_block` insertion before `global.ruby` and the `int` return type of `mov.play_wait_key`, as used by TheGodofDeath HD. The Python and Rust compile backends share these rules.
+Profile `2` is the comparison baseline: scene-string XOR multiplier `0x7087`, local `property` declarations only inside `command`, `&&` higher precedence than `||`, and z-labels `#z0`–`#z999`. It inserts a message block before `global.ruby`, assigns a read flag to `global.koe`, and emits selection blocks for `global.sel`, `global.sel_cancel`, `global.selmsg`, `global.selmsg_cancel`, and `global.sel_image`.
 
-Profile `4` is based on profile `2`, with `void` return types for `global.wait_wipe`, `global.koe_wait_key`, `global.exkoe`, `pcmch.wait_key`, and `pcmch.wait_fade_key`. It retains profile `2`'s read table and default multiplier of `0x7087`, including the read-flag field on `global.koe`.
+| Profile | Reference | Specific differences | Engine / examples |
+|---|---|---|---|
+| `0` | `1` | Adds `syscom.msg_back_get_chr_no`, `syscom.msg_back_get_koe_no`, `syscom.msg_back_get_message`, and `syscom.msg_back_get_name`. | Modern SiglusEngine; default. |
+| `1` | `2` | Adds types `joypad=1530`, `joystick=1540`, `joytrigger=1550`, and `keyboard=1560`, with keyboard/gamepad input interfaces, button queries, and gamepad-mode settings. Renames `keylist.clear`, `keylist.next`, `keylist.wait`, and `keylist.wait_force` to `__clear`, `__next`, `__wait`, and `__wait_force` in the same type. | Official engine `1.1.140.4`. |
+| `2` | — | Baseline rules above; uses `keylist.clear`, `keylist.next`, `keylist.wait`, and `keylist.wait_force`, without profile `1`'s added types/interfaces. | Official engine `1.1.137.0`. |
+| `3` | `2` | Uses plain scene strings (XOR multiplier `0`); `global.koe` does not receive a read flag. | TheGodofDeath HD. |
+| `4` | `2` | Changes `global.wait_wipe`, `global.koe_wait_key`, `global.exkoe`, `pcmch.wait_key`, and `pcmch.wait_fade_key` from `int` to `void`. Omits selection blocks and the associated selection-command expression restrictions. | Original Rewrite. |
+| `5` | `3` | Changes `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key` from `int` to `void`. Does not insert a message block before `global.ruby`. | nanami/Kisaragi. |
+| `6` | `2` | Allows call-local `property` declarations outside `command`. | Karumaruka. |
+| `7` | `4` | Changes `counter.wait_key` from `int` to `void`; allows call-local `property` outside `command`; treats `&&` and `\|\|` at equal precedence, left to right; limits z-labels to `#z0`–`#z99`. | Rurumi and Yamiiro. |
+| `8` | `5` | Uses type codes `frameaction=1212` and `intlistref=11`; allows call-local `property` outside `command`; limits z-labels to `#z0`–`#z99`. Preserves integer-variable references for `global.wipe(key_skip=...)` and `global.mask_wipe(key_skip=...)`; other integer expressions remain values. | Rewrite trial. |
+| `9` | `2` | Element code `47` is the `global.world` property of type `worldlist`, replacing the `global.msgbtn` command. | Rewrite Harvest festa! |
+| `10` | `0` | Adds mobile UI, touch, network, store, and extension-resource interfaces, including `global.sheet`, `global.touch`, `global.connect`, `global.appstore`, `global.googleplay`, and `global.extend`. Changes `global.message_box` from `void` to `int` and adds named argument `title_str`. | FlixEngine (mobile SiglusEngine). |
 
-Profile `5` has the same form/element codes, read table, selection-block rules, and plain scene strings as profile `3`. It sets the return types of `global.wait_wipe`, `global.exkoe`, `global.exkoe_play_wait_key`, `counter.wait_key`, `pcmch.wait_fade_key`, and `mov.play_wait_key` to `void` and does not automatically insert `msg_block` before `global.ruby` calls. Each profile defines its configuration tables in full, independently of other profiles.
+Profile numbers are not chronological. Use the same profile for disassembly, decompilation, compilation, and payload comparison. To identify a profile for a PCK with embedded sources, run `siglus-ssu test Scene.pck` and check the successful result.
 
-Profile `6` has the same form/element tables, message-block, read-flag and selection-block rules, and default string XOR multiplier of `0x7087` as profile `2`. Each profile explicitly configures `ALLOW_PROPERTY_OUT_OF_COMMAND`: profiles `0`-`5`, `9`, and `10` disable it and profiles `6`-`8` enable it. These declarations retain local call property semantics and do not become scene or global `#property` declarations. Python and Rust use the same setting.
-
-Profile `7` independently defines the same form/element codes, message-block rules, read table, empty selection-command table, and default string XOR multiplier as profile `4`, but changes `counter.wait_key` to return `void` and allows local properties outside commands. It treats `&&` and `||` as equal-precedence, left-associative operators. Its z-label limit is `100`; names such as `#z100` are ordinary labels. Each profile explicitly defines `LOGICAL_AND_PRECEDENCE` and `TNM_Z_LABEL_CNT`: profiles `0`-`6`, `9`, and `10` retain higher precedence for `&&` than `||` and a limit of `1000`. Python and Rust share these settings.
-
-Profile `8` defines its tables independently. It uses profile `5`'s command return types, message-block, read-flag and selection-block rules, and plain scene strings, with `frameaction = 1212` and `intlistref = 11`. It allows local properties outside commands, has a `100`-entry z-label table, and retains higher precedence for `&&` than `||`. Its `NAMED_INT_REFERENCE_ARGUMENTS` table preserves integer variable references only for `global.wipe(key_skip=...)` and `global.mask_wipe(key_skip=...)`; constants and other integer value expressions remain values. Profiles `0`-`7`, `9`, and `10` explicitly use empty tables. The same parameter metadata drives Python and Rust compilation.
-
-Profile `9` defines every configuration table independently. Its only element difference from profile `2` is the `global.world` property of type `worldlist` at code `47`, replacing `global.msgbtn`; the two incompatible meanings of that code are kept in separate profiles. It retains profile `2`'s command return types, message-block, read-flag and selection-block rules, multiplier `0x7087`, higher `&&` precedence than `||`, and `1000`-entry z-label table. It rejects local properties outside commands and has no named integer-reference arguments. Python and Rust share these bundled definitions; upgrading the package updates all profiles together.
-
-Profile `10` is an extensively reconstructed profile for FlixEngine, the mobile version of SiglusEngine, derived from matching embedded PCK sources to their original DAT bytecode. It independently stores the same base rules as profile `0`, adds mobile UI, touch, networking, store and extension-resource APIs, and changes `global.message_box` to return `int` and accept the named argument `title_str`. Python and Rust share these definitions. Embedded-source `test` automatically tries this profile after profile `9` when no explicit profile is supplied. Select it explicitly with `siglus-ssu --const-profile 10 -c src out.pck`.
-
-Validation using `--serial` covers six samples: LOOPERS, LUNARiA, Summer Pockets, Summer Pockets Starter, and the Android/iOS versions of Summer Pockets Reflection Blue. All `1364` scenes have matching payloads; the complete PCKs for LOOPERS, Summer Pockets and Starter are byte-identical. API and overload coverage is limited to what appears in these samples. The `mobile_*` type names and codes `1000001`-`1000024` are internal placeholders for member resolution; the official object type codes remain unknown and these names must not be treated as official declarable types. Uses that emit these objects as bytecode values have not been verified.
-
-Each profile has a `SEL_GLOBAL_CODE_NAMES` table. Profiles `0`-`3`, `5`, `6`, `8`, `9`, and `10` retain the existing selection-command rules; profiles `4` and `7` use empty tables, so compiling selection commands does not emit `CD_SEL_BLOCK_START` / `CD_SEL_BLOCK_END`. This table also determines static restrictions on selection commands in expressions, with the same settings used by the Python and Rust compile backends. Profile numbers do not indicate engine version order.
+Profile `10` has partial mobile API coverage. Its `mobile_*` type names are internal placeholders, not official types for source declarations; emitting these objects as bytecode values is unverified.
 
 ### Scene String XOR Multiplier
 
-`--string-xor-multiplier N` changes only the per-string XOR transform in compiled scene `.dat` string tables. It does not disable LZSS compression or package/scene encryption. `--no-angou` controls those outer layers, but it neither replaces this option nor disables the scene-string XOR transform. Profiles `0`-`2`, `4`, `6`, `7`, `9`, and `10` default to `0x7087`; profiles `3`, `5`, and `8` default to `0`. Use `0` only for titles whose scene strings are stored as plain UTF-16LE. This option does not patch `SiglusEngine.exe` or change the `-p --altkey` key; rebuilt scenes work only with an engine variant that expects the same scene-string multiplier.
+Use `--string-xor-multiplier N` only when the game's scene-string encoding differs from the profile default. `0` selects plain UTF-16LE strings. This option does not change compression, outer encryption, or the engine executable; `--no-angou` does not disable scene-string XOR.
 
-The multiplier is selected by the active profile or an explicit override and is not saved in an extracted working directory. Use the same profile and multiplier settings for every command that decodes, analyzes, compares, rewrites, or recompiles the title's scene strings. A wrong value can leave the file structurally valid while producing unreadable text, so the program may not be able to report a mismatch. Each compilation or comparison applies one multiplier to every scene; per-scene mixtures inside one `.pck` are not supported. A compare command therefore cannot correctly decode two inputs that use different multipliers; analyze them separately or rebuild one side with a shared setting first. The embedded-source `test` command tries profile defaults during fallback; an explicit multiplier applies to every attempt. With `-c --tmp`, the multiplier is part of the cache metadata, so changing it rebuilds all cached scenes.
+Use the same profile and multiplier whenever decoding, editing, or recompiling a title. Extraction does not save these settings. A wrong multiplier can produce unreadable text without a format error. One command applies one multiplier to all scenes and both comparison inputs, so inputs using different multipliers must be analyzed separately.
 
-Modes that do not decode or rebuild scene string tables ignore this option. In particular, `-c --dat-repack` copies existing `.dat` files unchanged, `-c --gei` handles only `Gameexe.dat`, and plain `-x` extraction does not use the multiplier unless disassembly or decompilation is requested. When the option is explicitly supplied to one of these no-op operations, the program prints a warning and continues. Structural `-a` analysis, `-k --single`, and non-scene modes likewise do not use it.
+Changing the multiplier rebuilds all `-c --tmp` cached scenes. Operations that do not process scene strings ignore it, including plain extraction, `--dat-repack`, and `--gei`.
 
-For example, use the following commands for a title whose scene strings do not use this XOR transform:
+For a title using plain scene strings:
 
 ```bash
-# Extract and disassemble scene strings
-siglus-ssu --string-xor-multiplier 0 -x --disam /path/to/Scene.pck /path/to/output_parent/
-
-# Export strings from an extracted compiled scene
+siglus-ssu --string-xor-multiplier 0 -x --disam /path/to/Scene.pck
 siglus-ssu --string-xor-multiplier 0 -m /path/to/extracted/chapter1.dat
-
-# After editing chapter1.dat.csv, apply it with the same setting
 siglus-ssu --string-xor-multiplier 0 -m --apply /path/to/extracted/chapter1.dat
-
-# If working from .ss source instead, compile it with the same title setting
-siglus-ssu --string-xor-multiplier 0 -c /path/to/source/ /path/to/Scene_translated.pck
+siglus-ssu --string-xor-multiplier 0 -c /path/to/source/ /path/to/translated.pck
 ```
 
 ### Command Aliases
 
-The CLI also accepts a few convenience aliases:
+`siglus-ssu help` and `siglus-ssu version` are aliases for `--help` and `--version`.
 
-- `siglus-ssu help` behaves the same as `siglus-ssu --help`
-- `siglus-ssu version` behaves the same as `siglus-ssu --version`
+After selecting a mode and required sub-operation, use `--` before positional paths beginning with `-`, for example `siglus-ssu test -- --sample.pck`. All options must precede `--`. For an option value beginning with `-`, use an absolute path or prefix it with `./`.
 
-After selecting a mode and any required sub-operation, `--` ends option parsing so that a positional path beginning with `-` can be passed unchanged, for example `siglus-ssu test -- --sample.pck`. All options, including global options, must precede `--`. For an option value whose path begins with `-`, use an absolute path or prefix the relative path with `./`.
-
-Long options must be written in full. Only explicitly documented aliases are accepted; arbitrary unique prefixes are rejected.
-
-### Python Module API
-
-This project supports the `siglus-ssu` command-line interface only. Importing or calling `siglus_ssu` modules from external Python code is not a supported API, and internal module names, functions, globals, and return shapes may change without compatibility guarantees.
+Write long options in full; arbitrary prefixes are not accepted.
 
 ### Getting Help
 
 ```bash
-# Show the global help message, listing all modes
 siglus-ssu --help
-
-# Mode-specific --help currently falls back to the same global help page
-siglus-ssu -lsp --help
-
-# Other modes behave the same way
-siglus-ssu -c --help
 ```
+
+Mode-specific `--help` shows the same global help page.
 
 ---
 
@@ -219,78 +166,43 @@ siglus-ssu -c --help
 
 ### `-lsp` — Start the Language Server
 
-Starts a standard **stdio JSON-RPC / Language Server Protocol** service for the **SiglusSceneScript language** (abbreviated **SiglusSS language**) and for `.inc` declaration files.
+Starts a stdio language server for `.ss` and `.inc` files. Configure your editor's LSP client to run this command:
 
-#### Syntax
-
-```
+```bash
 siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 ```
 
-#### Parameters
+| Option | Description |
+|---|---|
+| `--serial` | Scan the workspace serially instead of in parallel. |
+| `--read-sav PATH` | Show saved read states in hover details and clients supporting the `siglus/readFlags` extension. A missing or unreadable save does not prevent startup. |
 
-- `--serial`: Disable default parallel LSP workspace scanning and force serial scanning.
-- `--read-sav PATH`: Select the `read.sav` used for read-flag hover details and the `siglus/readFlags` extension request. The server can start when the file is missing or temporarily unreadable and reports its unavailable status on request.
+Features include diagnostics, semantic highlighting, completion, hover, definition and reference lookup, rename, and document symbols. Analysis uses the current scene and same-directory `.inc` files, including unsaved editor changes. Select the game's global `--const-profile` as for compilation.
 
-#### Notes
+Workspace indexes are cached between sessions and rebuilt when incompatible. Set `SIGLUS_SSU_LSP_CACHE_DIR` to change the cache location. Defaults are:
 
-- Workspace-wide symbol and link scans run in parallel by default, using half of the available CPU count as the default worker count, with a minimum of 1 and a maximum of 61 on Windows. A changed `.inc` rebuilds the directory index; changed `.ss` files reuse the current `.inc` context and are rescanned individually.
-- When the Rust native scanner is available, LSP workspace scans and document symbols use it automatically and fall back to the Python pipeline if native scanning is unavailable or cannot handle the document.
-- Workspace indexes persist across sessions. Indexes with an incompatible format version are rebuilt automatically. Cache compatibility includes the directory, `.inc` SHA-256 table, `.ss` file set, package version, and active `const.py` content/profile. A cached `.ss` entry is reused only when that file's SHA-256 still matches; unsaved editor overlays bypass the persistent index. The default cache directory is `%LOCALAPPDATA%\siglus_ssu\lsp-index` on Windows (falling back to `%APPDATA%\siglus_ssu\lsp-index` when `LOCALAPPDATA` is unavailable), `$XDG_CACHE_HOME/siglus_ssu/lsp-index` on Unix-like systems, or `~/.cache/siglus_ssu/lsp-index`; set `SIGLUS_SSU_LSP_CACHE_DIR` to override it.
-- Capabilities include semantic tokens, publish/pull diagnostics, completion, hover, go to definition, references, rename and conditional prepare-rename support, document symbols, and live same-directory `.inc` overlay refresh for `.ss` analysis. Pull diagnostics are advertised only when the client supports `textDocument/diagnostic`. Semantic token categories include dialogue text, system elements, speaker names, and used/unused macro declarations.
-- Go to definition and reference lookup cover ordinary and numeric `#z` label targets of `goto`, `gosub`, and `gosubstr`, including their expression forms. Leading zeroes in numeric labels do not affect lookup.
-- The server negotiates position encodings, returns range-aware completion edits, respects supported completion item kinds, supports work-done progress cancellation on long scans, and validates document URIs and request shapes.
-- Analysis reuses the applicable `-c` pipeline stages (`CA`, `LA`, `SA`, `MA`, `BS`). Its project model is directory-based, matching `.inc` / `.ss` joint analysis and global `.inc #command` linking.
-- Syntax analysis warns when analysis nesting exceeds `64` or expression-tree height exceeds `128`, then continues in both compile backends and LSP analysis; see [analysis depth warnings](#analysis-depth-warnings). Macro arguments, defaults, and bodies have separate hard scanning-step and macro-nesting limits; exceeding those limits stops the current analysis and reports an error. See [macro expansion](#macro).
+- Windows: `%LOCALAPPDATA%\siglus_ssu\lsp-index`, falling back to `%APPDATA%\siglus_ssu\lsp-index`.
+- Other platforms: `$XDG_CACHE_HOME/siglus_ssu/lsp-index`, falling back to `~/.cache/siglus_ssu/lsp-index`.
 
 #### Read flags
 
-Flag indices start at `0` within each scene. The compiler assigns flags to dialogue and the active profile's designated `print`, voice, selection, and related commands; repeated execution of the same bytecode in a loop reuses its flag index. Each flagged selection call has one flag covering the call as a whole. The engine queues some flags before setting them to `1` at processing points such as message clearing or waiting. A saved `0` means not marked as read; a nonzero value means marked as read. A zero alone does not establish that the player has never seen the content.
+Read flags are numbered from `0` within each scene. A saved zero means not marked as read; the content may already have appeared before the engine commits the flag, for example at a wait or text-clear operation.
 
-The Python and Rust LSP implementations record the corresponding token when `BS` assigns each flag, then follow source mappings to specific fragments in the current document. Dialogue maps to its text token, ordinary commands to their command names, and commands generated by macro expansion to the invoking macro name. Text in an explicit macro argument maps to that argument. One macro invocation can generate multiple flags, so distinct indices can share the same invocation range. The server returns each index's saved state separately without grouping by line or substituting a whole-line range for an unavailable precise location. These extra mappings are not collected unless `--read-sav` is enabled.
+Saved states are shown only when the scene name and flag count match the current source. A count mismatch is reported without applying the saved states. Hover details refer to the text, command, or macro invocation that produced the flag. Multiple flags can share one source location.
 
-Select the appropriate command rules through the global `--const-profile N`. The server follows the official engine's per-scene loading rule: a matching scene name and equal flag count establish compatibility. The save and PCK do not need identical scene sets. The official engine skips saved scenes absent from the PCK and retains the initialized all-zero state for PCK scenes without saved records. It also ignores read data with a mismatched scene flag count, retaining its initialized all-zero state; LSP returns `countMismatch` without highlight data to avoid applying incompatible saved states to source.
-
-The initialize result advertises `capabilities.experimental.siglusReadFlags.version = 1`. Clients can send a `siglus/readFlags` request with parameters `{"textDocument":{"uri":"file:///path/to/scene.ss"}}`. Response fields are:
-
-| Field | Description |
-|---|---|
-| `uri`, `version`, `scene`, `savePath` | Current document URI, document version, scene name, and configured save path. |
-| `status` | `matched`, `notConfigured`, `saveUnavailable`, `unsupportedDocument`, `analysisError`, `missingScene`, or `countMismatch`. An unloadable document returns `documentUnavailable`. Only `matched` includes flag details. |
-| `flagCount`, `savedFlagCount`, `readCount`, `unreadCount` | Flag counts in the current source and save, followed by matched read and unread counts. Values not yet available are `null`. |
-| `items` | Results ordered by flag index, with one item per flag. Each item contains a zero-based `index`, a boolean `read`, and `ranges`. Multiple flags on the same line remain separate items. |
-| `items[].ranges` | The flag's precise LSP ranges in the current document, using the negotiated position encoding. One flag can map to multiple noncontiguous fragments. Unlocatable flags retain their indices and states with an empty array. |
-
-The server reads the save on each flag request or relevant hover and reuses parsed data by content digest without actively monitoring the file. Clients can request fresh results after a save change and draw background decorations using each flag's `read` and `ranges`. Hover details include only flags whose fragments contain the pointer. The server does not select colors or alter existing dialogue semantic tokens.
+Refresh the hover or read-flag request after saving in-game; the server does not actively watch the save file. Editor clients control any background highlighting.
 
 ---
 
 ### `-c` / `--compile` — Compile Scripts
 
-Compiles a directory of `.ss` SceneScript source files into a `.pck` file. During compilation, individual scene `.dat` files are first generated in a temporary directory, then in the normal mode they are linked and packed into the final `Scene.pck`. The compilation pipeline implements the supported SiglusEngine-style build stages, including LZSS compression, per-script string-table shuffling, and encryption based on `暗号.dat`.
-
-By default, compile mode uses the Rust native backend when it is available and supported for the selected options, and falls back to the Python backend otherwise. Global `--legacy` forces the Python compile backend while still allowing native helpers such as LZSS; `--legacy-full` disables all Rust native acceleration.
-
-When `--tmp` is not supplied, every compile invocation creates a uniquely named automatic temporary directory. Concurrent compiles targeting the same output directory therefore do not share intermediate files.
-
-Scene names written into the linked `.pck` use the same ASCII-only lowercase normalization as the official compiler: `A` through `Z` become `a` through `z`, while non-ASCII characters, including fullwidth Latin letters such as `ＥＤ`, are preserved.
-
-Compiled `.dat` payloads do not retain independent filenames inside `.pck`; each payload is addressed by its normalized scene name, so scene lookup is ASCII-case-insensitive. Embedded Original Source `.ss` and `.inc` entries retain their source filename spelling as archive metadata, but they are not runtime scene keys. Runtime input reads prefer an exact file or directory name. On every platform, a missing exact path falls back to Windows filename case matching and rejects ambiguous matches. Every directory enumeration rejects immediate entries such as `A.ss` and `a.ss` whose names collide under Windows filename lowercase rules. Output creation continues to use the target filesystem's native path semantics.
-
-When Original Source embedding is enabled, both backends include dot-prefixed `.ss` and `.inc` files, such as `.scene.ss` and `.defs.inc`. Keep these files with the other sources when recompiling.
-
-It also supports compiling `Gameexe.ini` → `Gameexe.dat` independently via `--gei`. `Gameexe.ini` is optional in both normal and `--gei` compilation: when it is absent, the compiler warns and skips `Gameexe.dat` instead of creating an empty placeholder.
+Compiles `.ss` sources and same-directory `.inc` declarations into a `.pck`. Sources are scanned only in the input directory, not its subdirectories. Keep dot-prefixed sources such as `.scene.ss` and `.defs.inc` when recompiling extracted files.
 
 #### Syntax
 
 ```
-# Standard compilation
 siglus-ssu -c [options] <input_dir> <output_pck | output_dir>
-
-# Compile only Gameexe.dat from an existing Gameexe.ini
 siglus-ssu -c --gei <input_dir | Gameexe.ini> <output_dir>
-
-# Compile with shuffle seed brute-force
 siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck | output_dir> <test_dir>
 ```
 
@@ -298,112 +210,71 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | Parameter | Description |
 |---|---|
-| `<input_dir>` | Directory containing at least one `.ss` source file, optionally alongside `.inc`, `.ini` / `Gameexe.ini`, and `暗号.dat`. Source scanning is limited to this directory's immediate files. The `.ss` requirement does not apply to `--dat-repack` or `--gei`. |
-| `<output_pck \| output_dir>` | Output path. If the argument names an existing directory or ends with `/` or `\`, the directory is created if needed and `Scene.pck` is written inside it. Otherwise the argument is treated as the output file path; a non-existent path without a trailing separator is written as that exact file name even if it does not end in `.pck`. |
-| `--debug` | Keep intermediate temporary files (`.dat`, `.lzss`, etc.) after compilation. Cannot be combined with `--tmp`. |
-| `--charset ENC` | Force one source encoding using any codec available to Python. CP932/Shift-JIS aliases (`jis`, `sjis`, `shift_jis`, `shift-jis`, `cp932`, `ms932`, `windows-932`, `windows932`, and aliases recognized by Python such as `csshiftjis` and `s_jis`) intentionally select Windows CP932. This is a compatibility rule: Python's `shift_jis` and `cp932` codecs differ in extension characters and some character mappings. UTF-8 aliases are also accepted. If omitted, each file is auto-detected as UTF-8 or CP932. |
-| `--allow-invalid` | Replace invalid byte sequences with U+FFFD when decoding compile inputs, including `Gameexe.ini` and `暗号.dat`, using the encoding selected by `--charset`. Without `--charset`, keep strict UTF-8/CP932 detection and use UTF-8 replacement only if both fail. Defaults to off; syntax and type errors still fail compilation. |
-| `--no-os` | Compile normally, then omit the OS (Original Source) chunks from the written `Scene.pck`, preserving the package header. Source processing still runs. Does not affect encryption or compression of the scripts themselves. |
-| `--dat-repack` | Instead of compiling `.ss` scripts, scan the immediate files in `input_dir` for existing Siglus scene `.dat` files, copy them, and pack them directly into a `.pck` file. Same-directory `.inc` files are used to rebuild package-level include command metadata. If no `.inc` files are present, packaging continues with a warning and omits that metadata. It can only be combined with `--no-os` and/or `--no-lzss`. Cannot be combined with `--tmp` or `--test-shuffle`. |
-| `--no-angou` | Disable LZSS compression and outer XOR encryption, set `scn_data_exe_angou_mod = 0`, and omit original source embedding. The scene-string XOR transform is still controlled by `--string-xor-multiplier`. Cannot be combined with `--tmp`. |
-| `--no-lzss` | Disable the LZSS stage while keeping the usual script encryption/header behavior. Original source chunks are not embedded in this mode. This matches the official "easy link" style output. Cannot be combined with `--tmp`. |
-| `--serial` | Force the compile stage to run serially. Parallel compilation is enabled by default, using threads in the Rust backend and processes in the Python backend. |
-| `--max-workers N` | Positive maximum number of parallel compile workers. Only effective while parallel compilation is enabled. By default, both backends use half of the available CPU count, limited to 1 through 16 workers. On Windows, the Python backend caps an explicit value at 61 workers. |
-| `--set-shuffle SEED` | Set the initial MSVC-compatible `rand()` seed for the per-script string table shuffle. Accepts decimal or `0x...` hex from `0` through `0xFFFFFFFF`. Default: `1`. Implies `--serial`. Cannot be combined with `--tmp`. |
-| `--tmp <tmp_dir>` | Use a specific persistent temporary directory. When provided, a SHA-256 cache (`_source_hashes.json`) is maintained inside this directory to enable **incremental compilation** — only changed `.ss` files are recompiled on subsequent runs. The cache is single-writer; a concurrent compile using the same directory is rejected. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
-| `--test-shuffle [seed0]` | Scan 32-bit MSVC `rand()` seeds from `seed0` (default `0`) through `0xFFFFFFFF` to find one that reproduces the first scene's string-table order in `<test_dir>`, then verify that seed against every scene. `seed0` accepts decimal or `0x...` hexadecimal notation and must fit in `u32`. A numeric argument immediately after the option is consumed as the seed only when all three required paths remain. Cannot be combined with `--tmp` or `--gei`. |
-| `--csv <seed_csv>` | With `--test-shuffle`, write a CSV containing each scene object's initial seed and final seed from the serial rebuild pass. If the path is an existing directory or ends with a path separator, `test_shuffle_seeds.csv` is written inside it. Cannot be combined with `--tmp`. |
-| `--gei` | Only run the `Gameexe.ini` → `Gameexe.dat` compilation stage. The output argument is always treated as a directory. If it does not exist, it is created. When the input contains `Gameexe.ini`, `Gameexe.dat` is written inside it; when it does not, the command succeeds with a warning and does not create an empty `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
+| `<input_dir>` | Directory with at least one `.ss`, plus any `.inc`, `Gameexe.ini`, and `暗号.dat` files. `--dat-repack` and `--gei` do not require `.ss` files. |
+| `<output_pck \| output_dir>` | An existing directory or a path ending in `/` or `\` receives `Scene.pck`. Any other path is treated as the exact output filename. |
+| `--debug` | Keep intermediate files after compilation. Cannot be combined with `--tmp`. |
+| `--charset ENC` | Set one encoding for all source files. Default: detect UTF-8 or CP932 per file. Shift-JIS aliases such as `sjis` and `shift_jis` select Windows CP932. Other Python codecs are accepted explicitly. |
+| `--allow-invalid` | Replace invalid input bytes with U+FFFD, including in `Gameexe.ini` and `暗号.dat`. Uses `--charset` when supplied; otherwise tries strict UTF-8/CP932 first, then UTF-8 replacement. Syntax and type errors still fail. |
+| `--no-os` | Omit embedded original sources without changing script encryption or compression. |
+| `--dat-repack` | Pack existing scene `.dat` files without recompiling. Same-directory `.inc` files supply package command metadata; missing `.inc` files produce a warning. Only `--no-os` and `--no-lzss` may be combined with this operation. |
+| `--no-angou` | Disable LZSS compression, outer XOR encryption, and original-source embedding. Does not disable scene-string XOR. Cannot be combined with `--tmp`. |
+| `--no-lzss` | Disable LZSS compression and original-source embedding, retaining script encryption. Cannot be combined with `--tmp`. |
+| `--serial` | Compile serially instead of in parallel. |
+| `--max-workers N` | Positive maximum parallel worker count. Default: half the available CPUs, limited to 1–16. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
+| `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
+| `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Concurrent builds cannot share it. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
+| `--test-shuffle [seed0]` | Search seeds from `seed0` (default `0`) through `0xFFFFFFFF` to reproduce the first scene's string-table order in `<test_dir>`, then verify all scenes. Requires three paths after the optional seed. Cannot be combined with `--tmp` or `--gei`. |
+| `--csv <seed_csv>` | With `--test-shuffle`, export per-scene initial and final seeds. A directory target receives `test_shuffle_seeds.csv`. |
+| `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. Output is always a directory. A missing INI produces a warning and succeeds without creating `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 
-When a scene build writes `Gameexe.dat` using a 16-byte executable key, its temporary directory also contains `EXE_ANGOU.h`, with the key arranged as `KN_EXE_ANGOU_DATA` definitions. This intermediate file is retained with `--tmp` or `--debug`; otherwise the automatically created temporary directory is removed after a successful build.
-
-#### Compiling Stats
-
-The compiler prints an `=== Compiling Stats ===` summary before exit for compile runs.
-
-That summary includes:
-
-- Per-stage elapsed time totals for the stages that ran (`GEI`, `IA`, `CA`, `LA`, `SA`, `MA`, `BS`, or `Compiling`)
-- `inc_files`: number of `.inc` files participating in the build
-- `scene_files`: total number of `.ss` files in the input directory
-- `compiled_scene_files`: number of `.ss` files actually compiled in this run; under incremental compilation, this is the incremental subset only
-
-When the run completes a normal full scene compilation, the summary additionally includes detailed project-wide statistics:
-
-- `#replace`, `#define`, `#define_s`, and `#macro` totals together with their unused counts
-- `read_flags` and `read_flags_scenes`
-- source-side statistics for scene-local `#property` / `#command`, preprocessor directives, `#inc_start` blocks, labels, statements, expressions, operator kinds, string pools, and dialogue lines
-- `binary_sizes`
-- trailing `top5_*` detail lines: `top5_read_flags_scenes`, `top5_string_pool_scenes`, and `top5_dat_scenes`
-
-Detailed project-wide statistics are omitted instead of printed as `n/a` when the run is not a normal full scene compilation, including `--tmp`, `--dat-repack`, `--test-shuffle`, `--gei`, and partial or failed compile runs. The basic timing and file-count summary remains available when the corresponding stages ran.
+`Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped.
 
 #### Examples
 
-For the first example, use the extraction directory printed after `Output:`. Replace `output_YYYYMMDD_HHMMSS_nnnnnnnnn` with its actual name.
+Recompile the extraction directory printed after `Output:`:
 
 ```bash
-# Compile a translation directory into a new Scene.pck
-siglus-ssu -c /path/to/translation_work/output_YYYYMMDD_HHMMSS_nnnnnnnnn /path/to/Scene_translated.pck
+siglus-ssu -c /path/to/translation_work/output_... /path/to/translated.pck
+```
 
-# Compile with the default parallel workers and keep temp files for inspection
-siglus-ssu -c --debug /path/to/src /path/to/out/
+Use an incremental cache or limit parallel workers:
 
-# Force serial compilation
-siglus-ssu -c --serial /path/to/src /path/to/Scene.pck
-
-# Incremental compilation: only recompile changed .ss files
+```bash
 siglus-ssu -c --tmp /path/to/cache /path/to/src /path/to/Scene.pck
+siglus-ssu -c --max-workers 2 /path/to/src /path/to/Scene.pck
+```
 
-# Compile with a specific shuffle seed (to match original output byte-for-byte)
-siglus-ssu -c --set-shuffle 12345 /path/to/src /path/to/Scene.pck
+Repack compiled scenes, compile Gameexe alone, or search a shuffle seed:
 
-# Brute-force the shuffle seed starting from 12345
-siglus-ssu -c --test-shuffle 12345 /path/to/src /path/to/out/ /path/to/original_dats/
-
-# Brute-force the shuffle seed and write per-scene initial/final seeds
-siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/to/out/ /path/to/original_dats/
-
-# Repack existing .dat files without re-compiling .ss files
-siglus-ssu -c --dat-repack /path/to/dat_dir /path/to/Scene_repacked.pck
-
-# Repack existing .dat files without LZSS
-siglus-ssu -c --dat-repack --no-lzss /path/to/dat_dir /path/to/Scene_repacked.pck
-
-# Only generate Gameexe.dat from an existing Gameexe.ini
+```bash
+siglus-ssu -c --dat-repack /path/to/dat_dir /path/to/repacked.pck
 siglus-ssu -c --gei /path/to/src /path/to/out/
-
-# Force UTF-8 source encoding and disable encryption
-siglus-ssu -c --charset utf8 --no-angou /path/to/src /path/to/out/
+siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/to/out/ /path/to/original_dats/
 ```
 
 #### Notes
 
-- **Source decoding:** If `--charset` is not specified, each source file is decoded independently by testing UTF-8 and CP932, using the BOM, strict decode results, and deterministic ambiguity scoring to choose between them. Other Python codecs must be selected explicitly. Decoding is strict by default; invalid byte sequences before DOS EOF fail the compile. `--allow-invalid` enables replacement with U+FFFD. To reproduce historical output built by reading CP932 bytes as UTF-8, use `--charset utf8 --allow-invalid`; this intentionally preserves the resulting garbled strings instead of detecting CP932. Decoding removes one leading Unicode BOM and normalizes CRLF or lone CR to LF, but performs no Unicode normalization. Both compiler backends receive the same decoded text snapshot.
-- **DOS EOF:** Compilation stops reading each source at the first U+001A character in its encoding and ignores the remaining bytes, even if they are malformed. A `0x1A` byte inside another UTF-16/UTF-32 character is not EOF. Embedded original sources and source hashes retain the complete file bytes; ordinary non-compile text reads are unchanged.
-- **Encoding-independent compilation:** Source encoding does not select a different lexer. After decoding, CP932, UTF-8, and other encodings use the fixed CP932 double-byte character classification of the official Japanese compiler. Therefore equivalent CP932 and UTF-8 sources compile identically. Characters outside that fixed set are valid inside quoted strings but are not treated as unquoted full-width text.
-- **Key strings and cross-platform consistency:** When deriving a key from `暗号.dat` or `angou=text`, both backends use Python's `cp932` codec on every platform and ignore unencodable characters. These rules do not depend on the Windows version or system code page. The official compiler uses Windows `WideCharToMultiByte(CP_ACP, 0, ...)`, so the same string does not always produce the same key. For example, under Japanese CP932, SSU encodes `髙` as `EE E0`, while Windows uses `FB FC`; SSU ignores `¥`, while Windows converts it to `5C`. These differences can prevent correct decryption of `Scene.pck` or `Gameexe.dat` and can also change whether the encoded string meets the 8-byte minimum for enabling encryption. To interoperate with official output, use the raw 16-byte key from the matching engine: for compilation, supply `key.txt` and ensure the input directory has no higher-priority `暗号.dat`; for analysis, extraction, and other operations supporting `--angou`, supply `key=bytes` or the matching `SiglusEngine.exe` directly.
-- **Incremental compilation:** When `--tmp` is specified, the compiler caches SHA-256 hashes of all `.ss` and `.inc` files. Each hash is calculated from the same raw bytes used to decode that file for compilation; a file saved after its snapshot was read is detected as changed on the next run. Cache compatibility includes the `siglus-ssu` version, source charset, the `--allow-invalid` setting, active `const.py` content/profile, and scene string XOR multiplier. On the next compatible run, only files whose hash has changed (or whose `.dat` is missing) are recompiled, and existing `.lzss` outputs are reused. If a scene source changes or its `.lzss` is missing, that scene's `.lzss` is regenerated. Case-only source renames also remove conflicting old `.dat` files when recompilation is needed and invalidate the matching `.lzss` regardless of its filename case. If any `.inc` file is added, changed, or removed, or cache metadata is incompatible, a full recompile is triggered.
-- **Cache failure recovery:** Before updating an incremental cache, the previous `_source_hashes.json` validity marker is removed. A new marker is written only after linking and writing the final `.pck` succeeds. If compilation, linking, or cache-marker writing fails, or the process is interrupted during cache updates, the next run rebuilds all scenes rather than trusting partial output. Failure to delete stale `.lzss` files stops the build; release the file lock or correct the permissions before retrying. This protects cache reuse, not atomic replacement of all output files.
-- **Shuffle seed:** The compiler shuffles each `.dat` string table with an MSVC-compatible `rand()` seed. String order does not affect normal translation work. `--test-shuffle` finds a seed from the first scene and rebuilds every scene serially. A later mismatch still generates the requested output but returns a failure status; use `--set-shuffle` to rebuild with a known seed.
-- **Analysis depth warnings:** Crossing the syntax-analysis nesting threshold of `64` or expression-tree height threshold of `128` prints a warning and continues. These warnings alone do not fail compilation. They are separate from the hard [macro expansion limits](#macro).
+- **Source encoding:** Use `--charset utf8 --allow-invalid` only to reproduce output made by interpreting invalid UTF-8 with replacement. It can preserve garbled text. Compilation stops at the first DOS EOF character (U+001A); later bytes are ignored. See the [language reference](#siglusss-language-spec) for literal and character rules.
+- **Key compatibility:** Keys derived from `暗号.dat` or `angou=text` use CP932 and can differ from official Windows conversion. For existing official files, prefer the raw 16-byte key or matching engine executable. For compilation, put the raw key in `key.txt` and remove any higher-priority `暗号.dat` from the input directory.
+- **Incremental builds:** Changed scenes are rebuilt. Adding, changing, or removing an `.inc`, changing compiler settings, or upgrading the program can require a full rebuild. Failed or interrupted cache updates trigger a full rebuild on the next run.
+- **Shuffle search:** String-table order does not affect normal translation work. A later scene mismatch still produces the requested output but returns failure. Use `--set-shuffle` once the correct seed is known.
+- **Paths and names:** Input paths prefer exact spelling, then Windows case matching; ambiguous names are rejected. Directory entries such as `A.ss` and `a.ss` cannot coexist. Runtime scene names fold only ASCII `A`–`Z` to lowercase; embedded source filenames retain their spelling. Output paths follow the target filesystem's rules.
+
+#### Compiling Stats
+
+The final summary reports stage timings and file counts. `scene_files` is the total scene count; `compiled_scene_files` is the number rebuilt this run. Normal full builds also report source, read-flag, and binary-size statistics.
 
 ---
 
 ### `-x` / `--extract` — Extract Files
 
-Extracts a `.pck` scene file into a timestamped directory containing decoded scene `.dat` files. Plain extraction and `--disam` also restore any embedded original source files; `--decompile` reconstructs `.ss` / `.inc` from the compiled scene data and package metadata. With `--gei`, it restores the `Gameexe.ini` plaintext from a binary `Gameexe.dat`.
+Extracts decoded scene `.dat` files and any embedded original sources from a `.pck`. `--decompile` reconstructs `.ss` / `.inc` without requiring embedded sources.
 
 #### Syntax
 
 ```bash
-# Extract a .pck file
 siglus-ssu -x [--disam|--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
-
-# Batch-disassemble `.dat` files from a directory
 siglus-ssu -x --disam <input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
-
-# Restore Gameexe.ini from Gameexe.dat
 siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 ```
 
@@ -411,696 +282,407 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 
 | Parameter | Description |
 |---|---|
-| `<input_pck>` | Path to the `.pck` file to extract. Encrypted scene data requires a valid key source; extraction fails before creating an output directory when no valid key can be resolved. |
-| `<input_dir>` | Path to a directory scanned for `.dat` files when `--disam` is enabled. Only the immediate `.dat` files in that directory are processed. |
-| `<output_dir>` | Base output directory. A `.pck` extraction creates a timestamped subdirectory here. Optional for all `-x` modes. If omitted, the base directory defaults to the input file directory, or to the input directory itself when the input is a directory. |
-| `--disam` | With `.pck` input, also write `<scene>.dat.txt` disassembly. With directory input, scan only that directory's immediate `.dat` files and write `.dat.txt` into `<output_dir>`. Cannot be combined with `--gei`. Non-scene `.dat` files are skipped. |
-| `--decompile` | With a complete Siglus scene `.pck` input, reuse the disassembly pipeline and emit `<scene>.dat.txt` and reconstructed `decompiled/<scene>.ss` files. Write `decompiled/__decompiled.inc` only when shared declarations or name macros are needed. Package metadata is required; embedded original sources are not. Single `.dat` files and `.dat` directories are not accepted. Cannot be combined with `--gei`. |
-| `--angou <path\|angou=text\|key=bytes>` | Override or supplement the scene/Gameexe decryption key source. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). |
-| `--gei` | Instead of extracting a `.pck`, decode a `Gameexe.dat` binary back to a `Gameexe.ini` plaintext file. The input can be the `.dat` file itself or its parent directory. Key candidates are tried using the common key-source rules. |
+| `<input_pck>` | Scene `.pck` to extract. Encrypted scenes require a valid key source. |
+| `<input_dir>` | With `--disam`, scan immediate `.dat` files, skipping non-scene files. |
+| `[output_dir]` | Base output directory. Defaults to the input file's directory, or the input directory itself. PCK extraction creates a timestamped subdirectory. |
+| `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
+| `--decompile` | Write disassembly and reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
+| `--angou VALUE` | Specify a [decryption key source](#decryption-keys). |
+| `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. |
 
-With `.pck` input, extracted files are written into a separate `output_YYYYMMDD_HHMMSS_nnnnnnnnn/` directory for each extraction. The nine-digit suffix represents nanoseconds and is incremented on a name collision. Unless `--decompile` is selected, embedded original sources are restored there alongside the decoded scene `.dat` files. Disassembly includes raw named-argument IDs and a hex dump with file offsets for bytes not covered by decoded header fields or table entries, including gaps and trailing bytes. A `--disam` run prints total disassembly timing; a `--decompile` run also prints decompile-hints and decompile timing summaries.
+The extraction directory is printed after `Output:`. To edit embedded sources, work in that directory and pass it directly to `-c`.
 
-The actual extraction directory is printed after `Output:`. If original sources were restored, edit them in that directory and pass that directory to `-c`; the compiler does not scan subdirectories.
+Decompilation does not automatically detect the profile or recover original macros, comments, or formatting. Recompile `decompiled/` with the same profile and string multiplier, then verify with `-a --payload`. The rebuilt PCK need not be byte-identical. Incomplete disassembly fails decompilation.
 
-`--decompile` reconstructs source from disassembly traces and package declarations without consulting embedded `.ss` / `.inc` sources. A missing, truncated, or undecodable OS (Original Source) section does not prevent reconstruction when the compiled scenes and required package metadata are usable. Encrypted scenes require a usable key source; use `--angou` with the matching engine executable or a raw key when necessary. Incomplete disassembly returns failure.
+**Limitation:** Pass individual integer or string arguments to `gosub` and `gosubstr`. List-literal arguments can produce output that cannot be fully disassembled or decompiled.
 
-The reconstruction target is equality of normalized scene payloads after recompiling with `-c`. Compile the `decompiled/` directory using the same `--const-profile` and scene-string multiplier as the original, then verify the result with `-a --payload`. Disassembly and decompilation use the selected profile to interpret forms and built-in elements; they do not automatically detect the profile. Stored command and property names are reused where available; absent names receive generated names. Original macros, comments, and source formatting cannot be recovered from compiled data, and the rebuilt whole `.pck` need not be byte-identical.
-
-**Known limitation:** Pass individual integer or string arguments to `gosub` and `gosubstr`. The compiler currently accepts list-literal arguments but omits the required list metadata, which can prevent complete disassembly, decompilation, or payload round-trip checks.
-
-FlixEngine scene `.pck` files use profile `10`. Flix resource `.pck` containers support plain extraction only; `--disam` and `--decompile` are rejected for those containers.
+FlixEngine scenes use profile `10`. Flix resource PCK containers support plain extraction only.
 
 #### Examples
 
+Extract original sources, disassemble a DAT directory, or restore Gameexe:
+
 ```bash
-# Extract Scene.pck into the translation_work directory
 siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/
-
-# Extract Scene.pck next to the input file
-siglus-ssu -x /path/to/Scene.pck
-
-# Extract with `.dat` disassembly
-siglus-ssu -x --disam /path/to/Scene.pck /path/to/translation_work/
-
-# Extract with `.dat` disassembly and decompiled `.ss`
-siglus-ssu -x --decompile /path/to/Scene.pck /path/to/translation_work/
-
-# Extract encrypted scenes using an explicit key source
-siglus-ssu -x /path/to/Scene.pck /path/to/translation_work/ --angou /path/to/game_dir/
-
-# Batch-disassemble the `.dat` files in one directory
 siglus-ssu -x --disam /path/to/scene_dir/
-
-# Restore Gameexe.ini from Gameexe.dat
 siglus-ssu -x --gei /path/to/Gameexe.dat /path/to/output/
 ```
 
-For a profile `0` title, replace `output_...` below with the directory printed after `Output:`. For other titles, use their profile and any explicit string-multiplier override consistently in extraction, compilation, and comparison:
+Decompile and verify a profile `0` title. Replace `output_...` with the directory printed by extraction; use the appropriate profile and multiplier for other titles:
 
 ```bash
+siglus-ssu --const-profile 0 -x --decompile /path/to/Scene.pck /path/to/translation_work/
 siglus-ssu --const-profile 0 -c /path/to/translation_work/output_.../decompiled /path/to/rebuilt.pck
 siglus-ssu --const-profile 0 -a --payload /path/to/Scene.pck /path/to/rebuilt.pck
 ```
 
-Payload equality requires no added or removed scenes and no `text_only`, `real_diff`, unavailable, or `INCOMPLETE` results. Exit status `0` alone does not establish equality.
+Verify that no scenes are missing or added and no payload differences or unavailable results remain. Exit status `0` alone does not establish equality; see [Payload Comparison Results](#payload-comparison-results).
 
 ---
 
 ### `-a` / `--analyze` — Analyze and Compare Files
 
-Analyzes the internal structure of a supported binary file and prints a detailed report to standard output. `--read-flags` writes JSON and prints only a summary. When two files of the same type are provided, a structural comparison is performed.
-
-#### Supported File Types
-
-`.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`
+Analyzes `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, and `.tcr` files. Two files of the same type are compared; files of different types are analyzed separately. Any analysis failure produces a nonzero exit status.
 
 #### Syntax
 
 ```
-# Analyze a .pck file
-siglus-ssu -a <input_file.pck> [--angou <path|angou=text|key=bytes>]
-
-# Analyze a .dat file
-siglus-ssu -a [--disam] <input_file.dat> [--angou <path|angou=text|key=bytes>]
-
-# Analyze or update other supported files
+siglus-ssu -a [--disam] <input_file> [input_file_2] [--angou VALUE]
+siglus-ssu -a --payload <input_1.pck> <input_2.pck> [--angou VALUE]
+siglus-ssu -a --payload [--disam] <input_1.dat> <input_2.dat> [--angou VALUE]
 siglus-ssu -a [--readall|--apply] <input_file.sav>
-siglus-ssu -a <input_file.(gan|sav|cgm|tcr)>
-
 siglus-ssu -a --read-flags <read.sav> [Scene.pck] [--report-json FILE] [--angou VALUE]
-
-# Count dialogue units in a .pck only and write per-file CSV
-siglus-ssu -a --word <input_pck> [output_csv] [--angou <path|angou=text|key=bytes>]
-
-# Compare two .pck files
-siglus-ssu -a [--payload] <input_file_1.pck> <input_file_2.pck> [--angou <path|angou=text|key=bytes>]
-
-# Compare two .dat files
-siglus-ssu -a [--payload] [--disam] <input_file_1.dat> <input_file_2.dat> [--angou <path|angou=text|key=bytes>]
-
-# Compare two files without an explicit key source
-siglus-ssu -a <input_file_1> <input_file_2>
-
-# Analyze or derive the exe_el key from a key source
-siglus-ssu -a --angou <path|angou=text|key=bytes>
-
-# Analyze or compare Gameexe.dat
-siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou <path|angou=text|key=bytes>]
+siglus-ssu -a --word <input_pck> [output_csv] [--angou VALUE]
+siglus-ssu -a --angou VALUE
+siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]
 ```
 
 #### Parameters
 
 | Parameter | Description |
 |---|---|
-| `<input_file>` | Path to the file to analyze. Supported extensions: `.pck`, `.dat`, `.gan`, `.sav`, `.cgm`, `.tcr`. When analyzing or comparing `.pck` files, embedded `SCENE_SCRIPT_ID` values are shown in the existing tables as an `ID` column for embedded `.ss` source chunks; `.pck` comparisons also treat source IDs as comparison data. ID matching uses Windows path rules for embedded source names on every platform. |
-| `[input_file_2]` | Optional second file for comparison. If both files are the same type, a structural comparison is performed; if types differ, each file is analyzed separately. |
-| `--disam` | When analyzing a `.dat` file or comparing two `.dat` files, write human-readable disassembly to `<scene>.dat.txt` alongside each input `.dat`. Prints total disassembly timing before the command finishes. Use `-x --decompile <input_pck>` for reconstructed `.ss` output. |
-| `--readall` | Only valid for `read.sav` and `global.sav`. For `read.sav`: set all read-flag bits to `1` (marking every scene as read). For `global.sav`: unlock engine-managed collection fields in-place, currently `cg_table`, `bgm_table`, and `chrkoe.look_flag` when present. A non-overwriting `.bak` backup is created before writing. Cannot be combined with `--apply`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. Unrelated generic global flag arrays and external achievement backends such as Steam are not modified. |
-| `--read-flags` | Export zero-valued flag indices by scene to a UTF-8 JSON file, defaulting to `<save_stem>.flags.json` next to the save. The optional PCK validates scene names and flag counts and supplies original source line numbers, without requiring embedded OS source data. The console prints a summary and the report path. `--angou` requires a PCK, and other analyze modifiers cannot be combined with this option. The save is not modified. |
-| `--report-json FILE` | With `--read-flags`, choose the JSON output path. Also accepts `--report-json=FILE` and creates missing parent directories. The output must not overwrite the input save or PCK. |
-| `--apply` | For `global.sav` only: read the sibling `global.txt` with the same base name, apply editable `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag` entries, create a non-overwriting `.bak` backup, and rewrite the `.sav` in-place. Other generated fields such as `M`, `global_namae`, and character display names are ignored. Cannot be combined with `--readall`, compare mode, `--disam`, `--payload`, `--word`, `--angou`, or `--gei`. |
-| `--word` | For `.pck` only: skips normal structural analysis, counts dialogue units for each decoded scene `.dat` and each embedded `.ss` source file, prints the per-file counts, and writes them to CSV. If `[output_csv]` is omitted, the CSV is written as `<input_pck_stem>.word.csv` next to the input `.pck`; if `[output_csv]` is an existing directory or ends with a path separator, that default CSV filename is written inside it. Can be combined with `--angou`. Encrypted scene data without a valid key source fails before writing CSV. |
-| `--payload` | **(Compare mode only)** Add normalized scene runtime payload comparison for `.pck` and `.dat`. See [Payload Comparison Results](#payload-comparison-results) for the compared data, result labels, and equality criteria. Uses Rust scene disassembly when native acceleration is available, or Python when unavailable or disabled with `--legacy-full`. |
-| `--angou <path\|angou=text\|key=bytes>` | Explicit key source for `.pck`/`.dat` analysis, `.pck` word count, `Gameexe.dat` analysis, or standalone key derivation. `--angou` must be the final mode-specific option in the command, must use the separated form `--angou VALUE`, and its value cannot be empty. A bare value is always treated as a path to a file or directory. Use `angou=text` for a literal `暗号.dat` first line, and `key=bytes` for a literal 16-byte `exe_el` key such as `key=0xA9,0x86,...`. During decryption, candidates are tried in order: explicit `--angou`; embedded `暗号.dat` inside the input `.pck`; current directory; parent directory. Lower-priority candidates are used only after a higher-priority source produced a key and that key failed validation; a missing, malformed, or keyless explicit source is reported as an input error. If `--angou` is a bare path, parent-directory probing is disabled for that request, so fallback stops after the current directory. Directory probing is not recursive. Inside each probed directory, the order is `Scene.pck`, then `Scene*.pck`, then `暗号.dat`, then `key.txt`, then `SiglusEngine*.exe`. |
-| `--gei` | Analyze or compare `Gameexe.dat` files instead of general binary files. This mode can use `--angou`, but rejects other analyze modifiers such as `--disam`, `--readall`, `--apply`, `--payload`, and `--word`. |
+| `--disam` | Write disassembly beside each input `.dat` as `<scene>.dat.txt`. Requires one or two scene `.dat` files. For reconstructed `.ss`, use `-x --decompile`. |
+| `--readall` | Mark all scenes read in `read.sav`, or unlock engine-managed CG, BGM, and voice collections in `global.sav`. Does not unlock Steam achievements. Creates a non-overwriting `.bak` backup before rewriting the save. |
+| `--read-flags` | Export unread flag indices to UTF-8 JSON without modifying the save. Default output: `<save_stem>.flags.json`. An optional PCK validates scene names/counts and supplies original source line numbers. `--angou` requires a PCK. |
+| `--report-json FILE` | Set the `--read-flags` report path; also accepts `--report-json=FILE`. Missing parent directories are created. Cannot overwrite the input save or PCK. |
+| `--apply` | Apply sibling `global.txt` to `global.sav`, creating a non-overwriting `.bak` first. Editable entries are `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag`; other fields are ignored. |
+| `--word` | Count dialogue units per scene `.dat` and embedded `.ss`, print totals, and write CSV. Default output: `<pck_stem>.word.csv` beside the input; a directory target receives that filename. |
+| `--payload` | Compare normalized scene payloads for two `.pck` files or two `.dat` files. See [Payload Comparison Results](#payload-comparison-results). |
+| `--angou VALUE` | Supply a key source for PCK/DAT/Gameexe processing, or inspect a key without another input. See [Decryption Keys](#decryption-keys). |
+| `--gei` | Analyze or compare `Gameexe.dat`; only `--angou` may be combined with it. |
 
-For `.pck` and `.dat` comparisons, `text_only`, `real_diff`, missing scenes, and unavailable payloads are reported comparison results; exit status `0` alone does not establish equality. `INCOMPLETE` returns `1` even when both inputs contain the same incomplete data. The `.pck` check covers byte-identical scenes and scenes present on only one side. Input, key-source, and original-source decoding errors can also make the command fail.
+`--readall`, `--apply`, `--read-flags`, and `--word` are separate operations; do not combine them with each other or comparison modifiers. `--word` accepts `--angou`. Structural comparison of `.gan`, `.cgm`, or `.tcr` fails if either input cannot be parsed completely.
 
-Structural comparison of `.gan`, `.cgm`, and `.tcr` requires complete parsing of both inputs. Any parse error or warning makes the command print diagnostics and return `1` without reporting equality.
+PCK reports include an `ID` column when embedded `.ss` sources contain `SCENE_SCRIPT_ID` metadata. Comparison includes these IDs.
 
-In analyze mode, malformed PCK headers and out-of-file index, name, or scene-data ranges produce a diagnostic with the input path, field, byte offset, and expected versus actual size or value. The command returns `1` without a traceback for these format errors. Unexpected internal exceptions retain their traceback.
+#### Decryption Keys
 
-Keys derived from `暗号.dat` or `angou=text` use the same fixed CP932 rules described in the compilation notes and can differ from official Windows conversion. To match existing files exactly, supply the raw 16-byte `key=bytes` or the matching `SiglusEngine.exe` directly.
+Use `--angou VALUE` as the final mode-specific option, with a separate, nonempty value:
 
-Text keys in `key.txt` and `key=bytes` are parsed in this order: `0xNN` tokens, two-digit hexadecimal tokens, then one-to-three-digit decimal tokens. The first format with at least 16 matching tokens supplies its first 16 bytes. Thus sixteen `10` tokens mean sixteen `0x10` bytes, not decimal 10. Use explicit `0xNN` tokens to avoid ambiguity. An exactly 16-byte `key.txt` is read as raw binary.
+| Value | Meaning |
+|---|---|
+| File path | Read a key from `暗号.dat`, `key.txt`, `Scene.pck`, or `SiglusEngine*.exe`. |
+| Directory path | Search that directory's immediate files. |
+| `angou=text` | Derive a key from a literal `暗号.dat` first line. |
+| `key=bytes` | Supply a 16-byte key. Prefer explicit `0xNN` tokens to avoid numeric ambiguity. |
 
-Key-source diagnostics are printed to stderr whenever a decryption candidate is tried: each line includes the source, kind, path or inner file when applicable, the concrete `exe_el` value, and whether that candidate was accepted or rejected before falling back.
+Decryption tries the explicit key source first, then embedded `暗号.dat`, the current directory, and its parent. Directory search order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`; searches are not recursive. An explicit path disables parent-directory probing. An explicit source that is missing, malformed, or contains no key is an error; a valid key that fails decryption allows lower-priority candidates.
+
+Text keys from `暗号.dat` and `angou=text` can differ from official Windows conversion. For existing official files, prefer the matching engine executable or its raw key. A 16-byte `key.txt` is read as binary; other text keys are parsed as `0xNN`, two-digit hex, then decimal, taking the first 16 matches from the first applicable format. Thus sixteen `10` tokens mean hex `0x10` bytes.
+
+```bash
+siglus-ssu -x /path/to/Scene.pck --angou /path/to/SiglusEngine.exe
+siglus-ssu -a --angou "angou=literal_angou_string"
+siglus-ssu -a --angou "key=0xA9,0x86,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"
+```
 
 #### Read-Flag JSON
 
-The report describes the stored save data. A zero-valued flag means that the engine has not marked that flag as read; some commands mark flags only when text is cleared or a wait completes. Flag indices start at `0` within each scene.
+A zero flag means not marked as read, which may differ from whether the content has appeared. Flag indices start at `0` per scene.
 
-The top-level fields are `savePath`, `pckPath` (`null` without a PCK), `summary`, and `scenes`. `summary` contains `sceneCount`, `flagCount`, `readCount`, `unreadCount`, and scene counts by status in `mapping`. Each scene contains `name`, `status`, the saved `flagCount`, `pckFlagCount` (`null` when unavailable), saved `readCount` and `unreadCount`, and an `unreadFlags` list. Each unread entry has `index` and `line`. A matched `line` is the original one-based source line recorded by the official compiler, not a location in decompiled source; otherwise it is `null`.
+The report contains `savePath`, `pckPath` (`null` without a PCK), `summary`, and `scenes`. The summary gives scene and flag counts, read/unread counts, and status counts. Each scene includes its name, status, saved and PCK flag counts, read/unread counts, and `unreadFlags`. Each unread entry has `index` and `line`. A matched `line` is a one-based original source line, not a decompiled-source location; unavailable values are `null`.
 
 | Scene `status` | Meaning |
 |---|---|
-| `notChecked` | No PCK was supplied. Saved indices are exported without validation. |
-| `matched` | The scene name and flag count match, so the engine accepts the saved flags. |
-| `ignored` | The saved scene is absent from the PCK. The engine ignores this entry, and this status does not cause command failure. |
-| `countMismatch` | The scene exists, but its flag count differs. The engine ignores this scene's stored flags. |
-| `sceneUnavailable` | The PCK scene data could not be decoded or its flag table could not be read, so compatibility could not be checked. |
+| `notChecked` | No PCK supplied; saved indices are unvalidated. |
+| `matched` | Scene name and flag count match. |
+| `ignored` | Saved scene is absent from the PCK and ignored by the engine. |
+| `countMismatch` | Flag count differs; the engine ignores these saved flags. |
+| `sceneUnavailable` | PCK scene or flag table could not be decoded. |
 
-PCK scenes without a saved entry start with unread flags in the engine and are not added to this save-data report. Only matching names and counts are required by the engine; the scene sets do not need to be identical. `countMismatch` and `sceneUnavailable` entries produce a consolidated warning and exit status `1` after the JSON is written. All saved counts and unread indices are retained, including ignored or mismatched entries.
+The report includes saved records only; PCK scenes without a saved record start unread in-game. All saved counts and indices are retained, including ignored or mismatched records. `countMismatch` or `sceneUnavailable` returns `1` after writing the report; `ignored` does not cause failure.
 
 #### Payload Comparison Results
 
-The comparison covers every bytecode operand, label tables, scene property layouts, the complete string pool (including unreferenced strings), read-flag tables, and pack-level property/command routing metadata.
+Payload comparison covers bytecode, labels, properties, strings (including unused strings), read flags, and package command/property routing. It ignores string storage order, unused trailing zero Z-label entries, and debug-only name data. Identifier names remain significant.
 
-Normalization ignores string-pool storage order and the corresponding string-index shuffle, unused trailing zero entries in the Z-label table, and the debug-only `namae_list`. Z-label numbers, interior empty entries, nonzero jump offsets, internal label numbers, argument-list IDs, and other table entry counts and ordering remain significant. Scene identifier name tables preserve index offsets and lengths, empty entries, NULs, and the original UTF-16 code units; pack-level names also preserve empty entries, NULs, and UTF-16 code units. Changes to identifier name tables are `real_diff`. Raw `namae_list` entries remain in disassembly and are checked for out-of-range indices, but do not enter payload hashes.
-
-| `.pck` scene `PAYLOAD` column | `.dat` payload result | Meaning |
+| `.pck` scene `PAYLOAD` | `.dat` result | Meaning |
 |---|---|---|
-| `same` | `identical` | Full normalized payloads match. |
-| `text_only` | `text_only` | Non-string structure matches, but resolved string contents differ. This is a difference, and strings may name resources or scenes, so runtime behavior may change. |
-| `real_diff` | `real_diff` | Other normalized payload data differs. |
-| `-` | `unavailable` | A scene is missing on one side, or decoding/parsing is unavailable. Equality is not established. |
-| `INCOMPLETE` | `INCOMPLETE` | A scene cannot be completely disassembled or validated. Equality is not established, even for byte-identical inputs. |
+| `same` | `identical` | Normalized payloads match. |
+| `text_only` | `text_only` | Structure matches but strings differ. Resource or scene names may also differ, affecting behavior. |
+| `real_diff` | `real_diff` | Other payload data differs. |
+| `-` | `unavailable` | A scene is missing or cannot be decoded. |
+| `INCOMPLETE` | `INCOMPLETE` | Disassembly or validation is incomplete, even if input bytes match. |
 
-Truncated bytecode, a missing final `CD_EOF`, bytecode after `CD_EOF`, negative argument counts, out-of-range string indices, undefined branch labels, or branch targets outside instruction starts produce `INCOMPLETE`. Encrypted scene data also needs a usable key source.
+Whole-PCK equality requires no added or missing scenes and no `text_only`, `real_diff`, unavailable, or `INCOMPLETE` results. Header and embedded-source differences are reported separately. Validated identical scenes are omitted from the differences table; its payload summary counts listed scenes only.
 
-In `.pck` output, successfully validated scenes with identical stored bytes, source IDs, and package context are omitted from the differences table. The `scene_data payload:` summary counts only retained scene rows, not all scenes in the package; it may be absent when no scene rows remain. Original-source rows use `-` in the payload column and are not part of that summary.
-
-Payload equality for a whole `.pck` requires no missing or extra scenes and no `text_only`, `real_diff`, unavailable, or `INCOMPLETE` results. Header and embedded-source differences are reported separately. A visible `same` row describes one scene, not the whole file.
-
-`PAYLOAD_SAME` is a round-trip `test` result, not another `-a --payload` category. The lowercase `payload_same` in the test summary is the number of files with that result. A scene classified as `text_only` fails the round-trip test.
+Exit status `0` alone does not establish equality: differences are reported as results. `INCOMPLETE` returns `1`.
 
 #### Examples
 
+Analyze and compare files:
+
 ```bash
-# Analyze Scene.pck — prints header info, file count, encryption status
 siglus-ssu -a /path/to/Scene.pck
+siglus-ssu -a --payload /path/to/original.pck /path/to/rebuilt.pck
+siglus-ssu -a --disam /path/to/chapter1.dat
+```
 
-# Count dialogue units for each scene `.dat` and embedded `.ss`, then write CSV
-siglus-ssu -a --word /path/to/Scene.pck
+Export unread flags or mark all scenes read:
 
-# Count dialogue units and write the CSV to an explicit path
-siglus-ssu -a --word /path/to/Scene.pck /path/to/scene_counts.csv
-
-# Analyze a compiled .dat script — prints header fields and string pool
-siglus-ssu -a /path/to/script.dat
-
-# Analyze an encrypted .dat script using a directory key source
-siglus-ssu -a /path/to/script.dat --angou /path/to/game_dir/
-
-# Compare two versions of Scene.pck — reports file additions, removals, and changes
-siglus-ssu -a /path/to/Scene_original.pck /path/to/Scene_translated.pck
-
-# Compare two Scene.pck files by normalized scene runtime semantics
-siglus-ssu -a --payload /path/to/Scene_original.pck /path/to/Scene_translated.pck
-
-# Write .dat disassembly to disk for inspection
-siglus-ssu -a --disam /path/to/script.dat
-
-# Set all read flags in read.sav to 1
+```bash
+siglus-ssu -a --read-flags /path/to/savedata/read.sav /path/to/Scene.pck
 siglus-ssu -a --readall /path/to/savedata/read.sav
+```
 
-# Unlock engine-managed collection flags in global.sav
-siglus-ssu -a --readall /path/to/savedata/global.sav
+Analyze `global.sav` to generate `global.txt`, edit supported values, then apply them:
 
-# Generate global.txt, edit it, then write supported values back to global.sav
+```bash
 siglus-ssu -a /path/to/savedata/global.sav
 siglus-ssu -a --apply /path/to/savedata/global.sav
-
-# Derive the exe_el key from 暗号.dat
-siglus-ssu -a --angou /path/to/暗号.dat
-
-# Derive the exe_el key directly from a literal angou string
-siglus-ssu -a --angou "angou=literal_angou_string"
-
-# Derive the exe_el key from the SiglusEngine executable directly
-siglus-ssu -a --angou /path/to/SiglusEngine.exe
-
-# Derive the exe_el key from a literal 16-byte key
-siglus-ssu -a --angou "key=0xA9,0x86,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00"
-
-# Derive the exe_el key from a game directory
-siglus-ssu -a --angou /path/to/game_dir/
 ```
-
-#### Output Format (`.pck` example)
-
-```
-==== Analyze ====
-file: /path/to/Scene.pck
-type: pck
-size: 123456789 bytes (0x75BCD15)
-mtime: 2024-01-01 12:00:00
-sha256: a1b2c3d4...
-
-header:
-  header_size=...
-  scn_data_exe_angou_mod=...
-  original_source_header_size=...
-counts:
-  inc_prop=...  inc_cmd=...
-  scn_name=...  scn_data_index=...  scn_data_cnt=...
-read_flags: ...
-read_flags_scenes: ...
-top5_read_flags_scenes: scene_a(...), scene_b(...), ...
-...
-```
-
-If an embedded or adjacent `暗号.dat` is available, `.pck` analysis also appends a trailing `=== 暗号.dat ===` block and prints its first line, matching the compile-mode summary style.
 
 #### Word Count Output (`-a --word`)
 
-`-a --word` prints one row per decoded scene `.dat` and one row per embedded `.ss` source file. The count rule is as follows:
+```bash
+siglus-ssu -a --word /path/to/Scene.pck /path/to/counts.csv
+```
 
-- Han, Hiragana, fullwidth/standalone Katakana, and Bopomofo count as `1` per character; a halfwidth Katakana base followed by a halfwidth voiced/semi-voiced mark counts as one unit
-- Hangul counts by contiguous word run
-- Other letters and numbers count by contiguous word run
-- Internal `'`, `’`, `-`, `_`, `‐`, `‑`, `﹣`, and `－` keep one word run together when the nearest non-mark characters on both sides are Hangul, non-CJK letters, or numbers
-- Internal `.`, `,`, `/`, `:`, and their fullwidth variants keep a numeric run together when both sides are decimal digits
-- Punctuation, whitespace, emoji, and other symbols count as `0`
+Counts are dialogue units, not a universal linguistic word count:
 
-The CSV uses:
+- Han, Hiragana, Katakana, and Bopomofo count per character. A halfwidth Katakana base plus voiced/semi-voiced mark counts as one.
+- Hangul, other letters, and numbers count by contiguous word run.
+- Internal apostrophes, hyphens, and underscores join word runs. Internal `.`, `,`, `/`, `:`, and fullwidth equivalents join numeric runs when surrounded by decimal digits.
+- Punctuation, whitespace, emoji, and other symbols add no units.
 
-- `type` — `dat` or `ss`
-- `path` — per-file relative path inside the `.pck`
-- `status` — `ok`, `failed`, or `unavailable`
-- `dialogue_lines` — number of counted dialogue entries; empty if counting failed or sources are unavailable
-- `dialogue_count` — total counted dialogue units; empty if counting failed or sources are unavailable
-- `error` — failure reason, including the parsing stage and line number when available; empty for successful rows
+| CSV column | Meaning |
+|---|---|
+| `type` | `dat` or `ss`. |
+| `path` | Relative path inside the PCK. |
+| `status` | `ok`, `failed`, or `unavailable`. |
+| `dialogue_lines` | Number of dialogue entries. |
+| `dialogue_count` | Total dialogue units. |
+| `error` | Failure reason, if any. |
 
-Source counting stops at the first U+001A (DOS EOF), using the same decoding rule as compilation. Embedded original source bytes are not changed.
-
-If a file fails to parse, its row remains in the CSV, the reason is also printed to stderr, and the command returns exit code `1` after writing the available results. Totals include only successful rows; `dat_status` and `ss_status` identify `complete` or `partial` results.
-
-If the original-source section is declared but missing, truncated, or undecodable, the CSV retains the completed `.dat` rows and adds an `ss` row with an empty `path`, `status=unavailable`, empty counts, and the `error` value. The command returns `1`, and source totals are shown as `N/A`. A PCK that does not declare embedded sources is valid: its CSV contains only `.dat` rows, `ss_status=not_embedded`, source dialogue totals are `N/A`, and the command returns `0` if all `.dat` files were counted successfully.
+Failed or unavailable rows have empty counts; totals include successful rows only. Partial results are written before exit status `1`. A missing or unreadable declared source section produces `ss_status=unavailable` and source totals `N/A`; a PCK without embedded sources produces only DAT rows, `ss_status=not_embedded`, and succeeds if all DAT files were counted. Source counting stops at DOS EOF as in compilation.
 
 ---
 
 ### `-d` / `--db` — Export and Compile `.dbs` Databases
 
-Works with `.dbs` binary database files that store tabular engine data.
-
-Provides three sub-operations selected by `--x`, `--a`, or `--c`.
+Exports game databases to CSV and compiles edited CSV files back to `.dbs`.
 
 #### Syntax
 
 ```
-# Export one or more .dbs files to CSV
 siglus-ssu -d --x <input_dir | input_file.dbs> <output_dir>
-
-# Analyze a .dbs file (or compare two)
 siglus-ssu -d --a <input_file.dbs> [input_file_2.dbs]
-
-# Compile CSV(s) back to .dbs
 siglus-ssu -d --c [--type N] [--set-shuffle SEED] <input_csv | input_dir> <output_dbs | output_dir>
-
-# Brute-force the MSVC rand() skip to match a reference .dbs
 siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expected.dbs> <input_csv> <output_dbs | output_dir>
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `--x` | **Extract** mode: export `.dbs` → `.csv`. |
-| `--a` | **Analyze** mode: dump structural info. With two arguments, compare two `.dbs` files. |
-| `--c` | **Compile** mode: create `.dbs` from `.csv`. |
-| `--type N` | Override the `m_type` field of the generated `.dbs` (integer). Default: `1`. |
-| `--set-shuffle SEED` | Set the initial MSVC `rand()` seed for random padding bytes appended before packing. Accepts decimal or `0x...` hex. Default: `1`. |
-| `--test-shuffle [skip0]` | Search up to 16,777,216 MSVC `rand()` skip counts from `skip0` (default `0`) to match the padding pattern at the end of a reference `.dbs`. Single-file mode only. |
+| `--x` | Export `.dbs` to CSV. |
+| `--a` | Analyze one database or compare two. |
+| `--c` | Compile CSV to `.dbs`. |
+| `--type N` | Output database type; default `1`. Type `0` strings must be encodable as CP932; other types use UTF-16LE. |
+| `--set-shuffle SEED` | Set the random-padding seed (decimal or hexadecimal; default `1`). |
+| `--test-shuffle [skip0]` | Try up to 16,777,216 random-generator skip counts from `skip0` (default `0`) to match a reference database's padding. Single-file mode only. |
+
+Directory export and compilation scan recursively and preserve subdirectories. Batch compilation rejects output-name collisions such as `name.csv` and `name.dbs.csv`, including case-only collisions.
+
+Comparison uses decoded string values. It checks up to 2,000,000 cells and prints at most 20 differences, reporting when a limit is reached.
 
 #### Examples
 
 ```bash
-# Export all .dbs files in a directory to CSV
 siglus-ssu -d --x /path/to/dbs_dir/ /path/to/csv_out/
-
-# Export a single .dbs file
-siglus-ssu -d --x /path/to/gamedb.dbs /path/to/csv_out/
-
-# Analyze a .dbs file
-siglus-ssu -d --a /path/to/gamedb.dbs
-
-# Compare two .dbs files
-siglus-ssu -d --a /path/to/gamedb_original.dbs /path/to/gamedb_translated.dbs
-
-# Compile a single CSV back to .dbs
-siglus-ssu -d --c /path/to/gamedb.dbs.csv /path/to/gamedb_translated.dbs
-
-# Compile a directory of CSVs to .dbs files
-siglus-ssu -d --c /path/to/csv_dir/ /path/to/dbs_out/
-
-# Compile with a specific shuffle seed and type
-siglus-ssu -d --c --type 2 --set-shuffle 12345 /path/to/gamedb.dbs.csv /path/to/out.dbs
-
-# Brute-force the rand-skip to match a reference .dbs exactly
-siglus-ssu -d --c --test-shuffle /path/to/original.dbs /path/to/input.csv /path/to/output.dbs
+siglus-ssu -d --c /path/to/gamedb.dbs.csv /path/to/translated.dbs
+siglus-ssu -d --a /path/to/original.dbs /path/to/translated.dbs
 ```
-
-With directory input, both `-d --x` and `-d --c` **recursively** scan subdirectories and preserve the relative directory structure in the output. Before batch compilation writes any `.dbs`, output paths are checked for collisions using Windows filename case rules; conflicting inputs such as `name.csv` and `name.dbs.csv` cause failure rather than overwriting one another.
-
-When row and column layouts match, `-d --a` compares string cells by their decoded text, not by their offsets in the string pool. It scans at most 2,000,000 cells and prints at most 20 cell differences; the output states when either limit is reached.
-
-Strings in `m_type=0` use fixed Windows CP932 encoding and decoding on every platform, including extension characters such as `①` and `髙`, independently of the system code page. When compiling, every string must encode strictly as CP932; other types use strict UTF-16LE encoding. An unencodable cell reports its CSV path, record start line, column, and call number, and no invalid `.dbs` is written.
 
 #### CSV Format
 
-The exported CSV uses UTF-8 BOM encoding with CRLF line endings and is compatible with Microsoft Excel. The first two rows are the `#DATANO` and `#DATATYPE` header rows, followed by data rows.
+CSV files use UTF-8 with BOM and CRLF, suitable for Excel. Keep the first two rows and the first column:
 
-- `#DATANO` row: the first column is fixed to `#DATANO`, and the remaining columns are the call numbers of each column header.
-- `#DATATYPE` row: the first column is fixed to `#DATATYPE`, and the remaining columns are the data type markers of the corresponding columns; the main types you will see are `S` (string) and `V` (numeric / other 32-bit unit).
-- Data rows: the first column of each row is that row's row call number, and the remaining columns correspond to the column order defined by the first two rows.
+- `#DATANO`: column call numbers, after the first cell containing `#DATANO`.
+- `#DATATYPE`: corresponding types, commonly `S` (string) and `V` (numeric/32-bit value).
+- Data rows: the first cell is the row call number, followed by values in header order.
 
-Special characters in string values are handled by normal CSV quoting rather than by a custom backslash escape layer:
-
-| Character | CSV Handling |
-|---|---|
-| `\` | Literal backslash; not an escape prefix. |
-| `"` | Escaped by CSV quoting as doubled quotes when needed. |
-| newline / carriage return | Stored as actual line-break characters inside quoted CSV fields. |
-| TAB | Stored as an actual tab character. |
+Use normal CSV quoting: double embedded quotes, keep backslashes literal, and place actual newlines or tabs inside quoted fields. Unencodable strings fail compilation with the CSV location.
 
 ---
 
 ### `-k` / `--koe` — Collect Voice Files by Character
 
-Scans compiled scene data from a `.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files, reads KOE-related calls from disassembly traces, matches them against `.ovk` voice archive entries, and extracts the corresponding `.ogg` audio files. In normal mode, files are grouped into per-character subdirectories.
-
-In normal mode, the command also generates a `koe_master.csv` manifest listing all found KOE entries with their character name, dialogue text, and call-site location. If the same `koe_no` is referenced by multiple distinct character/text pairs, the CSV keeps separate rows and only merges call-sites for the same `koe_no`/character/text tuple. When scanning a `.pck` directly, call-sites are reported as `Scene.pck!scene.dat:line`. After processing, the tool also computes the total duration of **referenced** voice files only; entries written under `unreferenced/` are explicitly excluded from that total. If a particular `.ogg` duration cannot be read, CSV output still succeeds, but that item is counted under `Duration failed`.
-
-The CSV also keeps alternative names from same-line conditional branches when their association with the voice can be established. The tool matches the original global voice number and uses one inferred name for each audio file's directory.
+Matches scene voice references to `.ovk` entries, extracts `.ogg` files by character, and writes `koe_master.csv` with dialogue and call locations.
 
 #### Syntax
 
 ```
-siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -k [--stats-only] <scene_input> <voice_dir> <output_dir> [--angou VALUE]
 siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `<scene_input>` | Path to `Scene.pck`, a single scene `.dat`, or a directory tree of scene `.dat` files. Required in normal mode; not used with `--single`. |
-| `<voice_dir>` | Path to the flat top-level directory containing `.ovk` voice archive files (typically named `z0001.ovk`, `z0002.ovk`, etc.). Can also be a direct path to a single `.ovk` file. In directory mode, only `.ovk` files in that directory itself are scanned; the search is not recursive and character subdirectories are not inspected. |
-| `<output_dir>` | Directory where extracted `.ogg` files will be written. In normal mode, `koe_master.csv` is also written there. With `--single`, the extracted file is written directly under `<output_dir>`. |
-| `--angou <path\|angou=text\|key=bytes>` | Key source used when scanning encrypted `Scene.pck` or scene `.dat` input. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). Not valid with `--single`. |
-| `--stats-only` | Prints the summary and does not write any `.ogg` files. In normal mode it still writes `koe_master.csv`; with `--single`, no CSV is written. |
-| `--single KOE_NO` | Only extracts the specified global KOE number. In this mode, no scene input is required, no `koe_master.csv` is generated, no character-name or `unreferenced` subdirectories are created, and the output file is written directly as `<output_dir>/KOE(XXXXXXXXX).ogg`. |
+| `<scene_input>` | `Scene.pck`, a scene `.dat`, or a recursively scanned DAT directory. Not used with `--single`. |
+| `<voice_dir>` | One `.ovk` or a directory containing `.ovk` files, scanned at the immediate level only. |
+| `<output_dir>` | Destination for audio and, in normal mode, `koe_master.csv`. |
+| `--angou VALUE` | [Decryption key source](#decryption-keys) for encrypted scene input. Not valid with `--single`. |
+| `--stats-only` | Write the CSV and summary without audio. With `--single`, write only the summary. |
+| `--single KOE_NO` | Extract one global voice number as `KOE(XXXXXXXXX).ogg` directly in the output directory, without CSV or character subdirectories. A missing entry returns `1`. |
 
 #### Output Structure
 
 ```
 <output_dir>/
-  koe_master.csv           — Master manifest of all KOE entries
-  <CharacterName or %EMPTY>/ — One subdirectory per character name; %EMPTY when no name is inferred
-    KOE(000000001).ogg
-    KOE(000000002).ogg
-    ...
-  unreferenced/            — Entries in .ovk not referenced by any scanned scene
-    KOE(000000003).ogg
-    ...
+  koe_master.csv
+  <character name or %EMPTY>/KOE(000000001).ogg
+  unreferenced/KOE(000000002).ogg
 ```
 
-Character names used as directory segments are percent-escaped without changing the value stored in `koe_master.csv`. Path separators, control and Windows-invalid characters, literal `%`, trailing spaces or dots, reserved device names, and the tool's fixed output names are encoded distinctly instead of being collapsed to one replacement character. Names that differ only by case still follow the target file system's case-sensitivity rules.
+`%EMPTY` means no character name was found. Unsafe directory-name characters are percent-escaped; CSV names retain their original text. Case-only differences follow the output filesystem's rules.
 
-With `--single`, the output structure becomes:
-
-```
-<output_dir>/
-  KOE(123456789).ogg
-```
-
-#### Examples
-
-```bash
-# Collect all voice files directly from Scene.pck
-siglus-ssu -k /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
-
-# Collect from encrypted scene data using an explicit key source
-siglus-ssu -k /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/ --angou /path/to/game_dir/
-
-# Collect from a decoded scene `.dat` directory
-siglus-ssu -k /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
-
-# Collect from a single scene `.dat` file
-siglus-ssu -k /path/to/chapter1.dat /path/to/voice/ /path/to/voice_out/
-
-# Generate CSV and summary only, without writing any `.ogg`
-siglus-ssu -k --stats-only /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
-
-# Extract only one global KOE entry
-siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
-```
+Unreferenced archive entries go to `unreferenced/`. The summary's voice duration includes referenced entries only. Unreadable durations are counted under `Duration failed` without preventing CSV output.
 
 #### `koe_master.csv` Format (Normal Mode Only)
 
 | Column | Description |
 |---|---|
-| `koe_no` | The global KOE number (scene_no × 100000 + entry_no). Kept when known even if the OVK entry was not found. If a KOE is referenced by multiple distinct character/text pairs, the same number can appear on multiple rows. |
-| `character` | Character name inferred from `CD_NAME` events and inline voice metadata in the scene trace. |
-| `text` | Dialogue text inferred from `CD_TEXT` events and inline voice metadata in the scene trace. |
-| `duration_sec` | Voice duration in seconds, derived from the OVK entry sample count and Ogg sample rate. Empty when the OVK entry or duration metadata cannot be read. |
-| `callsite` | Semicolon-separated list of `filename:line` locations where this KOE/text row is called, or `Scene.pck!scene.dat:line` when scanning a `.pck` directly. |
+| `koe_no` | Global voice number, `scene_no × 100000 + entry_no`. |
+| `character` | Character name inferred from the scene. |
+| `text` | Associated dialogue. |
+| `duration_sec` | Duration in seconds; empty when unavailable. |
+| `callsite` | Semicolon-separated `filename:line` locations, or `Scene.pck!scene.dat:line` for PCK input. |
 
-#### Summary Output
+Distinct character/text pairs retain separate rows for the same voice number. Repeated references to the same pair share a row. Conditional alternative names are retained when identifiable; each audio file uses one inferred directory name.
 
-After completion, a summary is printed to stderr. Example with `--stats-only` and without `--single`:
+#### Examples
 
+```bash
+siglus-ssu -k /path/to/Scene.pck /path/to/voice/ /path/to/voice_out/
+siglus-ssu -k --stats-only /path/to/scene_dir/ /path/to/voice/ /path/to/voice_out/
+siglus-ssu -k --single 123456789 /path/to/voice/ /path/to/voice_out/
 ```
-=== koe_collector summary ===
-Stats only       : yes
-OVK entries      : 45,678
-OVK files        : 56
-OVK z-files      : 56
-OVK table errors : 0
-Scene files      : 128
-Scene callsites  : 44,213
-Scene missing    : 124
-KOE total        : 45,678
-KOE referenced   : 44,086
-KOE unreferenced : 1,592
-KOE multi-text   : 3
-KOE multi-text no: 200259, 2300267, 30100310
-Audio extracted  : 0
-Audio skipped    : 0
-Audio failed     : 0
-Voice duration   : 123,456.789 sec (34:17:36.789) [referenced only]
-Duration counted : 44,086
-Duration failed  : 0
-CSV path         : /path/to/voice_out/koe_master.csv
-CSV rows         : 45,805
-Out dir          : /path/to/voice_out/
-```
-
-`Stats only` appears only with `--stats-only`. In this mode, all three `Audio` counters are `0` because no audio files are extracted; duration-reading failures are counted under `Duration failed`. Without `--stats-only`, the `Stats only` line is omitted and the `Audio` counters report extraction results.
-
-`Single KOE` appears only with `--single`. The two options can be combined; for example, `--stats-only --single 123456789` starts the summary with:
-
-```
-=== koe_collector summary ===
-Stats only       : yes
-Single KOE       : 123456789
-```
-
-With `--single`, the `Scene`, aggregate `KOE`, and CSV-related lines are omitted, and `Voice duration` reports the selected entry without the `[referenced only]` suffix. If the entry is not found, `Single found     : no` is also shown and the command exits with code `1`.
-
-`KOE multi-text` counts scanned `koe_no` values associated with more than one non-empty dialogue text, and `KOE multi-text no` lists those values. This list is computed from scene references before OVK matching, and missing OVK call-sites keep their known `koe_no` in the CSV.
 
 ---
 
 ### `-e` / `--exec` / `--execute` — Execute at a Script Label
 
-Launches the `SiglusEngine.exe` directly to a specific scene and `#z` label. This is useful for quickly jumping to a particular scene during testing without replaying the full game.
-
-#### Syntax
+Launches `SiglusEngine.exe` at a scene's `#z` label. Requires a compatible Windows execution environment; this command does not configure or invoke Wine.
 
 ```
 siglus-ssu -e <path_to_engine> <scene_name> <label>
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `<path_to_engine>` | Absolute or relative path to `SiglusEngine.exe`. Quotes are stripped automatically. |
-| `<scene_name>` | The script name without directory (e.g., `opening` or `opening.ss`). Must be a bare filename without path components. The name remaining after removing surrounding quotes and the optional `.ss` extension must not be empty or consist only of whitespace. |
-| `<label>` | Non-negative decimal `#z` label number to jump to. The `#z` prefix is optional — `10`, `z10`, and `#z10` are all accepted. |
+| `<path_to_engine>` | Path to `SiglusEngine.exe`. |
+| `<scene_name>` | Nonempty bare scene name, optionally ending in `.ss`; no directory components or whitespace-only names. |
+| `<label>` | Non-negative decimal number, optionally prefixed with `z` or `#z`. |
 
-#### How It Works
-
-The utility creates or reuses the date-named `work_YYYYMMDD` directory next to the engine executable and launches it with the following command-line arguments:
-
-```
-SiglusEngine.exe /work_dir=<work_dir> /start=<scene_name> /z_no=<label> /end_start
-```
-
-The engine is launched as a separate subprocess; the utility returns immediately after launch. The work directory is retained.
-
-The engine itself requires a compatible Windows execution environment. This command does not configure or invoke Wine.
-
-#### Examples
+The command creates or reuses `work_YYYYMMDD` beside the executable, launches the engine, and returns immediately. The work directory is retained.
 
 ```bash
-# Jump to label #z5 in the scene named "chapter2"
 siglus-ssu -e /path/to/SiglusEngine.exe chapter2 5
-
-# The .ss extension is stripped automatically
-siglus-ssu -e /path/to/SiglusEngine.exe chapter2.ss z5
-
-# With explicit #z prefix
-siglus-ssu -e /path/to/SiglusEngine.exe chapter2 "#z5"
+siglus-ssu -e /path/to/SiglusEngine.exe chapter2.ss "#z5"
 ```
 
 ---
 
 ### `-m` / `--textmap` — Text Mapping for Translation
 
-Exports the string table from compiled scene `.dat` files to a CSV text map and applies translated strings back to the compiled files. Source `.ss` mutation is deliberately not supported because project macros and replacement rules can make a source-level string edit change compiled structure.
-
-#### Syntax
+Exports scene `.dat` strings to CSV and applies translations in-place. Source `.ss` editing is not supported.
 
 ```
-# Export string list from compiled .dat file(s)
-siglus-ssu -m <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
-
-# Apply translated string list back to compiled .dat file(s)
-siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou <path|angou=text|key=bytes>]
+siglus-ssu -m <path_to_dat | path_to_dir> [--angou VALUE]
+siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 ```
 
-#### Parameters
-
-| Parameter | Description |
-|---|---|
-| `<path_to_dat \| path_to_dir>` | A single scene `.dat` file or a directory. Exactly one path argument is required. Directory inputs are scanned recursively. |
-| `--apply` | Apply a `.dat.csv` translated string list back to the compiled `.dat` in-place. Without this option, the string list is exported to a `.dat.csv` file alongside the `.dat`. Export and apply work on encrypted, LZSS-compressed, or raw `.dat` files. Directory inputs recursively scan `.dat` files and automatically exclude `Gameexe.dat` and `暗号.dat`. |
-| `--angou <path\|angou=text\|key=bytes>` | Key source for encrypted compiled `.dat` files. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). When the input is a directory, key candidates are resolved once for that directory and reused for every `.dat` file in the scan. |
+Directory inputs are scanned recursively, excluding `Gameexe.dat` and `暗号.dat`. Encrypted files may need a [decryption key source](#decryption-keys).
 
 #### Workflow
 
-1. **Export string list:**
+1. Export `chapter1.dat.csv` beside the DAT:
 
    ```bash
    siglus-ssu -m /path/to/chapter1.dat
-   # → writes /path/to/chapter1.dat.csv
    ```
 
-2. **Edit `chapter1.dat.csv`:** Fill in the `replacement` column.
-
-3. **Apply translations:**
+2. Edit the CSV's `replacement` column, leaving `index` and `original` unchanged.
+3. Apply translations:
 
    ```bash
    siglus-ssu -m --apply /path/to/chapter1.dat
    ```
 
-   The `.dat` file is rewritten in-place preserving its original encryption and LZSS state.
+The command rewrites the DAT, preserving its encryption and compression. Back up the original before applying translations.
 
-If a CSV index is invalid or a row to be changed has an `original` value that does not match the current string, the command returns exit code `1` and leaves that `.dat` unchanged. Rows whose current string already equals `replacement` are accepted as already applied. Directory mode continues processing other files but returns `1` if any file fails.
+An invalid index or mismatched `original` leaves that DAT unchanged and returns `1`. Already-applied rows are accepted. Directory processing continues after failures and returns `1` if any file failed.
 
 #### `.dat.csv` Format
 
 | Column | Description |
 |---|---|
-| `index` | String index (`str_id`) in the compiled string table. |
-| `kind` | String kind: `1 = dialogue`, `2 = speaker name`, `3 = other text`. |
-| `original` | The original string value (escape-encoded). |
-| `replacement` | The replacement string value (escape-encoded). Initially identical to `original`. |
+| `index` | String-table index. |
+| `kind` | `1` = dialogue, `2` = speaker name, `3` = other text. |
+| `original` | Original string, escaped as below. |
+| `replacement` | Replacement, initially equal to `original`. |
 
-Special characters in `original` and `replacement` use `\\`, `\n`, `\r`, and `\t` for a literal backslash, newline, carriage return, and tab respectively. Isolated UTF-16 surrogate code units are written as `\uD800` through `\uDFFF`, so an exported CSV remains valid UTF-8 and can be applied back without changing the original UTF-16 code units.
+Use `\\`, `\n`, `\r`, and `\t` for backslash, newline, carriage return, and tab. Isolated UTF-16 surrogate units use `\uD800`–`\uDFFF` escapes.
 
 ---
 
 ### `-g` / `--g00` — Work with `.g00` Image Files
 
-Provides tools for analyzing, extracting, merging, creating, and updating `.g00` image archives used by SiglusEngine for backgrounds, sprites, and other visuals.
+Analyzes, extracts, merges, creates, and updates SiglusEngine images.
 
-#### `.g00` File Types
-
-| Type | Description |
+| Type | Contents |
 |---|---|
-| type0 | LZSS32-compressed BGRA (32-bit) image. |
-| type1 | LZSS-compressed paletted image (up to 256 colors). |
-| type2 | Multi-cut composite image (sprite sheet) containing multiple indexed cuts. |
-| type3 | XOR-obfuscated JPEG image. |
+| type0 | 32-bit BGRA image. |
+| type1 | Paletted image, up to 256 colors. |
+| type2 | Multiple image cuts with placement information. |
+| type3 | JPEG image. |
 
-> **Note:** `--a` never requires Pillow. Extracting type3 JPEG payloads without `--trim` can run without Pillow, but JPEG trimming, PNG decoding, merge mode, create mode (including type3 create, which reads JPEG dimensions), and type0/type1/type2/type3 update paths require [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`).
+Image processing requires [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`). Analysis and untrimmed type3 JPEG extraction can run without it.
 
 #### Syntax
 
 ```
-# Analyze a .g00 file (no Pillow required)
 siglus-ssu -g --a <input_g00>
-
-# Extract .g00 to PNG/JPEG files
 siglus-ssu -g --x [--trim] <input_g00 | input_dir> <output_dir>
-
-# Merge multiple .g00 files (or cuts) into a single PNG
 siglus-ssu -g --m [--trim] <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
-
-# Create a new .g00 from image files, or update from an explicit reference .g00
 siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `--a` | **Analyze** mode. Prints type, canvas size, and LZSS stats; for type2, also prints detailed information for up to the first 50 cuts. |
-| `--x` | **Extract** mode. Decodes each `.g00` and writes PNG or JPEG files; for type2, also writes a round-trippable `.type2.json` sidecar unless `--trim` is used. Existing image or JSON targets are skipped rather than overwritten. |
-| `--trim` | With `--x`, crop extracted images before writing them. PNG outputs are cropped to non-transparent pixels, falling back to the top-left background color when fully opaque; JPEG outputs use the top-left background color and keep the original payload when no crop is needed. Type2 JSON sidecars are not written when trimming. With `--m`, crop transparent or opaque-background edges from the merged PNG. |
-| `--m` | **Merge** mode. Composites multiple `.g00` images or cuts into one PNG while preserving straight-alpha RGB and aligning type2 layers by the selected cut centers. With `--trim`, crops transparent or opaque-background edges from the merged PNG. |
-| `--c` | **Create/update** mode. Without `--refer`, creates a new `.g00`. With `--refer`, updates image payload using the referenced `.g00` as the base. |
-| `--o <output_dir>`, `-o`, `--output`, `--output-dir` | (Merge mode only) Optional output directory for the merged PNG. If omitted, the file is written to the current working directory. |
-| `--type N`, `--t N` | (Only valid with `--c`) In create mode, force the output `.g00` type. In update mode, override the expected reference `.g00` type for validation. |
-| `--refer <ref_g00 \| ref_dir>` | (Only valid with `--c`) Use an existing `.g00` as the explicit base for update semantics. Single-file input accepts either a `.g00` file or a directory; directory input requires a reference directory. If the output path is omitted in update mode, single-file input defaults to writing back to the reference `.g00`, and directory input defaults to writing back to the reference directory. |
-| `<g00spec>[:cutNNN]` | For merge mode, optionally select a specific cut index from a type2 `.g00` by appending `:cutNNN` (e.g., `bg_day.g00:cut002`). |
+| `--a` | Show image type, dimensions, and cut information. |
+| `--x` | Extract PNG/JPEG files and, for untrimmed type2, a rebuildable `.type2.json` layout. Existing image and JSON targets are skipped. |
+| `--trim` | Crop transparent edges, or top-left background color for opaque images. Available with `--x` and `--m`; trimmed type2 extraction does not create a JSON layout. |
+| `--m` | Composite images or cuts into one PNG, aligning type2 cuts by their centers. |
+| `--c` | Create a new G00, or update from `--refer`. |
+| `--o`, `-o`, `--output`, `--output-dir` | Merge output directory; default is the current directory. |
+| `--type N`, `--t N` | Choose the created type, or validate the reference type during updates. Only valid with `--c`. |
+| `--refer <ref_g00 \| ref_dir>` | Update an existing G00. Directory input requires a reference directory; a single input accepts a reference file or directory. With no output path, the reference is overwritten. |
+| `:cutNNN` | Select a type2 cut for merging, for example `sprite.g00:cut002`. |
 
-#### Examples
+Extraction and creation scan directory inputs at the immediate level only.
+
+#### Create and Update
+
+Without `--refer`, PNG creates type0 and JPEG creates type3. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
+
+With no output path, creation writes beside the input; updates overwrite the reference. Back up original assets before updating them. JSON layouts cannot be combined with `--refer`. To update an individual cut through a reference directory, name its replacement `<basename>_cut###.png`.
 
 ```bash
-# Analyze a type2 sprite sheet
-siglus-ssu -g --a /path/to/sprite.g00
-
-# Extract all .g00 files in a directory to PNG/JPEG
-siglus-ssu -g --x /path/to/g00_dir/ /path/to/png_out/
-
-# Extract a single .g00
-siglus-ssu -g --x /path/to/bg_clear.g00 /path/to/png_out/
-
-# Merge two sprite layers into one composite PNG
-siglus-ssu -g --m /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merged_out/
-
-# Merge a specific cut from a type2 .g00
+siglus-ssu -g --x /path/to/sprite.g00 /path/to/work/
 siglus-ssu -g --m /path/to/sprite.g00:cut005 /path/to/overlay.g00 --o /path/to/out/
-
-# Merge and crop the output PNG edges
-siglus-ssu -g --m --trim /path/to/char_base.g00 /path/to/char_eye.g00 --o /path/to/merged_out/
-
-# Create a new type0 .g00 from a PNG (output optional)
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00
-
-# Omit output path: create <input_basename>.g00 next to the input image
-siglus-ssu -g --c /path/to/new_bg.png
-
-# Create a new type3 .g00 from a JPEG
-siglus-ssu -g --c /path/to/op.jpeg /path/to/op.g00
-
-# Create or rebuild a type2 .g00 directly from a .type2.json layout
-siglus-ssu -g --c --type 2 /path/to/char_face.type2.json /path/to/char_face.g00
-
-# Batch create type2 .g00 files from a directory of .type2.json layouts
-siglus-ssu -g --c --type 2 /path/to/layout_dir/ /path/to/out_g00/
-
-# Update an existing .g00 using an explicit reference
 siglus-ssu -g --c /path/to/new_bg.png /path/to/game_bg.g00 --refer /path/to/original_bg.g00
-
-# Batch update using a reference directory
-siglus-ssu -g --c /path/to/updated_pngs/ /path/to/out_g00/ --refer /path/to/original_g00/
 ```
-
-Directory input for `-g --x` scans only the immediate directory level for `.g00` files.
-With `--trim`, type2 `.type2.json` sidecars are not written because the cropped images are no longer a rebuild layout.
-
-#### Create Mode Notes
-
-- Create mode is selected when `--refer` is omitted.
-- Implemented create targets are **type0**, **type2**, and **type3**.
-- Default inference is: `png` -> type0, `jpg/jpeg` -> type3. Use `--type 2` and pass a `.type2.json` directly for type2 creation.
-- For type2 rebuilds produced by `-g --x`, pass the generated `.type2.json` directly to `-g --c`. Do not pass a single `*_cutNNN.png` file to create a multi-cut type2 archive.
-- `--c` directory input currently scans only the **immediate level** of files, not recursively.
-- `.type2.json` can only be used for creating/rebuilding type2; it cannot be used with `--refer` for update mode.
-- In update mode, if the output path is omitted: single-file input defaults to writing back to the reference `.g00`; directory input defaults to writing back to the reference directory. Back up original assets before operating on them.
-- An unchanged update targeting the same physical file as the reference skips the write and preserves that file. If the output is a different file, it is still written even when its bytes match the reference.
-- `type1` create is still not implemented.
 
 #### Type2 JSON Layout
 
-`type2` create is driven by a JSON layout, not by CutText or PSD metadata. The recommended strict schema is:
+Untrimmed type2 extraction produces `<basename>.type2.json` and either `<basename>.png` for one cut or `<basename>_cut000.png`, `<basename>_cut001.png`, etc. for multiple cuts. Edit the PNGs, then rebuild from the JSON:
+
+```bash
+siglus-ssu -g --c --type 2 /path/to/work/sprite.type2.json /path/to/rebuilt/sprite.g00
+```
+
+Pass the JSON, not an individual cut PNG, to rebuild a multi-cut image. Extraction preserves RGB beneath transparent pixels; rebuilding uses the edited PNG values as supplied.
 
 ```json
 {
@@ -1122,249 +704,143 @@ With `--trim`, type2 `.type2.json` sidecars are not written because the cropped 
 }
 ```
 
-Notes:
-- Root fields used by the strict schema are: `type`, `canvas`, optional `default_center`, and `cuts`.
-- `canvas` is the output type2 canvas size.
-- `cuts[]` is ordered by index. You may insert `null` to leave holes.
-- Each non-null cut should provide `source` and `canvas_rect`.
-- `source` is resolved relative to the JSON file. Both `/` and `\` are accepted as directory separators on every platform.
-- `canvas_rect` is the cut rectangle written into the outer type2 cut table.
-- `source_rect` is optional. If omitted, the full source image is used; if `canvas_rect` is also present, its width and height must match that full source image. When both `source_rect` and `canvas_rect` are present, they must have the same width and height.
-- `center` is optional per cut and defaults to `default_center` or `(0,0)`.
-- Recommended practice for strict, reproducible rebuilds: keep one JSON file beside the extracted PNG set and edit only the PNG pixels or the explicit rect/center fields you actually intend to change.
-
-#### Type2 Extract / Rebuild Asset Convention
-
-When `-g --x` extracts a type2 `.g00` without `--trim`, it writes a JSON sidecar next to the images unless that target already exists:
-- Single-cut: `<basename>.png` + `<basename>.type2.json`
-- Multi-cut: `<basename>_cut000.png`, `<basename>_cut001.png`, ... + `<basename>.type2.json`
-
-Notes:
-- Extracted type2 PNGs preserve RGB under fully transparent pixels (hidden RGB). This is the default extraction behavior for type2.
-- The generated `<basename>.type2.json` is the canonical rebuild layout for the extracted assets.
-- Rebuild mode respects the input PNG exactly as-is. No hidden-RGB recovery or synthesis step is applied during type2 creation.
-
-Direct rebuild from extracted assets:
-
-```bash
-# Step 1: extract a multi-cut type2 archive
-siglus-ssu -g --x /path/to/char_face.g00 /path/to/work/
-
-# Produces:
-#   /path/to/work/char_face.type2.json
-#   /path/to/work/char_face_cut000.png
-#   /path/to/work/char_face_cut001.png
-#   ...
-
-# Step 2: edit one or more extracted PNG files in place
-
-# Step 3: rebuild by passing the .type2.json file directly to -g --c
-siglus-ssu -g --c --type 2 /path/to/work/char_face.type2.json /path/to/rebuilt/char_face.g00
-```
-
-For multi-cut type2 archives, the `.type2.json` file is the create input. The referenced PNG files are resolved from the JSON file location.
-
-To update a specific cut, place an image named `<basename>_cut###.png` in the input directory when running `--c --refer ...`.
+- `canvas` sets the output canvas dimensions.
+- `cuts` is ordered by index; `null` leaves a hole.
+- `source` is relative to the JSON file; `/` and `\` are accepted as separators.
+- `canvas_rect` sets placement. Optional `source_rect` selects part of the PNG; otherwise the whole PNG is used. Source and canvas rectangles must have equal dimensions.
+- Per-cut `center` defaults to `default_center`, or `(0, 0)` if absent.
 
 ---
 
 ### `-s` / `--sound` — Work with Audio Files
 
-Provides tools for decoding, extracting, analyzing, and re-encoding audio files used by SiglusEngine.
-
-#### Supported Formats
-
-| Extension | Description |
+| Format | Extraction output |
 |---|---|
-| `.nwa` | NWA Adaptive differential PCM compressed audio. Decodes to `.wav`. |
-| `.owp` | XOR-obfuscated Ogg Vorbis audio. Decodes to `.ogg`. |
-| `.ovk` | Ogg Vorbis archive containing multiple numbered voice entries. Extracts to individual `.ogg` files. |
+| `.nwa` | `.wav` |
+| `.owp` | `.ogg` |
+| `.ovk` | Numbered `.ogg` voice entries |
 
 #### Syntax
 
 ```
-# Extract / decode audio files
-siglus-ssu -s --x <input_dir | input_file> <output_dir> [--trim <path_to_Gameexe.dat | Gameexe.ini>] [--angou <path|angou=text|key=bytes>]
-
-# Analyze an audio file, or compare two .ovk archives
+siglus-ssu -s --x <input_dir | input_file> <output_dir> [--trim <Gameexe.dat | Gameexe.ini>] [--angou VALUE]
 siglus-ssu -s --a <input_file.(nwa | ovk | owp)> [input_file_2.ovk]
-
-# Create / re-encode audio files
 siglus-ssu -s --c <input_ogg | input_dir> <output_dir>
-
-# Play one looped BGM or directory playlist using Gameexe loop points
-siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [path_to_Gameexe.dat | Gameexe.ini] [--angou <path|angou=text|key=bytes>]
+siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | Gameexe.ini] [--angou VALUE]
 ```
-
-#### Parameters
 
 | Parameter | Description |
 |---|---|
-| `--x` | **Extract** mode. Decodes `.owp` → `.ogg`, `.nwa` → `.wav`, `.ovk` → individual `.ogg` files. |
-| `--a` | **Analyze** mode. Prints detailed structural header information for one audio file. When two `.ovk` files are provided, compares entries by entry number/occurrence using size, sample count, and decoded Ogg payload content; for `z####.ovk` filenames it also reports the derived global KOE label. |
-| `--c` | **Create** mode. Encodes `.ogg` files → `.owp`, or groups of numbered `.ogg` files → `.ovk` archives. Directory input recursively scans for `.ogg` files and preserves the relative directory structure in the output. |
-| `--play` | **Play** mode. Plays one `.nwa` / `.owp` / `.ogg` BGM or an interactive directory playlist using the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini`. The Gameexe path is optional; if omitted, the tool auto-detects a nearby `Gameexe.dat`/`Gameexe.ini`. Playback runs in a full-screen terminal UI with a live progress bar and playlist view. Requires `ffplay` to be on the system `PATH` and [psutil](https://pypi.org/project/psutil/) to be installed. |
-| `--trim <Gameexe.dat \| Gameexe.ini>` | (Extract mode only) Read the `#BGM.*` loop-point table from `Gameexe.dat` or `Gameexe.ini` and trim `.owp` and `.nwa` BGM files to their loop regions. `.owp` trimming uses **ffmpeg** and writes `.ogg`; `.nwa` trimming slices decoded PCM directly and writes `.wav`. `.ovk` files are not trimmed. |
-| `--angou <path\|angou=text\|key=bytes>` | Key source for encrypted `Gameexe.dat` when a Gameexe source is read, such as `--x --trim` or `--play`. Uses the common key-source rules described in [`-a` / `--analyze`](#-a----analyze--analyze-and-compare-files). Accepted but ignored by sound operations that do not read a Gameexe source. |
+| `--x` | Extract audio. Directory inputs are recursive and preserve subdirectories. Existing outputs are overwritten; colliding batch output names are rejected. |
+| `--a` | Analyze one audio file, or compare entries in two OVK archives. |
+| `--c` | Create OWP or OVK from Ogg files using the naming rules below. Directory inputs are recursive and preserve subdirectories. |
+| `--play` | Preview BGM with Gameexe loop points in a terminal player. Requires `ffplay` on `PATH` and `psutil` (`pip install psutil`). Supports NWA/OWP/Ogg, not OVK. |
+| `--trim <Gameexe.dat \| Gameexe.ini>` | Extract only the `repeat`–`end` loop region of matching NWA/OWP tracks. OWP trimming requires `ffmpeg`; NWA trimming does not. OVK is unaffected. |
+| `--angou VALUE` | [Key source](#decryption-keys) for encrypted Gameexe data used by trimming or playback. Ignored by other sound operations. |
+
+#### OVK Naming
+
+Extraction writes `<basename>.ogg` for one entry, or `<basename>_<entry_no>.ogg` for multiple entries.
+
+Creation groups at least two `<basename>_<N>.ogg` files into `<basename>.ovk`. Other files, including a lone numbered file, become individual OWP files.
+
+#### Loop Playback
+
+The player matches audio basenames to `#BGM.*` entries. With no Gameexe path, it checks the audio directory's parent for `Gameexe.dat`, then nearby `Gameexe.*` files, preferring INI among the fallback files. For duplicate entries referencing one file, it prefers the matching BGM name, then the first entry.
+
+Playback starts at `start` and loops over `repeat`–`end`. `end=-1` or an end beyond the audio length means EOF. Directory input recursively collects matching tracks; unmatched files are skipped with a diagnostic.
+
+| Command | Action |
+|---|---|
+| `p`, `q`, `h` | Pause/resume, quit, help. |
+| `b`, `n` | Previous/next playlist track. |
+| `play N` | Play playlist track `N` (1-based). |
+| `l` | Recenter the playlist on the current track. |
+| `u`, `d` | Scroll the playlist by one page. |
+| `gg`, `G` | Scroll to the first/last playlist page. |
+
+Commands must be ASCII; `N` must use digits `0`–`9` and be positive. Track names and paths may contain Unicode.
 
 #### Examples
 
+Extract, trim, or create audio:
+
 ```bash
-# Decode all audio in a directory
-siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/
-
-# Decode a single .ovk voice archive
-siglus-ssu -s --x /path/to/z0001.ovk /path/to/ogg_out/
-
-# Decode .owp BGM files and trim to loop region using Gameexe.dat
-siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/ --trim /path/to/Gameexe.dat
-
-# Decode and trim with an explicit Gameexe.dat key source
-siglus-ssu -s --x /path/to/bgm/ /path/to/ogg_out/ --trim /path/to/Gameexe.dat --angou /path/to/game_dir/
-
-# Decode .nwa BGM files and trim to loop region using Gameexe.dat
-siglus-ssu -s --x /path/to/nwa_bgm/ /path/to/wav_out/ --trim /path/to/Gameexe.dat
-
-# Analyze an .nwa file header
-siglus-ssu -s --a /path/to/bgm01.nwa
-
-# Analyze an .ovk archive table
-siglus-ssu -s --a /path/to/z0001.ovk
-
-# Compare two .ovk archives
-siglus-ssu -s --a /path/to/old/koe/z0001.ovk /path/to/new/koe/z0001.ovk
-
-# Analyze an .owp file
-siglus-ssu -s --a /path/to/bgm01.owp
-
-# Play one .owp BGM from its start point and loop forever using Gameexe.dat
-siglus-ssu -s --play /path/to/bgm01.owp /path/to/Gameexe.dat
-
-# Play one .ogg BGM using Gameexe.ini directly
-siglus-ssu -s --play /path/to/bgm01.ogg /path/to/Gameexe.ini
-
-# Play all matching BGM files in a directory; auto-detect Gameexe.dat/Gameexe.ini
-siglus-ssu -s --play /path/to/BGM/
-
-# Re-encode .ogg files back to .owp
-siglus-ssu -s --c /path/to/translated_ogg/ /path/to/owp_out/
+siglus-ssu -s --x /path/to/voice/z0001.ovk /path/to/ogg_out/
+siglus-ssu -s --x /path/to/bgm/ /path/to/trimmed/ --trim /path/to/Gameexe.dat
+siglus-ssu -s --c /path/to/translated_ogg/ /path/to/audio_out/
 ```
 
-#### OVK Extraction Naming
+Compare voice archives or preview a BGM playlist:
 
-When extracting a `.ovk` with multiple entries, output files are named:
-- `<basename>.ogg` — if only one entry.
-- `<basename>_<entry_no>.ogg` — if multiple entries (e.g., `z0001_0.ogg`, `z0001_1.ogg`).
-
-#### OVK Creation Naming
-
-When creating `.ovk` from a directory, files named `<basename>_<N>.ogg` (where `N` is an integer) are only grouped into a single `<basename>.ovk` when at least two files share the same basename. If a group contains only one numerically-suffixed file, the current implementation treats it as a regular single-file input and produces an `.owp`. Files without a numeric suffix are also individually encoded as `.owp`.
-
-#### Sound Trim Details
-
-The `--trim` option reads the Gameexe.dat/Gameexe.ini BGM table (entries formatted as `#BGM.N = "...", "filename", start, end, repeat`) and trims matching `.owp` and `.nwa` files to the samples between `repeat` and `end`. For `.owp`, it decodes to `.ogg` and calls **ffmpeg** to write the trimmed `.ogg`. For `.nwa`, it decodes to PCM, slices the sample range directly, and writes a trimmed `.wav` without requiring ffmpeg. `.ovk` files are not trimmed. This is useful for extracting seamlessly-loopable background music.
-
-#### Loop Playback Details
-
-The `--play` option reads the Gameexe BGM table from either `Gameexe.dat` or `Gameexe.ini` and matches entries by input basename. The Gameexe path is optional; when omitted, the tool looks in the parent directory of the audio folder for `Gameexe.dat`, then falls back to the first nearby `Gameexe.*` file (preferring `Gameexe.ini`).
-
-The `Gameexe.dat` lookup uses the input path case-matching policy, so a file named `GAMEEXE.DAT` also takes priority on case-sensitive filesystems.
-
-If multiple `#BGM.*` rows point at the same physical file, the player keeps every candidate instead of letting the last row overwrite the others. It first prefers the row whose `#BGM` name matches the current basename exactly, then falls back to the first row for that file.
-
-It accepts `.nwa`, `.owp`, and plain `.ogg` input. `.nwa` files are decoded to temporary `.wav` data before playback. Playback builds an **ffplay** filter from the Gameexe sample points: when `start < repeat`, it plays `start` → `repeat` once and then loops `repeat` → `end`; when `start == repeat`, it loops `repeat` → `end`; when `start > repeat`, it plays `start` → `end` once and then loops back to `repeat` → `end`. If `end = -1` or `end` extends past the decoded audio length, playback treats EOF as the loop end.
-
-When the input is a directory, the player recursively scans `.nwa`/`.owp`/`.ogg` files, builds a playlist from files with matching `#BGM.*` entries, skips unmatched files with a diagnostic, and opens a full-screen terminal UI. The header shows the current file's full path, the status line reports whether playback is in the first pass, loop section, or paused state, and the bottom line still accepts typed commands.
-
-The player accepts `p` (pause/resume), `q` (stop), `h` (help), and in playlist mode also `b` (previous), `n` (next), `l` (recenter the playlist around the current track), `play N` (jump to a 1-based track index), `u` / `d` (scroll by one page), and `gg` / `G` (jump to the top or bottom). This mode is intended for BGM loop preview and does not support `.ovk`.
-
-Interactive commands must contain only ASCII characters. The track index `N` must be a positive integer written using digits `0`–`9` only. Track names and file paths support Unicode characters.
-
-Directory input for `-s --x` also recursively scans subdirectories and preserves the relative directory structure in the output. Existing output files are overwritten without confirmation. If multiple inputs or OVK entries in one batch map to the same output path under Windows filename case rules, the colliding write is rejected and reported as a failure. Other inputs continue processing, and the command returns failure if any input fails.
+```bash
+siglus-ssu -s --a /path/to/old/z0001.ovk /path/to/new/z0001.ovk
+siglus-ssu -s --play /path/to/BGM/
+```
 
 ---
 
 ### `-v` / `--video` — Work with `.omv` Video Files
 
-Provides tools for analyzing `.omv` structure, extracting the embedded Ogg payload (`.ogv`), and wrapping a Theora stream with a SiglusEngine header and page/frame indexes. These operations do not re-encode video or reconstruct colors and transparency.
-
-`-v --x` copies the entire Ogg payload, including any embedded audio streams. `-v --c` keeps only the first Theora video stream from its input; Vorbis, Opus, subtitles, and other streams are omitted from the generated `.omv`.
+Extracts Ogg video from OMV and wraps Theora video as OMV without re-encoding or converting colors/transparency. Extraction preserves embedded audio; creation keeps only the first Theora video stream and drops audio and other streams.
 
 #### Syntax
 
 ```
-# Extract .omv to .ogv (original compressed streams)
 siglus-ssu -v --x <input_dir | input_file.omv> <output_dir>
-
-# Analyze an .omv file (structural info)
 siglus-ssu -v --a <input_file.omv>
-
-# Wrap an .ogv into an .omv
 siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mode N] [--flags N]
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `--x` | **Extract** mode. Removes the wrapper and indexes, preserving the original Ogg payload without re-encoding or reconstructing its pixel layout. |
-| `--a` | **Analyze** mode. Prints detailed header information including outer header fields, TableA, and TableB frame metadata, plus parsed Theora stream info such as FPS, keyframe granule shift, pixel format, and frame size when available. |
-| `--c` | **Create** mode. Builds the `.omv` wrapper and indexes around an existing Theora stream. Its encoded planes must already match the selected mode. |
-| `--refer <ref.omv>` | Copies only `mode` and TableB `flags_hi24` from the reference. It does not copy the entire header or any reference streams. Explicit `--mode` and `--flags` override the corresponding reference values. |
-| `--mode N` | Sets the pixel interpretation mode at header offset `0x28`, without converting the encoded planes. Accepts decimal or `0x...` hex. Default without `--refer`: `2`. See the layouts below. |
-| `--flags N` | Overrides the high 24 bits of the TableB value read as `flags`; its low 8 bits are ignored by this option and generated from the keyframe marker. Use the original bit positions, such as `0x1A2B3C00`, or comma-separated frame ranges such as `0-9:0x1A2B3C00,10-:0x00000000`. Default without `--refer`: `0`. |
+| `--x` | Extract `.ogv`. Directory inputs are recursive and preserve subdirectories. |
+| `--a` | Show header, frame, and available Theora stream information. |
+| `--c` | Wrap a Theora stream whose encoded planes already match the selected mode. |
+| `--refer <ref.omv>` | Copy mode and per-frame flags from a reference; explicit `--mode` and `--flags` override them. No video data is copied. |
+| `--mode N` | Set pixel interpretation mode without converting pixels. Accepts decimal or hexadecimal; default `2` without a reference. |
+| `--flags N` | Set raw per-frame flags; normally leave at `0`. Use original bit positions such as `0x1A2B3C00`, or ranges such as `0-9:0x1A2B3C00,10-:0x00000000`. Low 8 bits are generated automatically. |
 
-In the official structure, those high 24 bits are alignment padding after the keyframe boolean. Normally leave them at `0`; this option preserves raw bytes for compatibility, rather than selecting color or transparency behavior.
+Creation treats its output as a directory if it exists as one, ends in a separator, or has no extension. Use a `.omv` extension for an explicit output file.
 
-Directory input for `-v --x` recursively scans for `.omv` files and preserves the relative directory structure in the output. For `-v --c`, the second argument is interpreted as a directory if it already exists as a directory, ends with a path separator, or has no extension; to write to a specific file, give an explicit path ending in `.omv`.
-
-Both `-v --x` and `-v --c` ask `Overwrite? [y/N]` before replacing an existing output. Only `y` or `yes` confirms the write, case-insensitively; an empty answer, unavailable standard input, or a cancelled prompt declines it. Creation then exits with failure. Batch extraction leaves that target unchanged, continues with the remaining files, and returns failure if any target was declined. If input and output refer to the same physical file, conversion is buffered until reading and conversion finish, so opening the output cannot prematurely truncate the input.
+Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. Declining returns failure; batch extraction continues with other files.
 
 #### Pixel Layouts and `.ogv` Inputs
 
-Use `-v --a` on the original `.omv` to inspect its mode, Theora pixel format, and dimensions. The standard SiglusEngine modes use three Theora 4:4:4 planes as follows:
+Inspect the original with `-v --a` and keep its mode when extracting. The Ogg file does not store the OMV mode. Standard modes use Theora 4:4:4 planes:
 
-| Mode | Plane contents | Required interpretation |
-|---|---|---|
-| `0` | B, G, R | Reorder as RGB; the image is opaque. |
-| `1` | B, G, R, each followed by an alpha segment | Reorder the color planes and concatenate the three alpha segments. |
-| `2` | Y, U, V | Convert full-range YUV to RGB using BT.601 coefficients. |
+| Mode | Layout |
+|---|---|
+| `0` | B, G, R planes; opaque. |
+| `1` | B, G, R planes, each followed by an alpha segment. |
+| `2` | Full-range BT.601 Y, U, V. |
 
-For mode `1`, a visible height of `H` requires a Theora picture height of `H + ceil(H / 3)`. In each plane, the first `H` rows hold color and the remaining segment holds up to `ceil(H / 3)` alpha rows. Concatenate the segments in plane order and take the first `H` rows as alpha. For example, a 1080-row image needs a Theora picture height of 1440.
+For mode `1`, visible height `H` needs Theora picture height `H + ceil(H / 3)`. The first `H` rows of each plane hold color. Concatenate the following alpha segments in plane order and take the first `H` rows as alpha. A 1080-row image needs a 1440-row encoded picture.
 
-Extraction preserves these plane contents, while the Ogg payload does not retain the outer OMV mode field. Keep the original `.omv` or record its mode. Ordinary players interpret the planes as YUV, so mode `0`/`1` needs color/alpha reconstruction before normal viewing or transcoding.
+Ordinary players treat planes as YUV, so mode `0`/`1` needs color/alpha reconstruction for normal viewing. Neither `--mode` nor `--refer` performs that conversion. Wrapping ordinary YUV video with a mode `0`/`1` reference produces an incorrect picture. Other numeric modes are accepted as metadata but are outside the standard layouts above.
 
-Inputs for `-v --c` should contain a video-only Theora stream whose planes already match the selected mode. `--mode` and `--refer` do not build BGR or packed-alpha planes. A normal YUV `.ogv` combined with a mode `0`/`1` reference will therefore produce an incorrect picture; mode `1` also derives the outer height as three quarters of the Theora picture height, rounded down. The CLI accepts other mode numbers as metadata overrides, but these are not defined by the standard modes above.
-
-For an ordinary opaque SDR video, use an FFmpeg build with `libtheora` to prepare a mode `2` input with full-range BT.601 YUV444:
+For ordinary opaque SDR video, prepare mode `2` using FFmpeg with `libtheora`:
 
 ```bash
 ffmpeg -i input_video -map 0:v:0 -an -vf "scale=out_range=full:out_color_matrix=bt601,format=yuv444p" -c:v libtheora -q:v 8 -color_range pc output.ogv
+siglus-ssu -v --c output.ogv output.omv --mode 2
 ```
 
-The filter converts the samples; `-color_range pc` keeps the encoder input at full range. Input range and matrix are inferred from the source, so correct missing or inaccurate source metadata with the scale filter's `in_range` / `in_color_matrix` options as needed. `-q:v 8` is an example quality setting. This command does not preserve audio or transparency and does not prepare a mode `0`/`1` layout.
+Correct missing or inaccurate input color metadata using the scale filter's `in_range` / `in_color_matrix` options. This example preserves neither audio nor transparency.
 
 #### Examples
 
 ```bash
-# Extract all .omv files in a directory to .ogv
 siglus-ssu -v --x /path/to/movie/ /path/to/ogv_out/
-
-# Analyze a single .omv
 siglus-ssu -v --a /path/to/op.omv
-
-# Repackage an .ogv whose pixel layout already matches the reference mode
-siglus-ssu -v --c /path/to/op_translated.ogv /path/to/op_translated.omv --refer /path/to/op_original.omv
-
-# Wrap the mode 2 Theora stream prepared above
-siglus-ssu -v --c /path/to/output.ogv /path/to/output.omv --mode 2
+siglus-ssu -v --c /path/to/translated.ogv /path/to/translated.omv --refer /path/to/original.omv
 ```
 
 ---
 
 ### `-p` / `--patch` — Patch `SiglusEngine.exe`
 
-Patch mode modifies selected binary values inside `SiglusEngine.exe`.
+Changes engine keys, language settings, or region detection. By default, writes a new executable; `--inplace` overwrites the original.
 
 #### Syntax
 
@@ -1375,30 +851,24 @@ siglus-ssu -p --info <input_exe>
 siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 ```
 
-#### Parameters
-
 | Parameter | Description |
 |---|---|
-| `<input_exe>` | Path to `SiglusEngine.exe` to patch. Symbolic links are rejected; pass the real executable path. |
-| `<input_key>` | **(`--altkey` only)** Source for the new 16-byte key. Accepts a file path to `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck`; a `key=bytes` literal; or an `angou=text` literal. Directories are not accepted. This positional form is only valid with `--altkey`. |
-| `-o`, `--output` | Output executable path. Defaults to `<stem>_alt.exe`, `<stem>_CJK.exe`, `<stem>_CJKPATH.exe`, `<stem>_LOC0.exe`, or `<stem>_LOC1.exe`. A JSON file uses `<stem>_<CONFIG>.exe`, where `<CONFIG>` is the JSON filename stem with characters outside ASCII letters, digits, `_`, and `-` removed, then uppercased; an empty stem or an inline JSON object uses `JSON`. `--revert` defaults to `<stem>_ORIGINAL.exe`. An existing symbolic-link output is rejected. |
-| `--inplace` | Overwrite the input executable directly. Cannot be combined with `-o` / `--output`. |
-| `--allow-partial` | Only for `--lang`. Write the available changes even when the current engine build lacks part of the selected preset. By default every preset component is required. |
-| `--lang cjk` | Patch font charset, locale, and `system.get_language` for CJK display while keeping `Gameexe.dat`, `Scene.pck`, and `savedata` paths unchanged. |
-| `--lang cjk-path` | Same as `cjk`, and retarget active path references to `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
-| `--lang config.json` | Apply a complete six-field language configuration from a JSON file, or pass the JSON object directly as one quoted argument. |
-| `--revert` | With `--lang` only, restore the byte-identical original executable using the configuration and undo data embedded by a language patch. Cannot be combined with `--allow-partial`. |
-| `--info` | Print patchable `ALTKEY`, `LANG`, and `LOC` information and exit without writing a file. |
-| `--loc 0` | Disable region detection by replacing the matched top-level check routine with an always-pass stub. |
-| `--loc 1` | Re-enable region detection only for executables previously disabled by this tool's function-stub patch. |
+| `<input_exe>` | Engine executable. Symbolic-link input and output paths are rejected. |
+| `<input_key>` | For `--altkey`: a `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck` file, or a `key=bytes` / `angou=text` literal. Directories are not accepted. |
+| `-o`, `--output` | Choose the output executable. Defaults use `_alt.exe`, `_CJK.exe`, `_CJKPATH.exe`, `_LOC0.exe`, or `_LOC1.exe`; JSON uses `_<CONFIG>.exe` and reverting uses `_ORIGINAL.exe`. |
+| `--inplace` | Overwrite the input; cannot be combined with `-o`. |
+| `--lang cjk` | Set CJK font charset, locale `chinese`, and language code `zh`, keeping game file/save paths unchanged. |
+| `--lang cjk-path` | Apply `cjk` and use `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
+| `--lang config.json` | Apply all six fields from a JSON file, or one quoted inline JSON object. |
+| `--allow-partial` | Apply supported parts of a language preset even if some components are unavailable. Otherwise all components are required before any output is written. |
+| `--revert` | Restore the byte-identical original from a previous language patch. Requires `--lang`; cannot be combined with `--allow-partial`. |
+| `--info` | Inspect patchable key, language, and region settings without writing. |
+| `--loc 0` | Disable region detection. |
+| `--loc 1` | Restore region detection previously disabled by this tool. |
 
-#### Language Presets
+#### Language Configuration
 
-`--lang cjk` changes Japanese/CJK charset compare slots to `0x86`, relocates the active locale string to `chinese`, and relocates the active language code string to `zh`.
-
-`--lang cjk-path` performs the same changes, writes the official ZH path strings into a dedicated read-only PE section, and repoints active references to them. The normalized configuration and exact undo data are stored in an unmapped EOF overlay.
-
-JSON configurations contain exactly `pck`, `gameexe`, `save`, `charset`, `locale`, and `language_code`. All six fields are required. A language-patched executable can be converted to another configuration directly; the patcher restores the original image in memory before applying the target configuration.
+JSON requires all six fields:
 
 ```json
 {
@@ -1411,71 +881,26 @@ JSON configurations contain exactly `pck`, `gameexe`, `save`, `charset`, `locale
 }
 ```
 
-Language presets are complete transactions by default: every required charset, locale, language-code, and selected path component must be patchable or already have the target value. Unsupported builds report missing components without writing output. Successful output is written through a temporary file and atomically replaced; use `--allow-partial` only when retaining the available subset is intentional.
-
-#### Charset Slots
-
-`--info` reports verified `ENUMLOGFONT` charset-filter loops. Detection accepts different base registers and requires the `lfCharSet` offset, the `0x11C` record stride, and the loop back edge, so unrelated zero-valued structure flags are not treated as charset slots. The common values are:
-
-- `0x00` (`ANSI_CHARSET`): ANSI font search.
-- `0x80` (`SHIFTJIS_CHARSET`): Shift-JIS font search.
-- `0x86` (`GB2312_CHARSET`): GB2312 font search.
-
-The CJK presets patch only recognized Japanese/CJK slots. If no such slot is present, strict mode reports the charset component as missing instead of guessing another slot.
+An already language-patched engine can be patched directly to another configuration. For `charset`, common values are `0` (ANSI), `128` (Shift-JIS), and `134` (GB2312). CJK presets use `134` for recognized Japanese/CJK font slots; unsupported builds fail unless `--allow-partial` is selected.
 
 #### Examples
 
 ```bash
-siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/SiglusEngine_patched.exe
-siglus-ssu -p --lang cjk /path/to/SiglusEngine.exe
-siglus-ssu -p --lang cjk-path /path/to/SiglusEngine.exe --inplace
+siglus-ssu -p --info /path/to/SiglusEngine.exe
+siglus-ssu -p --altkey /path/to/SiglusEngine.exe /path/to/key.txt -o /path/to/patched.exe
+siglus-ssu -p --lang cjk-path /path/to/SiglusEngine.exe
 siglus-ssu -p --lang config.json /path/to/SiglusEngine.exe
 siglus-ssu -p --lang config.json --revert /path/to/SiglusEngine_CONFIG.exe
-siglus-ssu -p --info /path/to/SiglusEngine.exe
 siglus-ssu -p --loc 0 /path/to/SiglusEngine.exe
-siglus-ssu -p --loc 1 /path/to/SiglusEngine.exe --inplace
-```
-
-#### Output
-
-```
-Input : /path/to/SiglusEngine.exe
-Mode  : lang:cjk-path
-SHA256(before): abc123...
-SHA256(after) : def456...
-Applied changes: N bytes
- - LANG charset: jp/shift-jis -> chs/gbk (1 bytes)
- - LANG string SceneZH.pck (N bytes)
- - LANG Scene: Scene.pck -> SceneZH.pck (N bytes)
-Written: /path/to/SiglusEngine_CJKPATH.exe
-```
-
-`--info` prints active code-referenced language/path slots:
-
-```
-Input : /path/to/SiglusEngine.exe
-SHA256: abc123...
-ALTKEY: 0xAA, 0xBB, ...
-LANG charset1: 0x201BC8=0x00 (eng/ansi)
-LANG charset2: 0x2BE1D3=0x80 (jp/shift-jis)
-LANG presets: cjk, cjk-path, JSON
-LANG Locale : japanese @ 0x677C94 refs=1
-LANG Code   : ja @ 0x64FC6C refs=3
-LANG Scene  : Scene.pck @ 0x66D208 refs=2
-LANG Save   : savedata @ 0x66D814 refs=1
-LANG Gameexe: Gameexe.dat @ 0x672C4C refs=1
-LOC   : enabled (original function, func=0x22BF20)
 ```
 
 ---
 
 ### `test` — Round-Trip Compile Test
 
-Tests whether one `.pck` file, or all `.pck` files directly under a directory, can be extracted and compiled back. A byte-identical `.pck` rebuild is `EXACT`; a different `.pck` with unchanged normalized scene payload semantics is `PAYLOAD_SAME`.
+Extracts and rebuilds one PCK or all immediate `.pck` files in a directory, then checks byte identity or normalized payload equality. Directory inputs are processed sequentially, continuing after failures. Temporary files are removed afterward.
 
-By default, this mode recompiles embedded original `.ss` sources. A `.pck` that does not declare an OS section is skipped. A declared OS section that is missing, unreadable, or contains no `.ss` files fails the test.
-
-With `--decompile`, the command reconstructs scripts from compiled scenes and package metadata, recompiles only `decompiled/`, and compares normalized payloads. An explicit global `--const-profile N` is required and applies to decompilation, compilation, and comparison. Only that profile is tested, with strict UTF-8 source decoding and no profile retry or `--charset utf8 --allow-invalid` fallback. Embedded original sources are not required or used to reconstruct scripts.
+By default, the command uses embedded original sources. PCKs with no declared source section are skipped; a declared but unreadable or empty source section fails.
 
 #### Syntax
 
@@ -1484,121 +909,61 @@ siglus-ssu [--const-profile N] test [--allow-invalid] [--serial] [--report-json 
 siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
-`--serial` disables parallel compilation during the rebuild step. Rebuilds are parallel by default.
+| Option | Description |
+|---|---|
+| `--decompile` | Reconstruct source without using embedded sources, rebuild it, and compare payloads. Requires an explicit global profile; uses strict UTF-8 without retries. |
+| `--allow-invalid` | With an explicit profile in embedded-source mode, compile as UTF-8 with replacement for invalid bytes. Not accepted with `--decompile`. |
+| `--serial` | Disable parallel compilation during rebuilds. |
+| `--report-json FILE` | Write results and timings as JSON. Cannot overwrite an input PCK. |
 
-Directory tests process all `.pck` files sequentially and collect results after individual failures. An explicit global `--const-profile N` selects one attempt per input, without profile or charset fallback. Without an explicit profile, embedded-source tests keep the automatic search starting at profile `0`.
+An explicit `--const-profile` makes one attempt with that profile and normal encoding detection, unless `--allow-invalid` is supplied. Without an explicit profile, embedded-source tests try profiles `0`–`10`, then retry with UTF-8 replacement if needed. An explicit string multiplier applies to all attempts.
 
-`test --allow-invalid` requires an explicit `--const-profile` and embedded-source mode. It passes `--charset utf8 --allow-invalid` to the compiler, replacing invalid input bytes during UTF-8 decoding. Without this option, the selected profile uses normal source decoding. Decompile tests reject `--allow-invalid` and always decode reconstructed sources as strict UTF-8.
+#### Results
 
-`--report-json FILE` writes a top-level `decompile` flag and a `results` list. Each result contains `path`, `status`, `detail`, `elapsed`, `timings`, `profile`, and `allow_invalid`. The `profile` and `allow_invalid` fields are `null` for failed or skipped files. A successful `allow_invalid` value records whether replacement decoding was used. The report path must not refer to an input `.pck`.
+| Status | Meaning |
+|---|---|
+| `EXACT` | Rebuilt PCK is byte-identical. |
+| `PAYLOAD_SAME` | Normalized payloads match. Decompile-mode success always uses this status. |
+| `FAIL` | Rebuild failed or payloads differ, including `text_only` or incomplete results. |
+| `SKIP` | No embedded sources declared in embedded-source mode. |
 
-#### Workflow
+The command exits with `0` if at least one file passes and none fail; any failure or an all-skipped run returns `1`. The summary includes timings and failed files.
 
-For each `.pck`, the embedded-source test without an explicit profile:
-
-1. analyzes the header and checks whether `original_source_header_size` indicates an OS section;
-2. extracts the archive into a temporary test directory;
-3. recompiles the extracted source in place, trying `const-profile` 0 through 10 in order until one profile produces `EXACT` or `PAYLOAD_SAME`; if all profiles fail, retries the same profiles in order with `--charset utf8 --allow-invalid`; each attempt uses that profile's compiler rules and default string multiplier unless the multiplier was explicitly overridden;
-4. checks whether the rebuilt `.pck` is byte-identical to the original `.pck`, and otherwise compares them with normalized `-a --payload` semantics;
-5. removes all temporary test files.
-
-With `--decompile`, the command analyzes the PCK, reconstructs scripts under the required profile, recompiles them under the same profile, compares payloads even when the rebuilt bytes are identical, and removes temporary files. Recompilation uses `--charset utf8 --no-lzss` to skip scene compression and original-source generation. Success is always `PAYLOAD_SAME`. Missing scenes, `text_only`, `real_diff`, unavailable payloads, and incomplete disassembly fail the test. A missing OS section does not cause a skip.
-
-#### Output
-
-Step log lines report status only. In the default embedded-source test, a completed file is `EXACT` when the original and rebuilt `.pck` bytes match exactly, or `PAYLOAD_SAME` when the bytes differ but the normalized payload comparison succeeds. `PASS` is not a result category. The `total` line and final summary include timings for `analyze`, `extract`, `compile`, `payload`, and `cleanup` when those steps run. The `compile` and `payload` timings include all executed attempts; an explicit profile runs only once. Logs identify attempts using `--charset utf8 --allow-invalid`; this retry does not relax the comparison criteria.
-
-In automatic embedded-source tests, compile errors are kept quiet while attempts remain in either round. If neither round produces a matching rebuild, the file is marked as `FAIL`: the command reports the closest payload comparison, or the captured compile output if no attempt reached comparison.
-
-Decompile tests include a `decompile` timing in place of `extract` and report decompilation, compilation, or payload errors for the selected profile without retrying.
-
-The final summary reports total counts, and lists only failed files with their total time and step timings.
-
-The command exits with `0` when at least one file is `EXACT` or `PAYLOAD_SAME` and no file fails. It exits with `1` when any file fails, or when all discovered files are skipped.
-
-#### Example
+JSON contains a `decompile` flag and `results`. Each result has `path`, `status`, `detail`, `elapsed`, `timings`, `profile`, and `allow_invalid`; the last two are `null` for failed or skipped files.
 
 ```bash
 siglus-ssu test /path/to/Scene.pck
-siglus-ssu test /path/to/pck_dir/
-siglus-ssu test --report-json /path/to/profiles.json /path/to/pck_dir/
+siglus-ssu test --report-json /path/to/results.json /path/to/pck_dir/
 siglus-ssu --const-profile 2 test --allow-invalid /path/to/Scene.pck
 siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 ```
 
 <a id="siglusss-language-spec"></a>
 
-## SiglusSceneScript Language Specification (SiglusSS; as Defined by `-c`)
+## SiglusSceneScript Language Reference
 
-This section treats the current `siglus-ssu -c` compiler as the normative definition of the **SiglusSceneScript language** (abbreviated **SiglusSS language**), rather than as an implementation note. Unless stated otherwise, “shall”, “shall not”, and “may” are used in their normative sense.
+These rules describe source accepted by `siglus-ssu -c`. The selected profile supplies available types (`form`), built-in properties and commands, and profile-specific constraints.
 
-The specification in this section covers the front-end and directory-level link constraints for `.ss` source files together with same-directory `.inc` files under a given `const.py` and `--const-profile`. `const.py` / `--const-profile` affect:
+### Source Files
 
-- the set of available form names;
-- the built-in property / command set;
-- certain extra profile-dependent static restrictions.
+Each scene uses its `.ss` file and all same-directory `.inc` files. Includes are processed in ASCII-lowercased filename order.
 
-They do **not** change the core character preprocessing, lexical structure, scene grammar skeleton, or most static rules given here.
+Source encoding is detected per file or selected with `--charset`. Invalid bytes fail unless `--allow-invalid` is enabled. Compilation ignores bytes after the first DOS EOF character (U+001A), removes one leading BOM, and normalizes CRLF/lone CR to LF. No Unicode normalization is performed.
 
-### Conformance principle
+### Processing Order
 
-An implementation conforming to the current compiler shall, under the same `const-profile`, `.inc` set, input directory, and conditions:
+1. Load same-directory `.inc` declarations.
+2. Remove scene comments, fold ASCII case, process conditional directives, and collect `#inc_start ... #inc_end` regions.
+3. Process those local declarations and expand replacements in scene text.
+4. Check scene syntax/types and directory-level command definitions, then build the PCK.
 
-1. accept and reject the same translation units as the current compiler;
-2. resolve names, labels, z-labels, properties, commands, and expression forms in the same way;
-3. apply the same directory-level linker judgments for uniqueness and completeness of global `.inc #command` implementations;
-4. reproduce the implementation quirks explicitly documented here, because they are already part of the current language definition.
-
-### Terms and translation environment
-
-#### Source-file set
-
-A single `.ss` file is not compiled in isolation. Its compilation environment consists of:
-
-- the current `.ss` file;
-- all `.inc` files in the same directory;
-- the form and built-in element tables supplied by the active `const.py` / `--const-profile`.
-
-Same-directory `.inc` files are processed in **ASCII-lowercased filename sort order**.
-
-#### Decoding and line endings
-
-`-c` first decodes each source file up to its first U+001A (DOS EOF), according to the source encoding selected by `--charset` or auto-detected by the compiler. Decoding is strict unless `--allow-invalid` is enabled, which replaces invalid byte sequences with U+FFFD; when neither UTF-8 nor CP932 passes strict auto-detection, this option uses UTF-8 replacement. Bytes after DOS EOF are ignored for compilation. One leading Unicode BOM is removed, CRLF and lone CR line endings are normalized to `\n`, and no NFC/NFKC or other Unicode normalization is performed. The CA stage also removes any remaining `\r` before character-level processing. The remaining rules of the SiglusSS language are therefore defined over this normalized LF text stream and do not depend on the original byte encoding.
-
-#### Normative terms
-
-- **scene text**: the part of a `.ss` file that is parsed by the ordinary scene grammar, excluding `#inc_start ... #inc_end` regions;
-- **scene-local inc region**: the text between `#inc_start` and `#inc_end` inside a `.ss` file, parsed by the `.inc` declaration language;
-- **global `.inc` environment**: the declaration, replacement, and name-set environment produced by all same-directory `.inc` files;
-- **well-formed program**: a program accepted by the complete front-end and link constraints defined here.
-
-### Translation phases
-
-For a single `.ss` translation unit, the current compiler can be normalized as follows:
-
-1. read and decode the source text;
-2. normalize CRLF / lone CR line endings to `\n`, and remove any remaining `\r`;
-3. apply character-level processing to the scene source: comment removal, ASCII upper-case folding outside literals and comments, `#ifdef` / `#elseifdef` / `#else` / `#endif` handling, and extraction of `#inc_start ... #inc_end` regions;
-4. analyze the extracted scene-local inc regions as `.inc` text with parent form = `scene`;
-5. merge the declarations and replacement environment produced by step 4 into the current file environment;
-6. perform replacement expansion on the scene text;
-7. run lexical analysis (LA), syntax analysis (SA), semantic analysis (MA), and bytecode generation (BS) on the expanded scene text;
-8. when `-c` compiles a whole directory, run the directory-level linker checks after all scene front-end phases finish.
-
-Two consequences are normative:
-
-- scene-level `#ifdef` / `#elseifdef` / `#else` / `#endif` run **before** scene-local inc declarations are analyzed; therefore scene-level conditional compilation cannot see names that are only declared later inside `#inc_start ... #inc_end` in the same `.ss` file;
-- passing the front-end for each `.ss` file is necessary but does not establish whole-directory validity; directory-level linker constraints must also pass.
+Scene-level conditions run before local include declarations, so they cannot see names declared in those regions. Every global `.inc #command` must have exactly one implementation in the directory, even when each scene otherwise compiles successfully.
 
 ### Character-level processing
 
 #### Case folding
 
-Outside string literals, character literals, and comments, ASCII `A` through `Z` are folded to lower case before further processing. Therefore:
-
-- ASCII keywords are case-insensitive;
-- ASCII identifiers, labels, and directive names are case-insensitive;
-- non-ASCII characters are not case-folded by this step.
+ASCII keywords, identifiers, labels, and directive names are case-insensitive. `A`–`Z` are lowercased outside strings, character literals, and comments; non-ASCII characters are unchanged.
 
 #### Comments
 
@@ -1608,9 +973,9 @@ Both scene text and `.inc` text accept these comment forms:
 - `//` to end of line;
 - `/* ... */` block comments.
 
-`/* ... */` does not nest. An unterminated block comment is ill-formed. Comment openers inside single-quoted and double-quoted literals are ignored.
+`/* ... */` does not nest. An unterminated block comment is invalid. Comment openers inside single-quoted and double-quoted literals are ignored.
 
-For compatibility with the official compiler, block comment delimiters in scene text, `.inc`, and `Gameexe.ini` may share one `*`, so `/*/` is a closed empty comment. In `/*/text*/`, `text*/` remains outside the comment; write `/* text */` to comment out the text. This rule is identical across platforms and the Python and Rust compile backends.
+In scene files, `.inc`, and `Gameexe.ini`, delimiters may share a `*`: `/*/` is a closed empty comment. In `/*/text*/`, `text*/` remains outside the comment. Use `/* text */` to comment out text.
 
 #### Conditional compilation
 
@@ -1623,15 +988,12 @@ Both scene text and `.inc` text support:
 #endif
 ```
 
-The rules are:
+1. `#ifdef` and `#elseifdef` test name existence, not numeric truth.
+2. Nesting is limited to 15 levels. Unmatched or unclosed directives are errors.
+3. A tested name may start with an ASCII letter, CP932 double-byte character, `_`, or `@`; later characters may also be digits.
+4. Only the innermost condition controls text inclusion. Nested conditions do not inherit an enclosing false state.
 
-1. `#ifdef` and `#elseifdef` test whether the name belongs to the current `name_set`; they do not evaluate a numeric truth value;
-2. the maximum nesting depth is 15; entering depth 16 is an error;
-3. unmatched `#else`, `#elseifdef`, and `#endif`, and an unterminated `#ifdef`, are ill-formed;
-4. `<word>` is not parsed by the ordinary scene identifier rule but by a wider `word-ex` rule: the first character may be an ASCII letter, a fullwidth/double-byte character, `_`, or `@`, and later characters may additionally include digits;
-5. for compatibility with the official Siglus compiler, nested conditions do not inherit exclusion from enclosing conditions. Each level records only its own name test, and character emission checks only the innermost level. `#elseifdef` and `#else` likewise update only their current level.
-
-For example:
+For example, if `inner_present` exists but `outer_missing` does not, `kept` is included:
 
 ```text
 #ifdef outer_missing
@@ -1641,16 +1003,9 @@ kept
 #endif
 ```
 
-If `outer_missing` is absent but `inner_present` belongs to `name_set`, `kept` remains in the processed text. This differs from conventional preprocessor semantics but is normative official-compatibility behavior. A compatible implementation must preserve it rather than combine the inner state with the enclosing false state.
-
 #### `#inc_start` / `#inc_end`
 
-These directives exist only during scene-file character processing. Their rules are:
-
-1. `#inc_start` begins collection of a scene-local inc region;
-2. `#inc_end` ends that region;
-3. the current implementation treats this as a Boolean state rather than a nesting counter, so nested `#inc_start` blocks are **not supported**;
-4. an unmatched `#inc_end` or an unterminated `#inc_start` is ill-formed.
+Use `#inc_start` and `#inc_end` to place local `.inc` declarations inside a scene file. Blocks cannot nest. Unmatched or unclosed blocks are errors.
 
 #### Source metadata comment
 
@@ -1660,19 +1015,13 @@ If the first line after source decoding begins with this exact text prefix:
 // #SCENE_SCRIPT_ID = dddd
 ```
 
-where `dddd` is a four-digit decimal number, the compiler records those four digits as scene metadata; any later text on that first line is ignored for this metadata read. It does not alter the core grammar or static semantics, but it is part of the accepted source format.
+`dddd` is four decimal digits recorded as scene metadata. Later text on the first line is ignored for this ID.
 
 ### Lexical structure
 
 #### White space and newlines
 
-White-space characters are:
-
-- space;
-- TAB;
-- newline.
-
-A newline is not a statement terminator. The SiglusSS language has no semicolon statement terminator.
+Whitespace consists of spaces, tabs, and newlines. A newline does not terminate a statement. Semicolons start comments, not statement terminators.
 
 #### Identifiers
 
@@ -1703,12 +1052,10 @@ label-token ::= "#" { "_" | ascii-letter | digit }
 z-label-token ::= "#z" digit [digit [digit]]
 ```
 
-Normatively:
-
-1. an ordinary label may be empty at the lexical level, so a lone `#` still tokenizes as an ordinary label;
-2. a z-label shall be spelled exactly `#z` followed by 1 to 3 decimal digits, and its numeric value shall be below the active `TNM_Z_LABEL_CNT`: `100` for profiles `7` and `8`, `1000` for all other profiles;
-3. `#z0`, `#z00`, and `#z000` are all z-labels; `#z1234` is not; in profiles `7` and `8`, `#z100` through `#z999` are ordinary labels;
-4. redefinition, missing definitions, and the mandatory presence of `#z0` are enforced later.
+- A lone `#` is accepted as an ordinary label.
+- Z-labels use 1–3 ASCII digits. Profiles `7` and `8` accept values below `100`; other profiles accept values below `1000`.
+- `#z0`, `#z00`, and `#z000` name the same numeric label. `#z1234`, and `#z100`–`#z999` in profiles `7`/`8`, are ordinary labels.
+- Labels must be uniquely defined and all references must resolve. Every scene needs `#z0`.
 
 #### Integer literals
 
@@ -1720,12 +1067,7 @@ binary  ::= "0b" { "0" | "1" }
 hex     ::= "0x" { hex-digit }
 ```
 
-Their semantics are:
-
-1. they are accumulated as **signed 32-bit integers** during lexing;
-2. overflow wraps as `i32`;
-3. the minus sign is not part of the literal; it is a unary operator.
-4. a bare `0b` or `0x` is accepted and yields `0`.
+Integers are signed 32-bit values with wrapping overflow. The minus sign is a unary operator. Bare `0b` and `0x` are accepted as zero.
 
 #### Character and string literals
 
@@ -1735,18 +1077,18 @@ Single-quoted and double-quoted literals may not cross a physical line. The only
 - `\n`
 - `\'` inside single-quoted literals, or `\"` inside double-quoted literals
 
-In double-quoted literals, `\n` becomes a newline. In single-quoted literals, the current lexer accepts `'\n'` but yields the character `n`, not a line feed; this quirk is normative. A single-quoted literal shall yield **exactly one character** according to that lexer rule; otherwise it is ill-formed. A character literal lexes as `VAL_INT`. A double-quoted literal lexes as `VAL_STR`.
+In double quotes, `\n` becomes a newline. In single quotes, `'\n'` yields the character `n`. A single-quoted literal must produce exactly one character and has integer type; a double-quoted literal has string type.
 
 #### Fullwidth / double-byte bare strings
 
-Any consecutive run of characters that `is_zen()` classifies as a two-byte character in Windows CP932, excluding `【` and `】`, lexes directly as `VAL_STR`. This matches the official compiler's Japanese-locale multibyte conversion rule. Therefore both of the following produce string tokens:
+Runs of Windows CP932 double-byte characters, excluding `【` and `】`, can be written as unquoted strings:
 
 ```text
 "こんにちは"
 こんにちは
 ```
 
-This is also why speaker-name brackets such as `【角色名】` and bare dialogue lines work without quotes.
+Non-ASCII characters outside that set need quotes, even in UTF-8 source. Speaker names can use `【名前】`.
 
 #### Delimiters and operators
 
@@ -1782,7 +1124,7 @@ Profile `7` treats `&&` and `||` as the same precedence level, evaluated left to
 
 ### The `.inc` declaration language
 
-Global `.inc` files and scene-local inc regions share the same declaration language. After comment removal and case folding, they shall consist only of white space and the following declarations:
+Global `.inc` files and scene-local include regions accept the same declarations:
 
 ```text
 inc-unit ::= { inc-decl }
@@ -1795,17 +1137,14 @@ inc-decl ::= replace-decl
            | expand-decl
 ```
 
-#### Name-extraction rules
+#### Declaration Names
 
-Names in `.inc` are not extracted by one universal identifier rule. Instead:
-
-- `#replace` / `#define` names stop at space, TAB, or newline;
-- `#define_s` names stop at TAB or newline, so they **may contain spaces**;
-- `#property` names stop at space, colon, TAB, or newline;
-- `#command` names stop at space, `(`, colon, TAB, or newline;
-- `.inc #property` and `#command` names may therefore exceed the ordinary scene identifier character set;
-- macro names must begin with `@`;
-- all of these declarations share one `name_set`: redeclaring an existing name is ill-formed, and every successful declaration immediately inserts its name into `name_set`, thereby affecting later `#ifdef` / `#elseifdef` decisions.
+- `#replace` / `#define` names end at space, tab, or newline.
+- `#define_s` names end at tab or newline and may contain spaces.
+- `#property` names also end at `:`; `#command` names also end at `(` or `:`.
+- Property and command names may use characters outside the ordinary scene identifier set.
+- Macro names must begin with `@`.
+- All declarations share one namespace. Duplicate names fail; successful declarations immediately affect later `#ifdef` / `#elseifdef` tests.
 
 #### `#replace`, `#define`, and `#define_s`
 
@@ -1824,17 +1163,9 @@ define-s-decl  ::= "#define_s" name-s replacement-text
 5. `##` denotes a literal `#`;
 6. nested `#ifdef` / `#elseifdef` / `#else` / `#endif` are allowed inside it.
 
-Expansion semantics are:
+`#replace` inserts its text without immediately expanding the inserted result again. `#define` and `#define_s` immediately rescan their result for further replacement.
 
-- `#replace`: after replacement, the scan position advances to the end of the inserted text, so the inserted text is not immediately rescanned at that same position;
-- `#define` and `#define_s`: after replacement, the scan position remains at the original position, so the inserted text is immediately eligible for further expansion.
-
-The replacement system also has two normative details:
-
-1. within a single replacement tree, matching uses **longest-prefix search**;
-2. when the default replacement tree and a temporary added tree both match at the same position, the current implementation chooses the candidate whose `name` field is lexicographically larger, not by declaration order or by a global cross-tree longest-match rule; a conforming implementation shall reproduce this behavior.
-
-Ordinary text, macro arguments (including defaults), and macro bodies share expansion limits that stop the current expansion with an error. The limits are described below.
+The longest matching name wins within the ordinary definitions or macro parameters. If both groups match, the lexicographically larger candidate name wins. Declaration order does not determine priority.
 
 #### `#macro`
 
@@ -1844,22 +1175,15 @@ macro-name ::= "@" <non-space-sequence>
 macro-param ::= param-name ["(" default-text ")"]
 ```
 
-Rules:
+- Macros substitute text. Arguments and defaults are expanded before substitution.
+- Parentheses, when present, must contain at least one parameter; empty `()` is rejected.
+- Argument splitting respects nested parentheses and quoted literals.
+- The body expands with its parameter values, and the inserted result is not immediately rescanned.
+- Repeated parameter names use the first occurrence's argument/default. Later occurrences still count as parameters and their values are expanded.
 
-1. a macro is a textual substitution, not a semantic call;
-2. actual arguments and defaults are handled as raw text, then textually expanded under the current replacement environment before substitution;
-3. if parentheses are present, the parameter list shall be non-empty; empty `()` is rejected;
-4. argument splitting is parenthesis-depth aware, and commas or parentheses inside string and character literals do not participate in outer-level splitting;
-5. the macro body is expanded with a temporary replacement tree for the macro parameters; after the final result is inserted, scanning advances past that inserted result, so it is not immediately rescanned at the same position.
-6. repeated parameter names use the actual argument or default bound to the first occurrence. Later occurrences still count toward the argument list and their values are expanded.
+**Expansion limits:** Macro nesting is limited to **128 levels**. Text, argument, and body expansion stops after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. Include `#expand` processing applies the same rule in declaration steps. These are progress limits, not limits on total macros or declarations in a file.
 
-**Expansion limits:** Both frontends stop the current analysis with an error when any of these limits is exceeded:
-
-- Each text expansion, macro argument (including a default), or macro body reports an expansion-limit error after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. The counter resets at each new minimum; this is not a limit on the total number of replacements in a file. Reaching this threshold suggests possible cyclic expansion; it does not prove an infinite loop.
-- Macro expansion may nest at most **128 levels**.
-- Include parsing applies the same progress rule to reinserted `#expand` text: more than **10000 consecutive declarations** without a new minimum remaining-text length stops analysis. This is not a limit on the total number of declarations or expanded characters.
-
-These limits apply to both compile backends, including `--legacy`, `--legacy-full`, and pure-Python installations, and to LSP analysis. Exceeding a limit returns a compile error or LSP diagnostic. Correct the definitions or reduce the expansion before retrying.
+Exceeding a limit fails compilation or LSP analysis. Correct cyclic definitions or reduce expansion depth before retrying.
 
 #### `#property`
 
@@ -1882,14 +1206,11 @@ inc-arg ::= form-name ["(" default-literal ")"]
 default-literal ::= signed-int-literal | double-quoted-string
 ```
 
-Rules:
-
-1. the default return form is `int`;
-2. `.inc #command` parameters carry forms and defaults only; they do not carry parameter names;
-3. if parentheses are present, the parameter list shall be non-empty; empty `()` is rejected;
-4. once one parameter has a default, every later parameter shall also have a default;
-5. the syntax allows `int` and `str` defaults;
-6. however, the current BS stage auto-fills omitted defaults only for remaining `int` parameters. Omitting a later string default still causes a BS-stage error, and this limitation is therefore part of the present language definition.
+- Default return form: `int`.
+- Parameters specify forms and defaults, without names.
+- Parentheses, when present, must contain at least one parameter.
+- Every parameter after the first default must also have a default.
+- `int` and `str` defaults are accepted, but only integer defaults can be omitted at calls. Omitted string defaults cause compilation failure.
 
 #### `#expand`
 
@@ -1897,7 +1218,7 @@ Rules:
 expand-decl ::= "#expand" replacement-text
 ```
 
-`#expand` immediately expands its text under the current replacement environment and inserts the expanded result back into the current `.inc` source, after which `.inc` declaration analysis continues from the insertion point.
+`#expand` immediately expands its text and processes the result as `.inc` declarations.
 
 ### Scene grammar
 
@@ -1961,7 +1282,7 @@ label-target ::= label-token | z-label-token
 assign-op ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>="
 ```
 
-Particular points to preserve:
+Rules:
 
 1. `switch` / `case` / `default` use **no colon**; `case(exp)` is followed directly by a sentence sequence;
 2. the three `for` clauses are separated by commas, not semicolons;
@@ -1984,9 +1305,9 @@ Supplementary rules:
 
 1. `form-name` shall be present in the active form table;
 2. named and positional arguments may be mixed syntactically; after parsing, named arguments are moved to the tail of the argument sequence while preserving the relative order within the positional and named subsets;
-3. `form[exp]` in scene `property` and `command` parameter declarations only requires the index expression to have form `int`; unlike `.inc #property`, the current implementation does not preserve that size as true array metadata for call-local properties.
+3. `form[exp]` in scene `property` and `command` parameter declarations requires an `int` expression but does not give call-local properties a fixed array size as `.inc #property` does.
 
-The `[exp]` following a `command` return form is not semantically analyzed and generates no runtime evaluation code; `form-name` still determines the return form. This matches the official compiler.
+A bracketed expression after a `command` return type is ignored. The return type is determined by `form-name`.
 
 #### Expressions
 
@@ -2026,11 +1347,11 @@ where:
 - `scene` is the current scene namespace;
 - `global` includes global `.inc` declarations together with profile-supplied built-ins.
 
-Further resolution of a chain such as `a.b[c].d(...)` depends on the form of the preceding segment. The reachable member set is therefore parameterized by the current form table.
+Available members in a chain such as `a.b[c].d(...)` depend on the preceding segment's type and the selected profile.
 
 #### Reference forms for properties
 
-When an element chain resolves to a property, its expression form is promoted to a reference form:
+Property expressions use the corresponding reference type:
 
 - `int` -> `intref`
 - `str` -> `strref`
@@ -2039,28 +1360,19 @@ When an element chain resolves to a property, its expression form is promoted to
 
 Therefore the left-hand side of an assignment shall be an element expression that resolves to a reference form.
 
-#### Special fallback from unresolved bare name to string
+#### Unresolved Names as Strings
 
-If a simple expression satisfies all of the following:
-
-1. it is an `elm-exp` containing exactly **one segment**;
-2. that segment has no argument list;
-3. name lookup fails;
-4. the name contains neither `@` nor `$`;
-
-then the compiler rewrites it to a string literal of the same spelling instead of reporting an unknown element. This rule is part of the language definition, not an error-recovery heuristic.
+An unresolved single-segment name with no arguments and no `@` or `$` is treated as a string literal of the same spelling. Other unresolved element names are errors.
 
 ### Types and static constraints
 
 #### Analysis depth warnings
 
-Both syntax analyzers issue `analysis nesting depth exceeds 64; continuing` when internal analysis nesting exceeds `64`, and `expression tree height exceeds 128; continuing` when an expression tree exceeds height `128`. Each message is reported once per scene analysis, at its first recorded location. Compilation and LSP analysis continue; a warning alone does not reject the source.
-
-These warning thresholds are separate from the hard macro-nesting and scanning-step limits described under [macro expansion](#macro).
+Syntax nesting beyond `64` levels or expression-tree height beyond `128` produces a warning; compilation and LSP analysis continue. These are separate from hard [macro expansion limits](#macro).
 
 #### Unary and binary operators
 
-The current implementation accepts these principal form rules:
+Operator types:
 
 1. unary `+`, `-`, and `~`: operand shall be `int` or `intref`; result is `int`;
 2. when both operands are `int` / `intref`, `+ - * / % == != > >= < <= && || & | ^ << >> >>>` are valid and yield `int`;
@@ -2082,43 +1394,27 @@ An assignment shall satisfy:
 
 #### Statement-level constraints
 
-1. in profiles `0`-`5`, `9`, and `10`, `property` statements shall appear only inside a `command` body; top-level `property` is syntactically recognized but semantically ill-formed. Profiles `6`-`8` allow local `property` declarations outside `command`, retaining call property numbering and storage semantics;
+1. profiles `0`–`5`, `9`, and `10` allow `property` only inside `command`. Profiles `6`–`8` also allow call-local properties outside commands;
 2. conditions of `if`, `for`, and `while` shall be `int` or `intref`;
 3. the `switch` condition shall be `int`, `intref`, `str`, or `strref`, and each `case` value shall belong to the same integer family or string family as the condition;
 4. the form of `goto` as an expression is `void`; `gosub` is `int`; `gosubstr` is `str`;
-5. `continue` and `break` used outside loops are rejected at the BS stage;
+5. `continue` and `break` are invalid outside loops;
 6. certain commands marked by the active profile as selection-related shall not appear in conditions, ordinary arguments, goto arguments, or index expressions;
 7. `name-stmt` emits a name-display event, and `text-stmt` emits a text-display event and consumes a read-flag slot.
 
-As in the official compiler, the state indicating whether analysis is inside a `command` is Boolean; leaving a nested `command` does not restore the enclosing state. Profiles `0`-`5`, `9`, and `10` therefore reject a `property` later in the enclosing body outside any subsequent `command` definition. Profiles `6`-`8` still allow these declarations.
+In profiles `0`–`5`, `9`, and `10`, a local `property` after a nested `command` definition is also rejected unless inside another command definition. Profiles `6`–`8` allow it.
 
 #### Matching command definitions to declarations
 
-A scene `command` definition may be either:
+A scene command can be local or implement a global `.inc #command`. Global implementations must match the declared return form, parameter count, and positional parameter forms. Parameter names and defaults are not compared.
 
-1. a purely scene-local command; or
-2. the implementation of a global `.inc #command` declaration.
+#### Return Values
 
-When a scene `command` implements a global `.inc #command`, the current compiler checks:
-
-- return form equality;
-- positional parameter count equality;
-- positional parameter form equality.
-
-It does **not** require:
-
-- parameter-name equivalence between the scene definition and the `.inc` declaration;
-- default-value equivalence between the scene definition and the `.inc` declaration.
-
-Therefore the current language definition matches global `.inc #command` implementations by return form and positional-parameter form sequence, not by parameter names or defaults.
-
-#### Current extent of `return` checking
-
-The current compiler does not perform an additional independent check that `return(exp)` has a form consistent with the command’s declared return form. Call-site type reasoning still follows the command declaration. A conforming implementation shall reproduce this current behavior.
+Call-site type checking uses the declared return form. The compiler does not check whether `return(exp)` actually matches that form.
 
 #### Named arguments
 
-Whether named arguments are accepted depends on whether the callee signature provides a named-argument mapping. For calls that accept named arguments, the compiler matches by name and checks the target slot form; an unknown named argument or a form mismatch is an error.
+Named arguments are accepted only by commands with named parameters. Unknown names and type mismatches are errors.
 
 ### Whole-file and directory-level constraints
 
@@ -2134,28 +1430,13 @@ A scene file shall satisfy:
 
 #### Directory-level linking of global `.inc #command`
 
-When `-c` compiles and packs a whole directory, the following shall also hold:
-
-1. global `.inc #command` declarations participate in the directory-level command table;
-2. each such global `.inc #command` shall be implemented by **exactly one** scene;
-3. if more than one scene implements the same command, the linker reports it as “defined more than once”;
-4. if no scene implements it, the linker reports it as “is not defined”.
-
-Missing definitions are checked for all global `.inc #command` declarations even if no scene in the directory contains a `command` definition.
-
-Therefore, an implementation that reproduces only the single-file front-end but not these directory-level constraints is not fully conforming to the present `-c` language definition.
+Every global `.inc #command` needs exactly one scene implementation, even when unused. Missing or duplicate implementations fail linking.
 
 ## Tips and Troubleshooting
 
 ### Unexpected Tokens During Compilation
 
-If text intended as one argument contains argument delimiters such as commas or parentheses, write it as a double-quoted string. In the following unquoted form, the comma splits the text into two arguments:
-
-```ss
-set_namae(Hello, world)
-```
-
-The quoted form passes one string argument:
+Quote text containing commas or parentheses when it should be one argument:
 
 ```ss
 set_namae("Hello, world")
@@ -2163,14 +1444,10 @@ set_namae("Hello, world")
 
 ### Mixed-Form String Multiplication
 
-The official compiler writes the right-hand form of a plain binary `*` expression as if it were the left operand (`exp_1`). This project intentionally uses the semantically natural right operand form (`exp_2`) instead.
-
-The problematic syntax is an ordinary binary `*` expression used as a value, where the left operand is string-like and the right operand is integer-like after dereferencing. Examples include `set_namae("ABC" * 3)`, `set_namae(s[0] * a[0])`, and `s[0] = "ABC" * 3`.
-
-If you need a source form that compiles to the same output under both the official `exp_1` behavior and this project's `exp_2` behavior, rewrite it through a string reference and `*=`. This can stay on one source line:
+String-by-integer `*` expressions, such as `set_namae("ABC" * 3)`, generate different bytecode from the official compiler. For matching output under both compilers, assign to a string variable and use `*=`:
 
 ```ss
 s[0] = "ABC" s[0] *= 3 set_namae(s[0])
 ```
 
-Do not rewrite it as `s[0] = s[0] * 3`, because that still uses the same problematic ordinary binary `*` expression form.
+Using `s[0] = s[0] * 3` does not avoid the compatibility issue.
