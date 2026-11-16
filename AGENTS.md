@@ -6,7 +6,7 @@
 4. Before each developer build, refresh relevant lock files to the latest compatible dependency versions and explain blocked updates. CI need not refresh locks. Offline or `--locked` builds alone do not count as a refresh.
 5. Ask before creating files unless the user already explicitly requested their creation. Editing existing files needs no separate approval.
 6. Prefer mainstream packages and minimize the total package count, including transitive dependencies.
-7. Align directly user-observable behavior across Windows, Linux, macOS, and other supported platforms. Internal behavior and CLI wording (including prompts and errors) may differ.
+7. Align directly user-observable behavior across supported platforms, except native filesystem path behavior. In `path_policy.py`, check selected multi-file inputs using the frozen Windows 11 26H2 (26300.9974) BMP case mapping, without platform branches or runtime Unicode casing. Ambiguous automatic file selection only warns. Single-file inputs and outputs follow native filesystem rules. Internal behavior and CLI wording may differ.
 8. Keep corresponding Rust and Python implementations behaviorally aligned.
 9. Keep both language versions of the manuals aligned with the implementation and with each other.
 10. For every diff, manually run and pass all lint checks defined in CI.

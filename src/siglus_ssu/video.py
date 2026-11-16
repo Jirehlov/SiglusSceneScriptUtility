@@ -5,7 +5,6 @@ import tempfile
 from collections import namedtuple
 from contextlib import contextmanager
 from .path_policy import (
-    FilenameCaseCollisionError,
     open_read,
     read_file_stat,
     resolve_read_path,
@@ -165,8 +164,6 @@ def _parse_outer_header(path):
             int(dword_4c),
             int(dword_50),
         )
-    except FilenameCaseCollisionError:
-        raise
     except (OSError, struct.error):
         return None
 

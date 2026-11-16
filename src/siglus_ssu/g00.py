@@ -24,6 +24,7 @@ from .path_policy import (
     read_directory,
     resolve_read_path,
     windows_filename_key,
+    validate_input_paths,
 )
 
 try:
@@ -232,6 +233,7 @@ def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
         raise ValueError("need >=2 input g00")
     specs = [_parse_g00_spec(x) for x in g00_paths]
     ps = [p for (p, _cut, _lab) in specs]
+    validate_input_paths(dict.fromkeys(str(path) for path in ps), allow_same_file=True)
     for p in ps:
         if not p.is_file():
             raise ValueError(f"missing file: {p}")
@@ -403,21 +405,25 @@ def iter_g00(p):
         return [p]
     _, entries = read_directory(p)
     return sorted(
-        Path(entry.path)
-        for entry in entries
-        if entry.is_file() and entry.name.lower().endswith(".g00")
+        validate_input_paths(
+            Path(entry.path)
+            for entry in entries
+            if entry.is_file() and entry.name.lower().endswith(".g00")
+        )
     )
 
 
 def _validate_extract_outputs(files):
     sources = {windows_filename_key(p.stem): p for p in files}
-    candidates = set()
+    candidates = {}
     for name, path in sources.items():
         match = re.fullmatch(r"(.*)_cut[0-9]{3,}", name)
         if match is not None and match[1] in sources:
-            candidates.update((sources[match[1]], path))
+            base = sources[match[1]]
+            candidates[str(base)] = base
+            candidates[str(path)] = path
     targets = {}
-    for path in sorted(candidates):
+    for path in sorted(candidates.values(), key=str):
         data = read_bytes(path)
         if not data:
             raise ValueError(f"empty g00: {path}")
@@ -930,7 +936,7 @@ def _parse_json_rect(obj, field_name: str):
     return x, y, w, h
 
 
-def _build_create_bytes(inp_p: Path, type_opt):
+def _build_create_bytes(inp_p: Path, type_opt, *, source_paths=None):
     is_image = _is_image_file(inp_p)
     g00_type = _infer_create_type(inp_p, type_opt)
     layout_path = None
@@ -941,7 +947,9 @@ def _build_create_bytes(inp_p: Path, type_opt):
             else _find_layout_sidecar(inp_p)
         )
     source_hint = inp_p if is_image else None
-    new_bytes = _build_g00_from_image(source_hint, g00_type, layout_path=layout_path)
+    new_bytes = _build_g00_from_image(
+        source_hint, g00_type, layout_path=layout_path, source_paths=source_paths
+    )
     report_layout = inp_p if layout_path is not None and not is_image else None
     return g00_type, new_bytes, source_hint, report_layout
 
@@ -1017,9 +1025,13 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     }
 
 
-def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -> bytes:
+def _build_type2_official_g00_from_image(
+    img_p: Path | None, layout_path=None, *, source_paths=None
+) -> bytes:
     img_p = Path(img_p) if img_p is not None else None
     cache = {}
+    if source_paths is None:
+        source_paths = {}
 
     def _resolve_source_path(sp, base_dir: Path | None = None) -> Path:
         if sp is None:
@@ -1045,9 +1057,11 @@ def _build_type2_official_g00_from_image(img_p: Path | None, layout_path=None) -
 
     def _load_source(sp, base_dir: Path | None = None):
         rp = _resolve_source_path(sp, base_dir)
-        if rp not in cache:
-            cache[rp] = _load_image_bgra(rp)
-        return cache[rp]
+        key = str(rp)
+        if key not in cache:
+            validate_input_paths([rp], seen=source_paths, allow_same_file=True)
+            cache[key] = _load_image_bgra(rp)
+        return cache[key]
 
     if layout_path is not None:
         layout_path = Path(layout_path)
@@ -1148,7 +1162,9 @@ def _report_single_update(report, img_p: Path, wh: tuple[int, int], changed: boo
     report["changed"] = changed
 
 
-def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
+def _build_g00_from_image(
+    img_p: Path | None, g00_type: int, layout_path=None, *, source_paths=None
+):
     if g00_type == 0:
         bgra, w, h = _load_type0_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
@@ -1164,7 +1180,9 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout_path=None):
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
     if g00_type == 2:
-        return _build_type2_official_g00_from_image(img_p, layout_path=layout_path)
+        return _build_type2_official_g00_from_image(
+            img_p, layout_path=layout_path, source_paths=source_paths
+        )
     raise ValueError(f"unsupported create type: {g00_type}")
 
 
@@ -1481,6 +1499,7 @@ def _run_type2_layout_dir(ip: Path, out_arg, type_opt, refer_arg):
     ]
     if not cfgs:
         return None
+    validate_input_paths(cfgs)
     targets = {}
     for cfg in cfgs:
         base_name = _layout_base_name(cfg)
@@ -1493,9 +1512,12 @@ def _run_type2_layout_dir(ip: Path, out_arg, type_opt, refer_arg):
         targets[key] = (base_name, cfg)
     out_dir = _resolve_compose_dir(out_arg, ip)
     print(f"Compose(create:type2-json): {ip} -> {out_dir} ({len(cfgs)} layouts)")
+    source_paths = {}
     for base_name, cfg in targets.values():
         out_path = out_dir / f"{base_name}.g00"
-        new_bytes = _build_type2_official_g00_from_image(ip, layout_path=cfg)
+        new_bytes = _build_type2_official_g00_from_image(
+            ip, layout_path=cfg, source_paths=source_paths
+        )
         write_bytes(str(out_path), new_bytes)
         _print_create_report(out_path, 2, new_bytes, layout=cfg)
         print(f"    Output: {out_path}")
@@ -1515,6 +1537,7 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
     ]
     if not imgs:
         return 2
+    validate_input_paths(imgs)
     groups = {}
     for p in imgs:
         base_name, cut_idx = _img_base_and_cut(p)
@@ -1550,6 +1573,7 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
             f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
         )
     total = changed = same = created = 0
+    source_paths = {}
     for base_name, ups in groups.values():
         out_path = out_dir / f"{base_name}.g00"
         if do_update:
@@ -1563,7 +1587,7 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
         else:
             img_p, _ = ups[0]
             t, new_bytes, source_hint, report_layout = _build_create_bytes(
-                img_p, type_opt
+                img_p, type_opt, source_paths=source_paths
             )
             created += 1
             _print_create_report(

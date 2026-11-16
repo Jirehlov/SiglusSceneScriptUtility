@@ -16,7 +16,7 @@ from .common import (
 )
 from . import dbs
 from .native_ops import find_rand_skip
-from .path_policy import resolve_read_path, windows_filename_key
+from .path_policy import resolve_read_path, windows_filename_key, validate_input_paths
 
 
 def _analyze_one(path):
@@ -62,6 +62,7 @@ def _compare_two(p1, p2):
         return 1
     if missing_input_file(p2):
         return 1
+    validate_input_paths([p1, p2], allow_same_file=True)
     b1 = read_bytes(p1)
     b2 = read_bytes(p2)
     return dbs.compare_dbs(b1, b2)

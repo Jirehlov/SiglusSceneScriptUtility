@@ -26,7 +26,7 @@ from .common import (
     format_exe_el_source,
     split_end_of_options,
 )
-from .path_policy import FilenameCaseCollisionError, open_read, resolve_read_path
+from .path_policy import open_read, resolve_read_path
 
 TEXTMAP_KIND_DIALOGUE = 1
 TEXTMAP_KIND_NAME = 2
@@ -632,9 +632,6 @@ def _process_dat(
     try:
         with open_read(dat_path) as f:
             blob = f.read()
-    except FilenameCaseCollisionError as exc:
-        eprint(f"textmap: {exc}", errors="replace")
-        return 1
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1

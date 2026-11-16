@@ -37,12 +37,12 @@ from . import sound
 from . import GEI
 from . import pck
 from .path_policy import (
-    FilenameCaseCollisionError,
     open_read,
     read_file_stat,
     read_directory,
     resolve_read_path,
     windows_filename_key,
+    validate_input_paths,
 )
 
 
@@ -51,8 +51,6 @@ def _analyze_one(path: str) -> int:
     try:
         st = read_file_stat(path)
         size = st.st_size
-    except FilenameCaseCollisionError:
-        raise
     except OSError:
         size = "?"
     print(_fmt_kv("path", path))
@@ -378,7 +376,7 @@ def _parse_bgm_table(gameexe_ini_text: str):
             rep = int(m.group("rep"))
         except (TypeError, ValueError):
             continue
-        table.setdefault(fn.lower(), []).append(
+        table.setdefault(windows_filename_key(fn), []).append(
             _BgmLoopEntry(
                 name=name,
                 start_sample=start,
@@ -392,8 +390,6 @@ def _parse_bgm_table(gameexe_ini_text: str):
 def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
     try:
         txt = read_text_auto(gameexe_path)
-    except FilenameCaseCollisionError:
-        raise
     except Exception:
         txt = ""
     if txt:
@@ -542,12 +538,12 @@ def _trim_nwa_to_wav_bytes(
 
 
 def _resolve_bgm_entry(trim_table, base_name: str):
-    key = base_name.lower()
+    key = windows_filename_key(base_name)
     if key not in trim_table:
         raise RuntimeError(f"no #BGM.* entry for file name: {base_name}")
     candidates = trim_table[key]
     for candidate in candidates:
-        if candidate.name.lower() == key:
+        if windows_filename_key(candidate.name) == key:
             return candidate
     return candidates[0]
 
@@ -791,7 +787,7 @@ def _filter_playback_entries(entries, trim_table):
     playable = []
     skipped = []
     for entry in entries:
-        if entry.base_name.lower() in trim_table:
+        if windows_filename_key(entry.base_name) in trim_table:
             playable.append(entry)
             continue
         skipped.append(entry)
@@ -931,9 +927,9 @@ def _default_play_gameexe_path(inp: str) -> str:
     root_dir = os.path.dirname(audio_dir)
     exact = os.path.join(root_dir, "Gameexe.dat")
     try:
-        return resolve_read_path(exact, kind="file")
+        exact_path = resolve_read_path(exact, kind="file")
     except (FileNotFoundError, NotADirectoryError):
-        pass
+        exact_path = ""
     wildcard_matches = []
     try:
         _, entries = read_directory(root_dir)
@@ -942,22 +938,23 @@ def _default_play_gameexe_path(inp: str) -> str:
             path = os.path.join(root_dir, name)
             if not os.path.isfile(path):
                 continue
-            if not name.lower().startswith("gameexe"):
+            if not windows_filename_key(name).startswith("gameexe"):
                 continue
             if "." not in name:
                 continue
             wildcard_matches.append(path)
-    except FilenameCaseCollisionError:
-        raise
     except OSError:
-        return exact
+        return exact_path or exact
+    validate_input_paths(wildcard_matches, warn_only=True)
+    if exact_path:
+        return exact_path
     if wildcard_matches:
         wildcard_matches.sort(
             key=lambda path: (
-                os.path.basename(path).lower() != "gameexe.ini",
+                windows_filename_key(os.path.basename(path)) != "gameexe.ini",
                 os.path.splitext(path)[1].lower() != ".ini",
                 os.path.splitext(path)[1].lower() != ".dat",
-                os.path.basename(path).lower(),
+                windows_filename_key(os.path.basename(path)),
             )
         )
         return wildcard_matches[0]
@@ -1640,6 +1637,7 @@ def main(argv) -> int:
             except (FileNotFoundError, NotADirectoryError):
                 eprint("input not found")
                 return 1
+            validate_input_paths([p1, p2], allow_same_file=True)
             return _compare_ovk(p1, p2)
         eprint("error: expected 1 input file, or 2 .ovk files, for --a")
         _hint_help()

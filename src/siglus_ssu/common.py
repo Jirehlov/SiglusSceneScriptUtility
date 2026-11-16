@@ -9,12 +9,12 @@ from types import SimpleNamespace
 import siglus_ssu as _runtime
 from . import command_name, const as C
 from .path_policy import (
-    FilenameCaseCollisionError,
     open_read,
     read_directory,
     resolve_read_path,
     walk_read_directory,
     windows_filename_key,
+    validate_input_paths,
 )
 
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
@@ -1476,19 +1476,30 @@ def find_siglus_engine_exe(base_dir: str) -> str:
         base_dir, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
         return ""
-    for entry in entries:
-        if windows_filename_key(entry.name) == "siglusengine.exe" and entry.is_file():
-            return _safe_abspath(entry.path)
+    exact = [
+        entry.path
+        for entry in entries
+        if windows_filename_key(entry.name) == "siglusengine.exe" and entry.is_file()
+    ]
+    if exact:
+        validate_input_paths(exact, warn_only=True)
+        return _safe_abspath(exact[0])
     cands = []
     for entry in entries:
-        cf = entry.name.casefold()
+        cf = windows_filename_key(entry.name)
         if (not cf.startswith("siglusengine")) or (not cf.endswith(".exe")):
             continue
         if entry.is_file():
             cands.append(_safe_abspath(entry.path))
     if not cands:
         return ""
-    cands.sort(key=lambda p: (len(os.path.basename(p)), os.path.basename(p).casefold()))
+    validate_input_paths(cands, warn_only=True)
+    cands.sort(
+        key=lambda p: (
+            len(os.path.basename(p)),
+            windows_filename_key(os.path.basename(p)),
+        )
+    )
     return cands[0]
 
 
@@ -1697,8 +1708,6 @@ def siglus_engine_exe_element(exe_bytes: bytes, with_patch_points: bool = False)
 def read_siglus_engine_exe_el(path: str) -> bytes:
     try:
         b = read_bytes(path)
-    except FilenameCaseCollisionError:
-        raise
     except (OSError, TypeError, ValueError):
         return b""
     return siglus_engine_exe_element(b)
@@ -1721,10 +1730,12 @@ def list_named_paths(base_dir: str, target_name: str):
     except (FileNotFoundError, NotADirectoryError):
         return []
     key = windows_filename_key(target_name)
-    for entry in entries:
-        if windows_filename_key(entry.name) == key and entry.is_file():
-            return [entry.path]
-    return []
+    paths = [
+        entry.path
+        for entry in entries
+        if windows_filename_key(entry.name) == key and entry.is_file()
+    ]
+    return validate_input_paths(paths, warn_only=True)
 
 
 def find_named_path(base_dir: str, target_name: str) -> str:
@@ -1894,8 +1905,6 @@ def angou_first_line(text: str) -> str:
 def read_angou_first_line(path: str) -> str:
     try:
         return angou_first_line(read_text_auto(path))
-    except FilenameCaseCollisionError:
-        raise
     except Exception:
         return ""
 
@@ -2049,8 +2058,6 @@ def parse_exe_el_key_text(text: str) -> bytes:
 def read_exe_el_key(path: str) -> bytes:
     try:
         b = read_bytes(path)
-    except FilenameCaseCollisionError:
-        raise
     except Exception:
         return b""
     if len(b) == 16:
@@ -2165,13 +2172,11 @@ def iter_exe_el_sources(
     def add_pck(path, label, blob=b"", source_entries=None):
         try:
             data = bytes(blob) if blob else read_bytes(path)
-        except FilenameCaseCollisionError:
-            raise
         except Exception:
             return []
         if not data:
             return []
-        cf = os.path.basename(str(path or "")).casefold()
+        cf = windows_filename_key(os.path.basename(str(path or "")))
         if (not cf.endswith(".pck")) and (not looks_like_siglus_pck(data)):
             return []
         try:
@@ -2201,15 +2206,13 @@ def iter_exe_el_sources(
 
     def add_file(path):
         bn = os.path.basename(str(path or ""))
-        cf = bn.casefold()
+        cf = windows_filename_key(bn)
         out = []
         if cf.endswith(".pck"):
             out.extend(add_pck(path, "explicit_file"))
             return out
         try:
             data = read_bytes(path)
-        except FilenameCaseCollisionError:
-            raise
         except Exception:
             data = b""
         if data and looks_like_siglus_pck(data):
@@ -2255,7 +2258,7 @@ def iter_exe_el_sources(
         for e in entries:
             if not e.is_file():
                 continue
-            cf = e.name.casefold()
+            cf = windows_filename_key(e.name)
             if cf == "scene.pck":
                 hits.append(_safe_abspath(e.path))
                 continue
@@ -2264,14 +2267,21 @@ def iter_exe_el_sources(
         hits.sort(
             key=lambda p: (
                 0 if os.path.basename(p) == "Scene.pck" else 1,
-                os.path.basename(p).casefold(),
+                windows_filename_key(os.path.basename(p)),
                 os.path.basename(p),
             )
         )
         others.sort(
-            key=lambda p: (len(os.path.basename(p)), os.path.basename(p).casefold())
+            key=lambda p: (
+                len(os.path.basename(p)),
+                windows_filename_key(os.path.basename(p)),
+            )
         )
-        return hits + others
+        paths = validate_input_paths(hits + others, warn_only=True)
+        selected = {}
+        for path in paths:
+            selected.setdefault(windows_filename_key(path), path)
+        return list(selected.values())
 
     def add_dir(path, label):
         out = []
@@ -2679,7 +2689,7 @@ def iter_files_by_ext(
     exclude_pred=None,
     recursive: bool = True,
 ):
-    ext_set = {ext.lower() for ext in extensions}
+    ext_set = {windows_filename_key(ext) for ext in extensions}
     out = []
 
     def should_skip(path):
@@ -2694,7 +2704,7 @@ def iter_files_by_ext(
     if os.path.isfile(root):
         if should_skip(root):
             return []
-        if os.path.splitext(root)[1].lower() in ext_set:
+        if windows_filename_key(os.path.splitext(root)[1]) in ext_set:
             return [root]
         return []
     if not recursive:
@@ -2703,22 +2713,22 @@ def iter_files_by_ext(
             if not entry.is_file():
                 continue
             name = entry.name
-            if os.path.splitext(name)[1].lower() not in ext_set:
+            if windows_filename_key(os.path.splitext(name)[1]) not in ext_set:
                 continue
             path = entry.path
             if should_skip(path):
                 continue
             out.append(path)
-        return sorted(out)
+        return sorted(validate_input_paths(out))
     for dirpath, _dirs, filenames in walk_read_directory(root):
         for name in filenames:
-            if os.path.splitext(name)[1].lower() not in ext_set:
+            if windows_filename_key(os.path.splitext(name)[1]) not in ext_set:
                 continue
             path = os.path.join(dirpath, name)
             if should_skip(path):
                 continue
             out.append(path)
-    return sorted(out)
+    return sorted(validate_input_paths(out))
 
 
 I32_STRUCT = _I32_LE
@@ -3086,8 +3096,6 @@ def prepare_batch_paths(
         eprint(f"input not found: {inp}")
         return None, None, None, 1
     src_is_dir = os.path.isdir(inp)
-    if src_is_dir:
-        read_directory(inp)
     if not src_is_dir and missing_input_file(inp):
         return None, None, None, 1
     if create_output:

@@ -45,7 +45,6 @@ from .common import (
     is_trace_command_base,
 )
 from .path_policy import (
-    FilenameCaseCollisionError,
     resolve_read_path,
     windows_filename_key,
 )
@@ -1004,8 +1003,6 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                             "\\", "/"
                         )
                         write_bytes(out_path, raw)
-                except FilenameCaseCollisionError:
-                    raise
                 except Exception:
                     out_path = _unique_outpath(
                         os.path.dirname(out_path) or tmpdir,
@@ -1057,8 +1054,6 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                         continue
                     row["lines"] += 1
                     row["count"] += count_text_units(txt)
-            except FilenameCaseCollisionError:
-                raise
             except Exception as exc:
                 row.update(
                     status="failed",

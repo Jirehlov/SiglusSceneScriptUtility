@@ -25,6 +25,7 @@ from .path_policy import (
     read_file_stat,
     resolve_read_path,
     windows_filename_key,
+    validate_input_paths,
 )
 from . import pck
 from . import dat
@@ -388,6 +389,7 @@ def compare_files(
     except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write("not found\n")
         return 2
+    validate_input_paths([p1, p2], allow_same_file=True)
     b1 = read_bytes(p1)
     b2 = read_bytes(p2)
     t1 = _detect_type(p1, b1)

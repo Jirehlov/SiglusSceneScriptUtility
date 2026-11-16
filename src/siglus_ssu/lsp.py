@@ -45,7 +45,9 @@ from .path_policy import (
     open_read,
     read_directory,
     read_file_stat,
+    same_read_path,
     windows_filename_key,
+    validate_input_paths,
 )
 
 SEVERITY_ERROR = 1
@@ -364,14 +366,10 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
         return _normalize_source_text(overlay_text)
     try:
         return _normalize_source_text(read_text_auto(norm))
-    except FilenameCaseCollisionError:
-        raise
     except (OSError, ValueError):
         try:
             with open_read(norm) as f:
                 return _decode_text_fallback(f.read())
-        except FilenameCaseCollisionError:
-            raise
         except (OSError, ValueError):
             return ""
 
@@ -379,8 +377,6 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
 def _file_state(path: str) -> tuple[int, int] | None:
     try:
         stat = read_file_stat(path)
-    except FilenameCaseCollisionError:
-        raise
     except (OSError, ValueError):
         return None
     return stat.st_mtime_ns, stat.st_size
@@ -391,23 +387,33 @@ def _sorted_dir_paths(
 ) -> list[str]:
     out: dict[str, str] = {}
     root = os.path.abspath(root_dir)
-    root_key = _path_identity(root)
+    seen = {}
     try:
         _, entries = read_directory(root)
-        for entry in entries:
-            if entry.is_file() and entry.name.lower().endswith(suffix):
-                norm = os.path.abspath(entry.path)
-                out[_path_identity(norm)] = norm
+        paths = validate_input_paths(
+            (
+                entry.path
+                for entry in entries
+                if entry.is_file() and entry.name.lower().endswith(suffix)
+            ),
+            seen=seen,
+        )
+        for path in paths:
+            norm = os.path.abspath(path)
+            out[_path_identity(norm)] = norm
     except FilenameCaseCollisionError:
         raise
     except (OSError, ValueError):
         pass
+    overlay_paths = []
     for path in overlays:
         norm = os.path.abspath(path)
-        if _path_identity(os.path.dirname(norm)) == root_key and norm.lower().endswith(
-            suffix
+        if norm.lower().endswith(suffix) and same_read_path(
+            os.path.dirname(norm), root
         ):
-            out[_path_identity(norm)] = norm
+            overlay_paths.append(norm)
+    for norm in validate_input_paths(overlay_paths, seen=seen, allow_same_file=True):
+        out[_path_identity(norm)] = norm
     return sorted(out.values(), key=lambda p: ascii_lower(os.path.basename(p)))
 
 
@@ -2457,7 +2463,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 28
+LSP_INDEX_CACHE_VERSION = 29
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -2475,6 +2481,7 @@ class DocumentState:
     base_analysis_signature: tuple[Any, ...] | None = None
     analysis: AnalysisResult | None = None
     analysis_signature: tuple[Any, ...] | None = None
+    open_uris: dict[str, tuple[str, int | None]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -2656,7 +2663,7 @@ def _lsp_index_cache_root() -> str:
 
 
 def _lsp_index_directory_signature(directory: str) -> str:
-    key_src = _path_identity(directory or ".")
+    key_src = os.path.abspath(directory or ".")
     return content_digest(key_src.encode("utf-8", "surrogatepass"))
 
 
@@ -2719,8 +2726,6 @@ def _read_lsp_index_cache_header(
             _lsp_index_cache_path(directory, inputs), mode="r", encoding="utf-8"
         ) as f:
             data = json.loads(f.read())
-    except FilenameCaseCollisionError:
-        raise
     except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict):
@@ -3291,10 +3296,36 @@ class SSLanguageServer:
         self.write_message(payload)
 
     def document_for_uri(self, uri: str) -> DocumentState | None:
-        return self.documents.get(document_key_for_uri(uri))
+        return self._checked_document(document_key_for_uri(uri), uri_to_path(uri), uri)
 
     def document_for_path(self, path: str) -> DocumentState | None:
-        return self.documents.get(document_key_for_path(path))
+        path = os.path.abspath(path)
+        return self._checked_document(document_key_for_path(path), path)
+
+    def _checked_document(
+        self, key: str, path: str, uri: str | None = None
+    ) -> DocumentState | None:
+        doc = self.documents.get(key)
+        if doc is not None and doc.path != path:
+            if not doc.opened and not doc.overlay_active:
+                return None
+            try:
+                validate_input_paths([doc.path, path], allow_same_file=True)
+            except FilenameCaseCollisionError:
+                if uri not in doc.open_uris or (
+                    _file_state(doc.path) is not None and _file_state(path) is not None
+                ):
+                    raise
+        if doc is not None and uri is not None and uri in doc.open_uris:
+            text, version = doc.open_uris[uri]
+            if doc.text != text:
+                self.clear_document_cache(doc)
+            doc.uri = uri
+            doc.path = path
+            doc.text = text
+            doc.version = version
+            doc.overlay_active = text != doc.disk_text
+        return doc
 
     def text_for_path(self, path: str) -> str:
         doc = self.document_for_path(path)
@@ -3310,14 +3341,13 @@ class SSLanguageServer:
 
     def get_or_load_document(self, uri: str) -> DocumentState | None:
         path = uri_to_path(uri)
-        state = _file_state(path)
         key = document_key_for_uri(uri)
+        doc = self._checked_document(key, path, uri)
+        state = _file_state(path)
         if state is None:
-            doc = self.documents.get(key)
             if doc is not None and (doc.opened or doc.overlay_active):
                 return doc
             return None
-        doc = self.documents.get(key)
         if doc is not None:
             if doc.opened or doc.overlay_active:
                 return doc
@@ -3346,10 +3376,9 @@ class SSLanguageServer:
     ) -> dict[str, str]:
         out: dict[str, str] = {}
         directory = os.path.abspath(directory)
-        directory_key = _path_identity(directory)
         for doc in self.documents.values():
             path = os.path.abspath(doc.path)
-            if _path_identity(os.path.dirname(path)) != directory_key:
+            if not same_read_path(os.path.dirname(path), directory):
                 continue
             if suffix is not None and not path.lower().endswith(suffix):
                 continue
@@ -3414,12 +3443,11 @@ class SSLanguageServer:
         self, directory: str, *, scene_paths: list[str] | None = None
     ) -> dict[str, dict[str, str]] | None:
         directory = os.path.abspath(directory or ".")
-        directory_key = _path_identity(directory)
         scene_overlays = set()
         for doc in self.documents.values():
             path = os.path.abspath(doc.path)
             lower = path.lower()
-            if _path_identity(os.path.dirname(path)) != directory_key:
+            if not same_read_path(os.path.dirname(path), directory):
                 continue
             if lower.endswith(".inc"):
                 if not self.persistent_cache_file_usable(path):
@@ -4039,7 +4067,7 @@ class SSLanguageServer:
             doc
             for doc in self.documents.values()
             if doc.opened
-            and _path_identity(os.path.dirname(doc.path)) == _path_identity(directory)
+            and same_read_path(os.path.dirname(doc.path), directory)
             and doc.uri != skip_uri
         ]
         docs.sort(key=lambda d: (os.path.basename(d.path).casefold(), d.uri))
@@ -4273,6 +4301,7 @@ class SSLanguageServer:
             if isinstance(version, int) and not isinstance(version, bool)
             else None
         )
+        doc.open_uris[uri] = (doc.text, doc.version)
         self.documents[key] = doc
         self.publish_diagnostics(doc)
         if old_signature != self.document_source_signature(doc):
@@ -4292,7 +4321,7 @@ class SSLanguageServer:
         if uri is None:
             return
         doc = self.document_for_uri(uri)
-        if doc is None:
+        if doc is None or uri not in doc.open_uris:
             return
         changes = (params or {}).get("contentChanges") or []
         if not isinstance(changes, list) or not changes:
@@ -4317,6 +4346,7 @@ class SSLanguageServer:
         else:
             doc.text = text
             doc.overlay_active = True
+        doc.open_uris[uri] = (doc.text, doc.version)
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
         self.publish_diagnostics(doc, include_link=False)
@@ -4340,7 +4370,7 @@ class SSLanguageServer:
         if uri is None:
             return
         doc = self.document_for_uri(uri)
-        if doc is None:
+        if doc is None or uri not in doc.open_uris:
             return
         old_signature = self.document_source_signature(doc)
         if "text" in params:
@@ -4353,6 +4383,7 @@ class SSLanguageServer:
             doc.file_state = _file_state(doc.path)
         else:
             old_signature = self.sync_document_from_disk(doc)
+        doc.open_uris[uri] = (doc.text, doc.version)
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
         self.publish_diagnostics(doc)
@@ -4372,7 +4403,9 @@ class SSLanguageServer:
         uri = _text_document_uri_from_params(params)
         if uri is None:
             return
-        doc = self.document_for_uri(uri)
+        doc = self.documents.get(document_key_for_uri(uri))
+        if doc is None or uri not in doc.open_uris:
+            return
         if not self.pull_diagnostics_enabled:
             self.write_message(
                 {
@@ -4381,21 +4414,33 @@ class SSLanguageServer:
                     "params": {"uri": uri, "diagnostics": []},
                 }
             )
-        if doc is not None:
-            old_signature = self.document_source_signature(doc)
-            doc.opened = False
+        old_signature = self.document_source_signature(doc)
+        del doc.open_uris[uri]
+        doc.opened = bool(doc.open_uris)
+        if doc.opened:
+            doc.uri, (doc.text, doc.version) = next(reversed(doc.open_uris.items()))
+            doc.path = uri_to_path(doc.uri)
+            doc.overlay_active = doc.text != doc.disk_text
+        else:
             doc.version = None
             if doc.overlay_active:
                 old_signature = self.sync_document_from_disk(doc)
-            if old_signature != self.document_source_signature(doc):
-                self.clear_document_cache(doc)
-                if doc.path.lower().endswith(".inc"):
-                    self.refresh_directory(
-                        os.path.dirname(doc.path) or ".",
-                        clear_base=True,
-                    )
-                elif doc.path.lower().endswith(".ss"):
-                    self.refresh_directory(os.path.dirname(doc.path) or ".")
+        if old_signature != self.document_source_signature(doc):
+            self.clear_document_cache(doc)
+        if doc.opened:
+            self.publish_diagnostics(doc)
+        if old_signature != self.document_source_signature(doc):
+            if doc.path.lower().endswith(".inc"):
+                self.refresh_directory(
+                    os.path.dirname(doc.path) or ".",
+                    skip_uri=doc.uri if doc.opened else None,
+                    clear_base=True,
+                )
+            elif doc.path.lower().endswith(".ss"):
+                self.refresh_directory(
+                    os.path.dirname(doc.path) or ".",
+                    skip_uri=doc.uri if doc.opened else None,
+                )
 
     def handle_document_diagnostic(self, msg_id: Any, params: dict[str, Any]) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
@@ -5487,6 +5532,21 @@ class SSLanguageServer:
                     self.handle_message(message)
                 except SystemExit as exc:
                     raise exc
+                except FilenameCaseCollisionError as exc:
+                    self.log_stderr(str(exc))
+                    if "id" in message:
+                        self.respond(
+                            message["id"],
+                            error={"code": JSONRPC_INVALID_PARAMS, "message": str(exc)},
+                        )
+                    else:
+                        self.write_message(
+                            {
+                                "jsonrpc": "2.0",
+                                "method": "window/showMessage",
+                                "params": {"type": 1, "message": str(exc)},
+                            }
+                        )
                 except Exception as exc:
                     self.log_stderr(traceback.format_exc())
                     msg_id = message.get("id")

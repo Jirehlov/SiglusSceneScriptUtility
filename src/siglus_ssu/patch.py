@@ -19,7 +19,7 @@ from .common import (
     parse_exe_el_key_text,
     angou_to_exe_el,
 )
-from .path_policy import resolve_read_path
+from .path_policy import resolve_read_path, same_file_path
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
 _LOC_BYPASS_STUB = b"\xb0\x01\xc3"
@@ -70,15 +70,6 @@ def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
     if upper:
         t = t.upper()
     return os.path.join(d, f"{stem}_{t}{ext}")
-
-
-def _same_file_path(left: str, right: str) -> bool:
-    try:
-        return os.path.samefile(left, right)
-    except OSError:
-        return os.path.normcase(os.path.realpath(left)) == os.path.normcase(
-            os.path.realpath(right)
-        )
 
 
 def _atomic_write_bytes(path: str, data: bytes) -> None:
@@ -1521,7 +1512,7 @@ def main(argv):
         out_path = explicit_out_path
     else:
         out_path = _default_out_path(in_path, suffix, upper=not args.altkey)
-    if not args.inplace and _same_file_path(in_path, out_path):
+    if not args.inplace and same_file_path(in_path, out_path):
         sys.stderr.write("output refers to input; use --inplace to overwrite it\n")
         return 2
     if os.path.islink(out_path):

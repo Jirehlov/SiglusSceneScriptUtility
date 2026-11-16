@@ -56,11 +56,10 @@ from .common import (
     split_end_of_options,
 )
 from .path_policy import (
-    FilenameCaseCollisionError,
     read_directory,
     resolve_read_path,
-    walk_read_directory,
     windows_filename_key,
+    validate_input_paths,
 )
 
 
@@ -270,8 +269,6 @@ def _compile_cache_state(
                 old = json.loads(
                     read_text_auto(existing_digest_path, force_charset="utf-8")
                 )
-            except FilenameCaseCollisionError:
-                raise
             except Exception:
                 old = None
         full_compile = False
@@ -561,7 +558,9 @@ def _load_project_sources(
     texts = {}
     digests = {"inc": {}, "ss": {}}
     source_bytes = {}
-    for name in dict.fromkeys([*paths, *original_files]):
+    names = list(dict.fromkeys([*paths, *original_files]))
+    validate_input_paths(os.path.join(base_dir, name) for name in names)
+    for name in names:
         path = os.path.join(base_dir, name)
         try:
             data = read_bytes(resolve_read_path(path, kind="file"))
@@ -1235,19 +1234,42 @@ def main(argv, *, collect_statistics=True):
         sys.stderr.write(
             f"{prog}: warning: --dat-repack found no .inc files; package-level include command metadata will be omitted\n"
         )
-    angou_key = windows_filename_key(ANGOU_DAT_NAME)
-    key_txt_key = windows_filename_key(KEY_TXT_NAME)
-    angou_name = next(
-        (name for name in files if windows_filename_key(name) == angou_key), ""
-    )
-    key_txt_name = next(
-        (name for name in files if windows_filename_key(name) == key_txt_key), ""
-    )
     if not gei_ini:
         gameexe_key = windows_filename_key("Gameexe.ini")
-        gei_ini = next(
-            (name for name in ini if windows_filename_key(name) == gameexe_key), ""
+        config_names = [
+            name
+            for name in ini
+            if ascii_lower(name).startswith("gameexe")
+            and ascii_lower(name).endswith(".ini")
+            and (
+                (not a.gei and not a.no_angou and not a.no_lzss)
+                or windows_filename_key(name) == gameexe_key
+            )
+        ]
+        validate_input_paths(
+            (os.path.join(inp, name) for name in config_names), warn_only=True
         )
+        config_choices = {}
+        ignored_configs = set()
+        for name in config_names:
+            if config_choices.setdefault(windows_filename_key(name), name) != name:
+                ignored_configs.add(name)
+        if ignored_configs:
+            files = [name for name in files if name not in ignored_configs]
+            ini = [name for name in ini if name not in ignored_configs]
+    auxiliary_names = {}
+    for target_name in (ANGOU_DAT_NAME, KEY_TXT_NAME, "Gameexe.ini"):
+        target_key = windows_filename_key(target_name)
+        names = [name for name in files if windows_filename_key(name) == target_key]
+        if target_name != "Gameexe.ini":
+            validate_input_paths(
+                (os.path.join(inp, name) for name in names), warn_only=True
+            )
+        auxiliary_names[target_name] = names[0] if names else ""
+    angou_name = auxiliary_names[ANGOU_DAT_NAME]
+    key_txt_name = auxiliary_names[KEY_TXT_NAME]
+    if not gei_ini:
+        gei_ini = auxiliary_names["Gameexe.ini"]
     os.makedirs(out, exist_ok=True)
     tmp = ""
     tmp_auto = False
@@ -1255,8 +1277,6 @@ def main(argv, *, collect_statistics=True):
         if a.tmp_dir:
             try:
                 tmp = resolve_read_path(a.tmp_dir, kind="dir")
-                for _ in walk_read_directory(tmp):
-                    pass
             except (FileNotFoundError, NotADirectoryError):
                 tmp = os.path.abspath(a.tmp_dir)
             os.makedirs(tmp, exist_ok=True)
@@ -1467,6 +1487,7 @@ def main(argv, *, collect_statistics=True):
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
                 dats = []
+                dat_paths = {}
                 _, entries = read_directory(inp)
                 for entry in sorted(entries, key=lambda item: ascii_lower(item.name)):
                     f = entry.name
@@ -1477,7 +1498,9 @@ def main(argv, *, collect_statistics=True):
                         continue
                     b = read_bytes(fp)
                     if looks_like_siglus_dat(b):
-                        write_bytes(os.path.join(bs_dir, f), b)
+                        validate_input_paths([fp], seen=dat_paths)
+                        name = os.path.splitext(f)[0] + ".dat"
+                        write_bytes(os.path.join(bs_dir, name), b)
                         dats.append(fp)
                 if not dats:
                     raise RuntimeError("--dat-repack: no scene .dat found")

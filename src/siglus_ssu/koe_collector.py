@@ -16,11 +16,12 @@ from .common import (
     is_option_token,
 )
 from .path_policy import (
-    FilenameCaseCollisionError,
     open_read,
     read_directory,
     resolve_read_path,
     walk_read_directory,
+    validate_input_paths,
+    windows_filename_key,
 )
 
 _VOICE_CALL_NAMES = frozenset(
@@ -183,8 +184,6 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
         try:
             blob = read_bytes(scene_root)
             hdr = pck.parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        except FilenameCaseCollisionError:
-            raise
         except Exception:
             blob = b""
             hdr = None
@@ -220,11 +219,10 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
                 yield bundle
         return
     candidates_by_dir = {}
+    scene_paths = {}
     for dat_path in _iter_scene_dat_paths(scene_root):
         try:
             blob = read_bytes(dat_path)
-        except FilenameCaseCollisionError:
-            raise
         except Exception:
             continue
         if not looks_like_siglus_dat(blob):
@@ -247,6 +245,7 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
         except Exception:
             bundle = None
         if isinstance(bundle, dict):
+            validate_input_paths([dat_path], seen=scene_paths)
             yield bundle
 
 
@@ -539,11 +538,12 @@ def _index_ovk(voice_dir: str):
     if os.path.isdir(voice_dir):
         _, dir_entries = read_directory(voice_dir)
         for e in dir_entries:
-            if e.is_file() and e.name.lower().endswith(".ovk"):
+            if e.is_file() and windows_filename_key(e.name).endswith(".ovk"):
                 ovk_paths.append(e.path)
-    elif os.path.isfile(voice_dir) and voice_dir.lower().endswith(".ovk"):
+    elif os.path.isfile(voice_dir) and windows_filename_key(voice_dir).endswith(".ovk"):
         ovk_paths.append(voice_dir)
-    ovk_paths.sort(key=lambda x: os.path.basename(x).lower())
+    ovk_paths.sort(key=lambda x: windows_filename_key(os.path.basename(x)))
+    selected_paths = {}
     for ovk_idx, full in enumerate(ovk_paths, 1):
         fn = os.path.basename(full)
         eprint(f"koe: indexing ovk {ovk_idx}/{len(ovk_paths)}: {fn}")
@@ -551,6 +551,7 @@ def _index_ovk(voice_dir: str):
         m = _Z_OVK_RE.match(fn)
         if not m:
             continue
+        validate_input_paths([full], seen=selected_paths)
         z_files += 1
         scene_no = int(m.group(1))
         scene_map.setdefault(scene_no, full)

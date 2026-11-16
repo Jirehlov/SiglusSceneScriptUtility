@@ -4,7 +4,7 @@ import os
 import struct
 import sys
 import time
-from .path_policy import read_file_stat, resolve_read_path
+from .path_policy import read_file_stat, resolve_read_path, validate_input_paths
 from . import const as C
 from . import disam
 from . import pck
@@ -1231,6 +1231,7 @@ def compare_gameexe_dat(p1, p2, explicit_angou: str = ""):
     except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write("not found\n")
         return 2
+    validate_input_paths([p1, p2], allow_same_file=True)
     b1 = read_bytes(p1)
     b2 = read_bytes(p2)
     if (not b1) or len(b1) < 8 or (not b2) or len(b2) < 8:

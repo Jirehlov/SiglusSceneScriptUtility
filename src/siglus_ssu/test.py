@@ -24,7 +24,7 @@ from .common import (
     split_end_of_options,
     first_option_token,
 )
-from .path_policy import FilenameCaseCollisionError, read_directory, resolve_read_path
+from .path_policy import read_directory, resolve_read_path
 
 
 _PAYLOAD_SUMMARY_RE = re.compile(
@@ -189,8 +189,6 @@ def _find_extract_dir(tmp_root: str) -> str:
         for entry in entries:
             if entry.is_dir() and entry.name.startswith("output_"):
                 cands.append(entry.path)
-    except FilenameCaseCollisionError:
-        raise
     except OSError:
         return ""
     cands.sort(key=lambda p: (os.path.getmtime(p), p), reverse=True)
@@ -205,8 +203,6 @@ def _count_files_with_ext(path: str) -> int:
             for entry in entries
             if entry.is_file() and os.path.splitext(entry.name)[1].lower() == ".ss"
         )
-    except FilenameCaseCollisionError:
-        raise
     except OSError:
         return 0
 
