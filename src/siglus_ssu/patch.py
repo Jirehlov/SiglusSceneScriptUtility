@@ -1533,8 +1533,9 @@ def main(argv):
             print(f" - {msg}")
     if after == raw:
         print("No applicable changes found.")
-        return 0
-    if changes:
+        if not output_given:
+            return 0
+    elif changes:
         print(f"Applied changes: {len(changes)} bytes")
         for r, c in _summarize_changes(changes).items():
             print(f" - {r} ({c} bytes)")

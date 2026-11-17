@@ -1131,16 +1131,15 @@ def _gei_decode_txt(path, explicit_angou: str = ""):
         exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
-        if int(mode) == 0 or (
-            info.get("ini_ok")
-            and (info.get("used_exe_el") or not info.get("lzss_size"))
+        if info.get("ini_ok") and (
+            int(mode) == 0 or info.get("used_exe_el") or not info.get("lzss_size")
         ):
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
             return info, txt
         sys.stderr.write(
             f"key source rejected, falling back: {format_exe_el_source(src)}\n"
         )
-    return info, txt
+    raise RuntimeError(f"Failed to decode Gameexe.dat payload: {path}")
 
 
 def _parse_gameexe_ini_configs(txt):
@@ -1204,10 +1203,6 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
     print(
         f"raw_size: {int(info.get('raw_size', 0) or 0):d} bytes ({hx(int(info.get('raw_size', 0) or 0))})"
     )
-    if info.get("warning"):
-        print(f"warning: {info.get('warning')}")
-    if int(mode) != 0 and not info.get("ini_ok"):
-        print("warning: failed to validate Gameexe.ini text")
     print()
     print("==== Structure ====")
     print("0x00000000: header (<ii>) 8 bytes")
@@ -1229,19 +1224,11 @@ def compare_gameexe_dat(p1, p2, explicit_angou: str = ""):
     if (not b1) or len(b1) < 8 or (not b2) or len(b2) < 8:
         sys.stderr.write("invalid Gameexe.dat: too small\n")
         return 1
-    _, m1 = struct.unpack_from("<ii", b1, 0)
-    _, m2 = struct.unpack_from("<ii", b2, 0)
     try:
-        info1, t1 = _gei_decode_txt(p1, explicit_angou=explicit_angou)
-        info2, t2 = _gei_decode_txt(p2, explicit_angou=explicit_angou)
+        _, t1 = _gei_decode_txt(p1, explicit_angou=explicit_angou)
+        _, t2 = _gei_decode_txt(p2, explicit_angou=explicit_angou)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
-        return 1
-    if int(m1) != 0 and not info1.get("ini_ok"):
-        sys.stderr.write("Failed to decode first Gameexe.dat payload.\n")
-        return 1
-    if int(m2) != 0 and not info2.get("ini_ok"):
-        sys.stderr.write("Failed to decode second Gameexe.dat payload.\n")
         return 1
     c1 = _parse_gameexe_ini_configs(t1)
     c2 = _parse_gameexe_ini_configs(t2)

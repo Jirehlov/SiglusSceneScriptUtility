@@ -214,9 +214,10 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
                 )
             except Exception:
                 bundle = None
-            if isinstance(bundle, dict):
-                bundle["koe_source"] = display
-                yield bundle
+            if not isinstance(bundle, dict):
+                raise ValueError(f"koe: failed to disassemble scene: {display}")
+            bundle["koe_source"] = display
+            yield bundle
         return
     candidates_by_dir = {}
     scene_paths = {}
@@ -518,6 +519,10 @@ def _scan_calls(scene_root: str, explicit_angou: str = ""):
         scene_root,
         explicit_angou=explicit_angou,
     ):
+        if not bundle.get("complete"):
+            raise ValueError(
+                f"koe: incomplete scene disassembly: {_bundle_relpath(bundle, scene_root)}"
+            )
         eprint(
             f"koe: scanning scene {scene_files + 1}: {_bundle_relpath(bundle, scene_root)}"
         )
@@ -743,10 +748,14 @@ def main(argv):
         table_failed,
     ) = _index_ovk(voice_dir)
     if single_koe_no is None:
-        call_refs, scene_files = _scan_calls(
-            scene_root,
-            explicit_angou=explicit_angou,
-        )
+        try:
+            call_refs, scene_files = _scan_calls(
+                scene_root,
+                explicit_angou=explicit_angou,
+            )
+        except ValueError as exc:
+            eprint(str(exc))
+            return 1
         if scene_files <= 0:
             eprint("No scene .dat files or supported .pck scenes found.")
             return 1
@@ -975,4 +984,4 @@ def main(argv):
     eprint(f"Out dir          : {out_dir}")
     if single_koe_no is not None and not single_found:
         return 1
-    return 0 if failed == 0 else 1
+    return 1 if failed or table_failed else 0
