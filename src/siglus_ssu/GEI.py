@@ -1,5 +1,7 @@
 import os
 import struct
+import sys
+from . import command_name
 from . import const as C
 from .common import (
     compile_exe_el,
@@ -77,7 +79,7 @@ def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
             txt = raw.decode("utf-16le", "strict")
         except UnicodeDecodeError:
             txt = raw.decode("utf-16le", "ignore")
-    ini_ok = False
+    ini_ok = not payload_enc
     if txt:
         a = IniFileAnalizer()
         ok, _ = a.analize(txt)
@@ -90,7 +92,7 @@ def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
         "raw_size": int(len(raw)),
         "ini_ok": bool(ini_ok),
     }
-    if int(mode) != 0 and (not used_exe_el):
+    if int(mode) != 0 and payload_enc and (not used_exe_el):
         info["warning"] = "missing exe_el"
     return info, txt
 
@@ -99,11 +101,11 @@ def restore_gameexe_ini(
     gameexe_dat_path: str, output_dir: str, exe_el: bytes = b""
 ) -> str:
     info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el)
-    if info.get("mode") and not info.get("used_exe_el"):
+    if info.get("mode") and info.get("lzss_size") and not info.get("used_exe_el"):
         raise RuntimeError(
             "Gameexe.dat is encrypted with exe angou; missing \u6697\u53f7.dat/key.txt to derive key"
         )
-    if (not txt) or (not info.get("ini_ok")):
+    if not info.get("ini_ok"):
         raise RuntimeError("Failed to decode Gameexe.dat payload")
     out_dir = os.path.abspath(output_dir or ".")
     out_path = os.path.join(out_dir, "Gameexe.ini")
@@ -131,6 +133,10 @@ def write_gameexe_dat(ctx):
                 f"GEI parse error line({a.get_error_line()}): {a.get_error_str()}"
             )
         ged = d
+    if not ged.strip(" \t\r\n"):
+        sys.stderr.write(
+            f"{command_name()} -c: warning: {gameexe_ini} is empty; generating Gameexe.dat anyway\n"
+        )
     el = compile_exe_el(ctx)
     mode = int(bool(el))
     lz = None

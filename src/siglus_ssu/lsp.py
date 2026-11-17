@@ -31,7 +31,7 @@ from .common import (
     build_empty_ia_data,
     content_digest,
     content_digest_file,
-    read_text_auto,
+    decode_text_auto,
     read_bytes,
     split_end_of_options,
 )
@@ -276,7 +276,15 @@ def _content_type_charset(content_type: str) -> str:
 
 
 def _normalize_source_text(text: str) -> str:
-    return str(text or "").replace("\r", "")
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _analysis_source_text(text: str) -> str:
+    text = text.partition("\x1a")[0]
+    if text.startswith("\ufeff"):
+        source = text.lstrip("\ufeff")
+        return " " * (len(text) - len(source)) + source
+    return text
 
 
 def _path_identity(path: str) -> str:
@@ -365,13 +373,13 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
     if overlay_text is not None:
         return _normalize_source_text(overlay_text)
     try:
-        return _normalize_source_text(read_text_auto(norm))
+        raw = read_bytes(norm).partition(b"\x1a")[0]
     except (OSError, ValueError):
-        try:
-            with open_read(norm) as f:
-                return _decode_text_fallback(f.read())
-        except (OSError, ValueError):
-            return ""
+        return ""
+    try:
+        return _normalize_source_text(decode_text_auto(raw, stop_at_dos_eof=True)[0])
+    except (UnicodeError, ValueError):
+        return _decode_text_fallback(raw)
 
 
 def _file_state(path: str) -> tuple[int, int] | None:
@@ -574,7 +582,9 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
         text = _read_text(inc_path, overlays)
         source_files[source_id] = (inc_path, text)
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
-        ia = IncAnalyzer(text, C.FM_GLOBAL, iad, iad2, sidecar=True)
+        ia = IncAnalyzer(
+            _analysis_source_text(text), C.FM_GLOBAL, iad, iad2, sidecar=True
+        )
         ia.source_id = source_id
         if not ia.step1():
             return ProjectContext(
@@ -852,7 +862,7 @@ def _binding_symbol_id(path: str, kind: str, identity: str) -> str:
 
 @lru_cache(maxsize=32)
 def _unexpanded_tokens(text: str, inc: bool) -> dict[str, Any] | None:
-    return _silent_stdout_call(source_tokens, text, inc)
+    return _silent_stdout_call(source_tokens, _analysis_source_text(text), inc)
 
 
 def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
@@ -1148,7 +1158,7 @@ def _analyze_ss_document(
     iad = copy_ia_data(project.iad)
     pcad: dict[str, Any] = {}
     ca = CharacterAnalizer(sidecar=True, read_flags=read_flags)
-    compiled = ca.analize_file(text, iad, pcad)
+    compiled = ca.analize_file(_analysis_source_text(text), iad, pcad)
     result.directive_tokens = pcad.get("directive_tokens", [])
     if not compiled:
         result.diagnostics.append(
@@ -1379,7 +1389,10 @@ def _native_lsp_project_config(
         return {
             "constants": _native_compile_constants_config(),
             "inc_docs": [
-                {"path": os.path.abspath(path), "text": _read_text(path, overlays)}
+                {
+                    "path": os.path.abspath(path),
+                    "text": _analysis_source_text(_read_text(path, overlays)),
+                }
                 for path in inc_paths
             ],
         }
@@ -1420,7 +1433,7 @@ def _native_scan_document_result(
         return None
     try:
         result = scan_lsp_document_native(
-            native_project, path, text, run_bs, read_flags
+            native_project, path, _analysis_source_text(text), run_bs, read_flags
         )
     except Exception:
         return None
@@ -2463,7 +2476,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 29
+LSP_INDEX_CACHE_VERSION = 31
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -4378,11 +4391,9 @@ class SSLanguageServer:
             if not isinstance(raw_text, str):
                 return
             doc.text = _normalize_source_text(raw_text)
-            doc.disk_text = doc.text
-            doc.overlay_active = False
-            doc.file_state = _file_state(doc.path)
-        else:
-            old_signature = self.sync_document_from_disk(doc)
+        doc.disk_text = _read_text(doc.path, {})
+        doc.overlay_active = doc.text != doc.disk_text
+        doc.file_state = _file_state(doc.path)
         doc.open_uris[uri] = (doc.text, doc.version)
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
@@ -4971,7 +4982,7 @@ class SSLanguageServer:
             analyzer = CharacterAnalizer(sidecar=True)
             if not _silent_stdout_call(
                 analyzer.analize_file,
-                originals[path],
+                _analysis_source_text(originals[path]),
                 copy_ia_data(project.iad),
                 data,
                 expand=False,

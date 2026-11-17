@@ -1762,7 +1762,8 @@ def norm_charset(cs: str) -> str:
         return "utf-8"
     try:
         name = codecs.lookup(s).name
-    except LookupError:
+        "a".encode(name)
+    except (LookupError, UnicodeError):
         return ""
     if name in ("cp932", "shift_jis"):
         return "cp932"
@@ -1799,7 +1800,7 @@ def decode_text_auto(
     def _fix(t: str) -> str:
         if stop_at_dos_eof:
             t = t.partition("\x1a")[0]
-        return t.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        return t.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
 
     if cs:
         if cs == "cp932":

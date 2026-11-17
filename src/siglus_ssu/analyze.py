@@ -24,7 +24,7 @@ from .path_policy import (
     open_read,
     read_file_stat,
     resolve_read_path,
-    windows_filename_key,
+    same_file_path,
     validate_input_paths,
 )
 from . import pck
@@ -237,26 +237,12 @@ def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json="
     report_json = os.path.abspath(
         report_json or os.path.splitext(save_path)[0] + ".flags.json"
     )
-    try:
-        for input_path in (save_path, input_pck):
-            if not input_path:
-                continue
-            same_input = windows_filename_key(report_json) == windows_filename_key(
-                os.path.abspath(input_path)
+    for input_path in (save_path, input_pck):
+        if input_path and same_file_path(report_json, input_path):
+            sys.stderr.write(
+                "analyze: --report-json must not overwrite an input file\n"
             )
-            if not same_input:
-                try:
-                    same_input = os.path.samefile(report_json, input_path)
-                except (FileNotFoundError, NotADirectoryError):
-                    pass
-            if same_input:
-                sys.stderr.write(
-                    "analyze: --report-json must not overwrite an input file\n"
-                )
-                return 2
-    except OSError as exc:
-        sys.stderr.write(f"analyze: cannot check JSON output path: {exc}\n")
-        return 1
+            return 2
     try:
         info = sav.parse_read_sav(read_bytes(save_path))
         scene_lines = {}

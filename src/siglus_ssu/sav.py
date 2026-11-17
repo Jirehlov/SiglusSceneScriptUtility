@@ -702,6 +702,16 @@ def _try_parse_global_or_config(blob):
     enc = blob[12 : 12 + int(data_size)]
     lz = _peek_lzss_header(enc) if data_size >= 8 else None
     kind = "global" if major >= 2 else "config"
+    if major == 1:
+        try:
+            reader = _SaveStreamReader(_unpack_tnm_data(enc))
+            if minor >= 2:
+                reader.seek(8)
+            _read_fixed_array_header(reader, item_size=4)
+        except (ValueError, RuntimeError, struct.error):
+            pass
+        else:
+            kind = "global"
     return {
         "kind": kind,
         "major": int(major),
@@ -1038,7 +1048,7 @@ def sav(blob, path=None):
         if info.get("payload") is None:
             if info.get("payload_error"):
                 print(f"payload_error: {info['payload_error']}")
-            return 0
+            return 1
         p = info["payload"]
         print(f"payload_keys: {len(p)}")
         if info["kind"] == "global":
@@ -1133,11 +1143,11 @@ def compare_sav(b1, b2):
         print(f"kind2: {k2['kind']}")
         print()
         print("--- Analyze file1 ---")
-        sav(b1)
+        rc1 = sav(b1)
         print()
         print("--- Analyze file2 ---")
-        sav(b2)
-        return 0
+        rc2 = sav(b2)
+        return rc1 or rc2
     if k1["kind"] == "read":
         a = parse_read_sav(b1)
         b = parse_read_sav(b2)
@@ -1184,7 +1194,16 @@ def compare_sav(b1, b2):
                 continue
             cnt1, r1 = ca
             cnt2, r2 = cb
-            if cnt1 == cnt2 and r1 == r2:
+            if (
+                cnt1 == cnt2
+                and r1 == r2
+                and all(
+                    bool(x) == bool(y)
+                    for x, y in zip(
+                        a["flags"][ascii_lower(name)], b["flags"][ascii_lower(name)]
+                    )
+                )
+            ):
                 continue
             pct1 = (r1 * 1000) // cnt1 if cnt1 else 0
             pct2 = (r2 * 1000) // cnt2 if cnt2 else 0
@@ -1225,7 +1244,7 @@ def compare_sav(b1, b2):
             if b.get("payload_error"):
                 print(f"payload_error2: {b.get('payload_error')}")
             print(f"raw_equal: {bool(a.get('raw') == b.get('raw'))}")
-            return 0
+            return 1
         if k1["kind"] == "global":
             diff = []
             for key in ("global_real_time", "dummy_check_id"):

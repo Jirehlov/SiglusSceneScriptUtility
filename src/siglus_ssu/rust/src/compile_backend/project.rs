@@ -1055,6 +1055,7 @@ fn write_gameexe_dat(
     config: &CompileConfig,
     source: &str,
     exe_key: Option<&[u8]>,
+    stdout: &mut OutputLog<'_>,
 ) -> Result<(), String> {
     let mut payload = Vec::new();
     let options = TextCommentOptions {
@@ -1068,6 +1069,12 @@ fn write_gameexe_dat(
     };
     let parsed = scan_text_comments(source, &options)
         .map_err(|error| line_error("GEI parse error", error.line, error.message))?;
+    if parsed.text.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
+        let gameexe_ini = &config.context.gameexe_ini;
+        stdout.push_warning(&format!(
+            "siglus-ssu -c: warning: {gameexe_ini} is empty; generating Gameexe.dat anyway"
+        ))?;
+    }
     if !parsed.text.is_empty() {
         payload = crate::lzss::pack(&utf16le(&parsed.text), false);
         crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
@@ -1634,7 +1641,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         None
     };
     if let Some(source) = gameexe_source {
-        write_gameexe_dat(config, source, exe_key.as_deref())?;
+        write_gameexe_dat(config, source, exe_key.as_deref(), stdout)?;
     } else {
         stdout.push_warning(&format!(
             "siglus-ssu -c: warning: {gameexe_ini} not found; skipped Gameexe.dat"

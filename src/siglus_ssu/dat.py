@@ -1142,7 +1142,10 @@ def _gei_decode_txt(path, explicit_angou: str = ""):
         exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
-        if int(mode) == 0 or (info.get("used_exe_el") and txt and info.get("ini_ok")):
+        if int(mode) == 0 or (
+            info.get("ini_ok")
+            and (info.get("used_exe_el") or not info.get("lzss_size"))
+        ):
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
             return info, txt
         sys.stderr.write(

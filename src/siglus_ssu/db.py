@@ -116,6 +116,9 @@ def main(argv):
             eprint("error: invalid --type value")
             hint_help()
             return 2
+        if not 0 <= opt_type < 1 << 31:
+            eprint("error: --type must be in 0..2147483647")
+            return 2
         del argv[i : i + 2]
     opt_seed = 1
     opt_seed_given = False

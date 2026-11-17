@@ -227,7 +227,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--csv <seed_csv>` | With `--test-shuffle`, export per-scene initial and final seeds. A directory target receives `test_shuffle_seeds.csv`. |
 | `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. Output is always a directory. A missing INI produces a warning and succeeds without creating `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 
-`Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped.
+`Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped. An empty INI produces a warning and is compiled.
 
 #### Examples
 
@@ -476,7 +476,7 @@ siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expect
 | `--x` | Export `.dbs` to CSV. |
 | `--a` | Analyze one database or compare two. |
 | `--c` | Compile CSV to `.dbs`. |
-| `--type N` | Output database type; default `1`. Type `0` strings must be encodable as CP932; other types use UTF-16LE. |
+| `--type N` | Output database type (`0`–`2147483647`; default `1`). Type `0` strings must be encodable as CP932; other types use UTF-16LE. |
 | `--set-shuffle SEED` | Set the random-padding seed (decimal or hexadecimal; default `1`). |
 | `--test-shuffle [skip0]` | Try up to 16,777,216 random-generator skip counts from `skip0` (default `0`) to match a reference database's padding. Single-file mode only. |
 
@@ -499,6 +499,8 @@ CSV files use UTF-8 with BOM and CRLF, suitable for Excel. Keep the first two ro
 - `#DATANO`: column call numbers, after the first cell containing `#DATANO`.
 - `#DATATYPE`: corresponding types, commonly `S` (string) and `V` (numeric/32-bit value).
 - Data rows: the first cell is the row call number, followed by values in header order.
+
+Row and column call numbers must fit signed 32-bit integers.
 
 Use normal CSV quoting: double embedded quotes, keep backslashes literal, and place actual newlines or tabs inside quoted fields. Unencodable strings fail compilation with the CSV location.
 
@@ -948,7 +950,7 @@ These rules describe source accepted by `siglus-ssu -c`. The selected profile su
 
 Each scene uses its `.ss` file and all same-directory `.inc` files. Includes are processed in ASCII-lowercased filename order.
 
-Source encoding is detected per file or selected with `--charset`. Invalid bytes fail unless `--allow-invalid` is enabled. Compilation ignores bytes after the first DOS EOF character (U+001A), removes one leading BOM, and normalizes CRLF/lone CR to LF. No Unicode normalization is performed.
+Source encoding is detected per file or selected with `--charset`. Invalid bytes fail unless `--allow-invalid` is enabled. Compilation ignores bytes after the first DOS EOF character (U+001A), ignores leading BOM characters, and normalizes CRLF/lone CR to LF. No Unicode normalization is performed.
 
 ### Processing Order
 
@@ -1054,8 +1056,8 @@ z-label-token ::= "#z" digit [digit [digit]]
 
 - A lone `#` is accepted as an ordinary label.
 - Z-labels use 1–3 ASCII digits. Profiles `7` and `8` accept values below `100`; other profiles accept values below `1000`.
-- `#z0`, `#z00`, and `#z000` name the same numeric label. `#z1234`, and `#z100`–`#z999` in profiles `7`/`8`, are ordinary labels.
-- Labels must be uniquely defined and all references must resolve. Every scene needs `#z0`.
+- `#z0`, `#z00`, and `#z000` occupy the same numeric label slot, but a jump reference must exactly match the definition's spelling. `#z1234`, and `#z100`–`#z999` in profiles `7`/`8`, are ordinary labels.
+- Labels must be uniquely defined and all references must resolve. Every scene must define a Z-label with numeric value `0`.
 
 #### Integer literals
 

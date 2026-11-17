@@ -2,7 +2,7 @@ import os
 import sys
 import subprocess
 import datetime
-from .common import split_end_of_options, first_option_token
+from .common import split_end_of_options, first_option_token, quote_ss_text
 from .path_policy import resolve_read_path
 
 
@@ -64,6 +64,15 @@ def main(argv):
         f"/z_no={label}",
         "/end_start",
     ]
+    if os.name == "nt":
+        cmd = " ".join(
+            (
+                subprocess.list2cmdline(cmd[:1]),
+                f"/work_dir={quote_ss_text(work_dir)}",
+                f"/start={quote_ss_text(ss)}",
+                *cmd[3:],
+            )
+        )
     try:
         subprocess.Popen(cmd, cwd=engine_dir)
     except (OSError, ValueError) as e:

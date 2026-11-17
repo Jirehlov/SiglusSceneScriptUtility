@@ -227,7 +227,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，导出各场景的初始和最终种子。目录目标下的文件名为 `test_shuffle_seeds.csv`。 |
 | `--gei` | 仅将 `Gameexe.ini` 编译为 `Gameexe.dat`，输出始终按目录处理。缺少 INI 时会警告并成功结束，不创建 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 
-普通编译也不要求存在 `Gameexe.ini`，缺失时会跳过 `Gameexe.dat`。
+普通编译也不要求存在 `Gameexe.ini`，缺失时会跳过 `Gameexe.dat`。空 INI 会警告并继续编译。
 
 #### 示例
 
@@ -476,7 +476,7 @@ siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expect
 | `--x` | 将 `.dbs` 导出为 CSV。 |
 | `--a` | 分析一个数据库或比较两个数据库。 |
 | `--c` | 将 CSV 编译为 `.dbs`。 |
-| `--type N` | 输出数据库类型，默认 `1`。类型 `0` 的字符串必须能以 CP932 编码，其他类型使用 UTF-16LE。 |
+| `--type N` | 输出数据库类型（`0`–`2147483647`），默认 `1`。类型 `0` 的字符串必须能以 CP932 编码，其他类型使用 UTF-16LE。 |
 | `--set-shuffle SEED` | 设置随机填充种子，支持十进制或十六进制，默认 `1`。 |
 | `--test-shuffle [skip0]` | 从 `skip0`（默认 `0`）开始，尝试最多 16,777,216 个随机数跳过次数，以匹配参考数据库的填充。仅用于单文件模式。 |
 
@@ -499,6 +499,8 @@ CSV 使用带 BOM 的 UTF-8 及 CRLF，可用 Excel 编辑。请保留前两行�
 - `#DATANO`：首格为 `#DATANO`，后续为各列调用号。
 - `#DATATYPE`：对应列的类型，常见值为 `S`（字符串）和 `V`（数值/32 位数据）。
 - 数据行：首格为行调用号，后续值按表头顺序排列。
+
+行、列调用号必须在有符号 32 位整数范围内。
 
 使用标准 CSV 引号规则：双引号写成两个双引号，反斜杠保留原样，换行和制表符直接写入带引号的字段。无法编码的字符串会使编译失败，并显示 CSV 位置。
 
@@ -948,7 +950,7 @@ siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 
 每个场景使用自身 `.ss` 及同目录的全部 `.inc`。Include 文件按文件名 ASCII 小写顺序处理。
 
-源码编码会逐文件检测，也可通过 `--charset` 指定。非法字节默认导致失败，`--allow-invalid` 可启用替换解码。编译会忽略首个 DOS EOF 字符（U+001A）之后的字节、移除一个开头 BOM，并将 CRLF 或孤立 CR 转为 LF，不进行 Unicode 规范化。
+源码编码会逐文件检测，也可通过 `--charset` 指定。非法字节默认导致失败，`--allow-invalid` 可启用替换解码。编译会忽略首个 DOS EOF 字符（U+001A）之后的字节及开头的 BOM 字符，并将 CRLF 或孤立 CR 转为 LF，不进行 Unicode 规范化。
 
 ### 处理顺序
 
@@ -1054,8 +1056,8 @@ z-label-token ::= "#z" digit [digit [digit]]
 
 - 单独的 `#` 是有效的普通标签。
 - Z-label 使用 1–3 位 ASCII 数字。Profile `7` 和 `8` 的数值须小于 `100`，其余须小于 `1000`。
-- `#z0`、`#z00` 和 `#z000` 对应同一个数字标签。`#z1234`，以及 profile `7`/`8` 中的 `#z100`–`#z999`，均为普通标签。
-- 标签必须唯一定义，全部引用必须可解析，每个场景都必须有 `#z0`。
+- `#z0`、`#z00` 和 `#z000` 占用同一个数字标签槽，但跳转引用必须与定义的拼写完全一致。`#z1234`，以及 profile `7`/`8` 中的 `#z100`–`#z999`，均为普通标签。
+- 标签必须唯一定义，全部引用必须可解析。每个场景都必须定义数值为 `0` 的 Z-label。
 
 #### 整数字面量
 

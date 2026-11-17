@@ -328,8 +328,6 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
         raise ValueError("unknown type")
     need_pil()
     canvas_w, canvas_h, cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
-    if not cuts:
-        raise ValueError("type2 no cuts")
     outer_rects = _type2_outer_rects(d, cut_cnt)
     single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
     wrote = sk = 0
@@ -434,8 +432,6 @@ def _validate_extract_outputs(files):
             names = [f"{pre}{_SIMPLE_EXT[t]}"]
         elif t == 2:
             _w, _h, cut_cnt, _off, _unp, cuts = _type2_unp_and_cuts(data)
-            if not cuts:
-                raise ValueError(f"type2 no cuts: {path}")
             single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
             names = [
                 f"{pre}.png" if single else f"{pre}_cut{ci:03d}.png"

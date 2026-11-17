@@ -345,19 +345,28 @@ def _msvcrt_rand_byte() -> int:
     return value
 
 
-def _wtoi_prefix(s):
+def _wtoi_prefix(s, *, call_location=None):
     if s is None:
         return None
     m = re.match(r"^[\s]*([+-]?\d+)", str(s))
     if not m:
         return None
     try:
-        return int(m.group(1), 10)
-    except Exception:
-        return None
+        value = int(m.group(1), 10)
+    except ValueError:
+        value = None
+    if call_location is not None and (
+        value is None or not -(1 << 31) <= value < 1 << 31
+    ):
+        path, line, column = call_location
+        raise ValueError(
+            f"{path}:{line}:{column}: call number must fit a signed 32-bit integer"
+        )
+    return value
 
 
 def _read_official_csv(csv_path: str):
+    csv.field_size_limit(2**31 - 1)
     with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
         reader = csv.reader(f)
         rows = []
@@ -368,6 +377,10 @@ def _read_official_csv(csv_path: str):
                 row = next(reader)
             except StopIteration:
                 break
+            except csv.Error as exc:
+                raise ValueError(
+                    f"{csv_path}:{line_no}: CSV parse error: {exc}"
+                ) from exc
             rows.append(row)
             row_lines.append(line_no)
     datano_i = None
@@ -391,7 +404,10 @@ def _read_official_csv(csv_path: str):
     max_cols = max(len(datano_row), len(datatype_row))
     col_specs = []
     for ci in range(1, max_cols):
-        call_no = _wtoi_prefix(datano_row[ci] if ci < len(datano_row) else "")
+        call_no = _wtoi_prefix(
+            datano_row[ci] if ci < len(datano_row) else "",
+            call_location=(csv_path, row_lines[datano_i], ci + 1),
+        )
         if call_no is None:
             continue
         t = (datatype_row[ci] if ci < len(datatype_row) else "").strip().upper()
@@ -410,7 +426,7 @@ def _read_official_csv(csv_path: str):
     for i, row in enumerate(rows[datatype_i + 1 :], datatype_i + 1):
         if not row:
             continue
-        row_call = _wtoi_prefix(row[0])
+        row_call = _wtoi_prefix(row[0], call_location=(csv_path, row_lines[i], 1))
         if row_call is None:
             continue
         row_calls.append(int(row_call))
@@ -501,8 +517,6 @@ def create_one_dbs_from_csv(
     struct.pack_into("<i", prefix, 0, int(data_size))
     expanded = bytes(prefix) + bytes(str_blob)
     align = int(C.DBS_MAP_WIDTH * 4)
-    if align <= 0:
-        align = 64
     padded_size = (len(expanded) + (align - 1)) // align * align
     dst = bytearray(padded_size)
     dst[: len(expanded)] = expanded
@@ -517,11 +531,7 @@ def create_one_dbs_from_csv(
 
 
 def _dbs_pack(m_type: int, expanded: bytes) -> bytes:
-    if not expanded:
-        return struct.pack("<i", int(m_type))
     merged = _dbs_plane_xor_merge(expanded)
-    if merged is None:
-        return struct.pack("<i", int(m_type))
     packed = bytearray(lzss_pack(merged))
     _xor32_inplace(packed, C.DBS_XOR32_CODE)
     return struct.pack("<i", int(m_type)) + bytes(packed)

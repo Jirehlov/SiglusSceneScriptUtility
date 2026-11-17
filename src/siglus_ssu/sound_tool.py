@@ -23,9 +23,10 @@ from .common import (
     parse_main_argv,
     prepare_batch_paths,
     content_digest,
+    read_bytes,
     write_bytes,
     missing_input_file,
-    read_text_auto,
+    decode_text_auto,
     run_batch,
     consume_angou_option,
     format_exe_el_source,
@@ -388,19 +389,16 @@ def _parse_bgm_table(gameexe_ini_text: str):
 
 
 def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
-    try:
-        txt = read_text_auto(gameexe_path)
-    except Exception:
-        txt = ""
-    if txt:
-        if _parse_bgm_table(txt):
-            return txt
-        try:
-            ok, _ = GEI.IniFileAnalizer().analize(txt)
-        except Exception:
-            ok = False
-        if ok:
-            return txt
+    blob = read_bytes(gameexe_path)
+    if not blob.startswith(b"\0\0\0\0"):
+        txt = decode_text_auto(blob, stop_at_dos_eof=True)[0]
+        analyzer = GEI.IniFileAnalizer()
+        ok, txt = analyzer.analize(txt)
+        if not ok:
+            raise RuntimeError(
+                f"GEI parse error line({analyzer.get_error_line()}): {analyzer.get_error_str()}"
+            )
+        return txt
     os_dir = os.path.dirname(os.path.abspath(gameexe_path))
     cands = list(
         pck.iter_exe_el_candidates(
@@ -417,11 +415,15 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         try:
             info, txt = GEI.read_gameexe_dat(gameexe_path, exe_el=exe_el)
-            if info.get("mode") and not info.get("used_exe_el"):
+            if (
+                info.get("mode")
+                and info.get("lzss_size")
+                and not info.get("used_exe_el")
+            ):
                 raise RuntimeError(
                     f"Gameexe.dat is encrypted with exe angou; missing {ANGOU_DAT_NAME}/key.txt to derive key"
                 )
-            if (not txt) or (not info.get("ini_ok")):
+            if not info.get("ini_ok"):
                 raise RuntimeError("Failed to decode Gameexe.dat payload")
             sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
             return txt
@@ -1678,10 +1680,20 @@ def main(argv) -> int:
                 no = int(m.group("no"))
                 key = (rel_dir, base2)
                 groups.setdefault(key, []).append((no, src_path))
+            targets = {}
             for (rel_dir, base2), items in sorted(
                 groups.items(), key=lambda x: (x[0][0], x[0][1])
             ):
                 if len(items) >= 2:
+                    out_path = os.path.join(out_root, rel_dir, base2 + ".ovk")
+                    key = windows_filename_key(os.path.abspath(out_path))
+                    previous = targets.get(key)
+                    if previous is not None:
+                        eprint(
+                            f"error: output path collision: {previous!r} and {out_path!r}"
+                        )
+                        return 1
+                    targets[key] = out_path
                     tasks.append(("ovk", items, rel_dir, base2))
                     continue
                 for _no, src_path in items:
