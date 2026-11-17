@@ -2095,7 +2095,7 @@ def extract_pck(
             out_path = _unique_outpath(bs_dir, out_name, output_names)
             write_bytes(out_path, out_dat)
             ok_cnt += 1
-            if D and not D.is_decompiler_excluded_dat(out_path, nm):
+            if D:
                 yield {
                     "dat_path": out_path,
                     "blob": out_dat,

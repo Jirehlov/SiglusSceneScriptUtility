@@ -82,20 +82,9 @@ def _build_decompile_hints(bundles):
 
 
 def is_decompiler_excluded_dat(dat_path=None, scene_name=None):
-    names = []
-    if dat_path:
-        name = os.path.basename(str(dat_path))
-        if name:
-            names.append(name)
-    if scene_name not in (None, ""):
-        scene_text = str(scene_name)
-        if scene_text:
-            names.append(scene_text)
-            names.append(scene_text + ".dat")
-    for name in names:
-        if is_named_filename(name, ANGOU_DAT_NAME):
-            return True
-    return False
+    if scene_name not in (None, "") or not dat_path:
+        return False
+    return is_named_filename(os.path.basename(str(dat_path)), ANGOU_DAT_NAME)
 
 
 def _payload_metadata_trace(meta, pack_context):

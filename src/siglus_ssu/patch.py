@@ -1531,12 +1531,15 @@ def main(argv):
         print("Warnings:")
         for msg in warnings:
             print(f" - {msg}")
-    if not changes:
+    if after == raw:
         print("No applicable changes found.")
         return 0
-    print(f"Applied changes: {len(changes)} bytes")
-    for r, c in _summarize_changes(changes).items():
-        print(f" - {r} ({c} bytes)")
+    if changes:
+        print(f"Applied changes: {len(changes)} bytes")
+        for r, c in _summarize_changes(changes).items():
+            print(f" - {r} ({c} bytes)")
+    else:
+        print("Restored original language configuration.")
     try:
         _atomic_write_bytes(out_path, after)
     except Exception as e:

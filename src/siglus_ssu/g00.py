@@ -472,7 +472,7 @@ def run_extract(inp, out_dir, trim: bool = False):
 
 def _img_base_and_cut(p: Path):
     stem = p.stem
-    m = re.match(r"^(.*)_cut(\d{3})$", stem)
+    m = re.match(r"^(.*)_cut(\d{3,})$", stem)
     if m:
         return m.group(1), int(m.group(2))
     return stem, None
