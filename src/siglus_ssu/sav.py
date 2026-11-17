@@ -125,34 +125,21 @@ def _parse_local_stream_ex(b):
         }
     sw_cnt = 4
     md_cnt = 4
-    sw_stride = None
     sw_bytes = sw_cnt * 3
     md_bytes = md_cnt * 8
-    if n >= sw_bytes + md_bytes:
-        sw_stride = 3
-        md_off = sw_bytes
-        if n < md_off + md_bytes:
-            sw_stride = None
-    if sw_stride is None and n >= (sw_cnt * 4) + md_bytes:
-        sw_stride = 4
-        md_off = sw_cnt * 4
-        if n < md_off + md_bytes:
-            sw_stride = None
-    if sw_stride is None:
+    if n < sw_bytes + md_bytes:
         return {"size": int(n), "sha256": content_digest(bb), "raw_hex": bb.hex()}
     out_sw = []
     off = 0
     for _ in range(sw_cnt):
         exist = bool(bb[off])
-        enable = bool(bb[off + 1]) if off + 1 < n else False
-        onoff = bool(bb[off + 2]) if off + 2 < n else False
+        enable = bool(bb[off + 1])
+        onoff = bool(bb[off + 2])
         out_sw.append({"exist": exist, "enable": enable, "onoff": onoff})
-        off += sw_stride
+        off += 3
     out_md = []
-    off = md_off
+    off = sw_bytes
     for _ in range(md_cnt):
-        if off + 8 > n:
-            break
         exist = bool(bb[off])
         enable = bool(bb[off + 1])
         mode = int(struct.unpack_from("<i", bb, off + 4)[0])

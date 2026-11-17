@@ -25,6 +25,9 @@ from .common import (
     read_scn_metadata,
     format_exe_el_source,
     split_end_of_options,
+    new_call_scope,
+    new_expression_state,
+    new_scene_element_resolver,
 )
 from .path_policy import open_read, resolve_read_path
 
@@ -92,20 +95,6 @@ def _csv_unescape_text(s: str | None) -> str:
             out.append("\\")
             out.append(nxt)
             i += 2
-    return "".join(out)
-
-
-def _encode_quoted(value: str) -> str:
-    out = []
-    for ch in value:
-        if ch == "\\":
-            out.append("\\\\")
-        elif ch == "\n":
-            out.append("\\n")
-        elif ch == '"':
-            out.append('\\"')
-        else:
-            out.append(ch)
     return "".join(out)
 
 
@@ -230,39 +219,7 @@ def _collect_compiled_string_kinds(root, atom_type_map, unknown_list):
     return out
 
 
-def _collect_replace_symbol_spans(
-    line_text: str, replace_tree
-) -> list[tuple[int, int]]:
-    spans = []
-    if not line_text or not isinstance(replace_tree, dict):
-        return spans
-    p = 0
-    n = len(line_text)
-    while p < n:
-        rep = CA.search_replace_tree(replace_tree, line_text, p)
-        if not isinstance(rep, dict):
-            p += 1
-            continue
-        name = rep.get("name") or ""
-        if not name:
-            p += 1
-            continue
-        end = p + len(name)
-        spans.append((p, end))
-        p = end if end > p else p + 1
-    return spans
-
-
-def _is_within_replace_symbol(rel_left: int, rel_right: int, spans) -> bool:
-    if rel_left < 0 or rel_right <= rel_left:
-        return False
-    for span_left, span_right in spans or []:
-        if span_left <= rel_left and rel_right <= span_right:
-            return True
-    return False
-
-
-def collect_tokens(text: str, ctx: dict, iad_base=None):
+def collect_dialogue_texts(text: str, ctx: dict, iad_base=None):
     if iad_base is None:
         iad = BS.build_ia_data(ctx)
     else:
@@ -278,10 +235,6 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
         raise RuntimeError(
             f"textmap: LA failed: {err.get('str', '')} at line {err.get('line', 0)}"
         )
-    atom_list = list(lad.get("atom_list") or [])
-    atom_type_map = {}
-    for atom in atom_list:
-        atom_type_map[_int_value(atom.get("id"))] = _int_value(atom.get("type"))
     sa = SA.SA(iad, lad)
     ok, sad = sa.analize()
     if not ok:
@@ -299,27 +252,140 @@ def collect_tokens(text: str, ctx: dict, iad_base=None):
             f"textmap: MA failed: {last.get('type', 'UNK_ERROR')} at line {atom.get('line', 0)}"
         )
     root = (mad or {}).get("root") if isinstance(mad, dict) else None
-    kind_map = _collect_compiled_string_kinds(
-        root, atom_type_map, lad.get("unknown_list") or []
-    )
     str_list = lad.get("str_list") or []
-    tokens = []
-    for atom in atom_list:
-        if atom.get("type") != C.LA_T["VAL_STR"]:
-            continue
-        aid = _int_value(atom.get("id"))
-        opt = int(atom.get("opt", -1))
-        if opt < 0 or opt >= len(str_list):
-            continue
-        kind = int(kind_map.get(aid, TEXTMAP_KIND_OTHER) or TEXTMAP_KIND_OTHER)
-        tokens.append(
-            {
-                "line": int(atom.get("line", 0) or 0),
-                "text": str_list[opt],
-                "kind": kind or TEXTMAP_KIND_OTHER,
-            }
-        )
-    return tokens, iad
+    unknown_list = lad.get("unknown_list") or []
+
+    def _constant_string(expression):
+        parts = []
+        pending = [expression]
+        while pending:
+            node = pending.pop()
+            if not isinstance(node, dict):
+                return None
+            nt = node.get("node_type")
+            if nt == C.NT_EXP_SIMPLE:
+                pending.append(node.get("smp_exp"))
+            elif nt == C.NT_SMP_KAKKO:
+                pending.append(node.get("exp"))
+            elif nt == C.NT_SMP_LITERAL:
+                atom = (node.get("Literal") or {}).get("atom") or {}
+                opt = _int_value(atom.get("opt"))
+                if atom.get("type") == C.LA_T["VAL_INT"]:
+                    parts.append(str(atom["opt"]))
+                    continue
+                if atom.get("type") != C.LA_T["VAL_STR"] or not 0 <= opt < len(
+                    str_list
+                ):
+                    return None
+                parts.append(str_list[opt])
+            elif (
+                nt == C.NT_EXP_OPR2
+                and node.get("node_form") == C.FM_STR
+                and ((node.get("opr") or {}).get("atom") or {}).get("opt") == C.OP_PLUS
+            ):
+                pending.extend((node.get("exp_2"), node.get("exp_1")))
+            else:
+                return None
+        return "".join(parts)
+
+    texts = []
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(reversed(node))
+        elif isinstance(node, dict):
+            nt = node.get("node_type")
+            if nt == C.NT_S_TEXT:
+                atom = (node.get("text") or {}).get("atom") or {}
+                opt = _int_value(atom.get("opt"))
+                texts.append(str_list[opt] if 0 <= opt < len(str_list) else None)
+            elif (
+                nt == C.NT_ELM_ELEMENT
+                and node.get("element_type") == C.ET_COMMAND
+                and node.get("element_parent_form") in (C.FM_GLOBAL, C.FM_MWND)
+                and (_int_value(node.get("element_code")) >> 24) != C.ELM_OWNER_USER_CMD
+            ):
+                atom = (node.get("name") or {}).get("atom") or {}
+                opt = _int_value(atom.get("opt"))
+                if 0 <= opt < len(unknown_list) and unknown_list[opt] == "print":
+                    args = (node.get("arg_list") or {}).get("arg") or []
+                    texts.append(_constant_string(args[0].get("exp")) if args else None)
+            if "atom" not in node:
+                pending.extend(reversed(node.values()))
+    return texts
+
+
+def iter_dat_string_uses(bundle):
+    meta = bundle.get("meta") or {}
+    context = bundle.get("pack_context") or {}
+    scope = new_call_scope(bundle.get("command_ranges") or {})
+    state = new_expression_state(
+        element_info=new_scene_element_resolver(
+            call_scope=scope,
+            global_property_defs=context.get("inc_property_defs"),
+            global_property_count=context.get("inc_property_cnt", 0),
+            scene_property_defs=meta.get("scn_prop_defs"),
+            global_command_defs=context.get("inc_command_defs"),
+            global_command_count=context.get("inc_command_cnt", 0),
+            scene_command_names=meta.get("scn_cmd_names"),
+        ),
+        item_expr=None,
+        render_expressions=False,
+        result_receivers=False,
+    )
+    fm_str = C.resolve_form_code(C.FM_STR)
+    fm_int = C.resolve_form_code(C.FM_INT)
+
+    def _pop_string(arg):
+        if arg["form"] in state.scalar_forms:
+            item = state.pop_stack_top() or {}
+            if item.get("form") == fm_int and item.get("val") is not None:
+                return str(item["val"]), ()
+            return item.get("string_value"), item.get("string_ids", ())
+        state.consume_element()
+        return None, ()
+
+    for event in bundle.get("trace") or []:
+        scope.advance(event["ofs"])
+        op = event["op"]
+        value = None
+        ids = ()
+        if op == "CD_PUSH" and event.get("form") == fm_str:
+            value = event.get("text")
+            ids = (event["value"],)
+        elif op == "CD_OPERATE_2" and event.get("left_form") == fm_str:
+            left, right = state.stack[-2:]
+            ids = left.get("string_ids", ())
+            if event.get("right_form") == fm_str and event["opr"] == C.OP_PLUS:
+                ids += right.get("string_ids", ())
+                lhs = left.get("string_value")
+                rhs = right.get("string_value")
+                if lhs is not None and rhs is not None:
+                    value = lhs + rhs
+        if op in ("CD_TEXT", "CD_NAME"):
+            item = state.stack[-1] if state.stack else {}
+            yield (
+                TEXTMAP_KIND_DIALOGUE if op == "CD_TEXT" else TEXTMAP_KIND_NAME,
+                item.get("string_ids", ()),
+                item.get("string_value"),
+            )
+        elif op == "CD_COMMAND" and (
+            _is_trace_command_base(event, "print")
+            or _is_trace_command_base(event, "set_namae")
+        ):
+            args = state.peek_arg_list(event["arg_layout"], _pop_string)
+            text, string_ids = args[0] if args else (None, ())
+            yield (
+                TEXTMAP_KIND_DIALOGUE
+                if _is_trace_command_base(event, "print")
+                else TEXTMAP_KIND_NAME,
+                string_ids,
+                text,
+            )
+        state.apply_event(event, scope)
+        if ids and state.stack and state.stack[-1]["form"] == fm_str:
+            state.stack[-1].update(string_value=value, string_ids=ids)
 
 
 def _collect_dat_string_kinds(bundle, source_name: str = ""):
@@ -336,21 +402,11 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
     if fm_str < 0:
         return out
     skipped_trace = 0
-    for i, ev in enumerate(trace):
+    for ev in trace:
         if not isinstance(ev, dict):
             skipped_trace += 1
             continue
         op = str(ev.get("op") or "")
-        if op == "CD_TEXT":
-            sid = _int_value(ev.get("str_id"))
-            if sid >= 0:
-                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_DIALOGUE)
-            continue
-        if op == "CD_NAME":
-            sid = _int_value(ev.get("str_id"))
-            if sid >= 0:
-                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_NAME)
-            continue
         if op != "CD_PUSH":
             continue
         if _int_value(ev.get("form")) != fm_str:
@@ -359,68 +415,14 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
         if sid < 0:
             continue
         out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_OTHER)
-        if i + 1 >= len(trace):
-            continue
-        next_ev = trace[i + 1]
-        if not isinstance(next_ev, dict):
-            continue
-        next_op = str(next_ev.get("op") or "")
-        if next_op == "CD_COMMAND":
-            if _is_trace_command_base(next_ev, "print"):
-                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_DIALOGUE)
-            elif _is_trace_command_base(next_ev, "set_namae"):
-                out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_NAME)
+    if not skipped_trace:
+        for kind, ids, _text in iter_dat_string_uses(bundle):
+            for sid in ids:
+                out[sid] = _merge_textmap_kind(out.get(sid), kind)
     if skipped_trace:
         eprint(
             f"{prefix}: skipped {skipped_trace} invalid trace item(s)",
             errors="replace",
-        )
-    return out
-
-
-def locate_tokens(source_text: str, tokens, iad):
-    source_lines = source_text.split("\n")
-    cursors = {}
-    out = []
-    replace_tree = iad.get("replace_tree") if isinstance(iad, dict) else None
-    replace_span_cache = {}
-    for token in tokens:
-        line_no = int(token["line"] or 0)
-        if line_no <= 0 or line_no > len(source_lines):
-            continue
-        line_text = source_lines[line_no - 1]
-        cursor = cursors.get(line_no, 0)
-        text = token["text"]
-        replace_spans = replace_span_cache.get(line_no)
-        if replace_spans is None:
-            replace_spans = _collect_replace_symbol_spans(line_text, replace_tree)
-            replace_span_cache[line_no] = replace_spans
-        quoted_lit = '"' + _encode_quoted(text) + '"'
-        pos_quoted = line_text.find(quoted_lit, cursor)
-        pos_raw = -1 if text == "" else line_text.find(text, cursor)
-        if pos_quoted >= 0 and (pos_raw < 0 or pos_quoted <= pos_raw):
-            cursor = pos_quoted + len(quoted_lit)
-        elif pos_raw >= 0:
-            rel_left = pos_raw
-            rel_right = pos_raw + len(text)
-            if not (
-                rel_left > 0
-                and rel_right < len(line_text)
-                and line_text[rel_left - 1] == '"'
-                and line_text[rel_right] == '"'
-            ) and _is_within_replace_symbol(rel_left, rel_right, replace_spans):
-                cursors[line_no] = pos_raw + len(text)
-                continue
-            cursor = pos_raw + len(text)
-        else:
-            continue
-        cursors[line_no] = cursor
-        out.append(
-            {
-                "text": text,
-                "kind": int(token.get("kind", TEXTMAP_KIND_OTHER) or 0)
-                or TEXTMAP_KIND_OTHER,
-            }
         )
     return out
 
@@ -533,7 +535,7 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
             replacement = _csv_unescape_text(replacement)
         if replacement is None:
             replacement = original
-        if replacement == original or str_list[idx] == replacement:
+        if str_list[idx] == replacement:
             continue
         if str_list[idx] != original:
             eprint(

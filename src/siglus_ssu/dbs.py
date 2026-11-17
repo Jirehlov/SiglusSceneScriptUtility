@@ -176,11 +176,11 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
     print("dbs structural compare:")
     print(f"  m_type_1={int(t1):d}  unpacked_sha256_1={content_digest(u1)}")
     print(f"  m_type_2={int(t2):d}  unpacked_sha256_2={content_digest(u2)}")
-    if u1 == u2 and int(t1) == int(t2):
-        print("  identical after XOR+LZSS unpack")
-        return 0
     try:
         s1 = parse_dbs(t1, u1)
+        if u1 == u2 and int(t1) == int(t2):
+            print("  identical after XOR+LZSS unpack")
+            return 0
         s2 = parse_dbs(t2, u2)
     except Exception as e:
         print(f"  parse failed: {e}")
@@ -194,7 +194,7 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
             first = lim
         if first is not None:
             print(f"  first_diff_offset={first:d}")
-        return 0
+        return 1
 
     def _hd(k):
         return (k, s1.get(k), s2.get(k))

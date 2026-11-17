@@ -42,7 +42,6 @@ from .common import (
     write_disam_totals,
     iter_exe_el_sources,
     format_exe_el_source,
-    is_trace_command_base,
 )
 from .path_policy import (
     resolve_read_path,
@@ -873,6 +872,7 @@ def _pck_cd_word_rows(
     scene_lists=None,
 ) -> dict:
     from . import dat as _dat
+    from . import textmap as _textmap
 
     stats = {
         "rows": [],
@@ -918,9 +918,8 @@ def _pck_cd_word_rows(
             scene_no=item.get("scene_no"),
             scene_name=item.get("scene_name"),
             emit_text=False,
-            trace_profile="koe",
         )
-        if not bundle:
+        if not bundle or not bundle.get("complete"):
             row.update(
                 status="failed",
                 lines=None,
@@ -929,22 +928,23 @@ def _pck_cd_word_rows(
             )
             stats["rows"].append(row)
             continue
-        stats["parsed_scene_files"] += 1
-        for ev in bundle.get("trace") or []:
-            op = ev.get("op")
-            if op == "CD_TEXT":
-                txt = str(ev.get("text") or "")
-            elif op == "CD_COMMAND" and is_trace_command_base(ev, "print"):
-                args = ev.get("_arg_values") or []
-                if not args or not isinstance(args[0], (str, int)):
-                    continue
-                txt = str(args[0])
-            else:
+        for kind, _ids, txt in _textmap.iter_dat_string_uses(bundle):
+            if kind != _textmap.TEXTMAP_KIND_DIALOGUE:
                 continue
+            if txt is None:
+                row.update(
+                    status="failed",
+                    lines=None,
+                    count=None,
+                    error="dialogue expression could not be evaluated statically",
+                )
+                break
             if txt == "":
                 continue
             row["lines"] += 1
             row["count"] += count_text_units(txt)
+        if row["status"] == "ok":
+            stats["parsed_scene_files"] += 1
         stats["cd_text_dialogue_lines"] += int(row.get("lines", 0) or 0)
         stats["cd_text_dialogue_count"] += int(row.get("count", 0) or 0)
         stats["rows"].append(row)
@@ -1044,12 +1044,12 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                     with redirect_stdout(io.StringIO()):
                         iad_base = _textmap.BS.build_ia_data(ctx)
                     iad_cache[key] = iad_base
-                tokens, iad = _textmap.collect_tokens(text, ctx, iad_base=iad_base)
-                entries = _textmap.locate_tokens(text, tokens, iad)
-                for entry in entries:
-                    if int(entry.get("kind", 0) or 0) != 1:
-                        continue
-                    txt = str(entry.get("text") or "")
+                texts = _textmap.collect_dialogue_texts(text, ctx, iad_base=iad_base)
+                for txt in texts:
+                    if txt is None:
+                        raise ValueError(
+                            "dialogue expression could not be evaluated statically"
+                        )
                     if not txt:
                         continue
                     row["lines"] += 1
