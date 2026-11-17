@@ -120,7 +120,12 @@ def _inject_lines_into_blank_run(lines, block_lines):
             out[i : i + need] = block_lines
             return out
         i = j
-    return block_lines + out
+    inline = "\t".join(block_lines)
+    if out:
+        out[0] = inline + "\t" + out[0]
+    else:
+        out.append(inline)
+    return out
 
 
 def _form_name(form):
@@ -2447,10 +2452,10 @@ class _Decompiler:
         next_idx = self._next_stmt_idx(stmt_idx, end_ofs)
         has_ops, line = self._render_simple_line_range(stmt_idx, next_idx, ctx)
         if inline:
-            if not has_ops:
-                return "", next_idx
             if self._has_inline_blocking_labels(self.events[start_idx]):
                 return None, start_idx
+            if not has_ops:
+                return "", next_idx
             if (
                 line
                 and any(x in line for x in ("\n", "{", "}"))
@@ -2981,6 +2986,11 @@ class _Decompiler:
                     self.event_ops[nl_idx + 1] == "CD_NL"
                     and self.event_lines[nl_idx] == header_line
                     and self.event_lines[nl_idx + 1] == header_line
+                    and (
+                        nl_idx == start_idx
+                        or self.event_ops[nl_idx - 1] != "CD_NL"
+                        or self.event_lines[nl_idx - 1] != header_line
+                    )
                 ):
                     header_idx = nl_idx
                 nl_idx = self.next_nl_index[nl_idx + 1]

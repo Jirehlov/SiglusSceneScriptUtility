@@ -997,9 +997,13 @@ pub(crate) mod decompiler {
             }
             start = end;
         }
-        let mut out = block;
-        out.extend(lines);
-        out
+        let inline = source_join(&block, "\t");
+        if let Some(first) = lines.first_mut() {
+            *first = source_concat(&[&inline.chars, &[9], &first.chars]);
+        } else {
+            lines.push(inline);
+        }
+        lines
     }
 
     pub(super) fn name_define_lines(macros: &HashMap<SourceText, SourceText>) -> Vec<SourceText> {
@@ -7799,9 +7803,6 @@ impl<'a> SourceParser<'a> {
         };
         let (has_ops, line) = self.line(statement, next, context)?;
         if inline {
-            if !has_ops {
-                return Ok((Some(empty_source()), vec![], next));
-            }
             let labels = self.scene.active_labels(self.instance, start)?;
             let suppressed = self
                 .instance
@@ -7821,6 +7822,9 @@ impl<'a> SourceParser<'a> {
                 && line != source("break"))
             {
                 return Ok((None, vec![], start));
+            }
+            if !has_ops {
+                return Ok((Some(empty_source()), vec![], next));
             }
             return Ok((Some(line), vec![], next));
         }
@@ -8242,6 +8246,9 @@ impl<'a> SourceParser<'a> {
                 if self.scene.events[nl + 1].op == Opcode::Nl
                     && self.scene.events[nl].line == line
                     && self.scene.events[nl + 1].line == line
+                    && (nl == start
+                        || self.scene.events[nl - 1].op != Opcode::Nl
+                        || self.scene.events[nl - 1].line != line)
                 {
                     header = Some(nl);
                 }

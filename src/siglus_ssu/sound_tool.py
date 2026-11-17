@@ -257,7 +257,11 @@ def _compare_ovk(p1: str, p2: str) -> int:
         a = m1.get(key)
         b = m2.get(key)
         if a is None or b is None:
-            rows.append((key, a, b, "only1" if b is None else "only2"))
+            status = "only1" if b is None else "only2"
+            if (a or b).error:
+                read_errors += 1
+                status += "+read_error"
+            rows.append((key, a, b, status))
             continue
         status = []
         if a.size != b.size:
@@ -341,7 +345,7 @@ def _compare_ovk(p1: str, p2: str) -> int:
             len(only2),
         )
     )
-    return 0
+    return 1 if read_errors else 0
 
 
 _BGM_RE = re.compile(
