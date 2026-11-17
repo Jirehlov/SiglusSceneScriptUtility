@@ -1929,12 +1929,7 @@ fn source_quote(text: &SourceText) -> SourceText {
                 chars.push(92);
                 chars.push(code);
             }
-            13 => {
-                if text.chars.get(pos) == Some(&10) {
-                    pos += 1;
-                }
-                chars.extend_from_slice(&[92, 110]);
-            }
+            13 => chars.extend_from_slice(&[92, 114]),
             10 => chars.extend_from_slice(&[92, 110]),
             _ => chars.push(code),
         }
@@ -5033,6 +5028,15 @@ fn new_decompiler(
     let NativeObject::Scene(scene) = trace.as_ref() else {
         return Err(Failure("native decompile trace required".into()));
     };
+    if let Some(index) = scene
+        .strings
+        .iter()
+        .position(|text| text.chars.contains(&13))
+    {
+        return Err(Failure(format!(
+            "cannot decompile string {index}: carriage return (U+000D) cannot be represented in SS source"
+        )));
+    }
     let mut instance = DecompilerState {
         scene: scene.clone(),
         meta: record_get(&bundle, "meta")?,

@@ -860,6 +860,13 @@ class _Decompiler:
     def __init__(self, bundle, hints, analysis_only=False):
         self.bundle = bundle
         self.hints = hints
+        self.str_list = self.bundle["str_list"]
+        for index, text in enumerate(self.str_list):
+            if "\r" in text:
+                raise ValueError(
+                    f"cannot decompile string {index}: carriage return (U+000D) "
+                    "cannot be represented in SS source"
+                )
         self.meta = self.bundle["meta"]
         self.events = self.bundle["trace"]
         self.event_offsets = [ev["ofs"] for ev in self.events]
@@ -873,7 +880,6 @@ class _Decompiler:
         if analysis_only:
             return
         self._end_index_cache = {}
-        self.str_list = self.bundle["str_list"]
         used_strings = {
             ev["value"]
             for ev in self.events
@@ -2585,7 +2591,20 @@ class _Decompiler:
         inline_same_line = self._range_is_inline(start_idx, end_ofs, source_line)
         inline_body = None
         if inline_same_line:
-            inline_body = yield (self._parse_inline_block, start_idx, end_ofs, ctx)
+            texts = []
+            for line in body_lines:
+                text = str(_line_text(line) or "").strip()
+                if not text:
+                    continue
+                if (
+                    _LINE_LABEL_RE.match(text)
+                    or "\n" in text
+                    or text.startswith(("switch(", "command "))
+                ):
+                    break
+                texts.append(text)
+            else:
+                inline_body = texts
         return body_lines, inline_body, inline_same_line
 
     def _first_target_line(self, lines, fallback=None):

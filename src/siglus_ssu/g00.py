@@ -1029,30 +1029,12 @@ def _build_type2_official_g00_from_image(
     if source_paths is None:
         source_paths = {}
 
-    def _resolve_source_path(sp, base_dir: Path | None = None) -> Path:
+    def _load_source(sp, base_dir: Path):
         if sp is None:
             raise ValueError(
                 "type2 layout cut is missing source and no default source was provided"
             )
-        sp = Path(sp)
-        candidates = []
-        if sp.is_absolute():
-            candidates.append(sp)
-        if base_dir is not None:
-            candidates.append(base_dir / sp)
-        if img_p is not None:
-            base = img_p.parent if img_p.is_file() else img_p
-            candidates.append(base / sp)
-        candidates.append(sp)
-        for candidate in candidates:
-            try:
-                return Path(resolve_read_path(candidate, kind="file"))
-            except (FileNotFoundError, NotADirectoryError):
-                continue
-        return candidates[-1].resolve()
-
-    def _load_source(sp, base_dir: Path | None = None):
-        rp = _resolve_source_path(sp, base_dir)
+        rp = Path(resolve_read_path(base_dir / sp, kind="file"))
         key = str(rp)
         if key not in cache:
             validate_input_paths([rp], seen=source_paths, allow_same_file=True)

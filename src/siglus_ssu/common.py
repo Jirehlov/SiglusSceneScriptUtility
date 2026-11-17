@@ -102,7 +102,7 @@ def augment_receiver_form_codes(forms):
 def quote_ss_text(text):
     s = str(text or "")
     s = s.replace("\\", "\\\\").replace('"', '\\"')
-    s = s.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    s = s.replace("\r", "\\r").replace("\n", "\\n")
     return f'"{s}"'
 
 
