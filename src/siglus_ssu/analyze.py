@@ -1,7 +1,6 @@
 import os
 import struct
 import sys
-import shutil
 import json
 from .common import (
     ascii_lower,
@@ -18,13 +17,13 @@ from .common import (
     I32_STRUCT,
     looks_like_siglus_pck,
     parse_i32_header_checked,
+    open_atomic_output,
     read_struct_list,
 )
 from .path_policy import (
-    open_read,
     read_file_stat,
     resolve_read_path,
-    same_file_path,
+    check_output_inputs,
     validate_input_paths,
 )
 from . import pck
@@ -38,15 +37,20 @@ from . import const as C
 SUPPORTED_TYPES = ("pck", "dat", "gan", "sav", "cgm", "tcr")
 
 
-def _backup_file(path):
+def _backup_file(path, blob):
     base = path + ".bak"
-    out = base
-    i = 1
-    while os.path.exists(out):
-        out = f"{base}{i:d}"
-        i += 1
-    shutil.copy2(path, out)
-    return out
+    index = 0
+    while True:
+        out = base if index == 0 else f"{base}{index}"
+        index += 1
+        if os.path.lexists(out):
+            continue
+        try:
+            with open_atomic_output(out, exclusive=True, private_new=True) as backup:
+                backup.write(blob)
+        except FileExistsError:
+            continue
+        return out
 
 
 def _fmt_key_txt(el: bytes) -> str:
@@ -116,7 +120,11 @@ def analyze_file(
     except (FileNotFoundError, NotADirectoryError):
         sys.stderr.write(f"not found: {path}\n")
         return 2
-    blob = read_bytes(path)
+    try:
+        blob = read_bytes(path)
+    except OSError as exc:
+        sys.stderr.write(f"analyze: failed to read {path}: {exc}\n")
+        return 1
     ftype = _detect_type(path, blob)
     if readall and ftype != "sav":
         sys.stderr.write("analyze: --readall is only valid for .sav inputs\n")
@@ -177,48 +185,53 @@ def analyze_file(
     if ftype == "tcr":
         return tcr.tcr(blob)
     if ftype == "sav":
-        if apply:
-            txt = os.path.splitext(path)[0] + ".txt"
+        if apply or readall:
+            if apply:
+                txt = os.path.splitext(path)[0] + ".txt"
+                try:
+                    txt_blob = read_bytes(txt)
+                except OSError as exc:
+                    print(f"apply_txt_error: {exc}")
+                    return 1
+                try:
+                    updated, stats = sav.apply_global_txt(blob, txt_blob)
+                except (
+                    ValueError,
+                    OSError,
+                    RuntimeError,
+                    EOFError,
+                    struct.error,
+                ) as exc:
+                    print(f"apply_error: {exc}")
+                    return 1
+            else:
+                try:
+                    updated = sav.readall(blob)
+                except (
+                    ValueError,
+                    OSError,
+                    RuntimeError,
+                    EOFError,
+                    struct.error,
+                ) as exc:
+                    print(f"readall_error: {exc}")
+                    return 1
             try:
-                with open_read(txt) as f:
-                    txt_blob = f.read()
-            except Exception as e:
-                print(f"apply_txt_error: {e!s}")
+                with open_atomic_output(path, expected=blob) as output:
+                    output.write(updated)
+                    backup = _backup_file(path, blob)
+                    print(f"backup_written: {backup}")
+            except OSError as exc:
+                print(f"write_error: {exc}")
                 return 1
-            try:
-                nb, stats = sav.apply_global_txt(blob, txt_blob)
-            except Exception as e:
-                print(f"apply_error: {e!s}")
-                return 1
-            try:
-                backup = _backup_file(path)
-                with open(path, "wb") as f:
-                    f.write(nb)
-                blob = nb
+            blob = updated
+            if apply:
                 print(f"apply_txt: {txt}")
-                print(f"backup_written: {backup}")
                 print(f"apply_written: {path}")
                 for key in ("G", "Z", "cg_table", "bgm_table", "chrkoe"):
                     print(f"apply_{key}: {int(stats.get(key) or 0)}")
-            except Exception as e:
-                print(f"write_error: {e!s}")
-                return 1
-        if readall:
-            try:
-                nb = sav.readall(blob)
-            except Exception as e:
-                print(f"readall_error: {e!s}")
-                return 1
-            try:
-                backup = _backup_file(path)
-                with open(path, "wb") as f:
-                    f.write(nb)
-                blob = nb
-                print(f"backup_written: {backup}")
+            else:
                 print(f"readall_written: {path}")
-            except Exception as e:
-                print(f"write_error: {e!s}")
-                return 1
         try:
             return sav.sav(blob, path=path)
         except (EOFError, OSError, ValueError, struct.error) as exc:
@@ -226,7 +239,9 @@ def analyze_file(
             return 1
 
 
-def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json=""):
+def analyze_read_flags(
+    save_path, input_pck="", explicit_angou="", report_json="", key_paths=None
+):
     try:
         save_path = resolve_read_path(save_path, kind="file")
         if input_pck:
@@ -237,12 +252,14 @@ def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json="
     report_json = os.path.abspath(
         report_json or os.path.splitext(save_path)[0] + ".flags.json"
     )
-    for input_path in (save_path, input_pck):
-        if input_path and same_file_path(report_json, input_path):
-            sys.stderr.write(
-                "analyze: --report-json must not overwrite an input file\n"
-            )
-            return 2
+    inputs = {save_path, *(key_paths or ())}
+    if input_pck:
+        inputs.add(input_pck)
+    try:
+        check_output_inputs([report_json], inputs)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"analyze: --report-json: {exc}\n")
+        return 2
     try:
         info = sav.parse_read_sav(read_bytes(save_path))
         scene_lines = {}
@@ -257,6 +274,7 @@ def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json="
                 require_exe=True,
                 explicit_angou=explicit_angou,
                 trace_key=True,
+                read_paths=inputs,
             ):
                 name = ascii_lower(item["scene_name"])
                 if name not in wanted:
@@ -264,7 +282,7 @@ def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json="
                 scene = item["blob"]
                 header = (
                     parse_i32_header_checked(scene, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
-                    if scene is not None
+                    if scene is not None and dat.scn_structure_valid(scene)
                     else None
                 )
                 lines = None
@@ -329,8 +347,10 @@ def analyze_read_flags(save_path, input_pck="", explicit_angou="", report_json="
         "scenes": scenes,
     }
     try:
-        os.makedirs(os.path.dirname(report_json), exist_ok=True)
-        with open(report_json, "w", encoding="utf-8", newline="\r\n") as output:
+        check_output_inputs([report_json], inputs)
+        with open_atomic_output(
+            report_json, "w", encoding="utf-8", newline="\r\n"
+        ) as output:
             json.dump(report, output, ensure_ascii=False, indent=2)
             output.write("\n")
     except (OSError, ValueError) as exc:
@@ -560,6 +580,7 @@ def main(argv):
         return 2
     if positional_args is not None:
         args.extend(positional_args)
+    key_paths = set()
     if read_flags:
         if word or gei or _disam or readall or apply or compare_payload:
             return 2
@@ -567,12 +588,20 @@ def main(argv):
             return 2
         if explicit_angou:
             try:
-                list(iter_exe_el_sources(explicit_angou=explicit_angou))
-            except ValueError as exc:
+                list(
+                    iter_exe_el_sources(
+                        explicit_angou=explicit_angou, read_paths=key_paths
+                    )
+                )
+            except (OSError, ValueError) as exc:
                 sys.stderr.write(str(exc) + "\n")
                 return 2
         return analyze_read_flags(
-            args[0], args[1] if len(args) == 2 else "", explicit_angou, report_json
+            args[0],
+            args[1] if len(args) == 2 else "",
+            explicit_angou,
+            report_json,
+            key_paths,
         )
     if report_json:
         sys.stderr.write("analyze: --report-json requires --read-flags\n")
@@ -582,21 +611,24 @@ def main(argv):
     if word:
         if gei or _disam or readall or apply or compare_payload:
             return 2
+        if len(args) not in (1, 2):
+            return 2
         if explicit_angou:
             try:
-                list(iter_exe_el_sources(explicit_angou=explicit_angou))
-            except ValueError as e:
-                sys.stderr.write(str(e) + "\n")
+                list(
+                    iter_exe_el_sources(
+                        explicit_angou=explicit_angou, read_paths=key_paths
+                    )
+                )
+            except (OSError, ValueError) as exc:
+                sys.stderr.write(str(exc) + "\n")
                 return 2
-        if len(args) == 1:
-            return pck.pck_word_count(args[0], explicit_angou=explicit_angou)
-        if len(args) == 2:
-            return pck.pck_word_count(
-                args[0],
-                args[1],
-                explicit_angou=explicit_angou,
-            )
-        return 2
+        return pck.pck_word_count(
+            args[0],
+            args[1] if len(args) == 2 else "",
+            explicit_angou=explicit_angou,
+            key_paths=key_paths,
+        )
     if explicit_angou and not args:
         if gei or _disam or readall or apply or compare_payload:
             return 2

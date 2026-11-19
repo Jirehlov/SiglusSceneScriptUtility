@@ -96,7 +96,7 @@ jobs:
         with: { name: dist-macos-intel, path: wheelhouse/*.whl }
 
   wheels-macos-arm64:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

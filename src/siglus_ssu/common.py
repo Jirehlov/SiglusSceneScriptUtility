@@ -1,9 +1,15 @@
 import codecs
+import errno
+import shutil
+import time
 import os
 import sys
 import struct
 import hashlib
 import re
+import stat
+from contextlib import contextmanager, nullcontext, suppress
+from uuid import uuid4
 from functools import lru_cache, partial, wraps
 from types import SimpleNamespace
 import siglus_ssu as _runtime
@@ -19,6 +25,7 @@ from .path_policy import (
 
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
+PCK_KEY_DIR = ".siglus-ssu-keys"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 
 
@@ -1743,6 +1750,22 @@ def find_named_path(base_dir: str, target_name: str) -> str:
     return hits[0] if hits else ""
 
 
+def find_angou_dat(base_dir: str) -> str:
+    separated = os.path.join(base_dir, PCK_KEY_DIR)
+    if os.path.isdir(separated):
+        path = find_named_path(separated, ANGOU_DAT_NAME)
+        if path:
+            return path
+    return find_named_path(base_dir, ANGOU_DAT_NAME)
+
+
+def is_auxiliary_dat_name(path) -> bool:
+    return windows_filename_key(os.path.basename(path)) in (
+        "gameexe.dat",
+        windows_filename_key(ANGOU_DAT_NAME),
+    )
+
+
 def norm_charset(cs: str) -> str:
     s = str(cs or "").strip().lower()
     if not s:
@@ -1786,12 +1809,19 @@ def decode_text_auto(
     if force_charset and not cs:
         raise ValueError(f"unsupported charset: {force_charset}")
     errors = "replace" if allow_invalid else "strict"
+    wide_bom_charset = ""
+    if b.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        wide_bom_charset = "utf-32"
+    elif b.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        wide_bom_charset = "utf-16"
+    cs = cs or wide_bom_charset
+    utf8_bom = b.startswith(codecs.BOM_UTF8)
+    had_bom = utf8_bom or bool(wide_bom_charset)
     if stop_at_dos_eof and cs in ("", "cp932", "utf-8"):
         b = b.partition(b"\x1a")[0]
-    had_bom = b.startswith(b"\xef\xbb\xbf")
 
     def _d8():
-        e = "utf-8-sig" if had_bom else "utf-8"
+        e = "utf-8-sig" if utf8_bom else "utf-8"
         return b.decode(e, errors if cs else "strict")
 
     def _d9():
@@ -1837,9 +1867,7 @@ def decode_text_auto(
         return _fix(b.decode("utf-8", errors)), "utf-8", had_bom
     if t8 is None:
         return _fix(t9), "cp932", had_bom
-    if t9 is None:
-        return _fix(t8), "utf-8", had_bom
-    if had_bom:
+    if t9 is None or had_bom:
         return _fix(t8), "utf-8", had_bom
     try:
         t8.encode("cp932")
@@ -1905,17 +1933,22 @@ def angou_first_line(text: str) -> str:
 
 def read_angou_first_line(path: str) -> str:
     try:
-        return angou_first_line(read_text_auto(path))
-    except Exception:
+        raw = read_bytes(path)
+        if looks_like_siglus_dat(raw):
+            return ""
+        return angou_first_line(decode_angou_first_line(raw))
+    except (OSError, UnicodeError):
         return ""
 
 
-def decode_angou_first_line(data: bytes) -> str:
-    try:
-        text, _, _ = decode_text_auto(data)
-    except Exception:
-        return ""
-    return angou_first_line(text)
+def decode_angou_first_line(
+    data: bytes, *, force_charset: str = "", allow_invalid: bool = False
+) -> str:
+    return first_line_text(
+        decode_text_auto(
+            data, force_charset=force_charset, allow_invalid=allow_invalid
+        )[0]
+    )
 
 
 def read_bytes(path: str) -> bytes:
@@ -1929,10 +1962,109 @@ def write_bytes(path: str, data: bytes) -> None:
         f.write(data)
 
 
-def write_cached_bytes(cache_path: str, data: bytes) -> None:
-    if not cache_path:
+def writable_file_mode(path):
+    try:
+        mode = os.stat(path).st_mode
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(mode):
+        raise OSError(f"not a regular file: {path}")
+    fd = os.open(path, os.O_WRONLY)
+    os.close(fd)
+    return stat.S_IMODE(mode)
+
+
+@contextmanager
+def directory_lock(path, *, timeout=0):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.mkdir(path)
+        except FileExistsError as exc:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise OSError(f"directory lock is already in use: {path}") from exc
+            time.sleep(min(remaining, 0.05))
+        else:
+            break
+    try:
+        yield
+    finally:
+        os.rmdir(path)
+
+
+def _publish_exclusive_output(staged, target, opener):
+    if os.name == "nt":
+        os.rename(staged, target)
         return
-    write_bytes(cache_path, data)
+    try:
+        os.link(staged, target)
+        return
+    except OSError as exc:
+        if exc.errno not in (
+            errno.EPERM,
+            errno.ENOSYS,
+            errno.ENOTSUP,
+            errno.EOPNOTSUPP,
+        ):
+            raise
+    with open_read(staged) as source:
+        created = None
+        try:
+            with open(target, "xb", opener=opener) as output:
+                created = os.fstat(output.fileno())
+                shutil.copyfileobj(source, output)
+                output.flush()
+                os.fsync(output.fileno())
+        except BaseException:
+            if created is not None:
+                with suppress(FileNotFoundError):
+                    if os.path.samestat(created, os.lstat(target)):
+                        os.unlink(target)
+            raise
+
+
+@contextmanager
+def open_atomic_output(
+    path, mode="wb", *, exclusive=False, private_new=False, expected=None, **kwargs
+):
+    target = os.path.abspath(path) if exclusive else os.path.realpath(path)
+    ensure_parent_dir(target)
+    staged = os.path.join(os.path.dirname(target), f".ssu-{uuid4().hex}.tmp")
+    existing_mode = None if exclusive else writable_file_mode(target)
+
+    def opener(name, flags):
+        permissions = 0o600 if private_new or existing_mode is not None else 0o666
+        return os.open(name, flags, permissions)
+
+    stream = open(staged, "xb" if "b" in mode else "x", opener=opener, **kwargs)
+    try:
+        with stream:
+            yield stream
+            stream.flush()
+            os.fsync(stream.fileno())
+        if exclusive:
+            _publish_exclusive_output(staged, target, opener)
+        else:
+            if existing_mode is not None:
+                os.chmod(staged, existing_mode)
+            lock = (
+                directory_lock(
+                    os.path.join(os.path.dirname(target), ".siglus-update.lockdir"),
+                    timeout=30,
+                )
+                if expected is not None
+                else nullcontext()
+            )
+            with lock:
+                if expected is not None:
+                    with open_read(target) as current:
+                        if current.read(len(expected) + 1) != expected:
+                            raise OSError(f"file changed since it was read: {target}")
+                os.replace(staged, target)
+    finally:
+        with suppress(FileNotFoundError):
+            os.unlink(staged)
 
 
 def write_text(path: str, text: str, enc: str = "utf-8") -> None:
@@ -2058,16 +2190,19 @@ def parse_exe_el_key_text(text: str) -> bytes:
 
 def read_exe_el_key(path: str) -> bytes:
     try:
-        b = read_bytes(path)
-    except Exception:
+        return decode_exe_el_key(read_bytes(path))
+    except OSError:
         return b""
-    if len(b) == 16:
-        return bytes(b)
+
+
+def decode_exe_el_key(data: bytes) -> bytes:
+    if len(data) == 16:
+        return bytes(data)
     try:
-        t, _, _ = decode_text_auto(b)
-    except Exception:
-        t = b.decode("utf-8", "ignore")
-    return parse_exe_el_key_text(t)
+        text = decode_text_auto(data)[0]
+    except UnicodeError:
+        text = data.decode("utf-8", "ignore")
+    return parse_exe_el_key_text(text)
 
 
 def angou_to_exe_el(text: str) -> bytes:
@@ -2076,16 +2211,6 @@ def angou_to_exe_el(text: str) -> bytes:
         return b""
     el = exe_angou_element(s.encode("cp932", "ignore"))
     return el if el and len(el) == 16 else b""
-
-
-def compile_exe_el(ctx) -> bytes:
-    if not ctx["exe_angou_mode"]:
-        return b""
-    el = angou_to_exe_el(ctx["exe_angou_str"])
-    if el:
-        return el
-    key_path = ctx["key_path"]
-    return read_exe_el_key(key_path) if key_path else b""
 
 
 def format_exe_el(el: bytes) -> str:
@@ -2142,14 +2267,65 @@ def consume_angou_option(argv):
     return out, value
 
 
+def iter_directory_key_paths(directory):
+    if not directory:
+        return
+    try:
+        _, entries = read_directory(directory)
+    except (FileNotFoundError, NotADirectoryError):
+        return
+    hits = []
+    others = []
+    for e in entries:
+        if not e.is_file():
+            continue
+        cf = windows_filename_key(e.name)
+        if cf == "scene.pck":
+            hits.append(_safe_abspath(e.path))
+            continue
+        if cf.startswith("scene") and cf.endswith(".pck"):
+            others.append(_safe_abspath(e.path))
+    hits.sort(
+        key=lambda p: (
+            0 if os.path.basename(p) == "Scene.pck" else 1,
+            windows_filename_key(os.path.basename(p)),
+            os.path.basename(p),
+        )
+    )
+    others.sort(
+        key=lambda p: (
+            len(os.path.basename(p)),
+            windows_filename_key(os.path.basename(p)),
+        )
+    )
+    paths = validate_input_paths(hits + others, warn_only=True)
+    selected = {}
+    for path in paths:
+        selected.setdefault(windows_filename_key(path), path)
+    for path in selected.values():
+        yield "pck", path
+    for kind, path in (
+        ("angou_dat", find_angou_dat(directory)),
+        ("key_txt", find_named_path(directory, KEY_TXT_NAME)),
+        ("siglusengine_exe", find_siglus_engine_exe(directory)),
+    ):
+        if path:
+            yield kind, path
+
+
 def iter_exe_el_sources(
     explicit_angou: str = "",
     input_path: str = "",
     base_dir: str = "",
     input_blob: bytes = b"",
     input_source_entries=None,
+    read_paths=None,
 ):
     seen = set()
+
+    def record_read(path):
+        if read_paths is not None and path:
+            read_paths.add(path)
 
     def add(el, kind, path="", label="", angou=""):
         if not el or len(el) != 16:
@@ -2171,6 +2347,7 @@ def iter_exe_el_sources(
         return add(angou_to_exe_el(s), kind, path=path, label=label, angou=s)
 
     def add_pck(path, label, blob=b"", source_entries=None):
+        record_read(path)
         try:
             data = bytes(blob) if blob else read_bytes(path)
         except Exception:
@@ -2183,29 +2360,26 @@ def iter_exe_el_sources(
         try:
             from . import pck as _pck
 
-            items = list(
-                _pck.iter_pck_angou_dat_items(data, source_entries=source_entries) or []
-            )
+            items = list(_pck.iter_pck_key_items(data, source_entries=source_entries))
         except Exception:
-            items = []
+            return []
         out = []
-        for item in items:
-            raw = bytes(item.get("raw") or b"")
-            s = decode_angou_first_line(raw)
-            src = add(
-                angou_to_exe_el(s),
-                "pck_angou",
-                path=path,
-                label=label,
-                angou=s,
-            )
+        for name, raw, is_angou in items:
+            if not is_angou:
+                src = add(decode_exe_el_key(raw), "pck_key_txt", path=path, label=label)
+            else:
+                try:
+                    text = decode_angou_first_line(raw)
+                except UnicodeError:
+                    continue
+                src = add_angou_text(text, "pck_angou", path=path, label=label)
             if src:
-                inner = str(item.get("name") or ANGOU_DAT_NAME)
-                src["inner"] = inner
+                src["inner"] = name
                 out.append(src)
         return out
 
     def add_file(path):
+        record_read(path)
         bn = os.path.basename(str(path or ""))
         cf = windows_filename_key(bn)
         out = []
@@ -2247,70 +2421,27 @@ def iter_exe_el_sources(
                 out.append(src)
         return out
 
-    def scene_pck_paths(path):
-        if not path:
-            return []
-        try:
-            _, entries = read_directory(path)
-        except (FileNotFoundError, NotADirectoryError):
-            return []
-        hits = []
-        others = []
-        for e in entries:
-            if not e.is_file():
-                continue
-            cf = windows_filename_key(e.name)
-            if cf == "scene.pck":
-                hits.append(_safe_abspath(e.path))
-                continue
-            if cf.startswith("scene") and cf.endswith(".pck"):
-                others.append(_safe_abspath(e.path))
-        hits.sort(
-            key=lambda p: (
-                0 if os.path.basename(p) == "Scene.pck" else 1,
-                windows_filename_key(os.path.basename(p)),
-                os.path.basename(p),
-            )
-        )
-        others.sort(
-            key=lambda p: (
-                len(os.path.basename(p)),
-                windows_filename_key(os.path.basename(p)),
-            )
-        )
-        paths = validate_input_paths(hits + others, warn_only=True)
-        selected = {}
-        for path in paths:
-            selected.setdefault(windows_filename_key(path), path)
-        return list(selected.values())
-
     def add_dir(path, label):
         out = []
-        for p in scene_pck_paths(path):
-            out.extend(add_pck(p, label))
-        p = find_named_path(path, ANGOU_DAT_NAME)
-        if p:
-            src = add_angou_text(
-                read_angou_first_line(p),
-                "angou_dat",
-                path=p,
-                label=label,
-            )
-            if src:
-                out.append(src)
-        kp = find_named_path(path, KEY_TXT_NAME)
-        if kp:
-            src = add(read_exe_el_key(kp), "key_txt", path=kp, label=label)
-            if src:
-                out.append(src)
-        ep = find_siglus_engine_exe(path)
-        if ep:
-            src = add(
-                read_siglus_engine_exe_el(ep),
-                "siglusengine_exe",
-                path=ep,
-                label=label,
-            )
+        for kind, source_path in iter_directory_key_paths(path):
+            if kind == "pck":
+                out.extend(add_pck(source_path, label))
+                continue
+            record_read(source_path)
+            if kind == "angou_dat":
+                src = add_angou_text(
+                    read_angou_first_line(source_path),
+                    kind,
+                    path=source_path,
+                    label=label,
+                )
+            else:
+                key = (
+                    read_exe_el_key(source_path)
+                    if kind == "key_txt"
+                    else read_siglus_engine_exe_el(source_path)
+                )
+                src = add(key, kind, path=source_path, label=label)
             if src:
                 out.append(src)
         return out
@@ -3130,7 +3261,8 @@ def run_batch(items, process_fn, item_name_fn=None):
         try:
             n, out_label = process_fn(item)
             wrote += n
-            eprint(f"[{idx}/{total}] done: wrote {out_label}")
+            action = "wrote" if n else "kept"
+            eprint(f"[{idx}/{total}] done: {action} {out_label}")
         except Exception as exc:
             failed += 1
             eprint(f"[{idx}/{total}] failed: {label}\t{exc}")

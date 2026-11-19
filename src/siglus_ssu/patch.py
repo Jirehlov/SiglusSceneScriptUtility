@@ -5,10 +5,10 @@ import argparse
 import json
 import hashlib
 import struct
-import tempfile
 from bisect import bisect_right
 from .common import (
     read_bytes,
+    open_atomic_output,
     siglus_engine_exe_element,
     parse_pe32_layout,
     pe32_file_off_to_va,
@@ -19,7 +19,7 @@ from .common import (
     parse_exe_el_key_text,
     angou_to_exe_el,
 )
-from .path_policy import resolve_read_path, same_file_path
+from .path_policy import check_output_inputs, resolve_read_path, same_file_path
 
 _LOC_FUNC_PROLOG = b"\x55\x8b\xec"
 _LOC_BYPASS_STUB = b"\xb0\x01\xc3"
@@ -70,33 +70,6 @@ def _default_out_path(in_exe: str, tag: str, upper: bool = True) -> str:
     if upper:
         t = t.upper()
     return os.path.join(d, f"{stem}_{t}{ext}")
-
-
-def _atomic_write_bytes(path: str, data: bytes) -> None:
-    target = os.path.abspath(path)
-    if os.path.islink(target):
-        raise OSError(f"refusing to replace symbolic link: {target}")
-    parent = os.path.dirname(target) or "."
-    os.makedirs(parent, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix=f".{os.path.basename(target)}.", dir=parent)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-        if os.path.exists(target):
-            os.chmod(tmp_path, os.stat(target).st_mode)
-        os.replace(tmp_path, target)
-    except BaseException:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
 
 
 def _read_cstr(blob: bytes, off: int):
@@ -1142,7 +1115,8 @@ def _load_lang_config(spec: str):
     key = text.lower()
     if key in _LANG_PRESETS:
         suffix, config = _LANG_PRESETS[key]
-        return key, suffix, _validate_lang_config(dict(config))
+        return key, suffix, _validate_lang_config(dict(config)), ""
+    path = ""
     if text.startswith("{"):
         source = text
         suffix = "JSON"
@@ -1163,7 +1137,7 @@ def _load_lang_config(spec: str):
         obj = json.loads(source)
     except json.JSONDecodeError as exc:
         raise ValueError(f"invalid language JSON: {exc}") from exc
-    return "json", suffix, _validate_lang_config(obj)
+    return "json", suffix, _validate_lang_config(obj), path
 
 
 def _lang_field_specs(config):
@@ -1196,8 +1170,7 @@ def _lang_needed_strings(data: bytes, layout, specs):
     return needed
 
 
-def patch_lang(data: bytearray, lang_spec: str, *, allow_partial: bool = False):
-    tag, suffix, config = _load_lang_config(lang_spec)
+def patch_lang(data: bytearray, config, *, allow_partial: bool = False):
     current = bytes(data)
     existing = _read_lang_overlay(current)
     if existing is not None:
@@ -1239,11 +1212,10 @@ def patch_lang(data: bytearray, lang_spec: str, *, allow_partial: bool = False):
     if changes:
         _append_lang_overlay(work, original, config)
     data[:] = work
-    return tag, suffix, changes, warnings
+    return changes, warnings
 
 
-def revert_lang(data: bytearray, lang_spec: str):
-    tag, _suffix, config = _load_lang_config(lang_spec)
+def revert_lang(data: bytearray, config):
     restored, manifest = _restore_lang_overlay(bytes(data), config)
     changes = []
     for entry in manifest.get("entries", []):
@@ -1262,7 +1234,7 @@ def revert_lang(data: bytearray, lang_spec: str):
         )
     )
     data[:] = restored
-    return tag, "ORIGINAL", changes, []
+    return changes
 
 
 def _format_active_utf16_refs(data: bytes, layout, texts):
@@ -1453,6 +1425,7 @@ def main(argv):
     data = bytearray(raw)
     loc_before = None
     loc_after = None
+    config_path = ""
     warnings = []
     if args.altkey:
         if args.key:
@@ -1496,11 +1469,13 @@ def main(argv):
         suffix = "LOC1" if args.loc == "1" else "LOC0"
     else:
         try:
+            tag, suffix, config, config_path = _load_lang_config(args.lang)
             if args.revert:
-                tag, suffix, changes, warnings = revert_lang(data, args.lang)
+                changes = revert_lang(data, config)
+                suffix = "ORIGINAL"
             else:
-                tag, suffix, changes, warnings = patch_lang(
-                    data, args.lang, allow_partial=args.allow_partial
+                changes, warnings = patch_lang(
+                    data, config, allow_partial=args.allow_partial
                 )
         except Exception as e:
             sys.stderr.write(str(e) + "\n")
@@ -1515,6 +1490,16 @@ def main(argv):
     if not args.inplace and same_file_path(in_path, out_path):
         sys.stderr.write("output refers to input; use --inplace to overwrite it\n")
         return 2
+    if args.altkey and key_source["kind"] == "input_key_file" and key_source["path"]:
+        if same_file_path(key_source["path"], out_path):
+            sys.stderr.write("output would overwrite the key source\n")
+            return 2
+    if config_path:
+        try:
+            check_output_inputs([out_path], [config_path])
+        except (OSError, ValueError) as e:
+            sys.stderr.write(str(e) + "\n")
+            return 2
     if os.path.islink(out_path):
         sys.stderr.write(f"symbolic link output is not allowed: {out_path}\n")
         return 2
@@ -1542,7 +1527,10 @@ def main(argv):
     else:
         print("Restored original language configuration.")
     try:
-        _atomic_write_bytes(out_path, after)
+        with open_atomic_output(
+            out_path, private_new=True, expected=raw if args.inplace else None
+        ) as f:
+            f.write(after)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1

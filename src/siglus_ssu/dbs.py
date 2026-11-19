@@ -1,5 +1,4 @@
 import struct
-import os
 import sys
 import csv
 import re
@@ -11,7 +10,7 @@ from .native_ops import (
     msvcrt_rand_byte,
     xor_cycle_inplace,
 )
-from .common import content_digest, read_bytes, write_bytes
+from .common import content_digest, open_atomic_output, read_bytes
 from .path_policy import open_read
 
 
@@ -368,7 +367,7 @@ def _wtoi_prefix(s, *, call_location=None):
 def _read_official_csv(csv_path: str):
     csv.field_size_limit(2**31 - 1)
     with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.reader(f)
+        reader = csv.reader(f, strict=True)
         rows = []
         row_lines = []
         while True:
@@ -429,6 +428,11 @@ def _read_official_csv(csv_path: str):
         row_call = _wtoi_prefix(row[0], call_location=(csv_path, row_lines[i], 1))
         if row_call is None:
             continue
+        if len(row) > max_cols:
+            raise ValueError(
+                f"{csv_path}:{row_lines[i]}:{max_cols + 1}: "
+                f"CSV row has {len(row)} fields, expected at most {max_cols}"
+            )
         row_calls.append(int(row_call))
         data_rows.append(row)
         data_lines.append(row_lines[i])
@@ -455,8 +459,9 @@ def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
             head_dtype.append("V")
         else:
             head_dtype.append("")
-    os.makedirs(os.path.dirname(out_csv_path) or ".", exist_ok=True)
-    with open(out_csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open_atomic_output(
+        out_csv_path, "w", exclusive=True, encoding="utf-8-sig", newline=""
+    ) as f:
         w = csv.writer(f, lineterminator="\r\n")
         w.writerow(head_datano)
         w.writerow(head_dtype)
@@ -470,9 +475,7 @@ def export_one_dbs_to_csv(dbs_path: str, out_csv_path: str) -> None:
             w.writerow(row)
 
 
-def create_one_dbs_from_csv(
-    csv_path: str, out_dbs_path: str, *, m_type: int = 1
-) -> None:
+def build_dbs_from_csv(csv_path: str, *, m_type: int = 1) -> bytes:
     col_specs, row_calls, data_rows, data_lines = _read_official_csv(csv_path)
     row_cnt = len(row_calls)
     col_cnt = len(col_specs)
@@ -525,9 +528,7 @@ def create_one_dbs_from_csv(
         if st < padded_size:
             for i in range(st, padded_size):
                 dst[i] = _msvcrt_rand_byte()
-    out_blob = _dbs_pack(int(m_type), bytes(dst))
-    os.makedirs(os.path.dirname(out_dbs_path) or ".", exist_ok=True)
-    write_bytes(out_dbs_path, out_blob)
+    return _dbs_pack(int(m_type), bytes(dst))
 
 
 def _dbs_pack(m_type: int, expanded: bytes) -> bytes:

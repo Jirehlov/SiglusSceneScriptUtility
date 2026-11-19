@@ -316,15 +316,6 @@ def _overlay_text_for_path(overlays: dict[str, str], path: str) -> str | None:
     return None
 
 
-def _decode_text_fallback(raw: bytes) -> str:
-    for enc in ("utf-8-sig", "utf-8", "cp932"):
-        try:
-            return _normalize_source_text(raw.decode(enc))
-        except UnicodeDecodeError:
-            continue
-    return _normalize_source_text(raw.decode("utf-8", "replace"))
-
-
 def _silent_stdout_call(func: Any, *args: Any, **kwargs: Any) -> Any:
     with redirect_stdout(io.StringIO()):
         return func(*args, **kwargs)
@@ -373,13 +364,10 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
     if overlay_text is not None:
         return _normalize_source_text(overlay_text)
     try:
-        raw = read_bytes(norm).partition(b"\x1a")[0]
+        raw = read_bytes(norm)
     except (OSError, ValueError):
         return ""
-    try:
-        return _normalize_source_text(decode_text_auto(raw, stop_at_dos_eof=True)[0])
-    except (UnicodeError, ValueError):
-        return _decode_text_fallback(raw)
+    return decode_text_auto(raw, stop_at_dos_eof=True, allow_invalid=True)[0]
 
 
 def _file_state(path: str) -> tuple[int, int] | None:
@@ -2476,7 +2464,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 31
+LSP_INDEX_CACHE_VERSION = 32
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 

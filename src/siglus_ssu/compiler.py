@@ -7,7 +7,10 @@ import time
 import shutil
 import csv
 import tempfile
-from contextlib import suppress
+import stat
+from contextlib import ExitStack, suppress
+from pathlib import Path
+from uuid import uuid4
 import siglus_ssu as _runtime
 from . import const as C, package_version
 from .BS import (
@@ -37,14 +40,18 @@ from .common import (
     decode_text_auto,
     read_bytes,
     read_scn_header,
-    read_exe_el_key,
+    is_auxiliary_dat_name,
+    open_atomic_output,
+    decode_exe_el_key,
+    find_angou_dat,
+    directory_lock,
     read_text_auto,
-    first_line_text,
-    angou_first_line,
+    decode_angou_first_line,
+    angou_to_exe_el,
+    writable_file_mode,
     write_bytes,
     write_text,
     parse_code,
-    ANGOU_DAT_NAME,
     KEY_TXT_NAME,
     MACRO_STAT_KINDS,
     has_option,
@@ -56,6 +63,7 @@ from .common import (
     split_end_of_options,
 )
 from .path_policy import (
+    check_output_inputs,
     read_directory,
     resolve_read_path,
     windows_filename_key,
@@ -63,48 +71,167 @@ from .path_policy import (
 )
 
 
-class _CompileCacheLock:
-    def __init__(self, directory):
-        self.file = open(os.path.join(directory, "_compile.lock"), "a+b")
-        self.locked = False
-        try:
-            self.file.seek(0, os.SEEK_END)
-            if self.file.tell() == 0:
-                self.file.write(b"\0")
-                self.file.flush()
-            self.file.seek(0)
-            if os.name == "nt":
-                import msvcrt
+_SOURCE_DIGEST_NAME = "_source_hashes.json"
+SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
 
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.locked = True
-        except (OSError, RuntimeError) as exc:
-            self.file.close()
-            raise RuntimeError(f"--tmp is already in use: {directory}") from exc
+class _CompileOutputs:
+    def __init__(self, directory, names):
+        directory = os.path.realpath(directory)
+        self.directory = directory
+        self.names = names
+        self.staging_dirs = {}
+        self.keep = False
+        self.staging = self._stage_in(directory) if names else directory
+
+    def _stage_in(self, directory):
+        if directory not in self.staging_dirs:
+            staging = os.path.join(directory, f".ssu-build-{uuid4().hex}")
+            os.mkdir(staging, 0o777 if os.name == "nt" else 0o700)
+            self.staging_dirs[directory] = staging
+        return self.staging_dirs[directory]
 
     def close(self):
-        if not self.locked:
+        if not self.keep:
+            for staging in self.staging_dirs.values():
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def publish(self, inputs, *, seed_report=None):
+        if not self.names:
             return
+        targets = [
+            os.path.realpath(os.path.join(self.directory, name)) for name in self.names
+        ]
+        with ExitStack() as locks:
+            locked = set()
+            for directory in sorted({os.path.dirname(target) for target in targets}):
+                info = os.stat(directory)
+                identity = (info.st_dev, info.st_ino) if info.st_ino else directory
+                if identity not in locked:
+                    locks.enter_context(
+                        directory_lock(
+                            os.path.join(directory, ".siglus-publish.lockdir")
+                        )
+                    )
+                    locked.add(identity)
+            destinations = (
+                targets if seed_report is None else [*targets, seed_report[0]]
+            )
+            check_output_inputs(destinations, inputs, distinct=True)
+            entries = []
+            for name, target in zip(self.names, targets):
+                stage = self._stage_in(os.path.dirname(target))
+                source = os.path.join(self.staging, name)
+                if stage != self.staging:
+                    source = shutil.move(source, os.path.join(stage, name))
+                mode = writable_file_mode(target)
+                backup = None
+                if mode is not None:
+                    backup = os.path.join(stage, f".previous-{uuid4().hex}")
+                    try:
+                        os.link(target, backup)
+                    except OSError:
+                        shutil.copy2(target, backup)
+                    os.chmod(source, mode)
+                entries.append((source, target, backup))
+            published = []
+            try:
+                for source, target, backup in entries:
+                    os.replace(source, target)
+                    published.append((target, backup))
+                if seed_report is not None:
+                    _write_test_shuffle_csv(*seed_report)
+            except BaseException:
+                restore_errors = []
+                for target, backup in reversed(published):
+                    try:
+                        if backup is None:
+                            os.unlink(target)
+                        else:
+                            os.replace(backup, target)
+                    except OSError as exc:
+                        restore_errors.append(str(exc))
+                if restore_errors:
+                    self.keep = True
+                    raise OSError(
+                        f"rollback failed: {'; '.join(restore_errors)}; "
+                        f"recovery files: {', '.join(self.staging_dirs.values())}"
+                    )
+                raise
+
+
+def _check_compile_cache(tmp, scenes, inputs, outputs):
+    root = Path(tmp)
+    bs = root / "bs"
+    if bs.is_symlink() or bs.is_junction():
+        raise ValueError(f"compile cache uses a directory link: {bs}")
+    files = [
+        root / _SOURCE_DIGEST_NAME,
+        root / (_SOURCE_DIGEST_NAME + ".tmp"),
+        root / "EXE_ANGOU.h",
+    ]
+    for path in scenes:
+        stem = Path(path).stem
+        files.extend((bs / f"{stem}.dat", bs / f"{stem}.lzss"))
+    names = {os.path.normcase(path) for path in files}
+    for path in outputs:
+        if os.path.normcase(os.path.realpath(path)) in names:
+            raise ValueError(f"output conflicts with a compile cache file: {path}")
+    for path in files:
         try:
-            self.file.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(self.file.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-        finally:
-            self.locked = False
-            self.file.close()
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+            raise ValueError(
+                f"compile cache file is not a standalone regular file: {path}"
+            )
+    check_output_inputs(files, [*inputs, *outputs])
 
 
-SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
+def _load_compile_keys(
+    directory, angou_name, key_name, charset, *, allow_invalid, prog, embed, prefer_key
+):
+    key_raw = None
+    exe_el = b""
+    sources = []
+    if prefer_key and key_name:
+        key_raw = read_bytes(os.path.join(directory, key_name))
+        exe_el = decode_exe_el_key(key_raw)
+    if angou_name and (not exe_el or embed):
+        path = os.path.join(directory, angou_name)
+        raw = read_bytes(path)
+        if not looks_like_siglus_dat(raw):
+            if embed:
+                sources.append((os.path.basename(angou_name), raw))
+            if not exe_el:
+                try:
+                    text = decode_angou_first_line(
+                        raw, force_charset=charset, allow_invalid=allow_invalid
+                    )
+                except UnicodeError as exc:
+                    raise ValueError(f"{path}: {exc}") from exc
+                exe_el = angou_to_exe_el(text)
+                if exe_el:
+                    if embed:
+                        try:
+                            auto_key = angou_to_exe_el(decode_angou_first_line(raw))
+                        except UnicodeError:
+                            auto_key = b""
+                        if auto_key != exe_el:
+                            sources.append((KEY_TXT_NAME, exe_el))
+                    return text, exe_el, sources
+                if text:
+                    sys.stderr.write(
+                        f"{prog}: warning: ignoring {path}: first line encodes to fewer than 8 CP932 bytes\n"
+                    )
+    if key_name:
+        if key_raw is None:
+            key_raw = read_bytes(os.path.join(directory, key_name))
+            exe_el = decode_exe_el_key(key_raw)
+        if embed:
+            sources.append((key_name, key_raw))
+    return None, exe_el, sources
 
 
 def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
@@ -244,7 +371,7 @@ def _compile_cache_state(
     *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid
 ):
     compile_list = list(ss or [])
-    digest_path = os.path.join(tmp_dir, "_source_hashes.json") if tmp_dir else ""
+    digest_path = os.path.join(tmp_dir, _SOURCE_DIGEST_NAME) if tmp_dir else ""
     cur_inc = source_digests["inc"]
     cur_ss = source_digests["ss"]
     full_compile = True
@@ -314,7 +441,20 @@ def _compile_cache_state(
             if os.path.basename(existing_dat_path) != name:
                 os.remove(existing_dat_path)
     pending_digests = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
-    return compile_list, digest_path, pending_digests, full_compile
+    return compile_list, digest_path, pending_digests
+
+
+def _stale_lzss_paths(tmp_dir, scenes):
+    bs_dir = os.path.join(tmp_dir, "bs")
+    stale = []
+    for scene in scenes:
+        stem = os.path.splitext(os.path.basename(scene))[0]
+        path = os.path.join(bs_dir, stem + ".lzss")
+        try:
+            stale.append(resolve_read_path(path, kind="file"))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+    return stale
 
 
 def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
@@ -346,7 +486,7 @@ def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
 def _native_compile_cache_config(
     *, args, tmp_dir, enc, charset, ss, source_digests, test_shuffle
 ):
-    compile_list, digest_path, pending_digests, full_compile = _compile_cache_state(
+    compile_list, digest_path, pending_digests = _compile_cache_state(
         tmp_dir=tmp_dir,
         enc=enc,
         charset=charset,
@@ -361,27 +501,7 @@ def _native_compile_cache_config(
         compile_list,
         use_lzss=not args.no_angou and not args.no_lzss,
     )
-    lzss_remove_paths = []
-    if args.tmp_dir:
-        bs_dir = os.path.join(tmp_dir, "bs")
-        if full_compile:
-            try:
-                _, entries = read_directory(bs_dir)
-            except (FileNotFoundError, NotADirectoryError):
-                entries = []
-            lzss_remove_paths = [
-                entry.path
-                for entry in entries
-                if entry.is_file() and entry.name.lower().endswith(".lzss")
-            ]
-        else:
-            for path in compile_list:
-                stem = os.path.splitext(os.path.basename(path))[0]
-                candidate = os.path.join(bs_dir, stem + ".lzss")
-                try:
-                    lzss_remove_paths.append(resolve_read_path(candidate, kind="file"))
-                except (FileNotFoundError, NotADirectoryError):
-                    pass
+    lzss_remove_paths = _stale_lzss_paths(tmp_dir, compile_list) if args.tmp_dir else []
     full_compile_stats = (
         (not args.dat_repack)
         and not args.tmp_dir
@@ -465,10 +585,7 @@ def _read_scn_dat_str_pool(path):
 
 
 def _write_test_shuffle_csv(csv_path, rows):
-    if not csv_path:
-        return
-    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open_atomic_output(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, lineterminator="\r\n")
         w.writerow(
             [
@@ -480,7 +597,7 @@ def _write_test_shuffle_csv(csv_path, rows):
                 "matched",
             ]
         )
-        for row in rows or []:
+        for row in rows:
             initial_seed = int(row.get("initial_seed", 0) or 0) & 0xFFFFFFFF
             final_seed = int(row.get("final_seed", 0) or 0) & 0xFFFFFFFF
             w.writerow(
@@ -907,7 +1024,6 @@ def _native_compile_constants_config():
         "logical_and_precedence": C.LOGICAL_AND_PRECEDENCE,
         "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
         "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
-        "exe_org": bytes(C.EXE_ORG),
         "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
         "exe_angou_b_idx": [int(x) for x in C.EXE_ANGOU_B_IDX],
         "source_angou": C.SOURCE_ANGOU,
@@ -936,7 +1052,6 @@ def _native_compile_config(
     charset_force,
     test_shuffle,
     force_serial_compile,
-    angou_content,
 ):
     if not args.tmp_dir and not args.debug:
         tmp_dir = ""
@@ -970,34 +1085,21 @@ def _native_compile_config(
         },
         "context": {
             "gameexe_ini": ctx.get("gameexe_ini"),
-            "angou_path": ctx.get("angou_path"),
-            "key_path": ctx.get("key_path"),
-            "exe_el_key": (
-                read_exe_el_key(ctx["key_path"])
-                if ctx.get("exe_angou_mode")
-                and ctx.get("key_path")
-                and not angou_content
-                else b""
-            ),
+            "exe_el_key": ctx["exe_el_key"],
             "scn_list": ctx.get("scn_list") or [],
             "scene_display_names": scene_display_names,
             "inc_list": ctx.get("inc_list") or [],
-            "ini_list": ctx.get("ini_list") or [],
             "source_texts": ctx.get("source_texts") or {},
-            "source_bytes": ctx["source_bytes"],
+            "original_sources": ctx["original_sources"],
             "utf8": bool(ctx.get("utf8")),
             "debug_outputs": bool(ctx.get("debug_outputs")),
             "lzss_mode": bool(ctx.get("lzss_mode")),
-            "exe_angou_mode": bool(ctx.get("exe_angou_mode")),
-            "source_angou_mode": bool(ctx.get("source_angou_mode")),
-            "original_source_mode": bool(ctx.get("original_source_mode")),
             "easy_link": bool(ctx.get("easy_link")),
         },
-        "angou_content": angou_content,
     }
 
 
-def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
+def _try_native_compile(config, ctx):
     result = compile_project_native(config)
     if not isinstance(result, dict):
         sys.stderr.write(
@@ -1020,13 +1122,15 @@ def _try_native_compile(config, ctx, *, tmp, tmp_auto, debug):
         sys.stderr.write(stderr)
         if not stderr.endswith(("\n", "\r")):
             sys.stderr.write("\n")
-    _print_summary(ctx, ok=ok)
-    if ok and (not debug) and tmp and tmp_auto:
-        shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1
 
 
 def main(argv, *, collect_statistics=True):
+    with ExitStack() as resources:
+        return _compile_cli(argv, resources, collect_statistics=collect_statistics)
+
+
+def _compile_cli(argv, resources, *, collect_statistics):
     import argparse
 
     prog = "siglus-ssu -c"
@@ -1060,16 +1164,23 @@ def main(argv, *, collect_statistics=True):
                 f"{prog}: error: --dat-repack is not compatible with --test-shuffle\n"
             )
             return 2
-        allowed = {"--dat-repack", "--no-os", "--no-lzss"}
-        bad = []
-        for t in argv:
-            s = str(t)
-            if s.startswith("-") and s not in allowed:
-                bad.append(s)
+        allowed = {
+            "--dat-repack",
+            "--no-os",
+            "--no-lzss",
+            "--charset",
+            "--allow-invalid",
+        }
+        bad = sorted(
+            {
+                arg
+                for arg in argv
+                if arg.startswith("-") and arg.partition("=")[0] not in allowed
+            }
+        )
         if bad:
-            bad = sorted(set(bad))
             sys.stderr.write(
-                f"{prog}: error: --dat-repack only supports being used alone or with --no-os/--no-lzss (got: {', '.join(bad)})\n"
+                f"{prog}: error: --dat-repack does not support {', '.join(bad)}\n"
             )
             return 2
     test_shuffle_prefix = "[test-shuffle]"
@@ -1103,7 +1214,7 @@ def main(argv, *, collect_statistics=True):
     ap.add_argument(
         "--no-os",
         action="store_true",
-        help="Remove source chunks after compilation, preserving the package header.",
+        help="Omit the original-source section.",
     )
     ap.add_argument(
         "--dat-repack",
@@ -1225,11 +1336,18 @@ def main(argv, *, collect_statistics=True):
             sys.stderr.write(f"{prog}: error: test_dir not found: {a.test_dir}\n")
             return 1
     files, ini, inc, ss, scn_ssid_map = _scan_dir(inp)
-    if not a.gei and not a.dat_repack and not ss:
-        sys.stderr.write(
-            f"{prog}: error: input_dir must contain at least one .ss file\n"
-        )
-        return 1
+    if not (a.gei or a.dat_repack):
+        if not ss:
+            sys.stderr.write(
+                f"{prog}: error: input_dir must contain at least one .ss file\n"
+            )
+            return 1
+        for path in ss:
+            if not os.path.splitext(os.path.basename(path))[1]:
+                sys.stderr.write(
+                    f"{prog}: error: missing scene name before .ss: {path}\n"
+                )
+                return 1
     if a.dat_repack and not inc:
         sys.stderr.write(
             f"{prog}: warning: --dat-repack found no .inc files; package-level include command metadata will be omitted\n"
@@ -1258,7 +1376,7 @@ def main(argv, *, collect_statistics=True):
             files = [name for name in files if name not in ignored_configs]
             ini = [name for name in ini if name not in ignored_configs]
     auxiliary_names = {}
-    for target_name in (ANGOU_DAT_NAME, KEY_TXT_NAME, "Gameexe.ini"):
+    for target_name in (KEY_TXT_NAME, "Gameexe.ini"):
         target_key = windows_filename_key(target_name)
         names = [name for name in files if windows_filename_key(name) == target_key]
         if target_name != "Gameexe.ini":
@@ -1266,37 +1384,32 @@ def main(argv, *, collect_statistics=True):
                 (os.path.join(inp, name) for name in names), warn_only=True
             )
         auxiliary_names[target_name] = names[0] if names else ""
-    angou_name = auxiliary_names[ANGOU_DAT_NAME]
+    angou_path = "" if a.no_angou else find_angou_dat(inp)
+    angou_name = os.path.relpath(angou_path, inp) if angou_path else ""
     key_txt_name = auxiliary_names[KEY_TXT_NAME]
     if not gei_ini:
         gei_ini = auxiliary_names["Gameexe.ini"]
-    os.makedirs(out, exist_ok=True)
     tmp = ""
     tmp_auto = False
     if not a.gei:
         if a.tmp_dir:
-            try:
-                tmp = resolve_read_path(a.tmp_dir, kind="dir")
-            except (FileNotFoundError, NotADirectoryError):
-                tmp = os.path.abspath(a.tmp_dir)
-            os.makedirs(tmp, exist_ok=True)
+            tmp = os.path.realpath(a.tmp_dir)
         else:
             tmp_auto = True
-            tmp = tempfile.mkdtemp(
-                prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
-                dir=out,
-            )
-    original_files = []
-    if not a.gei and not a.no_angou and not a.no_lzss:
-        original_files = [
+    embed_sources = not (a.gei or a.no_angou or a.no_lzss or a.no_os)
+    original_names = (
+        [
             name
             for name in files
-            if ascii_lower(name).endswith((".inc", ".ss"))
-            or (
-                ascii_lower(name).startswith("gameexe")
-                and ascii_lower(name).endswith(".ini")
-            )
+            if ascii_lower(name).startswith("gameexe")
+            and ascii_lower(name).endswith(".ini")
         ]
+        if embed_sources
+        else []
+    )
+    scene_source_names = [os.path.basename(path) for path in ss]
+    scripts = [*inc, *scene_source_names] if embed_sources else []
+    original_files = [*original_names, *scripts]
     try:
         source_texts, source_digests, source_bytes = _load_project_sources(
             inp,
@@ -1310,7 +1423,55 @@ def main(argv, *, collect_statistics=True):
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
         return 1
-    enc = charset or _guess_charset(source_bytes, ini, inc, ss)
+    input_paths = [
+        os.path.join(inp, name)
+        for name in dict.fromkeys([*source_bytes, angou_name, key_txt_name])
+        if name
+    ]
+    output_names = [] if a.gei else [scene_pck]
+    if gei_ini:
+        if not a.gei and windows_filename_key(scene_pck) == "gameexe.dat":
+            sys.stderr.write(f"{prog}: error: PCK and configuration outputs collide\n")
+            return 1
+        output_names.append("Gameexe.dat")
+    output_paths = [os.path.join(out, name) for name in output_names]
+    try:
+        if test_shuffle_csv_path:
+            output_paths.append(test_shuffle_csv_path)
+        check_output_inputs(output_paths, input_paths, distinct=True)
+        enc = charset or _guess_charset(source_bytes, ini, inc, ss)
+        angou_content, exe_el_key, key_sources = _load_compile_keys(
+            inp,
+            "" if a.no_angou else angou_name,
+            "" if a.no_angou else key_txt_name,
+            charset,
+            allow_invalid=a.allow_invalid,
+            prog=prog,
+            embed=embed_sources,
+            prefer_key=a.dat_repack,
+        )
+        original_sources = (
+            [(name, source_bytes[name]) for name in original_names]
+            + key_sources
+            + [(name, source_bytes[name]) for name in scripts]
+        )
+        os.makedirs(out, exist_ok=True)
+        if a.tmp_dir:
+            os.makedirs(tmp, exist_ok=True)
+            resources.enter_context(
+                directory_lock(os.path.join(tmp, "_compile.lockdir"))
+            )
+            _check_compile_cache(tmp, ss, input_paths, output_paths)
+        elif tmp_auto:
+            tmp = tempfile.mkdtemp(
+                prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
+                dir=out,
+            )
+        outputs = _CompileOutputs(out, output_names)
+        resources.callback(outputs.close)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"{prog}: error: {exc}\n")
+        return 1
     for path in ss:
         name = os.path.basename(path)
         ssid = _scene_ssid_from_text(source_texts.get(name, ""))
@@ -1341,27 +1502,22 @@ def main(argv, *, collect_statistics=True):
         "project": {},
         "scn_path": inp,
         "tmp_path": tmp,
-        "out_path": out,
+        "out_path": outputs.staging,
         "scene_pck": scene_pck,
         "gameexe_ini": gei_ini,
-        "angou_path": os.path.join(inp, angou_name) if angou_name else "",
-        "key_path": os.path.join(inp, key_txt_name) if key_txt_name else "",
-        "scn_list": [os.path.basename(x) for x in ss],
+        "exe_el_key": exe_el_key,
+        "scn_list": scene_source_names,
         "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,
-        "ini_list": ini,
         "source_texts": source_texts,
         "source_digests": source_digests,
-        "source_bytes": source_bytes,
+        "original_sources": original_sources,
         "utf8": bool(use_utf8),
         "charset": enc,
         "charset_force": charset,
         "debug_charset": "utf-8" if use_utf8 else "cp932",
         "debug_outputs": bool(a.debug),
         "lzss_mode": (not a.no_angou),
-        "exe_angou_mode": (not a.no_angou),
-        "source_angou_mode": (not a.no_angou),
-        "original_source_mode": (not a.no_os and not a.no_angou),
         "easy_link": bool(a.no_lzss),
         "easy_angou_code": C.EASY_ANGOU_CODE,
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
@@ -1369,34 +1525,7 @@ def main(argv, *, collect_statistics=True):
         "defined_names": set(),
         "stats": stats,
     }
-    angou_content = None
-    angou_path = ctx["angou_path"]
-    if (not a.no_angou) and angou_path:
-        try:
-            angou_content = first_line_text(
-                read_text_auto(
-                    angou_path,
-                    force_charset=charset,
-                    allow_invalid=a.allow_invalid,
-                )
-            )
-        except (OSError, UnicodeError) as exc:
-            sys.stderr.write(f"{prog}: error: {angou_path}: {exc}\n")
-            return 1
-    if angou_content and not angou_first_line(angou_content):
-        sys.stderr.write(
-            f"{prog}: warning: ignoring {angou_path}: first line encodes to fewer than 8 CP932 bytes\n"
-        )
-        angou_content = None
-    ctx["exe_angou_str"] = angou_content or ""
     stats["angou_content"] = angou_content
-    cache_lock = None
-    if a.tmp_dir:
-        try:
-            cache_lock = _CompileCacheLock(tmp)
-        except (OSError, RuntimeError) as exc:
-            sys.stderr.write(str(exc) + "\n")
-            return 1
     native_rc = None
     if is_native_available() and not _runtime._LEGACY_COMPILE:
         try:
@@ -1404,7 +1533,7 @@ def main(argv, *, collect_statistics=True):
                 args=a,
                 ctx=ctx,
                 input_dir=inp,
-                output_dir=out,
+                output_dir=outputs.staging,
                 scene_pck=scene_pck,
                 tmp_dir=tmp,
                 ss=ss,
@@ -1412,27 +1541,23 @@ def main(argv, *, collect_statistics=True):
                 charset_force=charset,
                 test_shuffle=test_shuffle,
                 force_serial_compile=force_serial_compile,
-                angou_content=angou_content,
             )
             if not collect_statistics:
                 native_config["cache"]["full_compile_stats"] = False
-            native_rc = _try_native_compile(
-                native_config,
-                ctx,
-                tmp=tmp,
-                tmp_auto=tmp_auto,
-                debug=bool(a.debug),
-            )
-        except Exception:
-            if cache_lock is not None:
-                cache_lock.close()
-            raise
+            native_rc = _try_native_compile(native_config, ctx)
+            if native_rc == 0:
+                outputs.publish(input_paths)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"{prog}: error: {exc}\n")
+            native_rc = 1
     if native_rc is not None:
-        if cache_lock is not None:
-            cache_lock.close()
+        _print_summary(ctx, ok=native_rc == 0)
+        if native_rc == 0 and not a.debug and tmp_auto:
+            shutil.rmtree(tmp, ignore_errors=True)
         return native_rc
     ok = False
     test_shuffle_failed = False
+    seed_report = None
     compile_stats = {
         "parallel": False,
         "scene_macro_counts": empty_macro_stat_counts(),
@@ -1450,39 +1575,21 @@ def main(argv, *, collect_statistics=True):
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
             stage = "compile cache"
-            compile_list, digest_path, pending_digests, full_compile = (
-                _compile_cache_state(
-                    tmp_dir=tmp,
-                    enc=enc,
-                    charset=charset,
-                    ss=ss,
-                    source_digests=source_digests,
-                    incremental=bool(a.tmp_dir),
-                    allow_invalid=a.allow_invalid,
-                )
+            compile_list, digest_path, pending_digests = _compile_cache_state(
+                tmp_dir=tmp,
+                enc=enc,
+                charset=charset,
+                ss=ss,
+                source_digests=source_digests,
+                incremental=bool(a.tmp_dir),
+                allow_invalid=a.allow_invalid,
             )
             if a.tmp_dir:
-                try:
-                    bs_dir = resolve_read_path(os.path.join(tmp, "bs"), kind="dir")
-                except (FileNotFoundError, NotADirectoryError):
-                    bs_dir = ""
-                if full_compile and bs_dir:
-                    _, entries = read_directory(bs_dir)
-                    for entry in entries:
-                        fn = entry.name
-                        if str(fn).lower().endswith(".lzss"):
-                            os.remove(os.path.join(bs_dir, fn))
-                elif bs_dir:
-                    for p in compile_list:
-                        nm = os.path.splitext(os.path.basename(p))[0]
-                        try:
-                            lp = resolve_read_path(
-                                os.path.join(bs_dir, nm + ".lzss"), kind="file"
-                            )
-                        except (FileNotFoundError, NotADirectoryError):
-                            continue
-                        os.remove(lp)
+                for path in _stale_lzss_paths(tmp, compile_list):
+                    os.remove(path)
             if a.dat_repack:
+                from .dat import scn_structure_valid
+
                 stage = "dat-repack"
                 bs_dir = os.path.join(tmp, "bs")
                 os.makedirs(bs_dir, exist_ok=True)
@@ -1497,13 +1604,22 @@ def main(argv, *, collect_statistics=True):
                     if not entry.is_file():
                         continue
                     b = read_bytes(fp)
-                    if looks_like_siglus_dat(b):
-                        validate_input_paths([fp], seen=dat_paths)
-                        name = os.path.splitext(f)[0] + ".dat"
-                        write_bytes(os.path.join(bs_dir, name), b)
-                        dats.append(fp)
+                    if not scn_structure_valid(b):
+                        if is_auxiliary_dat_name(f) and not b.startswith(
+                            struct.pack("<i", C.SCN_HDR_SIZE)
+                        ):
+                            continue
+                        raise ValueError(f"invalid scene DAT structure: {fp}")
+                    validate_input_paths([fp], seen=dat_paths)
+                    stem, suffix = os.path.splitext(f)
+                    if not suffix:
+                        raise ValueError(f"missing scene name before .dat: {fp}")
+                    write_bytes(os.path.join(bs_dir, stem + ".dat"), b)
+                    dats.append(fp)
                 if not dats:
                     raise RuntimeError("--dat-repack: no scene .dat found")
+                input_paths.extend(dats)
+                check_output_inputs(output_paths, dats)
                 ctx["scn_list"] = [os.path.basename(x) for x in dats]
                 compile_list = []
             full_compile_stats = (
@@ -1570,6 +1686,8 @@ def main(argv, *, collect_statistics=True):
                             raise FileNotFoundError(
                                 f"expected dat not found: {exp_dat}"
                             )
+                        check_output_inputs(output_paths, [exp_dat])
+                        input_paths.append(exp_dat)
                         targets.append(_read_scn_dat(exp_dat)[2])
                     seed0 = int(test_seed0) & 0xFFFFFFFF
                     if is_native_available():
@@ -1626,10 +1744,7 @@ def main(argv, *, collect_statistics=True):
                             }
                         )
                     if test_shuffle_csv_path:
-                        _write_test_shuffle_csv(test_shuffle_csv_path, seed_rows)
-                        sys.stderr.write(
-                            f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n"
-                        )
+                        seed_report = (test_shuffle_csv_path, seed_rows)
                     if not all_ok:
                         test_shuffle_failed = True
                         sys.stderr.write(
@@ -1664,6 +1779,10 @@ def main(argv, *, collect_statistics=True):
             if pending_digests is not None:
                 stage = "compile cache"
                 _write_digest_cache(digest_path, pending_digests)
+        stage = "publish"
+        outputs.publish(input_paths, seed_report=seed_report)
+        if seed_report is not None:
+            sys.stderr.write(f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n")
         ok = not test_shuffle_failed
     except Exception as exc:
         sys.stderr.write(
@@ -1672,8 +1791,6 @@ def main(argv, *, collect_statistics=True):
         ok = False
     finally:
         _print_summary(ctx, ok=ok)
-        if cache_lock is not None:
-            cache_lock.close()
         if ok and (not a.debug) and tmp and tmp_auto:
             shutil.rmtree(tmp, ignore_errors=True)
     return 0 if ok else 1

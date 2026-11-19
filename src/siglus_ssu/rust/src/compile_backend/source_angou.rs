@@ -13,19 +13,6 @@ fn write_u32(data: &mut [u8], offset: usize, value: u32) {
     }
 }
 
-pub fn exe_angou_element(source: &[u8], original: &[u8]) -> Vec<u8> {
-    let mut out = original.to_vec();
-    if source.is_empty() || out.is_empty() {
-        return out;
-    }
-    let count = source.len().max(out.len());
-    for index in 0..count {
-        let out_index = index % out.len();
-        out[out_index] ^= source[index % source.len()];
-    }
-    out
-}
-
 pub fn encrypt_source(
     data: &[u8],
     name: &str,

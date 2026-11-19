@@ -10,40 +10,14 @@ from .common import (
     record_stage_time,
     set_stage_time,
     pack_i32_pairs,
-    compile_exe_el,
     read_bytes,
     write_bytes,
-    write_cached_bytes,
-    find_named_path,
-    ANGOU_DAT_NAME,
-    KEY_TXT_NAME,
     parse_i32_header,
     read_scn_header,
 )
 from .BS import build_ia_data
 from .native_ops import lzss_pack, xor_cycle_inplace
 from .path_policy import resolve_read_path
-
-
-def _make_original_source_rel_list(ctx):
-    names = sorted(ctx["source_bytes"], key=ascii_lower)
-    out = [
-        name
-        for name in names
-        if ascii_lower(name).startswith("gameexe")
-        and ascii_lower(name).endswith(".ini")
-    ]
-    scn_path = ctx["scn_path"]
-    p = find_named_path(scn_path, ANGOU_DAT_NAME)
-    if p:
-        out.append(os.path.relpath(p, scn_path).replace("/", "\\"))
-    if not ctx["exe_angou_str"]:
-        kp = find_named_path(scn_path, KEY_TXT_NAME)
-        if kp:
-            out.append(os.path.relpath(kp, scn_path).replace("/", "\\"))
-    out += [name for name in names if ascii_lower(name).endswith(".inc")]
-    out += [name for name in names if ascii_lower(name).endswith(".ss")]
-    return out
 
 
 def _parse_cmd_labels(dat):
@@ -221,61 +195,25 @@ def _build_pack_bytes(
     return bytes(b)
 
 
-def _build_original_source_chunks(ctx, lzss_mode):
-    if not lzss_mode:
+def _build_original_source_chunks(ctx):
+    sources = ctx["original_sources"]
+    if not sources:
         return (0, [])
-    if not ctx.get("source_angou"):
-        return (0, [])
-    skip = ctx.get("original_source_mode") is False
-    scn_path = ctx.get("scn_path") or ""
-    tmp_path = ctx.get("tmp_path") or ""
-    if tmp_path:
-        os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
-    if not scn_path:
-        return (0, [])
-    from . import compiler as _m
+    from .compiler import source_angou_encrypt
 
-    rel_list = _make_original_source_rel_list(ctx)
-    if not rel_list:
-        return (0, [])
-    if len(rel_list) > 1:
+    start = time.time()
+    if len(sources) > 1:
         from .parallel import parallel_source_encrypt
 
-        start = time.time()
-        sizes, chunks = parallel_source_encrypt(ctx, rel_list, scn_path, tmp_path, skip)
-        set_stage_time(ctx, "OS", time.time() - start)
-        if not sizes:
-            return (0, [])
-        size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
-        size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
-        return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
-    sizes = []
-    chunks = []
-    for rel in rel_list:
-        src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
-        raw = ctx["source_bytes"].get(rel)
-        if raw is None:
-            try:
-                src_path = resolve_read_path(src_path, kind="file")
-            except (FileNotFoundError, NotADirectoryError):
-                continue
-            raw = read_bytes(src_path)
-        start = time.time()
-        log_stage("OS", rel, ctx)
-        cache_path = (
-            os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
-        )
-        enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-        write_cached_bytes(cache_path, enc_blob)
-        sizes.append(len(enc_blob) & 0xFFFFFFFF)
-        if not skip:
-            chunks.append(enc_blob)
-        record_stage_time(ctx, "OS", time.time() - start)
-    if not sizes:
-        return (0, [])
-    size_list_bytes = struct.pack("<" + "I" * len(sizes), *sizes)
-    size_list_enc = _m.source_angou_encrypt(size_list_bytes, "__DummyName__", ctx)
-    return (len(size_list_enc), [] if skip else [size_list_enc] + chunks)
+        chunks = parallel_source_encrypt(ctx, sources)
+    else:
+        name, raw = sources[0]
+        log_stage("OS", name, ctx)
+        chunks = [source_angou_encrypt(raw, name, ctx)]
+    size_list = struct.pack(f"<{len(chunks)}I", *(len(chunk) for chunk in chunks))
+    header = source_angou_encrypt(size_list, "__DummyName__", ctx)
+    set_stage_time(ctx, "OS", time.time() - start)
+    return len(header), [header, *chunks]
 
 
 def command_link_errors(names, command_ids):
@@ -336,8 +274,8 @@ def link_pack(ctx):
                 if 0 <= cmd_id < inc_command_cnt and cmd_id < len(inc_cmd_list):
                     inc_cmd_list[cmd_id] = (scn_no, off)
     noangou_scene_data = lzss_list if lzss_mode else dat_list
-    exe_el = compile_exe_el(ctx)
-    original_hsz, original_chunks = _build_original_source_chunks(ctx, lzss_mode)
+    exe_el = ctx["exe_el_key"]
+    original_hsz, original_chunks = _build_original_source_chunks(ctx)
     scene_data = noangou_scene_data
     if exe_el:
         scene_data = []

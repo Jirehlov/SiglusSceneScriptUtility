@@ -7,7 +7,6 @@ import time
 from .path_policy import read_file_stat, resolve_read_path, validate_input_paths
 from . import const as C
 from . import disam
-from . import pck
 from .decompiler import (
     _write_support_inc_lines,
     build_decompile_hints,
@@ -27,10 +26,8 @@ from .common import (
     build_sections,
     parse_i32_header_checked,
     read_bytes,
-    is_named_filename,
     unique_out_path,
     write_text,
-    ANGOU_DAT_NAME,
     looks_like_siglus_dat,
     new_disam_stats,
     add_elapsed_seconds,
@@ -79,12 +76,6 @@ def _build_decompile_hints(bundles):
     except Exception as exc:
         sys.stderr.write(f"decompile: failed to build hints: {exc}\n")
         return None
-
-
-def is_decompiler_excluded_dat(dat_path=None, scene_name=None):
-    if scene_name not in (None, "") or not dat_path:
-        return False
-    return is_named_filename(os.path.basename(str(dat_path)), ANGOU_DAT_NAME)
 
 
 def _payload_metadata_trace(meta, pack_context):
@@ -236,7 +227,6 @@ def dat_disassembly_bundle(
 ):
     try:
         payload_trace = trace_profile == "payload"
-        decompiler_excluded = is_decompiler_excluded_dat(dat_path, scene_name)
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
@@ -312,7 +302,6 @@ def dat_disassembly_bundle(
             "scene_no": scene_no,
             "scene_name": scene_name,
             "dat_path": dat_path,
-            "decompiler_excluded": decompiler_excluded,
             "trace": trace,
             "dis": dis,
             "complete": parse_status["complete"] and scn_structure_valid(blob),
@@ -442,8 +431,6 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text
 def _write_dat_txt(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):
     try:
         if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
-        if bundle["decompiler_excluded"]:
             return None
         return _write_dat_txt_prepared(
             dat_path, blob, out_dir, stats, bundle, emit_text=emit_text
@@ -1108,40 +1095,6 @@ def decode_scn_dat_with_candidates(blob: bytes, candidates=None):
     return bytes(blob)
 
 
-def _gei_decode_txt(path, explicit_angou: str = ""):
-    blob = read_bytes(path)
-    if not blob or len(blob) < 8:
-        raise RuntimeError("Invalid Gameexe.dat: too small")
-    _, mode = struct.unpack_from("<ii", blob, 0)
-    cands = [b""]
-    if int(mode) != 0:
-        cands = list(
-            pck.iter_exe_el_candidates(
-                os.path.dirname(os.path.abspath(path)),
-                explicit_angou=explicit_angou,
-                with_sources=True,
-            )
-        )
-        if not cands:
-            cands = [b""]
-    from . import GEI
-
-    for cand in cands:
-        src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el")
-        sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
-        info, txt = GEI.read_gameexe_dat(path, exe_el=exe_el)
-        if info.get("ini_ok") and (
-            int(mode) == 0 or info.get("used_exe_el") or not info.get("lzss_size")
-        ):
-            sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-            return info, txt
-        sys.stderr.write(
-            f"key source rejected, falling back: {format_exe_el_source(src)}\n"
-        )
-    raise RuntimeError(f"Failed to decode Gameexe.dat payload: {path}")
-
-
 def _parse_gameexe_ini_configs(txt):
     m = {}
     if not txt:
@@ -1163,7 +1116,7 @@ def _parse_gameexe_ini_configs(txt):
 
 
 def analyze_gameexe_dat(path, explicit_angou: str = ""):
-    import sys
+    from . import GEI
 
     try:
         path = resolve_read_path(path, kind="file")
@@ -1185,7 +1138,7 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
     hdr0, mode = struct.unpack_from("<ii", blob, 0)
     payload_size = max(0, len(blob) - 8)
     try:
-        info, _ = _gei_decode_txt(path, explicit_angou=explicit_angou)
+        info, _ = GEI.read_gameexe_dat(path, blob, explicit_angou=explicit_angou)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1
@@ -1212,6 +1165,8 @@ def analyze_gameexe_dat(path, explicit_angou: str = ""):
 
 
 def compare_gameexe_dat(p1, p2, explicit_angou: str = ""):
+    from . import GEI
+
     try:
         p1 = resolve_read_path(p1, kind="file")
         p2 = resolve_read_path(p2, kind="file")
@@ -1225,8 +1180,8 @@ def compare_gameexe_dat(p1, p2, explicit_angou: str = ""):
         sys.stderr.write("invalid Gameexe.dat: too small\n")
         return 1
     try:
-        _, t1 = _gei_decode_txt(p1, explicit_angou=explicit_angou)
-        _, t2 = _gei_decode_txt(p2, explicit_angou=explicit_angou)
+        _, t1 = GEI.read_gameexe_dat(p1, b1, explicit_angou=explicit_angou)
+        _, t2 = GEI.read_gameexe_dat(p2, b2, explicit_angou=explicit_angou)
     except Exception as e:
         sys.stderr.write(str(e) + "\n")
         return 1

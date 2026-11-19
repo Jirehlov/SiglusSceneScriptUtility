@@ -2,6 +2,7 @@ import os
 import stat
 import sys
 from functools import lru_cache
+from itertools import chain
 
 
 class FilenameCaseCollisionError(OSError):
@@ -170,6 +171,47 @@ def same_file_path(first, second):
         return os.path.samefile(first, second)
     except OSError:
         return False
+
+
+def check_output_inputs(outputs, inputs, *, distinct=False, paired_inputs=()):
+    destinations = set()
+    identities = {}
+    resolved_paths = {}
+    for path in outputs:
+        path = os.path.abspath(path)
+        destinations.add(path)
+        if distinct:
+            key = windows_filename_key(os.path.realpath(path))
+            if key in resolved_paths:
+                raise ValueError(
+                    f"output paths collide: {resolved_paths[key]!r} and {path!r}"
+                )
+            resolved_paths[key] = path
+        try:
+            info = os.stat(path)
+        except FileNotFoundError:
+            continue
+        identity = (info.st_dev, info.st_ino)
+        if distinct and identity in identities:
+            raise ValueError(
+                f"output paths collide: {identities[identity]!r} and {path!r}"
+            )
+        identities[identity] = path
+    if not destinations:
+        return
+    for path, paired_output in chain(((path, None) for path in inputs), paired_inputs):
+        absolute = os.path.abspath(path)
+        allowed = None if paired_output is None else os.path.abspath(paired_output)
+        if absolute in destinations and absolute != allowed:
+            raise ValueError(f"output would overwrite input: {absolute}")
+        if identities:
+            try:
+                info = os.stat(absolute)
+            except FileNotFoundError:
+                continue
+            target = identities.get((info.st_dev, info.st_ino))
+            if target is not None and target != allowed:
+                raise ValueError(f"output {target} would overwrite input {absolute}")
 
 
 def validate_input_paths(paths, *, seen=None, warn_only=False, allow_same_file=False):

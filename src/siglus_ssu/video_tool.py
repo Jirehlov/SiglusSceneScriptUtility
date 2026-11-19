@@ -46,8 +46,6 @@ def _warn_lossy_ogv_streams(path):
 
 
 def _confirm_overwrite(path):
-    if not os.path.lexists(path):
-        return True
     eprint(f"warning: output file already exists: {path}")
     eprint("Overwrite? [y/N]")
     try:
@@ -256,10 +254,8 @@ def main(argv):
             dir_path = outp.rstrip("/\\") or outp
             stem = os.path.splitext(os.path.basename(inp))[0]
             outp2 = os.path.join(dir_path, stem + ".omv")
-            out_dir = dir_path
         else:
             outp2 = outp
-            out_dir = os.path.dirname(outp2)
         if refer_path is not None:
             try:
                 refer_path = resolve_read_path(refer_path, kind="file")
@@ -283,15 +279,18 @@ def main(argv):
                     flags_hi24 = uniq[0]
                 else:
                     flags_hi24 = _build_hi24_ranges(hi24)
-        if not _confirm_overwrite(outp2):
+        overwrite = os.path.lexists(outp2)
+        if overwrite and not _confirm_overwrite(outp2):
             eprint("Not overwriting - exiting")
             return 1
-        if out_dir:
-            os.makedirs(out_dir, exist_ok=True)
         _warn_lossy_ogv_streams(inp)
         try:
             video.build_omv_from_ogv(
-                inp, outp2, mode=mode_override, flags_hi24=flags_hi24
+                inp,
+                outp2,
+                exclusive=not overwrite,
+                mode=mode_override,
+                flags_hi24=flags_hi24,
             )
         except (EOFError, OSError, ValueError, struct.error) as exc:
             eprint(f"error: build failed: {exc}")
@@ -320,9 +319,10 @@ def main(argv):
         rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
         stem = os.path.splitext(os.path.basename(src_path))[0]
         out_path = os.path.join(out_root, rel_dir, stem + ".ogv")
-        if not _confirm_overwrite(out_path):
+        overwrite = os.path.lexists(out_path)
+        if overwrite and not _confirm_overwrite(out_path):
             raise ValueError("Not overwriting")
-        video.extract_ogv_from_omv(src_path, out_path)
+        video.extract_ogv_from_omv(src_path, out_path, exclusive=not overwrite)
         return 1, out_path
 
     return run_batch(files, _proc)

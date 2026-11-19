@@ -422,56 +422,14 @@ def parallel_lzss_compress(
     return (dat_list, lzss_list)
 
 
-def _source_encrypt_task(
-    args: tuple[str, bytes | None, str, str, dict, bool],
-) -> tuple[str, int, bytes, str | None]:
-    rel, raw, src_path, cache_path, source_angou, skip = args
-    try:
-        from .common import read_bytes, write_cached_bytes
-        from . import compiler as _m
+def parallel_source_encrypt(ctx, sources):
+    from .compiler import source_angou_encrypt
 
-        if raw is None:
-            try:
-                src_path = resolve_read_path(src_path, kind="file")
-            except (FileNotFoundError, NotADirectoryError):
-                return (rel, 0, b"", None)
-            raw = read_bytes(src_path)
-        ctx = {"source_angou": source_angou}
-        enc_blob = _m.source_angou_encrypt(raw, rel, ctx)
-        write_cached_bytes(cache_path, enc_blob)
-        size = len(enc_blob) & 0xFFFFFFFF
-        chunk = enc_blob if not skip else b""
-        return (rel, size, chunk, None)
-    except Exception as e:
-        return (rel, 0, b"", str(e))
-
-
-def parallel_source_encrypt(
-    ctx: dict, rel_list: list[str], scn_path: str, tmp_path: str, skip: bool
-) -> tuple[list[int], list[bytes]]:
-    source_angou = ctx.get("source_angou")
-    if tmp_path:
-        os.makedirs(os.path.join(tmp_path, "os"), exist_ok=True)
-    tasks = []
-    for rel in rel_list:
-        src_path = os.path.join(scn_path, rel.replace("\\", os.sep))
-        cache_path = (
-            os.path.join(tmp_path, "os", rel.replace("\\", os.sep)) if tmp_path else ""
-        )
-        tasks.append(
-            (
-                rel,
-                ctx["source_bytes"].get(rel),
-                src_path,
-                cache_path,
-                source_angou,
-                skip,
-            )
-        )
-    workers = min(get_max_workers(None), len(tasks))
-    results = {}
-    errors = []
-    print(f"[PARALLEL] Encrypting {len(tasks)} source files with {workers} workers...")
+    source_ctx = {"source_angou": ctx["source_angou"]}
+    workers = min(get_max_workers(None), len(sources))
+    print(
+        f"[PARALLEL] Encrypting {len(sources)} source files with {workers} workers..."
+    )
     gil_enabled = getattr(sys, "_is_gil_enabled", None)
     executor_context = (
         ThreadPoolExecutor(max_workers=workers)
@@ -482,27 +440,18 @@ def parallel_source_encrypt(
         )
         else process_pool(workers)
     )
+    chunks = [b""] * len(sources)
     with executor_context as executor:
-        futures = [executor.submit(_source_encrypt_task, task) for task in tasks]
+        futures = {
+            executor.submit(source_angou_encrypt, raw, name, source_ctx): index
+            for index, (name, raw) in enumerate(sources)
+        }
         for future in as_completed(futures):
-            rel, size, chunk, error = future.result()
-            if error is not None:
-                errors.append((rel, error))
-            elif size > 0:
-                results[rel] = (size, chunk)
-                print(f"  OS: {rel}")
-    if errors:
-        raise RuntimeError(str(errors[0][1]))
-    sizes = []
-    chunks = []
-    for rel in rel_list:
-        if rel in results:
-            size, chunk = results[rel]
-            sizes.append(size)
-            if not skip and chunk:
-                chunks.append(chunk)
-    print(f"[PARALLEL] Source encryption complete: {len(sizes)} files")
-    return (sizes, chunks)
+            index = futures[future]
+            chunks[index] = future.result()
+            print(f"  OS: {sources[index][0]}")
+    print(f"[PARALLEL] Source encryption complete: {len(chunks)} files")
+    return chunks
 
 
 def _g00_extract_task(args):

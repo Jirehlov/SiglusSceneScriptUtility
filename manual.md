@@ -90,6 +90,10 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 
 Native acceleration is used automatically when available.
 
+On Linux and macOS filesystems without hard links, the tool copies staged output into a new file when overwriting is disallowed. A forced stop during the copy can leave that file incomplete.
+
+In-place translation, save edits, and EXE patches check whether the original changed before replacing it. An interrupted update can leave `.siglus-update.lockdir` in the output directory. Remove that directory only when no update is running.
+
 ### Global Options
 
 | Option | Description |
@@ -210,13 +214,13 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | Parameter | Description |
 |---|---|
-| `<input_dir>` | Directory with at least one `.ss`, plus any `.inc`, `Gameexe.ini`, and `暗号.dat` files. `--dat-repack` and `--gei` do not require `.ss` files. |
+| `<input_dir>` | Directory with at least one named `.ss` script, plus any `.inc`, `Gameexe.ini`, and `暗号.dat` files. `--dat-repack` and `--gei` do not require `.ss` files. |
 | `<output_pck \| output_dir>` | An existing directory or a path ending in `/` or `\` receives `Scene.pck`. Any other path is treated as the exact output filename. |
 | `--debug` | Keep intermediate files after compilation. Cannot be combined with `--tmp`. |
-| `--charset ENC` | Set one encoding for all source files. Default: detect UTF-8 or CP932 per file. Shift-JIS aliases such as `sjis` and `shift_jis` select Windows CP932. Other Python codecs are accepted explicitly. |
-| `--allow-invalid` | Replace invalid input bytes with U+FFFD, including in `Gameexe.ini` and `暗号.dat`. Uses `--charset` when supplied; otherwise tries strict UTF-8/CP932 first, then UTF-8 replacement. Syntax and type errors still fail. |
+| `--charset ENC` | Set one encoding for all source files. Default: detect UTF-8 or CP932 per file, with BOM detection for UTF-16 and UTF-32. Shift-JIS aliases such as `sjis` and `shift_jis` select Windows CP932. Other Python codecs are accepted explicitly. |
+| `--allow-invalid` | Replace invalid input bytes with U+FFFD, including in `Gameexe.ini` and `暗号.dat`. Without a forced charset or a UTF-16/32 BOM, it tries strict UTF-8 and CP932 before using UTF-8 replacement. Syntax and type errors still fail. |
 | `--no-os` | Omit embedded original sources without changing script encryption or compression. |
-| `--dat-repack` | Pack existing scene `.dat` files without recompiling. Same-directory `.inc` files supply package command metadata; missing `.inc` files produce a warning. Only `--no-os` and `--no-lzss` may be combined with this operation. |
+| `--dat-repack` | Pack existing scene `.dat` files without recompiling. A damaged scene aborts the repack and preserves the existing PCK. Only `Gameexe.dat` and `暗号.dat` may be skipped as auxiliary files. Same-directory `.inc` files supply package command metadata; missing `.inc` files produce a warning. Use `--charset` or `--allow-invalid` for text inputs. A valid `key.txt` takes priority over `暗号.dat` when repacking. Also accepts `--no-os` and `--no-lzss`. |
 | `--no-angou` | Disable LZSS compression, outer XOR encryption, and original-source embedding. Does not disable scene-string XOR. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable LZSS compression and original-source embedding, retaining script encryption. Cannot be combined with `--tmp`. |
 | `--serial` | Compile serially instead of in parallel. |
@@ -224,10 +228,12 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Concurrent builds cannot share it. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Search seeds from `seed0` (default `0`) through `0xFFFFFFFF` to reproduce the first scene's string-table order in `<test_dir>`, then verify all scenes. Requires three paths after the optional seed. Cannot be combined with `--tmp` or `--gei`. |
-| `--csv <seed_csv>` | With `--test-shuffle`, export per-scene initial and final seeds. A directory target receives `test_shuffle_seeds.csv`. |
+| `--csv <seed_csv>` | With `--test-shuffle`, publish per-scene initial and final seeds with the linked PCK. A directory target receives `test_shuffle_seeds.csv`. |
 | `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. Output is always a directory. A missing INI produces a warning and succeeds without creating `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
 
-`Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped. An empty INI produces a warning and is compiled.
+`Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped. An empty INI produces a warning and is compiled. The compiler rejects output paths that refer to its inputs and publishes results only after generating all requested files.
+
+After an interrupted build, check the cache for `_compile.lockdir` and each output file’s resolved parent directory for `.siglus-publish.lockdir`. Remove a leftover lock only after checking that no build is using the directory.
 
 #### Examples
 
@@ -255,7 +261,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 #### Notes
 
 - **Source encoding:** Use `--charset utf8 --allow-invalid` only to reproduce output made by interpreting invalid UTF-8 with replacement. It can preserve garbled text. Compilation stops at the first DOS EOF character (U+001A); later bytes are ignored. See the [language reference](#siglusss-language-spec) for literal and character rules.
-- **Key compatibility:** Keys derived from `暗号.dat` or `angou=text` use CP932 and can differ from official Windows conversion. For existing official files, prefer the raw 16-byte key or matching engine executable. For compilation, put the raw key in `key.txt` and remove any higher-priority `暗号.dat` from the input directory.
+- **Key compatibility:** Keys derived from `暗号.dat` or `angou=text` use CP932 and can differ from official Windows conversion. For existing official files, prefer the raw 16-byte key or matching engine executable. For normal compilation, put the raw key in `key.txt` and remove any higher-priority `暗号.dat` from the input directory.
 - **Incremental builds:** Changed scenes are rebuilt. Adding, changing, or removing an `.inc`, changing compiler settings, or upgrading the program can require a full rebuild. Failed or interrupted cache updates trigger a full rebuild on the next run.
 - **Shuffle search:** String-table order does not affect normal translation work. A later scene mismatch still produces the requested output but returns failure. Use `--set-shuffle` once the correct seed is known.
 - **Paths and names:** Paths follow the host filesystem's lookup rules. Multi-file operations reject selected input paths that collide under a fixed Windows filename case mapping, such as `A.ss` and `a.ss` in one directory; unrelated directory entries are ignored. Automatic filename discovery warns about case-colliding candidates and selects one in its usual order, including for embedded configuration sources. Existing output naming rules still apply. Runtime scene names fold only ASCII `A`–`Z` to lowercase; embedded source filenames retain their spelling.
@@ -288,9 +294,11 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
 | `--decompile` | Write disassembly and reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
 | `--angou VALUE` | Specify a [decryption key source](#decryption-keys). |
-| `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. |
+| `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. If the output already exists, use `Gameexe_1.ini` and so on. |
 
 The extraction directory is printed after `Output:`. To edit embedded sources, work in that directory and pass it directly to `-c`.
+
+If a scene and its embedded key file are both named `暗号.dat`, the key goes in `.siglus-ssu-keys/`. Compilation and repacking can read the key from there.
 
 Decompilation does not automatically detect the profile or recover original macros, comments, or formatting. Recompile `decompiled/` with the same profile and string multiplier, then verify with `-a --payload`. The rebuilt PCK need not be byte-identical. Incomplete disassembly fails decompilation.
 
@@ -344,9 +352,9 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]
 | `--disam` | Write disassembly beside each input `.dat` as `<scene>.dat.txt`. Requires one or two scene `.dat` files. For reconstructed `.ss`, use `-x --decompile`. |
 | `--readall` | Mark all scenes read in `read.sav`, or unlock engine-managed CG, BGM, and voice collections in `global.sav`. Does not unlock Steam achievements. Creates a non-overwriting `.bak` backup before rewriting the save. |
 | `--read-flags` | Export unread flag indices to UTF-8 JSON without modifying the save. Default output: `<save_stem>.flags.json`. An optional PCK validates scene names/counts and supplies original source line numbers. `--angou` requires a PCK. |
-| `--report-json FILE` | Set the `--read-flags` report path; also accepts `--report-json=FILE`. Missing parent directories are created. Cannot overwrite the input save or PCK. |
+| `--report-json FILE` | Set the `--read-flags` report path; also accepts `--report-json=FILE`. Missing parent directories are created. Cannot overwrite the input save, scene PCK, or a file read for its key. |
 | `--apply` | Apply sibling `global.txt` to `global.sav`, creating a non-overwriting `.bak` first. Editable entries are `G[n]`, `Z[n]`, `cg_table[n]`, `bgm_table[n]`, and `chrkoe[n].look_flag`; other fields are ignored. |
-| `--word` | Count dialogue units per scene `.dat` and embedded `.ss`, print totals, and write CSV. Default output: `<pck_stem>.word.csv` beside the input; a directory target receives that filename. |
+| `--word` | Count dialogue units per scene `.dat` and embedded `.ss`, print totals, and write CSV. Default output: `<pck_stem>.word.csv` beside the input; a directory target receives that filename. Cannot overwrite an input PCK or a file read for its key. |
 | `--payload` | Compare normalized scene payloads for two `.pck` files or two `.dat` files. See [Payload Comparison Results](#payload-comparison-results). |
 | `--angou VALUE` | Supply a key source for PCK/DAT/Gameexe processing, or inspect a key without another input. See [Decryption Keys](#decryption-keys). |
 | `--gei` | Analyze or compare `Gameexe.dat`; only `--angou` may be combined with it. |
@@ -366,9 +374,11 @@ Use `--angou VALUE` as the final mode-specific option, with a separate, nonempty
 | `angou=text` | Derive a key from a literal `暗号.dat` first line. |
 | `key=bytes` | Supply a 16-byte key. Prefer explicit `0xNN` tokens to avoid numeric ambiguity. |
 
-Decryption tries the explicit key source first, then embedded `暗号.dat`, the current directory, and its parent. Directory search order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`; searches are not recursive. An explicit path disables parent-directory probing. An explicit source that is missing, malformed, or contains no key is an error; a valid key that fails decryption allows lower-priority candidates.
+Decryption tries the explicit key source first, then embedded `key.txt` or `暗号.dat`, the current directory, and its parent. Directory search order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`; searches are not recursive. An explicit path disables parent-directory probing. An explicit source that is missing, malformed, or contains no key is an error; a valid key that fails decryption allows lower-priority candidates.
 
-Text keys from `暗号.dat` and `angou=text` can differ from official Windows conversion. For existing official files, prefer the matching engine executable or its raw key. A 16-byte `key.txt` is read as binary; other text keys are parsed as `0xNN`, two-digit hex, then decimal, taking the first 16 matches from the first applicable format. Thus sixteen `10` tokens mean hex `0x10` bytes.
+When compiling or decrypting an encrypted `Gameexe.dat`, each nonblank line after comment removal must be a configuration assignment such as `#WINDOW_XSIZE=640`. The `#` prefix is optional. Names start with an ASCII letter, digit, or underscore and may also contain periods, square brackets, hyphens, spaces, and tabs. Values may contain Unicode text. The format has no checksum to distinguish keys that produce syntactically valid text. Decryption fails if candidate keys produce different valid texts.
+
+Text keys from `暗号.dat` and `angou=text` can differ from official Windows conversion. For existing official files, prefer the matching engine executable or its raw key. Embedded `暗号.dat` supports UTF-16 or UTF-32 with a BOM. A 16-byte `key.txt` is read as binary; other text keys are parsed as `0xNN`, two-digit hex, then decimal, taking the first 16 matches from the first applicable format. Thus sixteen `10` tokens mean hex `0x10` bytes.
 
 ```bash
 siglus-ssu -x /path/to/Scene.pck --angou /path/to/SiglusEngine.exe
@@ -425,7 +435,7 @@ siglus-ssu -a --read-flags /path/to/savedata/read.sav /path/to/Scene.pck
 siglus-ssu -a --readall /path/to/savedata/read.sav
 ```
 
-Analyze `global.sav` to generate `global.txt`, edit supported values, then apply them:
+Analyze `global.sav` to generate `global.txt`, edit supported values, then apply them. Analysis preserves an existing `global.txt`.
 
 ```bash
 siglus-ssu -a /path/to/savedata/global.sav
@@ -473,12 +483,12 @@ siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expect
 
 | Parameter | Description |
 |---|---|
-| `--x` | Export `.dbs` to CSV. |
+| `--x` | Export `.dbs` to CSV, preserving existing CSV files. |
 | `--a` | Analyze one database or compare two. |
 | `--c` | Compile CSV to `.dbs`. |
 | `--type N` | Output database type (`0`–`2147483647`; default `1`). Type `0` strings must be encodable as CP932; other types use UTF-16LE. |
 | `--set-shuffle SEED` | Set the random-padding seed (decimal or hexadecimal; default `1`). |
-| `--test-shuffle [skip0]` | Try up to 16,777,216 random-generator skip counts from `skip0` (default `0`) to match a reference database's padding. Single-file mode only. |
+| `--test-shuffle [skip0]` | Try up to 16,777,216 random-generator skip counts from `skip0` (default `0`) to match a reference database's padding. Writes output only after an exact match and preserves the reference file. Single-file mode only. |
 
 Directory export and compilation scan recursively and preserve subdirectories. Batch compilation rejects output-name collisions such as `name.csv` and `name.dbs.csv`, including case-only collisions.
 
@@ -502,7 +512,7 @@ CSV files use UTF-8 with BOM and CRLF, suitable for Excel. Keep the first two ro
 
 Row and column call numbers must fit signed 32-bit integers.
 
-Use normal CSV quoting: double embedded quotes, keep backslashes literal, and place actual newlines or tabs inside quoted fields. Unencodable strings fail compilation with the CSV location.
+Use normal CSV quoting: double embedded quotes, keep backslashes literal, and place actual newlines or tabs inside quoted fields. Malformed quoting, extra fields, and unencodable strings fail compilation with the CSV location.
 
 ---
 
@@ -537,7 +547,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 
 `%EMPTY` means no character name was found. Unsafe directory-name characters are percent-escaped; CSV names retain their original text. Case-only differences follow the output filesystem's rules.
 
-Unreferenced archive entries go to `unreferenced/`. The summary's voice duration includes referenced entries only. Unreadable durations are counted under `Duration failed` without preventing CSV output.
+Scene scan or OVK index errors stop the command before it writes the CSV or audio. The CSV cannot replace a file read for its key. Unreferenced archive entries go to `unreferenced/`. The summary's voice duration includes referenced entries only. Unreadable durations are counted under `Duration failed` without preventing CSV output.
 
 #### `koe_master.csv` Format (Normal Mode Only)
 
@@ -593,11 +603,11 @@ siglus-ssu -m <path_to_dat | path_to_dir> [--angou VALUE]
 siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 ```
 
-Directory inputs are scanned recursively, excluding `Gameexe.dat` and `暗号.dat`. Encrypted files may need a [decryption key source](#decryption-keys).
+Directory inputs are scanned recursively. Configuration and key files are skipped. Encrypted files may need a [decryption key source](#decryption-keys).
 
 #### Workflow
 
-1. Export `chapter1.dat.csv` beside the DAT:
+1. Export `chapter1.dat.csv` beside the DAT. Re-exporting preserves an existing CSV:
 
    ```bash
    siglus-ssu -m /path/to/chapter1.dat
@@ -612,7 +622,7 @@ Directory inputs are scanned recursively, excluding `Gameexe.dat` and `暗号.da
 
 The command rewrites the DAT, preserving its encryption and compression. Back up the original before applying translations.
 
-An invalid index or mismatched `original` leaves that DAT unchanged and returns `1`. Already-applied rows are accepted. Directory processing continues after failures and returns `1` if any file failed.
+The CSV must include `index`, `original`, and `replacement`. Invalid or duplicate indices and mismatched originals leave that DAT unchanged and return `1`. Already-applied rows are accepted. Directory processing continues after failures and returns `1` if any file failed.
 
 #### `.dat.csv` Format
 
@@ -667,7 +677,9 @@ Extraction and creation scan directory inputs at the immediate level only.
 
 Without `--refer`, PNG creates type0 and JPEG creates type3. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
 
-With no output path, creation writes beside the input; updates overwrite the reference. Back up original assets before updating them. JSON layouts cannot be combined with `--refer`. To update an individual cut through a reference directory, name its replacement `<basename>_cut###.png`.
+With no output path, creation writes beside the input and updates overwrite the reference. Outputs cannot overwrite a source image, layout, or another target's reference, and must resolve to distinct files. Concurrent updates to the same output directory wait up to 30 seconds for the active update. After an interrupted update, remove `.siglus-g00.lockdir` only after confirming no update is running.
+
+Back up original assets before updating them. JSON layouts cannot be combined with `--refer`. To update an individual cut through a reference directory, name its replacement `<basename>_cut###.png`.
 
 ```bash
 siglus-ssu -g --x /path/to/sprite.g00 /path/to/work/
@@ -733,7 +745,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 
 | Parameter | Description |
 |---|---|
-| `--x` | Extract audio. Directory inputs are recursive and preserve subdirectories. Existing outputs are overwritten; colliding batch output names are rejected. |
+| `--x` | Extract audio. Directory inputs are recursive and preserve subdirectories. Existing outputs are overwritten unless they collide with another output or a file read for this operation. |
 | `--a` | Analyze one audio file, or compare entries in two OVK archives. |
 | `--c` | Create OWP or OVK from Ogg files using the naming rules below. Directory inputs are recursive and preserve subdirectories. |
 | `--play` | Preview BGM with Gameexe loop points in a terminal player. Requires `ffplay` on `PATH` and `psutil` (`pip install psutil`). Supports NWA/OWP/Ogg, not OVK. |
@@ -805,7 +817,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 
 Creation treats its output as a directory if it exists as one, ends in a separator, or has no extension. Use a `.omv` extension for an explicit output file.
 
-Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. Declining returns failure; batch extraction continues with other files.
+Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. The command preserves the file and reports failure if you decline or another process fills a previously unused target during conversion. Batch extraction continues with other files.
 
 #### Pixel Layouts and `.ogv` Inputs
 
@@ -856,12 +868,12 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | Parameter | Description |
 |---|---|
 | `<input_exe>` | Engine executable. Symbolic-link input and output paths are rejected. |
-| `<input_key>` | For `--altkey`: a `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck` file, or a `key=bytes` / `angou=text` literal. Directories are not accepted. |
+| `<input_key>` | For `--altkey`: a `key.txt`, `暗号.dat`, `SiglusEngine*.exe`, or `Scene.pck` file, or a `key=bytes` / `angou=text` literal. Directories are not accepted. The key file cannot also be the output. |
 | `-o`, `--output` | Choose the output executable. Defaults use `_alt.exe`, `_CJK.exe`, `_CJKPATH.exe`, `_LOC0.exe`, or `_LOC1.exe`; JSON uses `_<CONFIG>.exe` and reverting uses `_ORIGINAL.exe`. |
 | `--inplace` | Overwrite the input; cannot be combined with `-o`. |
 | `--lang cjk` | Set CJK font charset, locale `chinese`, and language code `zh`, keeping game file/save paths unchanged. |
 | `--lang cjk-path` | Apply `cjk` and use `GameexeZH.dat`, `SceneZH.pck`, and `savedata_zh`. |
-| `--lang config.json` | Apply all six fields from a JSON file, or one quoted inline JSON object. |
+| `--lang config.json` | Apply all six fields from a JSON file or one quoted inline JSON object. The output cannot overwrite the configuration file. |
 | `--allow-partial` | Apply supported parts of a language preset even if some components are unavailable. Otherwise all components are required before any output is written. |
 | `--revert` | Restore the byte-identical original from a previous language patch. Requires `--lang`; cannot be combined with `--allow-partial`. |
 | `--info` | Inspect patchable key, language, and region settings without writing. |
@@ -916,7 +928,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 | `--decompile` | Reconstruct source without using embedded sources, rebuild it, and compare payloads. Requires an explicit global profile; uses strict UTF-8 without retries. |
 | `--allow-invalid` | With an explicit profile in embedded-source mode, compile as UTF-8 with replacement for invalid bytes. Not accepted with `--decompile`. |
 | `--serial` | Disable parallel compilation during rebuilds. |
-| `--report-json FILE` | Write results and timings as JSON. Cannot overwrite an input PCK. |
+| `--report-json FILE` | Write results and timings as JSON. Cannot overwrite an input PCK or a file read for its key. |
 
 An explicit `--const-profile` makes one attempt with that profile and normal encoding detection, unless `--allow-invalid` is supplied. Without an explicit profile, embedded-source tests try profiles `0`–`10`, then retry with UTF-8 replacement if needed. An explicit string multiplier applies to all attempts.
 

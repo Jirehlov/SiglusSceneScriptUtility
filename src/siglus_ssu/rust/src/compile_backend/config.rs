@@ -73,7 +73,6 @@ pub struct CompileConstants {
     pub logical_and_precedence: i32,
     pub easy_angou_code: Vec<u8>,
     pub gameexe_dat_angou_code: Vec<u8>,
-    pub exe_org: Vec<u8>,
     pub exe_angou_a_idx: Vec<usize>,
     pub exe_angou_b_idx: Vec<usize>,
     pub source_angou: SourceAngouConfig,
@@ -137,21 +136,15 @@ pub struct CompileOptions {
 
 pub struct CompileContext {
     pub gameexe_ini: String,
-    pub angou_path: String,
-    pub key_path: String,
     pub exe_el_key: Vec<u8>,
     pub scn_list: Vec<String>,
     pub scene_display_names: HashMap<String, String>,
     pub inc_list: Vec<String>,
-    pub ini_list: Vec<String>,
     pub source_texts: HashMap<String, String>,
-    pub source_bytes: HashMap<String, Vec<u8>>,
+    pub original_sources: Vec<(String, Vec<u8>)>,
     pub utf8: bool,
     pub debug_outputs: bool,
     pub lzss_mode: bool,
-    pub exe_angou_mode: bool,
-    pub source_angou_mode: bool,
-    pub original_source_mode: bool,
     pub easy_link: bool,
 }
 
@@ -175,7 +168,6 @@ pub struct CompileConfig {
     pub cache: CompileCache,
     pub options: CompileOptions,
     pub context: CompileContext,
-    pub angou_content: Option<String>,
 }
 
 pub(super) fn extract_item<'py, T>(dict: &Bound<'py, PyDict>, key: &str) -> PyResult<T>
@@ -300,7 +292,6 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
             as i32,
         easy_angou_code: extract_item(&constants_dict, "easy_angou_code")?,
         gameexe_dat_angou_code: extract_item(&constants_dict, "gameexe_dat_angou_code")?,
-        exe_org: extract_item(&constants_dict, "exe_org")?,
         exe_angou_a_idx: extract_item(&constants_dict, "exe_angou_a_idx")?,
         exe_angou_b_idx: extract_item(&constants_dict, "exe_angou_b_idx")?,
         source_angou: get_source_angou(&source_angou_dict)?,
@@ -338,21 +329,15 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
     };
     let context = CompileContext {
         gameexe_ini: extract_item(&context_dict, "gameexe_ini")?,
-        angou_path: extract_item(&context_dict, "angou_path")?,
-        key_path: extract_item(&context_dict, "key_path")?,
         exe_el_key: extract_item(&context_dict, "exe_el_key")?,
         scn_list: extract_item(&context_dict, "scn_list")?,
         scene_display_names: extract_item(&context_dict, "scene_display_names")?,
         inc_list: extract_item(&context_dict, "inc_list")?,
-        ini_list: extract_item(&context_dict, "ini_list")?,
         source_texts: extract_item(&context_dict, "source_texts")?,
-        source_bytes: extract_item(&context_dict, "source_bytes")?,
+        original_sources: extract_item(&context_dict, "original_sources")?,
         utf8: extract_item(&context_dict, "utf8")?,
         debug_outputs: extract_item(&context_dict, "debug_outputs")?,
         lzss_mode: extract_item(&context_dict, "lzss_mode")?,
-        exe_angou_mode: extract_item(&context_dict, "exe_angou_mode")?,
-        source_angou_mode: extract_item(&context_dict, "source_angou_mode")?,
-        original_source_mode: extract_item(&context_dict, "original_source_mode")?,
         easy_link: extract_item(&context_dict, "easy_link")?,
     };
     let cache = CompileCache {
@@ -374,6 +359,5 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         cache,
         options,
         context,
-        angou_content: extract_item(&dict, "angou_content")?,
     })
 }

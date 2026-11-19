@@ -16,14 +16,15 @@ from .common import (
     hint_help as _hint_help,
     max_pair_end,
     iter_files_by_ext,
-    is_named_filename,
+    is_auxiliary_dat_name,
+    looks_like_siglus_dat,
     is_trace_command_base as _is_trace_command_base,
-    ANGOU_DAT_NAME,
     consume_angou_option,
     read_struct_list,
     I32_PAIR_STRUCT,
     read_scn_metadata,
     format_exe_el_source,
+    open_atomic_output,
     split_end_of_options,
     new_call_scope,
     new_expression_state,
@@ -433,7 +434,17 @@ def _read_map(csv_path: str):
     except OverflowError:
         csv.field_size_limit(2**31 - 1)
     with open_read(csv_path, mode="r", encoding="utf-8-sig", newline="") as f:
-        return list(csv.DictReader(f))
+        reader = csv.DictReader(f, strict=True)
+        fieldnames = reader.fieldnames or []
+        required = {"index", "original", "replacement"}
+        if not required.issubset(fieldnames) or len(set(fieldnames)) != len(fieldnames):
+            raise csv.Error("expected unique index, original, and replacement columns")
+        rows = []
+        for row in reader:
+            if None in row or any(row[key] is None for key in required):
+                raise csv.Error(f"line {reader.line_num}: wrong number of fields")
+            rows.append(row)
+        return rows
 
 
 def _parse_scn_dat(blob: bytes):
@@ -491,8 +502,9 @@ def _parse_scn_dat(blob: bytes):
 
 
 def _write_dat_map(csv_path: str, str_list, kind_map):
-    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open_atomic_output(
+        csv_path, "w", exclusive=True, encoding="utf-8-sig", newline=""
+    ) as f:
         w = csv.writer(f)
         w.writerow(["index", "kind", "original", "replacement"])
         for i in sorted(int(k) for k in (kind_map or {}).keys()):
@@ -515,7 +527,8 @@ def _write_dat_map(csv_path: str, str_list, kind_map):
 def _apply_dat_map(str_list, rows, filename: str = ""):
     changes = 0
     errors = 0
-    for row in rows or []:
+    seen = set()
+    for row in rows:
         try:
             idx = int(row.get("index", ""))
         except Exception:
@@ -529,13 +542,14 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
             eprint(f"textmap: {filename}: index {idx} out of range", errors="replace")
             errors += 1
             continue
-        original = _csv_unescape_text(row.get("original", str_list[idx]))
-        replacement = row.get("replacement")
-        if replacement is not None:
-            replacement = _csv_unescape_text(replacement)
-        if replacement is None:
-            replacement = original
-        if str_list[idx] == replacement:
+        if idx in seen:
+            eprint(f"textmap: {filename}: duplicate index {idx}", errors="replace")
+            errors += 1
+            continue
+        seen.add(idx)
+        original = _csv_unescape_text(row["original"])
+        replacement = _csv_unescape_text(row["replacement"])
+        if replacement != original and str_list[idx] == replacement:
             continue
         if str_list[idx] != original:
             eprint(
@@ -544,8 +558,9 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
             )
             errors += 1
             continue
-        str_list[idx] = replacement
-        changes += 1
+        if replacement != original:
+            str_list[idx] = replacement
+            changes += 1
     return str_list, changes, errors
 
 
@@ -624,13 +639,19 @@ def _process_dat(
     dat_path: str,
     apply_mode: bool,
     exe_el_candidates=None,
-) -> int:
+    *,
+    skip_auxiliary=False,
+) -> int | None:
     try:
         dat_path = resolve_read_path(dat_path, kind="file")
     except (FileNotFoundError, NotADirectoryError):
         eprint(f"textmap: file not found: {dat_path}", errors="replace")
         return 1
     fname = os.path.basename(dat_path)
+    csv_path = dat_path + ".csv"
+    if not apply_mode and os.path.isfile(csv_path):
+        print(f"textmap: kept existing map: {csv_path}")
+        return 0
     try:
         with open_read(dat_path) as f:
             blob = f.read()
@@ -656,15 +677,30 @@ def _process_dat(
             f"key source rejected, falling back: {format_exe_el_source(src)}\n"
         )
     if not parsed:
+        if (
+            skip_auxiliary
+            and is_auxiliary_dat_name(dat_path)
+            and not looks_like_siglus_dat(blob)
+        ):
+            return None
         eprint(f"textmap: {fname}: not a scene .dat", errors="replace")
         return 1
     str_list, out_scn = parsed
-    csv_path = dat_path + ".csv"
     if not apply_mode:
         bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
         kind_map = _collect_dat_string_kinds(bundle, fname)
-        _write_dat_map(csv_path, str_list, kind_map)
-        print(csv_path)
+        try:
+            _write_dat_map(csv_path, str_list, kind_map)
+        except FileExistsError:
+            if not os.path.isfile(csv_path):
+                eprint(f"textmap: output is not a file: {csv_path}", errors="replace")
+                return 1
+            print(f"textmap: kept existing map: {csv_path}")
+        except OSError as exc:
+            eprint(f"textmap: {fname}: export failed: {exc}", errors="replace")
+            return 1
+        else:
+            print(csv_path)
         return 0
     try:
         csv_path = resolve_read_path(csv_path, kind="file")
@@ -693,10 +729,10 @@ def _process_dat(
         return 1
     out_bytes = _encode_scn_dat(out_bytes_plain, enc, used_exe_el)
     try:
-        with open(dat_path, "wb") as f:
+        with open_atomic_output(dat_path, expected=blob) as f:
             f.write(out_bytes)
-    except Exception:
-        eprint(f"textmap: {fname}: write failed", errors="replace")
+    except OSError as exc:
+        eprint(f"textmap: {fname}: write failed: {exc}", errors="replace")
         return 1
     print(f"textmap: applied {count} changes")
     return 0
@@ -735,14 +771,7 @@ def main(argv):
         eprint(f"textmap: path not found: {args[0]}", errors="replace")
         return 1
     if os.path.isdir(dat_path):
-        dat_files = iter_files_by_ext(
-            dat_path,
-            [".dat"],
-            exclude_pred=lambda path: (
-                os.path.basename(path).lower() == "gameexe.dat"
-                or is_named_filename(os.path.basename(path), ANGOU_DAT_NAME)
-            ),
-        )
+        dat_files = iter_files_by_ext(dat_path, [".dat"])
         if not dat_files:
             eprint(f"textmap: no .dat files found in: {dat_path}", errors="replace")
             return 1
@@ -757,15 +786,22 @@ def main(argv):
         except ValueError as exc:
             eprint(str(exc), errors="replace")
             return 2
-        errors = 0
+        errors = processed = 0
         for file_path in dat_files:
             rc = _process_dat(
                 file_path,
                 apply_mode,
                 exe_el_candidates=exe_el_candidates,
+                skip_auxiliary=True,
             )
-            if rc != 0:
-                errors += 1
+            if rc is not None:
+                processed += 1
+                errors += bool(rc)
+        if not processed:
+            eprint(
+                f"textmap: no scene .dat files found in: {dat_path}", errors="replace"
+            )
+            return 1
         return 1 if errors else 0
     if os.path.splitext(dat_path)[1].lower() != ".dat":
         eprint("textmap: unsupported file type (expected .dat)", errors="replace")

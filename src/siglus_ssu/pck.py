@@ -31,10 +31,14 @@ from .common import (
     parse_i32_header_checked,
     parse_code,
     is_named_filename,
-    find_named_path,
+    find_angou_dat,
+    open_atomic_output,
+    PCK_KEY_DIR,
     ANGOU_DAT_NAME,
     read_u32_le,
     decode_angou_first_line,
+    angou_first_line,
+    KEY_TXT_NAME,
     read_angou_first_line,
     looks_like_siglus_dat,
     looks_like_siglus_pck,
@@ -44,6 +48,7 @@ from .common import (
     format_exe_el_source,
 )
 from .path_policy import (
+    check_output_inputs,
     resolve_read_path,
     windows_filename_key,
 )
@@ -393,7 +398,7 @@ def _flix_pck_sections(blob, info):
     return secs, meta
 
 
-def _pck_original_source_entries(blob, h, only_name=""):
+def _pck_original_source_entries(blob, h, only_names=()):
     out = []
     os_hsz = int(h.get("original_source_header_size", 0) or 0)
     if os_hsz == 0:
@@ -439,13 +444,13 @@ def _pck_original_source_entries(blob, h, only_name=""):
     for index, sz in enumerate(sizes):
         try:
             raw, nm = source_angou_decrypt(
-                blob[pos : pos + sz], ctx, only_name=only_name
+                blob[pos : pos + sz], ctx, only_names=only_names
             )
         except (ValueError, RuntimeError, struct.error) as exc:
             raise ValueError(
                 f"original-source (OS) chunk {index:d} at {pos:#x} cannot be decoded: {exc}"
             ) from exc
-        if not only_name or is_named_filename(ntpath.basename(nm), only_name):
+        if not only_names or windows_filename_key(ntpath.basename(nm)) in only_names:
             out.append((nm, pos, pos + sz, raw))
         pos += sz
     return out
@@ -524,50 +529,54 @@ def _scene_script_id_pair(left, right):
     return _scene_script_id_text(left) + "/" + _scene_script_id_text(right)
 
 
-def _iter_pck_original_source_items(blob: bytes, hdr=None, only_name=""):
+def _iter_pck_original_source_items(blob: bytes, hdr=None):
     if not looks_like_siglus_pck(blob):
         return
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     if not hdr:
         return
-    for name, _a, _b, raw in _pck_original_source_entries(
-        blob, hdr, only_name=only_name
-    ):
+    for name, _a, _b, raw in _pck_original_source_entries(blob, hdr):
         yield {"name": name, "raw": raw}
 
 
-def iter_pck_angou_dat_items(blob: bytes, hdr=None, source_entries=None):
+def iter_pck_key_items(blob: bytes, hdr=None, source_entries=None):
+    key_names = {windows_filename_key(name) for name in (ANGOU_DAT_NAME, KEY_TXT_NAME)}
     if source_entries is None:
+        hdr = hdr or parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+        if not hdr:
+            return
         try:
-            cands = list(
-                _iter_pck_original_source_items(blob, hdr=hdr, only_name=ANGOU_DAT_NAME)
+            source_entries = _pck_original_source_entries(
+                blob, hdr, only_names=key_names
             )
         except ValueError:
             return
-    else:
-        cands = [
-            {"name": name, "raw": raw}
-            for name, _a, _b, raw in source_entries
-            if is_named_filename(ntpath.basename(name), ANGOU_DAT_NAME)
-        ]
-    cands.sort(key=lambda item: (len(item["name"]), item["name"].casefold()))
-    yield from cands
+    candidates = []
+    for name, _start, _end, raw in source_entries:
+        basename = windows_filename_key(ntpath.basename(name))
+        if basename in key_names:
+            candidates.append((basename != KEY_TXT_NAME, len(name), name, raw))
+    for is_angou, _, name, raw in sorted(candidates):
+        yield name, raw, is_angou
 
 
 def _pck_angou_content(
     blob: bytes, input_pck: str = "", hdr=None, source_entries=None
 ) -> str:
-    for item in iter_pck_angou_dat_items(blob, hdr=hdr, source_entries=source_entries):
-        line = decode_angou_first_line(item["raw"])
-        if line:
-            return line
+    for _, raw, is_angou in iter_pck_key_items(
+        blob, hdr=hdr, source_entries=source_entries
+    ):
+        if is_angou:
+            try:
+                line = angou_first_line(decode_angou_first_line(raw))
+            except UnicodeError:
+                continue
+            if line:
+                return line
     if input_pck:
         try:
-            path = find_named_path(
-                os.path.dirname(os.path.abspath(input_pck)),
-                ANGOU_DAT_NAME,
-            )
+            path = find_angou_dat(os.path.dirname(os.path.abspath(input_pck)))
         except Exception:
             path = ""
         if path:
@@ -630,7 +639,10 @@ def _resolve_pck_scene_exe_el(
     explicit_angou: str = "",
     trace_key: bool = False,
     source_entries=None,
+    read_paths=None,
 ):
+    from .dat import scn_structure_valid
+
     try:
         if not hdr:
             hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
@@ -646,6 +658,7 @@ def _resolve_pck_scene_exe_el(
             base_dir=base_dir,
             input_blob=blob,
             input_source_entries=source_entries,
+            read_paths=read_paths,
         )
     except Exception:
         return b""
@@ -671,7 +684,7 @@ def _resolve_pck_scene_exe_el(
                     exe_el,
                     require_exe=True,
                 )
-                if out_dat and looks_like_siglus_dat(out_dat):
+                if out_dat and scn_structure_valid(out_dat):
                     if trace_key:
                         sys.stderr.write(
                             f"key source accepted: {format_exe_el_source(src)}\n"
@@ -695,6 +708,7 @@ def require_pck_scene_exe_el(
     scn_data=None,
     explicit_angou: str = "",
     source_entries=None,
+    read_paths=None,
 ):
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
@@ -710,6 +724,7 @@ def require_pck_scene_exe_el(
         explicit_angou=explicit_angou,
         trace_key=True,
         source_entries=source_entries,
+        read_paths=read_paths,
     )
     if exe_el:
         return exe_el
@@ -729,6 +744,7 @@ def iter_pck_scene_dat_items(
     scene_exe_el=None,
     scene_lists=None,
     source_entries=None,
+    read_paths=None,
 ):
     if not looks_like_siglus_pck(blob):
         return
@@ -749,6 +765,7 @@ def iter_pck_scene_dat_items(
             explicit_angou=explicit_angou,
             trace_key=trace_key,
             source_entries=source_entries,
+            read_paths=read_paths,
         )
     else:
         exe_el = bytes(scene_exe_el)
@@ -844,8 +861,7 @@ def _pck_word_csv_path(input_pck: str, output_csv: str = "") -> str:
 
 
 def _write_pck_word_csv(csv_path: str, rows) -> None:
-    os.makedirs(os.path.dirname(csv_path) or ".", exist_ok=True)
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open_atomic_output(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f, lineterminator="\r\n")
         w.writerow(
             ["type", "path", "status", "dialogue_lines", "dialogue_count", "error"]
@@ -1069,7 +1085,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
 
 
 def pck_word_count(
-    input_pck: str, output_csv: str = "", explicit_angou: str = ""
+    input_pck: str, output_csv: str = "", explicit_angou: str = "", key_paths=None
 ) -> int:
     try:
         input_pck = resolve_read_path(input_pck, kind="file")
@@ -1077,12 +1093,11 @@ def pck_word_count(
         sys.stderr.write(f"not found: {input_pck}\n")
         return 2
     csv_path = _pck_word_csv_path(input_pck, output_csv)
+    inputs = {input_pck, *(key_paths or ())}
     try:
-        same_input = os.path.samefile(input_pck, csv_path)
-    except (FileNotFoundError, NotADirectoryError):
-        same_input = False
-    if same_input:
-        sys.stderr.write("--word output must differ from the input PCK\n")
+        check_output_inputs([csv_path], inputs)
+    except (ValueError, OSError) as exc:
+        sys.stderr.write(f"analyze: --word: {exc}\n")
         return 2
     blob = read_bytes(input_pck)
     if _parse_flix_pck(blob) and (not looks_like_siglus_pck(blob)):
@@ -1100,10 +1115,16 @@ def pck_word_count(
             hdr=hdr,
             scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
+            read_paths=inputs,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1
+    try:
+        check_output_inputs([csv_path], inputs)
+    except (ValueError, OSError) as exc:
+        sys.stderr.write(f"analyze: --word: {exc}\n")
+        return 2
     dat_stats = _pck_cd_word_rows(
         blob,
         input_pck=input_pck,
@@ -1130,7 +1151,12 @@ def pck_word_count(
             ]
         }
     rows = (dat_stats.get("rows") or []) + (ss_stats.get("rows") or [])
-    _write_pck_word_csv(csv_path, rows)
+    try:
+        check_output_inputs([csv_path], inputs)
+        _write_pck_word_csv(csv_path, rows)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"analyze: failed to write word CSV: {exc}\n")
+        return 1
     failed_rows = [row for row in rows if row["status"] != "ok"]
     for row in failed_rows:
         label = row["path"] or "original sources"
@@ -1387,6 +1413,7 @@ def compare_pck(
     explicit_angou: str = "",
     *,
     ignore_original_sources=False,
+    read_paths=None,
 ) -> int:
     m1 = _pck_sections(b1, preview=False, input_pck=p1)[1]
     m2 = _pck_sections(b2, preview=False, input_pck=p2)[1]
@@ -1482,6 +1509,7 @@ def compare_pck(
                 source_entries=source_entries1
                 if not source_failed and not ignore_original_sources
                 else None,
+                read_paths=read_paths,
             )
             exe_el2 = require_pck_scene_exe_el(
                 b2,
@@ -1492,6 +1520,7 @@ def compare_pck(
                 source_entries=source_entries2
                 if not source_failed and not ignore_original_sources
                 else None,
+                read_paths=read_paths,
             )
         except RuntimeError as exc:
             sys.stderr.write(str(exc) + "\n")
@@ -1851,7 +1880,7 @@ def _read_blobs(dat: bytes, idx_pairs, blob_ofs: int, blob_bytes: int):
     return out
 
 
-def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
+def source_angou_decrypt(enc: bytes, ctx: dict, *, only_names=()):
     sa = ctx.get("source_angou")
     if not sa:
         raise RuntimeError("source_angou: missing ctx.source_angou")
@@ -1866,7 +1895,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
     if len(enc) < hs + 4:
         raise ValueError("source_angou: truncated header")
     last_index = int(sa.get("last_index", 0))
-    dec = bytearray(enc[: hs + 4] if only_name else enc)
+    dec = bytearray(enc[: hs + 4] if only_names else enc)
     xor_cycle_inplace(dec, lg, last_index)
     ver = struct.unpack_from("<I", dec, 0)[0]
     if ver != 1:
@@ -1878,7 +1907,7 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
         raise ValueError("source_angou: invalid filename length")
     if name_len > len(enc) - p:
         raise ValueError("source_angou: truncated filename")
-    if only_name:
+    if only_names:
         nameb = bytearray(enc[p : p + name_len])
         xor_cycle_inplace(nameb, lg, last_index + p)
     else:
@@ -1896,9 +1925,9 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_name=""):
         raise ValueError("source_angou: truncated payload")
     if mapt * 2 != len(enc) - p:
         raise ValueError("source_angou: unexpected trailing data")
-    if only_name and not is_named_filename(ntpath.basename(name), only_name):
+    if only_names and windows_filename_key(ntpath.basename(name)) not in only_names:
         return (b"", name)
-    if only_name:
+    if only_names:
         dec = bytearray(enc[p : p + mapt * 2])
         xor_cycle_inplace(dec, lg, last_index + p)
         p = 0
@@ -1986,7 +2015,11 @@ def extract_pck(
     dat_txt: bool = False,
     explicit_angou: str = "",
     decompile: bool = False,
+    *,
+    read_paths=None,
 ) -> int:
+    from .dat import scn_structure_valid
+
     input_pck = os.path.abspath(input_pck)
     output_dir = os.path.abspath(output_dir)
     ok_cnt = 0
@@ -2018,11 +2051,11 @@ def extract_pck(
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     scene_lists = _read_pck_scene_lists(dat, hdr=hdr)
-    source_items = []
+    source_entries = None
     source_failed = False
     if not decompile:
         try:
-            source_items = list(_iter_pck_original_source_items(dat, hdr=hdr))
+            source_entries = _pck_original_source_entries(dat, hdr)
         except ValueError as exc:
             source_failed = True
             sys.stderr.write(f"Failed to extract original sources: {exc}\n")
@@ -2033,14 +2066,19 @@ def extract_pck(
             hdr=hdr,
             scn_data=scene_lists[1],
             explicit_angou=explicit_angou,
+            source_entries=source_entries,
+            read_paths=read_paths,
         )
     except RuntimeError as exc:
         sys.stderr.write(str(exc) + "\n")
         return 1
     out_dir = _create_extract_dir(output_dir)
     output_names = set()
-    bs_dir = out_dir
-    os_dir = out_dir
+    key_output_names = set()
+    angou_name = windows_filename_key(os.path.splitext(ANGOU_DAT_NAME)[0])
+    separate_key = any(
+        windows_filename_key(name) == angou_name for name in scene_lists[0]
+    )
     sys.stdout.write(f"Output: {out_dir}\n")
     if (
         not decompile
@@ -2048,15 +2086,18 @@ def extract_pck(
         and int(hdr.get("original_source_header_size", 0) or 0) != 0
     ):
         try:
-            for item in source_items:
-                raw = bytes(item.get("raw") or b"")
-                rel = _safe_relpath(str(item.get("name") or ""))
+            for name, _start, _end, raw in source_entries:
+                rel = _safe_relpath(name)
                 if not rel:
                     rel = "unknown.bin"
                 out_name = os.path.basename(rel) or rel
-                out_path = _unique_outpath(os_dir, out_name, output_names)
+                if separate_key and is_named_filename(out_name, ANGOU_DAT_NAME):
+                    key_dir = os.path.join(out_dir, PCK_KEY_DIR)
+                    out_path = _unique_outpath(key_dir, out_name, key_output_names)
+                else:
+                    out_path = _unique_outpath(out_dir, out_name, output_names)
                 write_bytes(out_path, raw)
-            sys.stdout.write(f"Extracted original sources: {len(source_items):d}\n")
+            sys.stdout.write(f"Extracted original sources: {len(source_entries):d}\n")
         except Exception as e:
             source_failed = True
             sys.stderr.write(f"Failed to extract original sources: {e}\n")
@@ -2087,19 +2128,19 @@ def extract_pck(
             )
             out_name = os.path.basename(rel) or rel
             blob = item.get("blob")
-            if not blob:
+            if not blob or not scn_structure_valid(blob):
                 sys.stderr.write(f"Failed: {out_name} (scene decode failed)\n")
                 fail_cnt += 1
                 continue
             out_dat = bytes(blob)
-            out_path = _unique_outpath(bs_dir, out_name, output_names)
+            out_path = _unique_outpath(out_dir, out_name, output_names)
             write_bytes(out_path, out_dat)
             ok_cnt += 1
             if D:
                 yield {
                     "dat_path": out_path,
                     "blob": out_dat,
-                    "out_dir": os.path.dirname(out_path) or bs_dir,
+                    "out_dir": out_dir,
                     "pack_context": item.get("pack_context"),
                     "scene_no": item.get("scene_no"),
                     "scene_name": item.get("scene_name"),

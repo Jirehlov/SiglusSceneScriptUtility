@@ -1,18 +1,22 @@
 import os
+import re
 import struct
 import sys
 from . import command_name
 from . import const as C
 from .common import (
-    compile_exe_el,
+    format_exe_el_source,
+    iter_exe_el_sources,
+    open_atomic_output,
     read_bytes,
-    read_compile_source,
     write_text,
     write_bytes,
     scan_text_comments,
 )
 from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace
-from .path_policy import read_file_exists
+
+
+_GAMEEXE_ASSIGNMENT = re.compile(r"#?[ \t]*\w[\w.\[\] \t-]*=", re.ASCII)
 
 
 class IniFileAnalizer:
@@ -27,9 +31,15 @@ class IniFileAnalizer:
         self._es = msg
         return False
 
-    def analize(self, src):
+    def analize(self, src, *, check_assignments=False):
         if not self._comment_cut(src):
             return False, ""
+        if check_assignments:
+            for number, line in enumerate(self._last.split("\n"), 1):
+                line = line.strip(" \t\r")
+                if line and not _GAMEEXE_ASSIGNMENT.match(line):
+                    self._error(number, "Expected a configuration assignment.")
+                    return False, ""
         return True, self._last
 
     def _comment_cut(self, text):
@@ -48,86 +58,112 @@ class IniFileAnalizer:
         return True
 
 
-def read_gameexe_dat(gameexe_dat_path: str, exe_el: bytes = b""):
-    dat = read_bytes(gameexe_dat_path)
-    if not dat or len(dat) < 8:
+def _decode_gameexe_payload(payload, exe_el=b""):
+    if not payload:
+        return (0, 0), ""
+    if exe_el:
+        payload = payload.copy()
+        xor_cycle_inplace(payload, exe_el)
+    if len(payload) < 8:
+        raise ValueError("truncated LZSS header")
+    packed_size, raw_size = struct.unpack_from("<II", payload)
+    if packed_size != len(payload) or not raw_size or raw_size % 2:
+        raise ValueError("invalid LZSS sizes")
+    raw = lzss_unpack(bytes(payload))
+    if len(raw) != raw_size:
+        raise ValueError("invalid decompressed size")
+    text = raw.decode("utf-16le")
+    ok, normalized = IniFileAnalizer().analize(text, check_assignments=bool(exe_el))
+    if not ok or normalized != text:
+        raise ValueError("invalid compiled INI text")
+    return (packed_size, raw_size), text
+
+
+def read_gameexe_dat(path, data, *, explicit_angou="", read_paths=None):
+    if len(data) < 8:
         raise RuntimeError("Invalid Gameexe.dat: too small")
-    _, mode = struct.unpack_from("<ii", dat, 0)
-    payload_enc = dat[8:]
-    base = C.GAMEEXE_DAT_ANGOU_CODE
-    payload = bytearray(payload_enc)
-    if payload and base:
-        xor_cycle_inplace(payload, base)
-    used_exe_el = False
-    if int(mode) != 0:
-        if exe_el:
-            xor_cycle_inplace(payload, exe_el)
-            used_exe_el = True
-    lz = bytes(payload)
-    lz_hdr = (0, 0)
-    if len(lz) >= 8:
-        lz_hdr = struct.unpack_from("<II", lz, 0)
-    raw = b""
-    if lz:
+    _, mode = struct.unpack_from("<ii", data)
+    payload = bytearray(data[8:])
+    if payload and C.GAMEEXE_DAT_ANGOU_CODE:
+        xor_cycle_inplace(payload, C.GAMEEXE_DAT_ANGOU_CODE)
+    encrypted = bool(mode and payload)
+    sources = iter_exe_el_sources(
+        explicit_angou=explicit_angou,
+        base_dir=os.path.dirname(os.path.abspath(path)) if encrypted else "",
+        read_paths=read_paths,
+    )
+    if encrypted:
+        decoded = None
+        accepted_source = ""
+        for source in sources:
+            label = format_exe_el_source(source)
+            sys.stderr.write(f"key source try: {label}\n")
+            try:
+                candidate = _decode_gameexe_payload(payload, source["exe_el"])
+            except ValueError:
+                sys.stderr.write(f"key source rejected, falling back: {label}\n")
+                continue
+            if decoded is None:
+                decoded = candidate
+                accepted_source = label
+            elif decoded[1] != candidate[1]:
+                raise RuntimeError(
+                    f"{path}: ambiguous Gameexe.dat key; candidates decode to different valid INI text"
+                )
+        if decoded is None:
+            raise RuntimeError(f"{path}: no valid key for Gameexe.dat payload")
+        sys.stderr.write(f"key source accepted: {accepted_source}\n")
+        lzss_header, text = decoded
+    else:
+        if explicit_angou:
+            list(sources)
         try:
-            raw = lzss_unpack(lz)
-        except ValueError:
-            raw = b""
-    txt = ""
-    if raw:
-        try:
-            txt = raw.decode("utf-16le", "strict")
-        except UnicodeDecodeError:
-            txt = raw.decode("utf-16le", "ignore")
-    ini_ok = not payload_enc
-    if txt:
-        a = IniFileAnalizer()
-        ok, _ = a.analize(txt)
-        ini_ok = bool(ok)
-    info = {
-        "mode": int(mode),
-        "used_exe_el": bool(used_exe_el),
-        "lzss_header": (int(lz_hdr[0]), int(lz_hdr[1])),
-        "lzss_size": int(len(lz)),
-        "raw_size": int(len(raw)),
-        "ini_ok": bool(ini_ok),
-    }
-    if int(mode) != 0 and payload_enc and (not used_exe_el):
-        info["warning"] = "missing exe_el"
-    return info, txt
+            lzss_header, text = _decode_gameexe_payload(payload)
+        except ValueError as exc:
+            raise RuntimeError(f"{path}: failed to decode Gameexe.dat: {exc}") from exc
+    return {
+        "used_exe_el": encrypted,
+        "lzss_header": lzss_header,
+        "lzss_size": len(payload),
+        "raw_size": lzss_header[1],
+    }, text
 
 
-def restore_gameexe_ini(
-    gameexe_dat_path: str, output_dir: str, exe_el: bytes = b""
-) -> str:
-    info, txt = read_gameexe_dat(gameexe_dat_path, exe_el=exe_el)
-    if info.get("mode") and info.get("lzss_size") and not info.get("used_exe_el"):
-        raise RuntimeError(
-            "Gameexe.dat is encrypted with exe angou; missing \u6697\u53f7.dat/key.txt to derive key"
-        )
-    if not info.get("ini_ok"):
-        raise RuntimeError("Failed to decode Gameexe.dat payload")
+def restore_gameexe_ini(gameexe_dat_path, output_dir, *, explicit_angou=""):
+    _, txt = read_gameexe_dat(
+        gameexe_dat_path, read_bytes(gameexe_dat_path), explicit_angou=explicit_angou
+    )
     out_dir = os.path.abspath(output_dir or ".")
-    out_path = os.path.join(out_dir, "Gameexe.ini")
-    write_text(out_path, txt, enc="utf-8")
-    return out_path
+    number = 0
+    while True:
+        name = f"Gameexe_{number}.ini" if number else "Gameexe.ini"
+        out_path = os.path.join(out_dir, name)
+        try:
+            with open_atomic_output(
+                out_path, "w", exclusive=True, encoding="utf-8", newline="\r\n"
+            ) as f:
+                f.write(txt)
+        except FileExistsError:
+            if not os.path.lexists(out_path):
+                raise
+            number += 1
+        else:
+            return out_path
 
 
 def write_gameexe_dat(ctx):
-    scn = ctx.get("scn_path") or "."
     out = ctx.get("out_path") or "."
     tmp = ctx.get("tmp_path") or ""
-    gameexe_ini = ctx.get("gameexe_ini") or "Gameexe.ini"
+    gameexe_ini = ctx["gameexe_ini"]
     base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
-    gei_path = os.path.join(scn, gameexe_ini)
-    source_texts = ctx.get("source_texts") or {}
-    if gameexe_ini not in source_texts and not read_file_exists(gei_path):
+    gei = ctx["source_texts"].get(gameexe_ini)
+    if gei is None:
         return None
-    gei = read_compile_source(ctx, gei_path)
+    el = ctx["exe_el_key"]
     ged = ""
     if gei:
         a = IniFileAnalizer()
-        ok, d = a.analize(gei)
+        ok, d = a.analize(gei, check_assignments=bool(el))
         if not ok:
             raise RuntimeError(
                 f"GEI parse error line({a.get_error_line()}): {a.get_error_str()}"
@@ -137,7 +173,6 @@ def write_gameexe_dat(ctx):
         sys.stderr.write(
             f"{command_name()} -c: warning: {gameexe_ini} is empty; generating Gameexe.dat anyway\n"
         )
-    el = compile_exe_el(ctx)
     mode = int(bool(el))
     lz = None
     if ged:

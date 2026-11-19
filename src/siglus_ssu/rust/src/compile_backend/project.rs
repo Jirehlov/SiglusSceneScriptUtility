@@ -11,7 +11,7 @@ use super::ma::SemanticAnalyzer;
 use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes};
 use super::sa::SyntaxAnalyzer;
 use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat};
-use super::source_angou::{encrypt_source, exe_angou_element};
+use super::source_angou::encrypt_source;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -316,11 +316,7 @@ fn read_source<'a>(config: &'a CompileConfig, path: &Path) -> Result<&'a str, St
         .ok_or_else(|| format!("source text not loaded: {}", path.display()))
 }
 
-fn encode_cp932_ignore(text: &str) -> Vec<u8> {
-    encode_cp932(text, true).unwrap_or_default()
-}
-
-fn encode_cp932(text: &str, ignore_errors: bool) -> Result<Vec<u8>, ()> {
+fn encode_cp932(text: &str) -> Result<Vec<u8>, ()> {
     let mut out = Vec::new();
     for ch in text.chars() {
         if let Some(encoded) = cp932_code(ch) {
@@ -329,9 +325,6 @@ fn encode_cp932(text: &str, ignore_errors: bool) -> Result<Vec<u8>, ()> {
             } else {
                 out.extend_from_slice(&encoded.to_be_bytes());
             }
-            continue;
-        }
-        if ignore_errors {
             continue;
         }
         return Err(());
@@ -427,22 +420,10 @@ fn write_text_encoded(path: &Path, text: &str, utf8: bool) -> Result<(), String>
     let bytes = if utf8 {
         text.into_bytes()
     } else {
-        encode_cp932(&text, false)
+        encode_cp932(&text)
             .map_err(|()| format!("{}: failed to encode as cp932", path.display()))?
     };
     fs::write(path, bytes).map_err(|error| format_path_error(path, error))
-}
-
-fn write_cached_bytes(path: &Path, data: &[u8]) -> Result<(), String> {
-    if path.as_os_str().is_empty() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;
-    }
-    fs::write(path, data).map_err(|error| format_path_error(path, error))
 }
 
 fn read_i32_le(bytes: &[u8], offset: usize) -> Option<i32> {
@@ -1031,26 +1012,6 @@ fn scene_semantic_error(
     scene_error(code, display_name, line)
 }
 
-fn resolve_exe_key(config: &CompileConfig) -> Option<Vec<u8>> {
-    if !config.context.exe_angou_mode {
-        return None;
-    }
-    if let Some(content) = config
-        .angou_content
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        let key = exe_angou_element(&encode_cp932_ignore(content), &config.constants.exe_org);
-        if key.len() == 16 {
-            return Some(key);
-        }
-    }
-    if config.context.exe_el_key.len() == 16 {
-        return Some(config.context.exe_el_key.clone());
-    }
-    None
-}
-
 fn write_gameexe_dat(
     config: &CompileConfig,
     source: &str,
@@ -1069,6 +1030,30 @@ fn write_gameexe_dat(
     };
     let parsed = scan_text_comments(source, &options)
         .map_err(|error| line_error("GEI parse error", error.line, error.message))?;
+    if exe_key.is_some() {
+        for (index, line) in parsed.text.split('\n').enumerate() {
+            let line = line.trim_matches([' ', '\t', '\r']);
+            if line.is_empty() {
+                continue;
+            }
+            let assignment = line
+                .strip_prefix('#')
+                .unwrap_or(line)
+                .trim_start_matches([' ', '\t']);
+            if !assignment.split_once('=').is_some_and(|(name, _)| {
+                name.starts_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_')
+                    && name
+                        .bytes()
+                        .all(|ch| ch.is_ascii_alphanumeric() || b"_.[]- \t".contains(&ch))
+            }) {
+                return Err(line_error(
+                    "GEI parse error",
+                    index + 1,
+                    "Expected a configuration assignment.",
+                ));
+            }
+        }
+    }
     if parsed.text.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
         let gameexe_ini = &config.context.gameexe_ini;
         stdout.push_warning(&format!(
@@ -1119,186 +1104,52 @@ fn write_gameexe_dat(
     Ok(())
 }
 
-fn original_source_paths(config: &CompileConfig) -> Vec<(String, PathBuf)> {
-    fn append_path(
-        sources: &mut Vec<(String, PathBuf)>,
-        seen: &mut HashSet<String>,
-        base: &Path,
-        path: PathBuf,
-    ) {
-        let relative = path
-            .strip_prefix(base)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('/', "\\");
-        if seen.insert(relative.to_ascii_lowercase()) {
-            sources.push((relative, path));
-        }
-    }
-
-    let base = Path::new(&config.input_dir);
-    let mut sources = Vec::new();
-    let mut seen = HashSet::new();
-    for name in &config.context.ini_list {
-        let file_name = Path::new(name)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or(name)
-            .to_ascii_lowercase();
-        if file_name.starts_with("gameexe") && file_name.ends_with(".ini") {
-            append_path(&mut sources, &mut seen, base, source_path(base, name));
-        }
-    }
-    if !config.context.angou_path.is_empty() {
-        append_path(
-            &mut sources,
-            &mut seen,
-            base,
-            PathBuf::from(&config.context.angou_path),
-        );
-    }
-    if config.angou_content.as_deref().is_none_or(str::is_empty)
-        && !config.context.key_path.is_empty()
-    {
-        append_path(
-            &mut sources,
-            &mut seen,
-            base,
-            PathBuf::from(&config.context.key_path),
-        );
-    }
-    for name in &config.context.inc_list {
-        append_path(&mut sources, &mut seen, base, source_path(base, name));
-    }
-    for name in &config.context.scn_list {
-        append_path(&mut sources, &mut seen, base, source_path(base, name));
-    }
-    sources
-}
-
 fn build_original_source_chunks(
     config: &CompileConfig,
-    use_lzss: bool,
     log: &mut OutputLog<'_>,
     stage_times: &mut Vec<(String, f64)>,
 ) -> Result<(i32, Vec<Vec<u8>>), String> {
-    if !use_lzss || !config.context.source_angou_mode {
-        return Ok((0, Vec::new()));
-    }
-    let skip = !config.context.original_source_mode;
-    let sources = original_source_paths(config);
+    let sources = &config.context.original_sources;
     if sources.is_empty() {
         return Ok((0, Vec::new()));
     }
-    let tmp_os_dir = Path::new(&config.tmp_dir).join("os");
-    if !config.tmp_dir.is_empty() {
-        fs::create_dir_all(&tmp_os_dir).map_err(|error| format_path_error(&tmp_os_dir, error))?;
-    }
-    let workers = default_parallel_worker_count(sources.len());
-    let encrypted_sources = if workers > 1 && sources.len() > 1 {
-        let stage_start = Instant::now();
+    let start = Instant::now();
+    let workers = default_parallel_worker_count(sources.len()).min(sources.len());
+    let mut chunks = if workers > 1 {
         log.push_line(format!(
             "[PARALLEL] Encrypting {} source files with {} workers...",
             sources.len(),
             workers
         ))?;
-        let tmp_dir = &config.tmp_dir;
-        let source_count = sources.len();
-        let mut results = std::iter::repeat_with(|| None)
-            .take(source_count)
-            .collect::<Vec<Option<Option<(String, Vec<u8>)>>>>();
+        let mut chunks = vec![Vec::new(); sources.len()];
         parallel_visit_unordered_with_state(
-            sources,
+            sources.iter().collect(),
             workers,
             || (),
-            |(), (name, path)| -> Result<Option<(String, Vec<u8>)>, String> {
-                let owned_source;
-                let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
-                    raw.as_slice()
-                } else {
-                    if !path.is_file() {
-                        return Ok(None);
-                    }
-                    owned_source =
-                        fs::read(&path).map_err(|error| format_path_error(&path, error))?;
-                    &owned_source
-                };
-                let encrypted = encrypt_source(raw, &name, &config.constants.source_angou)?;
-                if !tmp_dir.is_empty() {
-                    write_cached_bytes(
-                        &Path::new(tmp_dir)
-                            .join("os")
-                            .join(name.replace('\\', std::path::MAIN_SEPARATOR_STR)),
-                        &encrypted,
-                    )?;
-                }
-                Ok(Some((name, encrypted)))
-            },
-            |index, result| {
-                let item = result?;
-                if let Some((name, _)) = &item {
-                    log.push_line(format!("  OS: {name}"))?;
-                }
-                results[index] = Some(item);
-                Ok(())
+            |(), (name, raw)| encrypt_source(raw, name, &config.constants.source_angou),
+            |index, encrypted| {
+                chunks[index] = encrypted?;
+                log.push_line(format!("  OS: {}", sources[index].0))
             },
         )?;
-        let mut out = Vec::new();
-        for item in results
-            .into_iter()
-            .filter_map(|item| item.expect("source encrypt worker did not produce a result"))
-        {
-            out.push(item.1);
-        }
         log.push_line(format!(
             "[PARALLEL] Source encryption complete: {} files",
-            out.len()
+            chunks.len()
         ))?;
-        record_stage_time(stage_times, "OS", stage_start);
-        out
+        chunks
     } else {
-        let mut out = Vec::new();
-        for (name, path) in sources {
-            let stage_start = Instant::now();
-            log_stage(log, "OS", scene_display_name(config, &name))?;
-            let owned_source;
-            let raw = if let Some(raw) = config.context.source_bytes.get(&name) {
-                raw.as_slice()
-            } else {
-                if !path.is_file() {
-                    continue;
-                }
-                owned_source = fs::read(&path).map_err(|error| format_path_error(&path, error))?;
-                &owned_source
-            };
-            let encrypted = encrypt_source(raw, &name, &config.constants.source_angou)?;
-            if !config.tmp_dir.is_empty() {
-                write_cached_bytes(
-                    &tmp_os_dir.join(name.replace('\\', std::path::MAIN_SEPARATOR_STR)),
-                    &encrypted,
-                )?;
-            }
-            out.push(encrypted);
-            record_stage_time(stage_times, "OS", stage_start);
-        }
-        out
+        let (name, raw) = &sources[0];
+        log_stage(log, "OS", scene_display_name(config, name))?;
+        vec![encrypt_source(raw, name, &config.constants.source_angou)?]
     };
-    let mut sizes = Vec::new();
-    let mut chunks = Vec::new();
-    for encrypted in encrypted_sources {
-        sizes.extend_from_slice(&(encrypted.len() as u32).to_le_bytes());
-        if !skip {
-            chunks.push(encrypted);
-        }
-    }
-    if sizes.is_empty() {
-        return Ok((0, Vec::new()));
-    }
+    let sizes: Vec<u8> = chunks
+        .iter()
+        .flat_map(|chunk| (chunk.len() as u32).to_le_bytes())
+        .collect();
     let header = encrypt_source(&sizes, "__DummyName__", &config.constants.source_angou)?;
     let header_size = header.len() as i32;
-    if config.context.original_source_mode {
-        chunks.insert(0, header);
-    }
+    chunks.insert(0, header);
+    record_stage_time(stage_times, "OS", start);
     Ok((header_size, chunks))
 }
 
@@ -1635,13 +1486,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
         &config.context.gameexe_ini
     };
     let gameexe_source = config.context.source_texts.get(gameexe_ini);
-    let exe_key = if gameexe_source.is_some() || !config.options.gei {
-        resolve_exe_key(config)
-    } else {
-        None
-    };
+    let key = config.context.exe_el_key.as_slice();
+    let exe_key = (key.len() == 16).then_some(key);
     if let Some(source) = gameexe_source {
-        write_gameexe_dat(config, source, exe_key.as_deref(), stdout)?;
+        write_gameexe_dat(config, source, exe_key, stdout)?;
     } else {
         stdout.push_warning(&format!(
             "siglus-ssu -c: warning: {gameexe_ini} not found; skipped Gameexe.dat"
@@ -2035,14 +1883,14 @@ fn compile_project_inner<const FULL_STATS: bool>(
         } else {
             scene.dat
         };
-        if let Some(key) = exe_key.as_deref() {
+        if let Some(key) = exe_key {
             crate::xor::cycle_inplace(&mut encoded, key, 0);
         }
         (scene.stem.to_ascii_lowercase(), encoded)
     });
     let (scene_names, scene_data): (Vec<_>, Vec<_>) = encoded_scenes.into_iter().unzip();
     let (original_source_header_size, original_source_chunks) =
-        build_original_source_chunks(config, use_lzss, stdout, stage_times)?;
+        build_original_source_chunks(config, stdout, stage_times)?;
     let pack_input = PackInput {
         inc_prop_list: base_ia
             .property_list

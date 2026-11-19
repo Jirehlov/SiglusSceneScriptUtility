@@ -13,13 +13,16 @@ from .native_ops import (
     palette_bgra,
 )
 from .common import (
+    directory_lock,
     first_option_token,
     is_option_token,
+    open_atomic_output,
     read_bytes,
     split_end_of_options,
-    write_bytes,
 )
 from .path_policy import (
+    check_output_inputs,
+    same_file_path,
     open_read,
     read_directory,
     resolve_read_path,
@@ -119,14 +122,12 @@ def type1_bgra(unp: bytes, w: int, h: int) -> bytes:
     return palette_bgra(pal, idx)
 
 
-def save_png_bgra(bgra: bytes, w: int, h: int, p: Path, trim: bool = False) -> None:
-    if p.exists():
-        return
+def _write_png_bgra(bgra: bytes, w: int, h: int, output, trim: bool):
     need_pil()
     img = Image.frombytes("RGBA", (w, h), bgra, "raw", "BGRA")
     if trim:
         img, _cropped = _trim_image_edges(img)
-    img.save(p, "PNG")
+    img.save(output, "PNG")
 
 
 def cuts_from_unp(unp: bytes):
@@ -253,43 +254,55 @@ def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
     out_path = out_dir / out_name
     if trim:
         base_img, _cropped = _trim_image_edges(base_img)
-    base_img.save(out_path, "PNG")
+    check_output_inputs([out_path], ps)
+    with open_atomic_output(out_path) as output:
+        base_img.save(output, "PNG")
     return out_path
 
 
-def cut_to_png(blk: bytes, p: Path, trim: bool = False) -> bool:
-    if p.exists():
+def _extract_cut_png(blk: bytes, path: Path, trim: bool) -> bool:
+    if path.is_file():
         return False
-    need_pil()
-    canvas, cw, ch = _render_cut_canvas(blk)
-    img = Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA")
-    if trim:
-        img, _cropped = _trim_image_edges(img)
-    img.save(p, "PNG")
+    canvas, width, height = _render_cut_canvas(blk)
+    try:
+        with open_atomic_output(path, exclusive=True) as output:
+            _write_png_bgra(canvas, width, height, output, trim)
+    except FileExistsError:
+        if not path.is_file():
+            raise
+        return False
     return True
 
 
 def _extract_simple(pre: str, d: bytes, out: Path, trim: bool = False):
     t, w, h, pay = _parse_simple_g00(d)
     dst = out / f"{pre}{_SIMPLE_EXT[t]}"
-    if dst.exists():
+    if dst.is_file():
         return ("skip", 0, 1)
-    if t == 3:
-        jpeg = de_xor(pay)
-        if trim:
-            need_pil()
-            from io import BytesIO
+    try:
+        with open_atomic_output(dst, exclusive=True) as output:
+            if t == 3:
+                jpeg = de_xor(pay)
+                if trim:
+                    need_pil()
+                    from io import BytesIO
 
-            img = Image.open(BytesIO(jpeg))
-            img, cropped = _trim_image_edges(img)
-            if cropped:
-                img.save(dst, "JPEG")
+                    with Image.open(BytesIO(jpeg)) as img:
+                        image, cropped = _trim_image_edges(img)
+                        if cropped:
+                            image.save(output, "JPEG")
+                        else:
+                            output.write(jpeg)
+                else:
+                    output.write(jpeg)
             else:
-                write_bytes(str(dst), jpeg)
-        else:
-            write_bytes(str(dst), jpeg)
-    else:
-        save_png_bgra(_decode_simple_g00_bgra(t, pay, w, h), w, h, dst, trim=trim)
+                _write_png_bgra(
+                    _decode_simple_g00_bgra(t, pay, w, h), w, h, output, trim
+                )
+    except FileExistsError:
+        if not dst.is_file():
+            raise
+        return ("skip", 0, 1)
     return ("ok", 1, 0)
 
 
@@ -334,10 +347,10 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
     cuts_meta = None if trim else [None] * max(int(cut_cnt), 0)
     for ci, o, s in cuts:
         dst = out / (f"{pre}.png" if single else f"{pre}_cut{ci:03d}.png")
-        if dst.exists():
-            sk += 1
-        elif cut_to_png(unp[o : o + s], dst, trim=trim):
+        if _extract_cut_png(unp[o : o + s], dst, trim):
             wrote += 1
+        else:
+            sk += 1
         if cuts_meta is not None:
             if ci >= len(cuts_meta):
                 cuts_meta.extend([None] * (ci + 1 - len(cuts_meta)))
@@ -346,11 +359,16 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
             )
     if cuts_meta is not None:
         layout_path = out / f"{pre}.type2.json"
-        if layout_path.exists():
+        try:
+            if layout_path.is_file():
+                sk += 1
+            else:
+                _dump_type2_layout_json(layout_path, canvas_w, canvas_h, cuts_meta)
+                wrote += 1
+        except FileExistsError:
+            if not layout_path.is_file():
+                raise
             sk += 1
-        else:
-            _dump_type2_layout_json(layout_path, canvas_w, canvas_h, cuts_meta)
-            wrote += 1
     return ("skip", 0, sk) if wrote == 0 and sk > 0 else ("ok", wrote, sk)
 
 
@@ -594,9 +612,9 @@ def _dump_type2_layout_json(out_path: Path, canvas_w: int, canvas_h: int, cuts_m
         if payload.get("default_center") != {"x": int(cx), "y": int(cy)}:
             entry["center"] = {"x": int(cx), "y": int(cy)}
         payload["cuts"].append(entry)
-    out_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    with open_atomic_output(out_path, "w", exclusive=True, encoding="utf-8") as output:
+        json.dump(payload, output, ensure_ascii=False, indent=2)
+        output.write("\n")
 
 
 def _resolve_refer_base(refer_arg, base_name: str, dir_input: bool):
@@ -932,24 +950,6 @@ def _parse_json_rect(obj, field_name: str):
     return x, y, w, h
 
 
-def _build_create_bytes(inp_p: Path, type_opt, *, source_paths=None):
-    is_image = _is_image_file(inp_p)
-    g00_type = _infer_create_type(inp_p, type_opt)
-    layout_path = None
-    if g00_type == 2:
-        layout_path = (
-            inp_p
-            if inp_p.is_file() and _is_layout_file(inp_p)
-            else _find_layout_sidecar(inp_p)
-        )
-    source_hint = inp_p if is_image else None
-    new_bytes = _build_g00_from_image(
-        source_hint, g00_type, layout_path=layout_path, source_paths=source_paths
-    )
-    report_layout = inp_p if layout_path is not None and not is_image else None
-    return g00_type, new_bytes, source_hint, report_layout
-
-
 def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None = None):
     try:
         with open_read(config_path, mode="r", encoding="utf-8", errors="replace") as f:
@@ -975,6 +975,7 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     if not isinstance(cuts_in, list):
         raise ValueError("type2 layout json requires cuts[]")
     cuts = []
+    sources = {}
     for raw in cuts_in:
         if raw is None:
             cuts.append(None)
@@ -991,8 +992,15 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
             while len(cuts) <= idx:
                 cuts.append(None)
         source = raw.get("source", default_source)
+        if source is None:
+            raise ValueError(
+                "type2 layout cut is missing source and no default source was provided"
+            )
         if isinstance(source, str):
             source = source.replace("\\", "/")
+        candidate = str(config_path.parent / source)
+        if candidate not in sources:
+            sources[candidate] = resolve_read_path(candidate, kind="file")
         source_rect = _parse_json_rect(
             raw.get("source_rect", raw.get("crop", raw.get("rect"))),
             "cuts[].source_rect/rect",
@@ -1003,7 +1011,7 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
         )
         center = _parse_json_xy(raw.get("center"), "cuts[].center") or default_center
         cut = {
-            "source": source,
+            "source": sources[candidate],
             "source_rect": source_rect,
             "canvas_rect": canvas_rect,
             "center": (int(center[0]), int(center[1])),
@@ -1017,52 +1025,29 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     return {
         "canvas": (canvas_w, canvas_h),
         "cuts": cuts,
-        "config_dir": config_path.parent,
+        "sources": sources.values(),
     }
 
 
-def _build_type2_official_g00_from_image(
-    img_p: Path | None, layout_path=None, *, source_paths=None
-) -> bytes:
-    img_p = Path(img_p) if img_p is not None else None
+def _build_type2_official_g00_from_image(img_p: Path | None, layout) -> bytes:
     cache = {}
-    if source_paths is None:
-        source_paths = {}
 
-    def _load_source(sp, base_dir: Path):
-        if sp is None:
-            raise ValueError(
-                "type2 layout cut is missing source and no default source was provided"
-            )
-        rp = Path(resolve_read_path(base_dir / sp, kind="file"))
-        key = str(rp)
-        if key not in cache:
-            validate_input_paths([rp], seen=source_paths, allow_same_file=True)
-            cache[key] = _load_image_bgra(rp)
-        return cache[key]
+    def _load_source(path):
+        path = str(path)
+        if path not in cache:
+            cache[path] = _load_image_bgra(path)
+        return cache[path]
 
-    if layout_path is not None:
-        layout_path = Path(layout_path)
-        layout = _load_type2_layout_json(
-            layout_path,
-            default_source_hint=img_p
-            if img_p is not None and img_p.is_file()
-            else None,
-        )
+    if layout is not None:
         canvas_w, canvas_h = layout["canvas"]
         cuts = layout["cuts"]
-        base_dir = layout["config_dir"]
     else:
-        if img_p is None or not img_p.is_file():
-            raise ValueError("type2 create requires an input image or a layout json")
-        _, default_w, default_h = _load_source(img_p, img_p.parent)
-        canvas_w, canvas_h = default_w, default_h
-        base_dir = img_p.parent
+        _, canvas_w, canvas_h = _load_source(img_p)
         cuts = [
             {
                 "source": img_p,
-                "source_rect": (0, 0, default_w, default_h),
-                "canvas_rect": (0, 0, default_w, default_h),
+                "source_rect": (0, 0, canvas_w, canvas_h),
+                "canvas_rect": (0, 0, canvas_w, canvas_h),
                 "center": (0, 0),
             }
         ]
@@ -1077,7 +1062,7 @@ def _build_type2_official_g00_from_image(
             outer += struct.pack("<6i", 0, 0, 0, 0, 0, 0)
             entries.append((len(unp), 0))
             continue
-        src_bgra, src_w, src_h = _load_source(c["source"], base_dir)
+        src_bgra, src_w, src_h = _load_source(c["source"])
         source_rect = c.get("source_rect")
         canvas_rect = c.get("canvas_rect")
         if source_rect is None and canvas_rect is None:
@@ -1140,9 +1125,7 @@ def _report_single_update(report, img_p: Path, wh: tuple[int, int], changed: boo
     report["changed"] = changed
 
 
-def _build_g00_from_image(
-    img_p: Path | None, g00_type: int, layout_path=None, *, source_paths=None
-):
+def _build_g00_from_image(img_p: Path | None, g00_type: int, layout):
     if g00_type == 0:
         bgra, w, h = _load_type0_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
@@ -1158,9 +1141,7 @@ def _build_g00_from_image(
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
     if g00_type == 2:
-        return _build_type2_official_g00_from_image(
-            img_p, layout_path=layout_path, source_paths=source_paths
-        )
+        return _build_type2_official_g00_from_image(img_p, layout)
     raise ValueError(f"unsupported create type: {g00_type}")
 
 
@@ -1419,6 +1400,54 @@ def _resolve_compose_dir(
     return out_dir
 
 
+def _create_g00_files(targets, type_opt):
+    plans = []
+    source_paths = {}
+    for inp, out_path in targets:
+        kind = _infer_create_type(inp, type_opt)
+        image = inp if _is_image_file(inp) else None
+        layout_path = None
+        layout = None
+        validate_input_paths([inp], seen=source_paths, allow_same_file=True)
+        if kind == 2:
+            layout_path = _find_layout_sidecar(inp) if image is not None else inp
+            if layout_path is not None:
+                layout = _load_type2_layout_json(layout_path, default_source_hint=image)
+                validate_input_paths(
+                    [layout_path, *layout["sources"]],
+                    seen=source_paths,
+                    allow_same_file=True,
+                )
+        plans.append((out_path, kind, image, layout_path, layout))
+
+    check_output_inputs(
+        (out_path for out_path, *_ in plans), source_paths.values(), distinct=True
+    )
+    for out_path, kind, image, layout_path, layout in plans:
+        data = _build_g00_from_image(image, kind, layout)
+        with open_atomic_output(out_path) as output:
+            output.write(data)
+        _print_create_report(out_path, kind, data, source=image, layout=layout_path)
+        print(f"    Output: {out_path}")
+
+
+def _update_g00_file(base_path, out_path, updates, type_opt):
+    parent = out_path.resolve().parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with directory_lock(parent / ".siglus-g00.lockdir", timeout=30):
+        check_output_inputs([out_path], (image for image, _ in updates))
+        base_bytes = read_bytes(base_path)
+        report = {}
+        data = _apply_updates_to_g00(base_bytes, updates, type_opt, report)
+        changed = data != base_bytes
+        if changed or not same_file_path(out_path, base_path):
+            with open_atomic_output(out_path) as output:
+                output.write(data)
+        _print_update_report(base_path, report, base_bytes, data)
+        print(f"    Output: {out_path}")
+    return changed
+
+
 def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
     do_update = refer_arg is not None
     if _is_image_file(ip):
@@ -1442,27 +1471,11 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
         else _resolve_create_out(ip, out_arg, base_name)
     )
     if do_update:
-        base_bytes = read_bytes(base_path)
-        rep = {}
-        new_bytes = _apply_updates_to_g00(base_bytes, [(ip, cut_idx)], type_opt, rep)
-        _print_update_report(base_path, rep, base_bytes, new_bytes)
+        _update_g00_file(base_path, out_path, [(ip, cut_idx)], type_opt)
     else:
         if cut_idx is not None:
             raise ValueError("create mode does not support _cut### inputs")
-        t, new_bytes, source_hint, report_layout = _build_create_bytes(ip, type_opt)
-        _print_create_report(
-            out_path, t, new_bytes, source=source_hint, layout=report_layout
-        )
-    if (
-        do_update
-        and new_bytes == base_bytes
-        and out_path.exists()
-        and out_path.samefile(base_path)
-    ):
-        print("    Output: in-place")
-    else:
-        write_bytes(str(out_path), new_bytes)
-        print(f"    Output: {out_path}")
+        _create_g00_files([(ip, out_path)], type_opt)
     return 0
 
 
@@ -1490,15 +1503,10 @@ def _run_type2_layout_dir(ip: Path, out_arg, type_opt, refer_arg):
         targets[key] = (base_name, cfg)
     out_dir = _resolve_compose_dir(out_arg, ip)
     print(f"Compose(create:type2-json): {ip} -> {out_dir} ({len(cfgs)} layouts)")
-    source_paths = {}
-    for base_name, cfg in targets.values():
-        out_path = out_dir / f"{base_name}.g00"
-        new_bytes = _build_type2_official_g00_from_image(
-            ip, layout_path=cfg, source_paths=source_paths
-        )
-        write_bytes(str(out_path), new_bytes)
-        _print_create_report(out_path, 2, new_bytes, layout=cfg)
-        print(f"    Output: {out_path}")
+    _create_g00_files(
+        ((cfg, out_dir / f"{base_name}.g00") for base_name, cfg in targets.values()),
+        type_opt,
+    )
     print(f"Done. Targets={len(cfgs)} CREATED={len(cfgs)}")
     return 0
 
@@ -1550,40 +1558,35 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
         print(
             f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
         )
-    total = changed = same = created = 0
-    source_paths = {}
-    for base_name, ups in groups.values():
-        out_path = out_dir / f"{base_name}.g00"
-        if do_update:
-            base_path = _resolve_refer_base(refer_arg, base_name, dir_input=True)
-            base_bytes = read_bytes(base_path)
-            rep = {}
-            new_bytes = _apply_updates_to_g00(base_bytes, ups, type_opt, rep)
-            _print_update_report(base_path, rep, base_bytes, new_bytes)
-            same += int(new_bytes == base_bytes)
-            changed += int(new_bytes != base_bytes)
-        else:
-            img_p, _ = ups[0]
-            t, new_bytes, source_hint, report_layout = _build_create_bytes(
-                img_p, type_opt, source_paths=source_paths
-            )
-            created += 1
-            _print_create_report(
-                out_path, t, new_bytes, source=source_hint, layout=report_layout
-            )
-        total += 1
-        if not (
-            do_update
-            and new_bytes == base_bytes
-            and out_path.exists()
-            and out_path.samefile(base_path)
-        ):
-            write_bytes(str(out_path), new_bytes)
-        print(f"    Output: {out_path}")
+    targets = [
+        (base_name, out_dir / f"{base_name}.g00", updates)
+        for base_name, updates in groups.values()
+    ]
+    total = len(targets)
     if do_update:
-        print(f"Done. Targets={total} UPDATED={changed} SAME={same}")
+        plans = [
+            (
+                _resolve_refer_base(refer_dir, base_name, dir_input=True),
+                out_path,
+                updates,
+            )
+            for base_name, out_path, updates in targets
+        ]
+        check_output_inputs(
+            (out_path for _, out_path, _ in plans),
+            imgs,
+            distinct=True,
+            paired_inputs=((base_path, out_path) for base_path, out_path, _ in plans),
+        )
+        changed = 0
+        for base_path, out_path, updates in plans:
+            changed += _update_g00_file(base_path, out_path, updates, type_opt)
+        print(f"Done. Targets={total} UPDATED={changed} SAME={total - changed}")
     else:
-        print(f"Done. Targets={total} CREATED={created}")
+        _create_g00_files(
+            ((updates[0][0], out_path) for _, out_path, updates in targets), type_opt
+        )
+        print(f"Done. Targets={total} CREATED={total}")
     return 0
 
 

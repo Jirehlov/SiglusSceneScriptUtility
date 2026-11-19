@@ -21,10 +21,11 @@ from .common import (
     looks_like_siglus_pck,
     parse_i32_header,
     read_bytes,
+    open_atomic_output,
     split_end_of_options,
     first_option_token,
 )
-from .path_policy import read_directory, resolve_read_path
+from .path_policy import check_output_inputs, read_directory, resolve_read_path
 
 
 _PAYLOAD_SUMMARY_RE = re.compile(
@@ -214,6 +215,7 @@ def _compare_payload(
     rebuilt_blob=None,
     *,
     ignore_original_sources=False,
+    read_paths=None,
 ):
     if rebuilt_blob is None:
         rebuilt_blob = read_bytes(rebuilt_pck)
@@ -225,6 +227,7 @@ def _compare_payload(
         rebuilt_blob,
         True,
         ignore_original_sources=ignore_original_sources,
+        read_paths=read_paths,
     )
     if rc != 0:
         return False, "compare failed", out, err, None
@@ -252,7 +255,9 @@ def _compare_payload(
     return ok, detail, out, err, counts
 
 
-def _compare_rebuilt_pck(original_pck: str, rebuilt_pck: str, original_blob: bytes):
+def _compare_rebuilt_pck(
+    original_pck: str, rebuilt_pck: str, original_blob: bytes, *, read_paths
+):
     rebuilt_blob = read_bytes(rebuilt_pck)
     if original_blob == rebuilt_blob:
         return "EXACT", "pck bytes identical", "", "", None
@@ -261,6 +266,7 @@ def _compare_rebuilt_pck(original_pck: str, rebuilt_pck: str, original_blob: byt
         rebuilt_pck,
         original_blob,
         rebuilt_blob,
+        read_paths=read_paths,
     )
     return "PAYLOAD_SAME" if payload_ok else "FAIL", detail, out, err, counts
 
@@ -311,6 +317,7 @@ def _compile_payload_attempt(
     profile: int,
     allow_invalid=False,
     decompile=False,
+    read_paths=None,
 ):
     C.set_profile(profile)
     if os.path.isfile(rebuilt_pck):
@@ -353,6 +360,7 @@ def _compile_payload_attempt(
             rebuilt_read_path,
             original_blob,
             ignore_original_sources=True,
+            read_paths=read_paths,
         )
         result = "PAYLOAD_SAME" if payload_ok else "FAIL"
     else:
@@ -360,6 +368,7 @@ def _compile_payload_attempt(
             original_pck,
             rebuilt_read_path,
             original_blob,
+            read_paths=read_paths,
         )
         payload_ok = result != "FAIL"
     payload_elapsed = max(0.0, time.perf_counter() - payload_started)
@@ -384,6 +393,8 @@ def _compile_payload_with_profile_fallback(
     extract_dir: str,
     rebuilt_pck: str,
     serial=False,
+    *,
+    read_paths=None,
 ):
     attempts = []
     for allow_invalid, profile in product((False, True), CONST_PROFILE_IDS):
@@ -395,6 +406,7 @@ def _compile_payload_with_profile_fallback(
             serial=serial,
             profile=profile,
             allow_invalid=allow_invalid,
+            read_paths=read_paths,
         )
         attempts.append(attempt)
         if attempt.get("payload_ok"):
@@ -416,6 +428,7 @@ def _decompile_payload(
     serial=False,
     *,
     profile: int,
+    read_paths=None,
 ):
     C.set_profile(profile)
     started = time.perf_counter()
@@ -425,6 +438,7 @@ def _decompile_payload(
         tmp_root,
         dat_txt=False,
         decompile=True,
+        read_paths=read_paths,
     )
     extract_dir = _find_extract_dir(tmp_root)
     source_dir = os.path.join(extract_dir, "decompiled") if extract_dir else ""
@@ -453,6 +467,7 @@ def _decompile_payload(
         serial=serial,
         profile=profile,
         decompile=True,
+        read_paths=read_paths,
     )
     attempt["decompile_elapsed"] = decompile_elapsed
     attempt["source_ss"] = source_count
@@ -511,6 +526,7 @@ def _test_one(
     decompile=False,
     const_profile=None,
     allow_invalid=False,
+    read_paths=None,
 ) -> _TestResult:
     started = time.perf_counter()
     path = os.path.abspath(path)
@@ -560,7 +576,9 @@ def _test_one(
         if status == "PENDING" and not decompile:
             step_started = time.perf_counter()
             tmp_root = tempfile.mkdtemp(prefix="siglus_ssu_test_")
-            rc, out, err_text = _capture(pck.extract_pck, path, tmp_root, False)
+            rc, out, err_text = _capture(
+                pck.extract_pck, path, tmp_root, False, read_paths=read_paths
+            )
             _record_timing(timings, "extract", step_started)
             if rc != 0:
                 print("  extract: failed")
@@ -593,6 +611,7 @@ def _test_one(
                     rebuilt_pck,
                     serial=serial,
                     profile=const_profile,
+                    read_paths=read_paths,
                 )
             elif const_profile is not None:
                 attempt = _compile_payload_attempt(
@@ -603,6 +622,7 @@ def _test_one(
                     serial=serial,
                     profile=const_profile,
                     allow_invalid=allow_invalid,
+                    read_paths=read_paths,
                 )
                 result = (
                     bool(attempt.get("payload_ok")),
@@ -617,6 +637,7 @@ def _test_one(
                     extract_dir,
                     rebuilt_pck,
                     serial=serial,
+                    read_paths=read_paths,
                 )
             payload_ok, selected_profile, attempts, selected_attempt = result
             if decompile:
@@ -790,12 +811,14 @@ def main(argv=None, *, const_profile=None):
     if not paths:
         sys.stderr.write(f"no .pck files found: {input_path}\n")
         return 1
+    read_paths = None
     if report_json:
         report_json = os.path.abspath(report_json)
-        if os.path.exists(report_json) and any(
-            os.path.samefile(report_json, p) for p in paths
-        ):
-            sys.stderr.write("--report-json must not overwrite an input .pck\n")
+        read_paths = set(paths)
+        try:
+            check_output_inputs([report_json], read_paths)
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"test: --report-json: {exc}\n")
             return 2
     label = "Decompile round-trip test" if decompile else "Round-trip test"
     print(f"{label} pck files: {len(paths):d}")
@@ -810,6 +833,7 @@ def main(argv=None, *, const_profile=None):
                 decompile=decompile,
                 const_profile=const_profile,
                 allow_invalid=allow_invalid,
+                read_paths=read_paths,
             )
         )
     exact = sum(1 for r in results if r.status == "EXACT")
@@ -836,15 +860,21 @@ def main(argv=None, *, const_profile=None):
                 )
             )
     if report_json:
-        os.makedirs(os.path.dirname(report_json), exist_ok=True)
-        with open(report_json, "w", encoding="utf-8", newline="\r\n") as report:
-            json.dump(
-                {"decompile": decompile, "results": [asdict(r) for r in results]},
-                report,
-                ensure_ascii=False,
-                indent=2,
-            )
-            report.write("\n")
+        try:
+            check_output_inputs([report_json], read_paths)
+            with open_atomic_output(
+                report_json, "w", encoding="utf-8", newline="\r\n"
+            ) as report:
+                json.dump(
+                    {"decompile": decompile, "results": [asdict(r) for r in results]},
+                    report,
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                report.write("\n")
+        except (OSError, ValueError) as exc:
+            sys.stderr.write(f"test: --report-json: {exc}\n")
+            return 1
     return 1 if failed or exact + payload_same == 0 else 0
 
 

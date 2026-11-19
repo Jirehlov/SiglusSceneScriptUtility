@@ -3,7 +3,7 @@ import re
 import struct
 from . import const as C
 from .native_ops import xor_cycle_inplace, lzss_pack, lzss_unpack
-from .common import ascii_lower, content_digest, dn
+from .common import ascii_lower, content_digest, dn, open_atomic_output
 
 
 _GLOBAL_APPLY_INT_RE = re.compile(r"^(G|Z|cg_table|bgm_table)\[(\d+)\]\s*:\s*(.*?)\s*$")
@@ -1048,17 +1048,6 @@ def sav(blob, path=None):
             print(f"cg_table_cnt: {len(p.get('cg_table') or [])}")
             print(f"bgm_table_cnt: {len(p.get('bgm_table') or [])}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
-            if path:
-                pp = str(path)
-                txt = os.path.splitext(pp)[0] + ".txt"
-                out = []
-                _dump_payload_full("", p, out=out)
-                data = "\r\n".join(out) + "\r\n"
-                with open(txt, "wb") as f:
-                    f.write(data.encode("utf-8"))
-                print(f"payload_txt: {txt}")
-            else:
-                _dump_payload_full("", p)
         else:
             print(f"screen_size_mode: {p.get('screen_size_mode')}")
             print(f"all_sound_user_volume: {p.get('all_sound_user_volume')}")
@@ -1066,17 +1055,21 @@ def sav(blob, path=None):
             print(f"koe_mode: {p.get('koe_mode')}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
             print(f"object_disp_flag_cnt: {len(p.get('object_disp_flag') or [])}")
-            if path:
-                pp = str(path)
-                txt = os.path.splitext(pp)[0] + ".txt"
-                out = []
-                _dump_payload_full("", p, out=out)
-                data = "\r\n".join(out) + "\r\n"
-                with open(txt, "wb") as f:
-                    f.write(data.encode("utf-8"))
-                print(f"payload_txt: {txt}")
+        if path:
+            txt = os.path.splitext(path)[0] + ".txt"
+            try:
+                with open_atomic_output(txt, exclusive=True) as f:
+                    out = []
+                    _dump_payload_full("", p, out=out)
+                    f.write(("\r\n".join(out) + "\r\n").encode("utf-8"))
+            except FileExistsError:
+                if not os.path.isfile(txt):
+                    raise
+                print(f"payload_txt_preserved: {txt}")
             else:
-                _dump_payload_full("", p)
+                print(f"payload_txt: {txt}")
+        else:
+            _dump_payload_full("", p)
         return 0
     if k["kind"] == "local":
         w = int(C.NAME_W)

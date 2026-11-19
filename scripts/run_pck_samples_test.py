@@ -8,7 +8,9 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
@@ -57,10 +59,30 @@ def _tree_entries(repo: str, ref: str):
     return entries
 
 
+def _remote_path_parts(path: str) -> list[str]:
+    parts = path.split("/")
+    for part in parts:
+        stem = part.partition(".")[0].rstrip(" ").upper()
+        if (
+            not part
+            or part.endswith((" ", "."))
+            or any(char in '<>:"\\|?*' or ord(char) < 32 for char in part)
+            or stem in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+            or re.fullmatch(r"(COM|LPT)[0-9¹²³]", stem)
+        ):
+            raise ValueError(f"unsupported sample path: {path!r}")
+    return parts
+
+
 def _pck_entries(tree, subdir: str):
-    prefix = subdir.strip("/").replace("\\", "/")
-    prefix = f"{prefix}/" if prefix else ""
+    from siglus_ssu.path_policy import windows_filename_key
+
+    subdir = subdir.replace("\\", "/").rstrip("/")
+    if subdir:
+        _remote_path_parts(subdir)
+    prefix = f"{subdir}/" if subdir else ""
     entries = []
+    names = set()
     for item in tree:
         path = str(item.get("path") or "")
         if not path.startswith(prefix):
@@ -71,6 +93,11 @@ def _pck_entries(tree, subdir: str):
             continue
         if item.get("type") != "blob":
             continue
+        _remote_path_parts(path)
+        key = windows_filename_key(path)
+        if key in names:
+            raise ValueError(f"conflicting sample paths: {path!r}")
+        names.add(key)
         entries.append(
             {
                 "path": path,
@@ -100,7 +127,21 @@ def _git_blob_sha(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_file(url: str, dest: Path, expected_size: int, expected_sha: str) -> None:
+def _check_download_target(root: Path, target: Path) -> None:
+    resolved = target.resolve()
+    if (
+        not resolved.is_relative_to(root)
+        or resolved != target
+        or target.is_symlink()
+        or (target.exists() and not target.is_file())
+    ):
+        raise ValueError(f"invalid sample download target: {target}")
+
+
+def _download_file(
+    url: str, dest: Path, expected_size: int, expected_sha: str, root: Path
+) -> None:
+    _check_download_target(root, dest)
     has_expected_size = dest.is_file() and (
         expected_size <= 0 or dest.stat().st_size == expected_size
     )
@@ -110,20 +151,21 @@ def _download_file(url: str, dest: Path, expected_size: int, expected_sha: str) 
         print(f"cache: {dest}")
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    part = dest.with_name(dest.name + ".part")
-    if part.exists():
-        part.unlink()
     last_error = None
     for attempt in range(1, 6):
+        part = None
         try:
+            _check_download_target(root, dest)
             request = Request(url, headers=_headers("application/octet-stream"))
-            with urlopen(request, timeout=300) as response:
-                with part.open("wb") as out:
-                    while True:
-                        chunk = response.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        out.write(chunk)
+            with (
+                urlopen(request, timeout=300) as response,
+                tempfile.NamedTemporaryFile(
+                    dir=dest.parent, prefix=".sample-", suffix=".part", delete=False
+                ) as out,
+            ):
+                part = Path(out.name)
+                while chunk := response.read(CHUNK_SIZE):
+                    out.write(chunk)
             if expected_size > 0 and part.stat().st_size != expected_size:
                 raise RuntimeError(
                     f"download size mismatch for {dest.name}: "
@@ -136,85 +178,73 @@ def _download_file(url: str, dest: Path, expected_size: int, expected_sha: str) 
                         f"download SHA mismatch for {dest.name}: "
                         f"got={actual_sha} expected={expected_sha}"
                     )
+            _check_download_target(root, dest)
             part.replace(dest)
             print(f"downloaded: {dest}")
             return
         except (HTTPError, URLError, OSError, RuntimeError) as exc:
             last_error = exc
-            if part.exists():
-                part.unlink()
             if attempt >= 5:
                 break
-            time.sleep(min(2**attempt, 20))
+        finally:
+            if part is not None:
+                part.unlink(missing_ok=True)
+        time.sleep(min(2**attempt, 20))
     raise RuntimeError(f"failed to download {url}: {last_error}")
 
 
-def _subdir_path(subdir: str) -> Path:
-    parts = [part for part in subdir.strip("/").replace("\\", "/").split("/") if part]
-    return Path(*parts) if parts else Path()
+def _prepare_samples(
+    repo: str,
+    ref: str,
+    subdir: str,
+    work_dir: Path,
+    *,
+    profiles_from="",
+    report_json="",
+) -> list[Path]:
+    from siglus_ssu.path_policy import check_output_inputs
 
-
-def _sample_paths(entries, work_dir: Path) -> set[Path]:
-    paths = set()
-    for item in entries:
-        rel = Path(*str(item["path"]).split("/"))
-        dest = work_dir / rel
-        paths.add(dest)
-    return paths
-
-
-def _drop_stale_samples(entries, work_dir: Path, subdir: str) -> Path:
-    samples_dir = work_dir / _subdir_path(subdir)
-    if not samples_dir.exists():
-        return samples_dir
-    expected = _sample_paths(entries, work_dir)
-    for path in samples_dir.iterdir():
-        if not path.is_file():
-            continue
-        if path.suffix.lower() != ".pck":
-            continue
-        if path in expected:
-            continue
-        path.unlink()
-        print(f"stale: {path}")
-    return samples_dir
-
-
-def _prepare_samples(repo: str, ref: str, subdir: str, work_dir: Path) -> Path:
     tree = _tree_entries(repo, ref)
     entries = _pck_entries(tree, subdir)
-    profile_entry = next(
-        (
-            item
-            for item in tree
-            if item.get("path") == "profiles.json" and item.get("type") == "blob"
-        ),
-        None,
+    pcks = [work_dir.joinpath(*_remote_path_parts(item["path"])) for item in entries]
+    for path in pcks:
+        _check_download_target(work_dir, path)
+    downloads = pcks if profiles_from else [*pcks, work_dir / "profiles.json"]
+    check_output_inputs(
+        downloads, [path for path in (profiles_from, report_json) if path]
     )
-    if profile_entry is None:
-        raise RuntimeError(f"No profiles.json found in {repo}@{ref}")
-    _download_file(
-        _raw_url(repo, ref, "profiles.json"),
-        work_dir / "profiles.json",
-        int(profile_entry.get("size") or 0),
-        str(profile_entry.get("sha") or ""),
-    )
-    samples_dir = _drop_stale_samples(entries, work_dir, subdir)
+    if not profiles_from:
+        profile_entry = next(
+            (
+                item
+                for item in tree
+                if item.get("path") == "profiles.json" and item.get("type") == "blob"
+            ),
+            None,
+        )
+        if profile_entry is None:
+            raise RuntimeError(f"No profiles.json found in {repo}@{ref}")
+        _download_file(
+            _raw_url(repo, ref, "profiles.json"),
+            work_dir / "profiles.json",
+            int(profile_entry.get("size") or 0),
+            str(profile_entry.get("sha") or ""),
+            work_dir,
+        )
     total_size = sum(int(item["size"]) for item in entries)
     print(
         f"samples: repo={repo} ref={ref} subdir={subdir} "
         f"pck={len(entries)} bytes={total_size}"
     )
-    for item in entries:
-        rel = Path(*str(item["path"]).split("/"))
-        dest = work_dir / rel
+    for item, dest in zip(entries, pcks):
         _download_file(
             _raw_url(repo, ref, item["path"]),
             dest,
             int(item["size"]),
             str(item.get("sha") or ""),
+            work_dir,
         )
-    return samples_dir
+    return pcks
 
 
 def _find_pcks(samples_dir: Path) -> list[Path]:
@@ -285,14 +315,14 @@ def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
 
 def _profiles_from_manifest(
     manifest_path: str, pcks: list[Path]
-) -> dict[Path, tuple[int, bool]]:
+) -> list[tuple[int, bool]]:
     from siglus_ssu import CONST_PROFILE_IDS
 
     manifest_path = Path(manifest_path).resolve()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise ValueError("--profiles-from requires a sample profile mapping")
-    profiles = {}
+    profiles = []
     for path in pcks:
         key = path.relative_to(manifest_path.parent).as_posix()
         entry = manifest.get(key)
@@ -304,12 +334,12 @@ def _profiles_from_manifest(
             raise ValueError(f"invalid preset profile for {key}")
         if type(allow_invalid) is not bool:
             raise ValueError(f"invalid allow_invalid setting for {key}")
-        profiles[path] = (profile, allow_invalid)
+        profiles.append((profile, allow_invalid))
     return profiles
 
 
 def _run_siglus_test(
-    samples_dir: Path,
+    pcks: list[Path],
     command: str | None,
     serial: bool,
     expected_status="",
@@ -318,61 +348,81 @@ def _run_siglus_test(
     profiles_from="",
     report_json="",
 ) -> int:
-    pcks = _find_pcks(samples_dir)
-    if not pcks:
-        raise RuntimeError(f"No .pck files found in {samples_dir}")
+    from siglus_ssu.common import iter_directory_key_paths, open_atomic_output
+    from siglus_ssu.path_policy import check_output_inputs, validate_input_paths
+
+    validate_input_paths(pcks)
     prefix = _command_prefix(command)
     report_path = Path(report_json).resolve() if report_json else None
-    if (
-        report_path is not None
-        and report_path.exists()
-        and any(report_path.samefile(path) for path in pcks)
-    ):
-        raise ValueError("--report-json must not overwrite an input .pck")
-    if profiles_from and report_path == Path(profiles_from).resolve():
-        raise ValueError("--report-json must not overwrite the profile mapping")
-    report_results = []
+    report_inputs = list(pcks)
+    if profiles_from:
+        report_inputs.append(profiles_from)
+    if report_path is not None:
+        check_output_inputs([report_path], report_inputs)
+
     profiles = (
         _profiles_from_manifest(profiles_from, pcks)
         if profiles_from
-        else dict.fromkeys(pcks, (const_profile, False))
+        else [(const_profile, False)] * len(pcks)
     )
-    for index, path in enumerate(pcks, 1):
-        profile, allow_invalid = profiles[path]
-        cmd = prefix + ["--const-profile", str(profile), "test"]
-        if decompile:
-            cmd.append("--decompile")
-        elif allow_invalid:
-            cmd.append("--allow-invalid")
-        if serial:
-            cmd.append("--serial")
-        if report_path is not None:
-            report_path.unlink(missing_ok=True)
-            cmd.extend(["--report-json", str(report_path)])
-        cmd.append(str(path))
-        status = expected_status or ("PAYLOAD_SAME" if decompile else "")
-        rc = _run_test_command(cmd, 1, status)
-        if report_path is not None:
-            if report_path.is_file():
-                report = json.loads(report_path.read_text(encoding="utf-8"))
-                report_results.extend(report["results"])
-            elif rc == 0:
-                raise RuntimeError("test did not write the requested JSON report")
-            if report_results:
-                with report_path.open("w", encoding="utf-8", newline="\r\n") as report:
-                    json.dump(
-                        {"decompile": False, "results": report_results},
-                        report,
-                        ensure_ascii=False,
-                        indent=2,
-                    )
-                    report.write("\n")
-        if rc != 0:
-            print(f"samples: stopped after {index:d}/{len(pcks):d} (first failure)")
-            return rc
-    if decompile:
+    report_results = []
+    rc = 0
+    report_dir = (
+        tempfile.TemporaryDirectory() if report_path is not None else nullcontext()
+    )
+    with report_dir as tmp:
+        for index, (path, (profile, allow_invalid)) in enumerate(
+            zip(pcks, profiles), 1
+        ):
+            cmd = prefix + ["--const-profile", str(profile), "test"]
+            if decompile:
+                cmd.append("--decompile")
+            elif allow_invalid:
+                cmd.append("--allow-invalid")
+            if serial:
+                cmd.append("--serial")
+            child_report = Path(tmp) / f"{index}.json" if tmp is not None else None
+            if child_report is not None:
+                cmd.extend(["--report-json", str(child_report)])
+            cmd.append(str(path))
+            status = expected_status or ("PAYLOAD_SAME" if decompile else "")
+            rc = _run_test_command(cmd, 1, status)
+            if child_report is not None:
+                if child_report.is_file():
+                    report = json.loads(child_report.read_text(encoding="utf-8"))
+                    rows = report.get("results")
+                    if not isinstance(rows, list) or len(rows) != 1:
+                        raise ValueError(f"expected one test result for {path}")
+                    report_results.extend(rows)
+                elif rc == 0:
+                    raise RuntimeError("test did not write the requested JSON report")
+            if rc != 0:
+                print(f"samples: stopped after {index:d}/{len(pcks):d} (first failure)")
+                break
+    if report_results:
+        directories = dict.fromkeys(
+            str(directory)
+            for path in pcks
+            for directory in (path.parent, path.parent.parent)
+        )
+        for directory in directories:
+            report_inputs.extend(
+                path for _, path in iter_directory_key_paths(directory)
+            )
+        check_output_inputs([report_path], report_inputs)
+        with open_atomic_output(
+            report_path, "w", encoding="utf-8", newline="\r\n"
+        ) as output:
+            json.dump(
+                {"decompile": decompile, "results": report_results},
+                output,
+                ensure_ascii=False,
+                indent=2,
+            )
+            output.write("\n")
+    if decompile and rc == 0:
         print(f"decompile samples: total={len(pcks):d} failed=0")
-    return 0
+    return rc
 
 
 def main(argv=None) -> int:
@@ -407,38 +457,45 @@ def main(argv=None) -> int:
 
     if args.samples_dir:
         samples_dir = Path(args.samples_dir).resolve()
+        pcks = _find_pcks(samples_dir)
+        profile_path = samples_dir.parent / "profiles.json"
+        if args.list_only:
+            for path in pcks:
+                print(path)
+            print(f"total={len(pcks)}")
+            return 0
     else:
+        work_dir = Path(args.work_dir).resolve()
         if args.list_only:
             entries = _pck_entries(_tree_entries(args.repo, args.ref), args.subdir)
             for item in entries:
                 print(f"{item['path']}\t{item['size']}\t{item['sha']}")
             print(f"total={len(entries)}")
             return 0
-        samples_dir = _prepare_samples(
+        pcks = _prepare_samples(
             args.repo,
             args.ref,
             args.subdir,
-            Path(args.work_dir).resolve(),
+            work_dir,
+            profiles_from=args.profiles_from,
+            report_json="" if args.download_only else args.report_json,
         )
-    pcks = _find_pcks(samples_dir)
+        samples_dir = pcks[0].parent
+        profile_path = work_dir / "profiles.json"
     if not pcks:
         raise RuntimeError(f"No .pck files found in {samples_dir}")
     print(f"ready: {samples_dir} pck={len(pcks)}")
     if args.download_only:
         return 0
     return _run_siglus_test(
-        samples_dir,
+        pcks,
         args.command or None,
         bool(args.serial),
         args.expected_status,
         decompile=bool(args.decompile),
         const_profile=args.const_profile,
         profiles_from=args.profiles_from
-        or (
-            str(samples_dir.parent / "profiles.json")
-            if args.const_profile is None
-            else ""
-        ),
+        or (str(profile_path) if args.const_profile is None else ""),
         report_json=args.report_json,
     )
 

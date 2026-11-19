@@ -14,7 +14,6 @@ try:
 except Exception:
     psutil = None
 from .common import (
-    ANGOU_DAT_NAME,
     collect_batch_files,
     eprint,
     hint_help as _hint_help,
@@ -24,20 +23,20 @@ from .common import (
     prepare_batch_paths,
     content_digest,
     read_bytes,
+    open_atomic_output,
     write_bytes,
     missing_input_file,
     decode_text_auto,
     run_batch,
     consume_angou_option,
-    format_exe_el_source,
     split_end_of_options,
     first_option_token,
     is_option_token,
 )
 from . import sound
 from . import GEI
-from . import pck
 from .path_policy import (
+    check_output_inputs,
     open_read,
     read_file_stat,
     read_directory,
@@ -392,7 +391,7 @@ def _parse_bgm_table(gameexe_ini_text: str):
     return table
 
 
-def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
+def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str, read_paths) -> str:
     blob = read_bytes(gameexe_path)
     if not blob.startswith(b"\0\0\0\0"):
         txt = decode_text_auto(blob, stop_at_dos_eof=True)[0]
@@ -403,48 +402,15 @@ def _load_gameexe_ini_text(gameexe_path: str, explicit_angou: str = "") -> str:
                 f"GEI parse error line({analyzer.get_error_line()}): {analyzer.get_error_str()}"
             )
         return txt
-    os_dir = os.path.dirname(os.path.abspath(gameexe_path))
-    cands = list(
-        pck.iter_exe_el_candidates(
-            os_dir,
-            explicit_angou=explicit_angou,
-            with_sources=True,
-        )
+    _, text = GEI.read_gameexe_dat(
+        gameexe_path, blob, explicit_angou=explicit_angou, read_paths=read_paths
     )
-    if not cands:
-        cands = [b""]
-    for cand in cands:
-        src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-        exe_el = src.get("exe_el")
-        sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
-        try:
-            info, txt = GEI.read_gameexe_dat(gameexe_path, exe_el=exe_el)
-            if (
-                info.get("mode")
-                and info.get("lzss_size")
-                and not info.get("used_exe_el")
-            ):
-                raise RuntimeError(
-                    f"Gameexe.dat is encrypted with exe angou; missing {ANGOU_DAT_NAME}/key.txt to derive key"
-                )
-            if not info.get("ini_ok"):
-                raise RuntimeError("Failed to decode Gameexe.dat payload")
-            sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-            return txt
-        except Exception as exc:
-            last_err = exc
-            sys.stderr.write(
-                f"key source rejected, falling back: {format_exe_el_source(src)}\n"
-            )
-    raise last_err
+    return text
 
 
-def _load_bgm_table(gameexe_path: str, explicit_angou: str = ""):
+def _load_bgm_table(gameexe_path: str, explicit_angou: str = "", *, read_paths=None):
     try:
-        text = _load_gameexe_ini_text(
-            gameexe_path,
-            explicit_angou=explicit_angou,
-        )
+        text = _load_gameexe_ini_text(gameexe_path, explicit_angou, read_paths)
     except ValueError as exc:
         eprint(f"error: {exc}")
         return None, 2
@@ -1512,99 +1478,42 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
             _stop_running_playback(current)
 
 
-def _pack_one(src_path: str, out_root: str, rel_dir: str) -> int:
-    bn = os.path.basename(src_path)
-    base_name, ext = os.path.splitext(bn)
-    ext = ext.lower()
-    out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
-    os.makedirs(out_dir, exist_ok=True)
-    if ext == ".ogg":
-        with open_read(src_path) as f:
-            ogg = f.read()
-        owp = sound.encode_ogg_to_owp_bytes(ogg)
-        out_path = os.path.join(out_dir, base_name + ".owp")
-        write_bytes(out_path, owp)
-        return 1
-    raise RuntimeError("unsupported file type (expected .ogg)")
+def _extract_one(src_path, outputs, entries, trim_table, ffmpeg_path, tmp_dir):
+    if entries is not None:
+        for out_path, (_, ogg) in zip(
+            outputs, sound.iter_ovk_entries(src_path, entries), strict=True
+        ):
+            with open_atomic_output(out_path) as output:
+                output.write(ogg)
+        return len(outputs)
 
-
-def _extract_one(
-    src_path: str,
-    out_root: str,
-    rel_dir: str,
-    output_claims,
-    trim_table=None,
-    ffmpeg_path: str = "",
-    tmp_dir: str = "",
-) -> int:
-    bn = os.path.basename(src_path)
-    base_name, ext = os.path.splitext(bn)
-    ext = ext.lower()
-    out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
-    os.makedirs(out_dir, exist_ok=True)
-
-    def _write_output(out_name, data):
-        out_path = os.path.join(out_dir, out_name)
-        key = windows_filename_key(os.path.abspath(out_path))
-        previous = output_claims.get(key)
-        if previous is not None:
-            raise ValueError(
-                f"output path collision: {previous} and {src_path} -> {out_path}"
-            )
-        write_bytes(out_path, data)
-        output_claims[key] = src_path
-
-    if ext == ".owp":
-        ogg = sound.decode_owp_to_ogg_bytes(src_path)
+    base_name, ext = os.path.splitext(os.path.basename(src_path))
+    if trim_table is not None:
+        bgm = _resolve_bgm_entry(trim_table, base_name)
+        end = bgm.end_sample
+        repeat = bgm.repeat_sample
+        eprint(
+            f"trim {base_name} #{bgm.name}: samples {repeat}..{end if end != -1 else 'EOF'}"
+        )
+    if ext.lower() == ".owp":
+        data = sound.decode_owp_to_ogg_bytes(src_path)
         if trim_table is not None:
-            bgm_entry = _resolve_bgm_entry(trim_table, base_name)
-            end_pos = bgm_entry.end_sample
-            rep_pos = bgm_entry.repeat_sample
-            eprint(
-                f"trim {base_name} #{bgm_entry.name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
-            )
-            ogg = _ffmpeg_trim_ogg_bytes(
-                ogg,
-                start_sample=rep_pos,
-                end_sample=end_pos,
+            data = _ffmpeg_trim_ogg_bytes(
+                data,
+                start_sample=repeat,
+                end_sample=end,
                 ffmpeg_path=ffmpeg_path,
                 tmp_dir=tmp_dir,
             )
-        _write_output(base_name + ".ogg", ogg)
-        return 1
-    if ext == ".nwa":
-        if trim_table is not None:
-            bgm_entry = _resolve_bgm_entry(trim_table, base_name)
-            end_pos = bgm_entry.end_sample
-            rep_pos = bgm_entry.repeat_sample
-            eprint(
-                f"trim {base_name} #{bgm_entry.name}: samples {rep_pos}..{end_pos if end_pos != -1 else 'EOF'}"
-            )
-            with open_read(src_path) as f:
-                wav = _trim_nwa_to_wav_bytes(
-                    f.read(),
-                    start_sample=rep_pos,
-                    end_sample=end_pos,
-                )
-        else:
-            wav = sound.decode_nwa_to_wav_bytes(src_path)
-        _write_output(base_name + ".wav", wav)
-        return 1
-    if ext == ".ovk":
-        entries = sound.read_ovk_table(src_path)
-        if not entries:
-            return 0
-        multi = len(entries) > 1
-        wrote = 0
-        for entry_no, ogg in sound.iter_ovk_entries(src_path, entries):
-            if multi:
-                out_name = f"{base_name}_{entry_no}.ogg"
-            else:
-                out_name = f"{base_name}.ogg"
-            _write_output(out_name, ogg)
-            wrote += 1
-        return wrote
-    raise RuntimeError("unsupported file type (expected .owp, .nwa, or .ovk)")
+    elif trim_table is not None:
+        data = _trim_nwa_to_wav_bytes(
+            read_bytes(src_path), start_sample=repeat, end_sample=end
+        )
+    else:
+        data = sound.decode_nwa_to_wav_bytes(src_path)
+    with open_atomic_output(outputs[0]) as output:
+        output.write(data)
+    return 1
 
 
 def main(argv) -> int:
@@ -1669,62 +1578,49 @@ def main(argv) -> int:
         if rc is not None:
             return rc
         tasks = []
-        if src_is_dir:
-            suffix_re = re.compile(r"^(?P<base>.+)_(?P<no>-?\d+)$")
-            groups = {}
-            for src_path in files:
-                rel = os.path.relpath(src_path, inp)
-                rel_dir = os.path.dirname(rel)
-                base, _ = os.path.splitext(os.path.basename(src_path))
-                m = suffix_re.match(base)
-                if not m:
-                    tasks.append(("owp", src_path, rel_dir))
-                    continue
-                base2 = m.group("base")
-                no = int(m.group("no"))
-                key = (rel_dir, base2)
-                groups.setdefault(key, []).append((no, src_path))
-            targets = {}
-            for (rel_dir, base2), items in sorted(
-                groups.items(), key=lambda x: (x[0][0], x[0][1])
-            ):
-                if len(items) >= 2:
-                    out_path = os.path.join(out_root, rel_dir, base2 + ".ovk")
-                    key = windows_filename_key(os.path.abspath(out_path))
-                    previous = targets.get(key)
-                    if previous is not None:
-                        eprint(
-                            f"error: output path collision: {previous!r} and {out_path!r}"
-                        )
-                        return 1
-                    targets[key] = out_path
-                    tasks.append(("ovk", items, rel_dir, base2))
-                    continue
-                for _no, src_path in items:
-                    tasks.append(("owp", src_path, rel_dir))
-        else:
-            src_path = files[0]
-            rel_dir = ""
-            tasks.append(("owp", src_path, rel_dir))
+        groups = {}
+        suffix_re = re.compile(r"^(?P<base>.+)_(?P<no>-?\d+)$")
+        for src_path in files:
+            rel_dir = (
+                os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
+            )
+            base = os.path.splitext(os.path.basename(src_path))[0]
+            match = suffix_re.fullmatch(base) if src_is_dir else None
+            if match is None:
+                tasks.append(
+                    (os.path.join(out_root, rel_dir, base + ".owp"), [(0, src_path)])
+                )
+            else:
+                group = (rel_dir, match.group("base"))
+                groups.setdefault(group, []).append((int(match.group("no")), src_path))
+        for (rel_dir, base), items in sorted(groups.items()):
+            if len(items) > 1:
+                tasks.append((os.path.join(out_root, rel_dir, base + ".ovk"), items))
+            else:
+                source = items[0][1]
+                stem = os.path.splitext(os.path.basename(source))[0]
+                tasks.append((os.path.join(out_root, rel_dir, stem + ".owp"), items))
+
+        try:
+            check_output_inputs((out for out, _ in tasks), files, distinct=True)
+        except (OSError, ValueError) as exc:
+            eprint(f"audio output: {exc}")
+            return 1
 
         def _proc(task):
-            kind = task[0]
-            if kind == "owp":
-                _, src_path, rel_dir = task
-                n = _pack_one(src_path, out_root, rel_dir)
-                return n, n
-            _, items, rel_dir, base2 = task
-            out_dir = os.path.join(out_root, rel_dir) if rel_dir else out_root
-            os.makedirs(out_dir, exist_ok=True)
-            entry_list = []
-            for no, src_path in sorted(items, key=lambda x: x[0]):
-                with open_read(src_path) as f:
-                    ogg = f.read()
-                entry_list.append((no, ogg))
-            ovk = sound.encode_oggs_to_ovk_bytes(entry_list)
-            out_path = os.path.join(out_dir, base2 + ".ovk")
-            write_bytes(out_path, ovk)
-            return 1, 1
+            out_path, items = task
+            if len(items) == 1:
+                data = sound.encode_ogg_to_owp_bytes(read_bytes(items[0][1]))
+            else:
+                data = sound.encode_oggs_to_ovk_bytes(
+                    [
+                        (no, read_bytes(path))
+                        for no, path in sorted(items, key=lambda item: item[0])
+                    ]
+                )
+            with open_atomic_output(out_path) as output:
+                output.write(data)
+            return 1, out_path
 
         return run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
     if mode == "play":
@@ -1812,6 +1708,7 @@ def main(argv) -> int:
     ffmpeg_path = ""
     tmp_dir = ""
     needs_ffmpeg = False
+    inputs = set()
     files, rc = collect_batch_files(
         inp, src_is_dir, [".owp", ".nwa", ".ovk"], "no supported audio files found"
     )
@@ -1823,7 +1720,8 @@ def main(argv) -> int:
         except (FileNotFoundError, NotADirectoryError):
             eprint(f"Gameexe.dat not found: {trim_path}")
             return 1
-        trim_table, rc = _load_bgm_table(trim_path, explicit_angou)
+        inputs.add(trim_path)
+        trim_table, rc = _load_bgm_table(trim_path, explicit_angou, read_paths=inputs)
         if rc is not None:
             return rc
         needs_ffmpeg = any(
@@ -1834,29 +1732,52 @@ def main(argv) -> int:
             if not ffmpeg_path:
                 eprint("ffmpeg not found in PATH")
                 return 1
-    os.makedirs(out_root, exist_ok=True)
+    inputs.update(files)
+    tasks = []
+    try:
+        for src_path in files:
+            rel_dir = (
+                os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
+            )
+            out_dir = os.path.join(out_root, rel_dir)
+            stem, ext = os.path.splitext(os.path.basename(src_path))
+            ext = ext.lower()
+            entries = sound.read_ovk_table(src_path) if ext == ".ovk" else None
+            if entries is None:
+                suffix = ".wav" if ext == ".nwa" else ".ogg"
+                outputs = [os.path.join(out_dir, stem + suffix)]
+            elif len(entries) == 1:
+                outputs = [os.path.join(out_dir, stem + ".ogg")]
+            else:
+                outputs = [
+                    os.path.join(out_dir, f"{stem}_{entry.entry_no}.ogg")
+                    for entry in entries
+                ]
+            tasks.append((src_path, outputs, entries))
+        check_output_inputs(
+            (target for _, outputs, _ in tasks for target in outputs),
+            inputs,
+            distinct=True,
+        )
+    except (OSError, ValueError, EOFError) as exc:
+        eprint(f"audio output: {exc}")
+        return 1
+
     if needs_ffmpeg:
+        os.makedirs(out_root, exist_ok=True)
         try:
             tmp_dir = tempfile.mkdtemp(prefix=".tmp_ffmpeg_", dir=out_root)
         except OSError:
             tmp_dir = tempfile.mkdtemp(prefix="siglus_ffmpeg_")
 
-    output_claims = {}
+    def _proc(task):
+        src_path, outputs, entries = task
+        n = _extract_one(src_path, outputs, entries, trim_table, ffmpeg_path, tmp_dir)
+        return n, outputs[0] if len(outputs) == 1 else f"{n} files for {src_path}"
 
-    def _proc(src_path):
-        rel_dir = os.path.dirname(os.path.relpath(src_path, inp)) if src_is_dir else ""
-        n = _extract_one(
-            src_path,
-            out_root,
-            rel_dir,
-            trim_table=trim_table,
-            ffmpeg_path=ffmpeg_path,
-            tmp_dir=tmp_dir,
-            output_claims=output_claims,
-        )
-        return n, n
-
-    exit_code = run_batch(files, _proc)
-    if tmp_dir:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    try:
+        exit_code = run_batch(tasks, _proc, item_name_fn=lambda task: task[0])
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
     return exit_code

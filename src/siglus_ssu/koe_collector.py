@@ -8,7 +8,9 @@ from . import sound
 from .common import (
     eprint,
     read_bytes,
-    write_bytes,
+    open_atomic_output,
+    is_auxiliary_dat_name,
+    looks_like_siglus_pck,
     consume_angou_option,
     iter_exe_el_sources,
     looks_like_siglus_dat,
@@ -16,6 +18,7 @@ from .common import (
     is_option_token,
 )
 from .path_policy import (
+    check_output_inputs,
     open_read,
     read_directory,
     resolve_read_path,
@@ -176,23 +179,24 @@ def _bundle_relpath(bundle, scene_root: str):
     return "<unknown>"
 
 
-def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
+def _iter_scene_bundles(scene_root: str, explicit_angou: str, read_paths):
     if os.path.isfile(scene_root) and os.path.basename(scene_root).lower().endswith(
         ".pck"
     ):
         pck_name = os.path.basename(scene_root)
-        try:
-            blob = read_bytes(scene_root)
-            hdr = pck.parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        except Exception:
-            blob = b""
-            hdr = None
+        read_paths.add(scene_root)
+        blob = read_bytes(scene_root)
+        if not looks_like_siglus_pck(blob):
+            raise ValueError(f"koe: not a Siglus scene PCK: {scene_root}")
+        hdr = pck.parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
         for item in pck.iter_pck_scene_dat_items(
             blob,
             input_pck=scene_root,
             hdr=hdr,
+            require_exe=True,
             explicit_angou=explicit_angou,
             trace_key=True,
+            read_paths=read_paths,
         ):
             if not isinstance(item, dict):
                 continue
@@ -221,33 +225,39 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str = ""):
         return
     candidates_by_dir = {}
     scene_paths = {}
+    directory_mode = os.path.isdir(scene_root)
     for dat_path in _iter_scene_dat_paths(scene_root):
+        read_paths.add(dat_path)
         try:
             blob = read_bytes(dat_path)
-        except Exception:
-            continue
+        except OSError as exc:
+            raise ValueError(
+                f"koe: could not read scene DAT {dat_path}: {exc}"
+            ) from exc
         if not looks_like_siglus_dat(blob):
             directory = os.path.dirname(os.path.abspath(dat_path))
             if directory not in candidates_by_dir:
                 candidates_by_dir[directory] = list(
-                    pck.iter_exe_el_candidates(
-                        directory,
+                    iter_exe_el_sources(
+                        base_dir=directory,
                         explicit_angou=explicit_angou,
-                        with_sources=True,
+                        read_paths=read_paths,
                     )
                 )
             blob = dat.decode_scn_dat_with_candidates(
                 blob, candidates_by_dir[directory]
             )
-        try:
-            bundle = dat.dat_disassembly_bundle(
-                blob, dat_path, emit_text=False, trace_profile="koe"
-            )
-        except Exception:
-            bundle = None
-        if isinstance(bundle, dict):
-            validate_input_paths([dat_path], seen=scene_paths)
-            yield bundle
+        if not looks_like_siglus_dat(blob):
+            if directory_mode and is_auxiliary_dat_name(dat_path):
+                continue
+            raise ValueError(f"koe: could not decode scene DAT: {dat_path}")
+        bundle = dat.dat_disassembly_bundle(
+            blob, dat_path, emit_text=False, trace_profile="koe"
+        )
+        if not isinstance(bundle, dict):
+            raise ValueError(f"koe: failed to disassemble scene: {dat_path}")
+        validate_input_paths([dat_path], seen=scene_paths)
+        yield bundle
 
 
 def _iter_trace_line_groups(trace):
@@ -512,13 +522,10 @@ def _scan_bundle_calls(bundle, scene_root: str):
     return refs
 
 
-def _scan_calls(scene_root: str, explicit_angou: str = ""):
+def _scan_calls(scene_root: str, explicit_angou: str, read_paths):
     refs = []
     scene_files = 0
-    for bundle in _iter_scene_bundles(
-        scene_root,
-        explicit_angou=explicit_angou,
-    ):
+    for bundle in _iter_scene_bundles(scene_root, explicit_angou, read_paths):
         if not bundle.get("complete"):
             raise ValueError(
                 f"koe: incomplete scene disassembly: {_bundle_relpath(bundle, scene_root)}"
@@ -538,7 +545,6 @@ def _index_ovk(voice_dir: str):
     ovk_files = 0
     z_files = 0
     entry_count = 0
-    table_failed = 0
     ovk_paths = []
     if os.path.isdir(voice_dir):
         _, dir_entries = read_directory(voice_dir)
@@ -562,9 +568,8 @@ def _index_ovk(voice_dir: str):
         scene_map.setdefault(scene_no, full)
         try:
             table = sound.read_ovk_table(full)
-        except Exception:
-            table_failed += 1
-            continue
+        except (OSError, EOFError, ValueError) as exc:
+            raise ValueError(f"koe: could not read OVK index {full}: {exc}") from exc
         ovk_entry_map[full] = {int(e.entry_no): e for e in table}
         for e in table:
             entry_count += 1
@@ -582,7 +587,6 @@ def _index_ovk(voice_dir: str):
         ovk_files,
         z_files,
         entry_count,
-        table_failed,
     )
 
 
@@ -600,8 +604,19 @@ def _format_duration_seconds_csv(duration) -> str:
     return f"{max(float(duration), 0.0):.6f}"
 
 
+def _extract_voice(path, ogg):
+    try:
+        with open_atomic_output(path, exclusive=True) as output:
+            output.write(ogg)
+    except FileExistsError:
+        if not os.path.isfile(path):
+            raise
+        return False
+    return True
+
+
 def _write_master_csv(csv_path, entries, missing_rows, duration_by_koe):
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+    with open_atomic_output(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f, lineterminator="\r\n")
         writer.writerow(["koe_no", "character", "text", "duration_sec", "callsite"])
         csv_rows = []
@@ -731,29 +746,32 @@ def main(argv):
     except (FileNotFoundError, NotADirectoryError):
         eprint(f"voice input not found: {voice_dir}")
         return 1
+    read_paths = set()
     if explicit_angou:
         try:
-            list(iter_exe_el_sources(explicit_angou=explicit_angou))
+            list(
+                iter_exe_el_sources(
+                    explicit_angou=explicit_angou, read_paths=read_paths
+                )
+            )
         except ValueError as e:
             eprint(str(e))
             return 2
-    os.makedirs(out_dir, exist_ok=True)
-    (
-        scene_map,
-        entries,
-        ovk_entry_map,
-        ovk_files,
-        z_files,
-        entry_count,
-        table_failed,
-    ) = _index_ovk(voice_dir)
+    try:
+        scene_map, entries, ovk_entry_map, ovk_files, z_files, entry_count = _index_ovk(
+            voice_dir
+        )
+    except (OSError, ValueError) as exc:
+        eprint(str(exc))
+        return 1
+    csv_path = ""
     if single_koe_no is None:
+        csv_path = os.path.join(out_dir, "koe_master.csv")
+        read_paths.update(ovk_entry_map)
         try:
-            call_refs, scene_files = _scan_calls(
-                scene_root,
-                explicit_angou=explicit_angou,
-            )
-        except ValueError as exc:
+            call_refs, scene_files = _scan_calls(scene_root, explicit_angou, read_paths)
+            check_output_inputs([csv_path], read_paths)
+        except (OSError, ValueError) as exc:
             eprint(str(exc))
             return 1
         if scene_files <= 0:
@@ -799,11 +817,9 @@ def main(argv):
                 prev_file.close()
         return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
 
-    csv_path = ""
+    os.makedirs(out_dir, exist_ok=True)
     total_rows = 0
     duration_by_koe = {}
-    if single_koe_no is None:
-        csv_path = os.path.join(out_dir, "koe_master.csv")
     single_found = single_koe_no is None or single_koe_no in entries
     extracted = skipped = failed = 0
     total_duration_sec = 0.0
@@ -868,9 +884,10 @@ def main(argv):
                     if read_error is not None:
                         raise read_error
                     if should_extract:
-                        os.makedirs(dest_dir, exist_ok=True)
-                        write_bytes(out_path, ogg)
-                        extracted += 1
+                        if _extract_voice(out_path, ogg):
+                            extracted += 1
+                        else:
+                            skipped += 1
                     if not is_unref and not duration_done:
                         total_duration_sec, duration_counted, duration_failed = (
                             _maybe_add_duration(
@@ -920,9 +937,10 @@ def main(argv):
                         if should_extract or (not duration_done):
                             ogg = _read_ogg_from_ovk(ovk_path, entry)
                         if should_extract:
-                            os.makedirs(out_dir, exist_ok=True)
-                            write_bytes(out_path, ogg)
-                            extracted += 1
+                            if _extract_voice(out_path, ogg):
+                                extracted += 1
+                            else:
+                                skipped += 1
                         if not duration_done:
                             total_duration_sec, duration_counted, duration_failed = (
                                 _maybe_add_duration(
@@ -943,7 +961,13 @@ def main(argv):
     finally:
         _close_current_ovk()
     if single_koe_no is None:
-        total_rows = _write_master_csv(csv_path, entries, missing_rows, duration_by_koe)
+        try:
+            total_rows = _write_master_csv(
+                csv_path, entries, missing_rows, duration_by_koe
+            )
+        except OSError as exc:
+            eprint(f"koe: failed to write {csv_path}: {exc}")
+            return 1
     eprint("")
     eprint("=== koe_collector summary ===")
     if stats_only:
@@ -955,7 +979,6 @@ def main(argv):
     eprint(f"OVK entries      : {entry_count:,}")
     eprint(f"OVK files        : {ovk_files:,}")
     eprint(f"OVK z-files      : {z_files:,}")
-    eprint(f"OVK table errors : {table_failed:,}")
     if single_koe_no is None:
         eprint(f"Scene files      : {scene_files:,}")
         eprint(f"Scene callsites  : {len(call_refs):,}")
@@ -984,4 +1007,4 @@ def main(argv):
     eprint(f"Out dir          : {out_dir}")
     if single_koe_no is not None and not single_found:
         return 1
-    return 1 if failed or table_failed else 0
+    return 1 if failed else 0

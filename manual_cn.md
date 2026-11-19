@@ -90,6 +90,10 @@ siglus-ssu [-h] [-V|--version] [--legacy] [--legacy-full] [--const-profile N] [-
 
 程序会自动使用可用的原生加速。
 
+在 Linux 和 macOS 上，程序会在不支持硬链接的文件系统上以复制方式写入禁止覆盖的输出。强制终止复制可能留下不完整的新文件。
+
+就地应用翻译、修改存档或补丁 EXE 前，程序会检查原文件是否发生变化。操作中断后，输出目录中可能留有 `.siglus-update.lockdir`。请先确认没有更新正在运行，再删除这个目录。
+
 ### 全局选项
 
 | 选项 | 说明 |
@@ -210,13 +214,13 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | 参数 | 说明 |
 |---|---|
-| `<input_dir>` | 至少包含一个 `.ss` 的目录，以及所需的 `.inc`、`Gameexe.ini` 和 `暗号.dat`。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
+| `<input_dir>` | 至少包含一个有场景名的 `.ss` 文件的目录，以及所需的 `.inc`、`Gameexe.ini` 和 `暗号.dat`。`--dat-repack` 和 `--gei` 不要求存在 `.ss`。 |
 | `<output_pck \| output_dir>` | 已存在的目录或以 `/`、`\` 结尾的路径会接收 `Scene.pck`，其他路径按精确的输出文件名处理。 |
 | `--debug` | 编译后保留中间文件。不能与 `--tmp` 同用。 |
-| `--charset ENC` | 统一指定源码编码，默认逐文件检测 UTF-8 或 CP932。`sjis`、`shift_jis` 等 Shift-JIS 别名均使用 Windows CP932。其他 Python 编码需显式指定。 |
-| `--allow-invalid` | 将非法输入字节替换为 U+FFFD，也适用于 `Gameexe.ini` 和 `暗号.dat`。指定 `--charset` 时按指定编码替换；否则先严格尝试 UTF-8/CP932，均失败后按 UTF-8 替换。语法和类型错误仍会导致失败。 |
+| `--charset ENC` | 统一指定源码编码，默认逐文件检测 UTF-8 或 CP932，并根据 BOM 识别 UTF-16 和 UTF-32。`sjis`、`shift_jis` 等 Shift-JIS 别名均使用 Windows CP932。其他 Python 编码需显式指定。 |
+| `--allow-invalid` | 将非法输入字节替换为 U+FFFD，也适用于 `Gameexe.ini` 和 `暗号.dat`。未指定编码且没有 UTF-16 或 UTF-32 BOM 时，会先严格尝试 UTF-8 和 CP932，均失败后按 UTF-8 替换。语法和类型错误仍会导致失败。 |
 | `--no-os` | 不嵌入原始源码，不改变脚本的加密或压缩。 |
-| `--dat-repack` | 直接打包现有场景 `.dat`，不重新编译。同目录 `.inc` 用于提供包级命令元数据，缺失时会打印警告。仅可与 `--no-os`、`--no-lzss` 组合使用。 |
+| `--dat-repack` | 直接打包现有场景 `.dat`。遇到损坏的场景时，程序会终止回包并保留已有 PCK。仅 `Gameexe.dat` 和 `暗号.dat` 可作为辅助文件跳过。同目录 `.inc` 用于提供包级命令元数据，缺失时会打印警告。可用 `--charset` 或 `--allow-invalid` 解码文本输入。回包时优先使用有效的 `key.txt`，其次是 `暗号.dat`。也支持 `--no-os` 和 `--no-lzss`。 |
 | `--no-angou` | 禁用 LZSS 压缩、外层 XOR 加密和原始源码嵌入，不关闭场景字符串 XOR。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 压缩和原始源码嵌入，保留脚本加密。不能与 `--tmp` 同用。 |
 | `--serial` | 串行编译，默认并行。 |
@@ -224,10 +228,12 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--set-shuffle SEED` | 设置字符串表乱序种子（`0`–`0xFFFFFFFF`，十进制或十六进制，默认 `1`），并启用串行编译。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 复用指定目录进行增量编译，不允许并发构建共用。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，复现 `<test_dir>` 中首个场景的字符串表顺序，再验证全部场景。可选种子后必须保留三个路径参数。不能与 `--tmp` 或 `--gei` 同用。 |
-| `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，导出各场景的初始和最终种子。目录目标下的文件名为 `test_shuffle_seeds.csv`。 |
+| `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，随链接后的 PCK 一并发布各场景的初始和最终种子。目录目标下的文件名为 `test_shuffle_seeds.csv`。 |
 | `--gei` | 仅将 `Gameexe.ini` 编译为 `Gameexe.dat`，输出始终按目录处理。缺少 INI 时会警告并成功结束，不创建 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 
-普通编译也不要求存在 `Gameexe.ini`，缺失时会跳过 `Gameexe.dat`。空 INI 会警告并继续编译。
+普通编译也不要求存在 `Gameexe.ini`，缺失时会跳过 `Gameexe.dat`。空 INI 会警告并继续编译。编译器会拒绝覆盖输入文件，并在本次产物全部生成后再写入输出目录。
+
+构建中断后，可在缓存目录查找 `_compile.lockdir`，在各输出文件的实际父目录查找 `.siglus-publish.lockdir`。确认没有构建在使用相应目录后，再删除遗留的锁目录。
 
 #### 示例
 
@@ -255,7 +261,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 #### 说明
 
 - **源码编码：** 仅在复现按 UTF-8 替换解码得到的历史产物时使用 `--charset utf8 --allow-invalid`，否则可能保留乱码。编译在首个 DOS EOF 字符（U+001A）处停止，并忽略后续字节。字面量与字符规则见[语言参考](#siglusss-language-spec)。
-- **密钥兼容性：** 从 `暗号.dat` 或 `angou=text` 派生的密钥使用 CP932，可能与官方 Windows 转换结果不同。处理现有官方文件时，优先使用原始 16 字节密钥或对应引擎程序。编译时请将原始密钥写入 `key.txt`，并移走输入目录中优先级更高的 `暗号.dat`。
+- **密钥兼容性：** 从 `暗号.dat` 或 `angou=text` 派生的密钥使用 CP932，可能与官方 Windows 转换结果不同。处理现有官方文件时，优先使用原始 16 字节密钥或对应引擎程序。普通编译时请将原始密钥写入 `key.txt`，并移走输入目录中优先级更高的 `暗号.dat`。
 - **增量编译：** 修改过的场景会重新编译。增删改 `.inc`、更改编译设置或升级程序后，可能需要全量重编译。缓存更新失败或中断后，下次运行会全量重建。
 - **乱序搜索：** 字符串表顺序不影响普通翻译工作。后续场景不匹配时，命令会生成请求的输出，但返回失败。已知正确种子时可使用 `--set-shuffle`。
 - **路径与名称：** 路径按所在文件系统的规则查找。多文件操作会按固定的 Windows 文件名大小写映射检查选中输入路径，并拒绝冲突，例如同一目录内的 `A.ss` 与 `a.ss`；无关目录项不参与检查。程序自动查找文件名时，仅对大小写归约后同名的候选发出警告，按原有顺序选取一份，在内嵌配置源码中也仅保留选中的文件。各命令原有的输出命名规则继续适用。运行时场景名仅将 ASCII `A`–`Z` 转为小写，内嵌源码文件名保留原拼写。
@@ -288,9 +294,11 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--disam` | 额外写出 `<scene>.dat.txt` 反汇编，不能与 `--gei` 同用。 |
 | `--decompile` | 写出反汇编及重建的 `decompiled/<scene>.ss`，并按需生成 `decompiled/__decompiled.inc`。需要包含包级元数据的完整场景 PCK，不接受单个 `.dat` 或目录。不能与 `--gei` 同用。 |
 | `--angou VALUE` | 指定[解密密钥来源](#解密密钥)。 |
-| `--gei` | 从 `Gameexe.dat` 或其父目录还原 `Gameexe.ini`。 |
+| `--gei` | 从 `Gameexe.dat` 或其父目录还原 `Gameexe.ini`。已有同名文件时，依次尝试 `Gameexe_1.ini` 等文件名。 |
 
-实际提取目录显示在 `Output:` 后。编辑内嵌源码后，请将该目录直接传给 `-c`。
+在 `Output:` 后打印提取目录。要编辑内嵌源码，请在该目录中修改，再直接将该目录传给 `-c`。
+
+如果场景和包内密钥文件都叫 `暗号.dat`，密钥会提取到 `.siglus-ssu-keys/`。编译和回包时可以从该目录读取密钥。
 
 反编译不会自动检测 profile，也不能还原原始宏、注释或排版。请使用相同的 profile 和字符串乘数回编 `decompiled/`，再用 `-a --payload` 验证。回编后的 PCK 不要求字节完全一致。反汇编不完整时，反编译会失败。
 
@@ -344,9 +352,9 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]
 | `--disam` | 在各输入 `.dat` 旁写出 `<scene>.dat.txt` 反汇编，输入须为一个或两个场景 `.dat`。重建 `.ss` 请使用 `-x --decompile`。 |
 | `--readall` | 将 `read.sav` 的全部场景标记为已读，或解锁 `global.sav` 中由引擎管理的 CG、BGM 和语音收集内容，不解锁 Steam 成就。重写存档前创建不覆盖旧文件的 `.bak` 备份。 |
 | `--read-flags` | 将未读 flag 编号导出为 UTF-8 JSON，不修改存档。默认输出为 `<save_stem>.flags.json`。可选 PCK 用于校验场景名和数量、提供原始源码行号。`--angou` 仅在提供 PCK 时有效。 |
-| `--report-json FILE` | 指定 `--read-flags` 报告路径，也接受 `--report-json=FILE`。缺失的父目录会自动创建，不允许覆盖输入存档或 PCK。 |
+| `--report-json FILE` | 指定 `--read-flags` 报告路径，也接受 `--report-json=FILE`。缺失的父目录会自动创建，不允许覆盖输入存档、场景 PCK 或用于读取密钥的文件。 |
 | `--apply` | 将同目录 `global.txt` 应用到 `global.sav`，写入前创建不覆盖旧文件的 `.bak`。可编辑项为 `G[n]`、`Z[n]`、`cg_table[n]`、`bgm_table[n]` 和 `chrkoe[n].look_flag`，其他字段会被忽略。 |
-| `--word` | 按场景 `.dat` 和内嵌 `.ss` 统计台词单位，显示汇总并写入 CSV。默认输出为输入旁的 `<pck_stem>.word.csv`，目录目标下也使用该文件名。 |
+| `--word` | 按场景 `.dat` 和内嵌 `.ss` 统计台词单位，显示汇总并写入 CSV。默认输出为输入旁的 `<pck_stem>.word.csv`，目录目标使用该文件名。不允许覆盖输入 PCK 或用于读取密钥的文件。 |
 | `--payload` | 对两个 `.pck` 或两个 `.dat` 执行规范化场景 payload 比较，详见 [payload 比较结果](#payload-比较结果)。 |
 | `--angou VALUE` | 为 PCK/DAT/Gameexe 操作提供密钥，或单独查看密钥，详见[解密密钥](#解密密钥)。 |
 | `--gei` | 分析或比较 `Gameexe.dat`，仅可与 `--angou` 同用。 |
@@ -366,9 +374,11 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]
 | `angou=text` | 从字面量形式的 `暗号.dat` 首行派生密钥。 |
 | `key=bytes` | 指定 16 字节密钥，建议使用明确的 `0xNN` 写法，避免数字歧义。 |
 
-解密时先尝试显式密钥来源，再依次尝试内嵌 `暗号.dat`、当前目录和父目录。每个目录内按 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt`、`SiglusEngine*.exe` 的顺序搜索，不递归查找。显式指定路径后不再搜索父目录。显式来源缺失、格式错误或不含密钥时会报错；成功读取的密钥未通过解密校验时，可继续尝试低优先级来源。
+解密时先尝试显式密钥来源，再依次尝试包内的 `key.txt` 或 `暗号.dat`、当前目录和父目录。每个目录内按 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt`、`SiglusEngine*.exe` 的顺序搜索，不递归查找。显式指定路径后不再搜索父目录。显式来源缺失、格式错误或不含密钥时会报错；成功读取的密钥未通过解密校验时，可继续尝试低优先级来源。
 
-`暗号.dat` 和 `angou=text` 的文本密钥可能与官方 Windows 转换结果不同。处理现有官方文件时，优先使用对应引擎或原始密钥。恰好 16 字节的 `key.txt` 按二进制读取。其他文本密钥依次按 `0xNN`、两位十六进制、十进制解析，取首个适用格式的前 16 个数值。因此，16 个 `10` 表示十六进制 `0x10` 字节。
+编译或解密加密的 `Gameexe.dat` 时，去除注释后的每个非空行都必须是配置赋值，例如 `#WINDOW_XSIZE=640`。配置名可省略 `#` 前缀，以 ASCII 字母、数字或下划线开头，后续可含点号、方括号、连字符、空格和制表符。配置值可含 Unicode 文本。文件格式没有用于区分有效解码结果的校验和。程序用不同密钥解出多份语法有效且内容不同的文本时会报告密钥歧义。
+
+`暗号.dat` 和 `angou=text` 的文本密钥可能与官方 Windows 转换结果不同。处理现有官方文件时，优先使用对应引擎或原始密钥。包内的 `暗号.dat` 支持带 BOM 的 UTF-16 或 UTF-32。恰好 16 字节的 `key.txt` 按二进制读取。其他文本密钥依次按 `0xNN`、两位十六进制、十进制解析，取首个适用格式的前 16 个数值。因此，16 个 `10` 表示十六进制 `0x10` 字节。
 
 ```bash
 siglus-ssu -x /path/to/Scene.pck --angou /path/to/SiglusEngine.exe
@@ -425,7 +435,7 @@ siglus-ssu -a --read-flags /path/to/savedata/read.sav /path/to/Scene.pck
 siglus-ssu -a --readall /path/to/savedata/read.sav
 ```
 
-分析 `global.sav` 生成 `global.txt`，编辑支持的值后再应用：
+分析 `global.sav` 生成 `global.txt`，编辑支持的值后再应用。分析时会保留已有的 `global.txt`。
 
 ```bash
 siglus-ssu -a /path/to/savedata/global.sav
@@ -473,12 +483,12 @@ siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expect
 
 | 参数 | 说明 |
 |---|---|
-| `--x` | 将 `.dbs` 导出为 CSV。 |
+| `--x` | 将 `.dbs` 导出为 CSV，保留已有的 CSV。 |
 | `--a` | 分析一个数据库或比较两个数据库。 |
 | `--c` | 将 CSV 编译为 `.dbs`。 |
 | `--type N` | 输出数据库类型（`0`–`2147483647`），默认 `1`。类型 `0` 的字符串必须能以 CP932 编码，其他类型使用 UTF-16LE。 |
 | `--set-shuffle SEED` | 设置随机填充种子，支持十进制或十六进制，默认 `1`。 |
-| `--test-shuffle [skip0]` | 从 `skip0`（默认 `0`）开始，尝试最多 16,777,216 个随机数跳过次数，以匹配参考数据库的填充。仅用于单文件模式。 |
+| `--test-shuffle [skip0]` | 从 `skip0`（默认 `0`）开始，尝试最多 16,777,216 个随机数跳过次数，以匹配参考数据库的填充。仅在逐字节一致时写出结果，保留参考文件。仅用于单文件模式。 |
 
 目录导出与编译会递归扫描，并保留子目录结构。批量编译会拒绝 `name.csv`、`name.dbs.csv` 等输出重名项，包括仅大小写不同的重名。
 
@@ -502,7 +512,7 @@ CSV 使用带 BOM 的 UTF-8 及 CRLF，可用 Excel 编辑。请保留前两行�
 
 行、列调用号必须在有符号 32 位整数范围内。
 
-使用标准 CSV 引号规则：双引号写成两个双引号，反斜杠保留原样，换行和制表符直接写入带引号的字段。无法编码的字符串会使编译失败，并显示 CSV 位置。
+使用标准 CSV 引号规则：双引号写成两个双引号，反斜杠保留原样，换行和制表符直接写入带引号的字段。遇到引号格式错误、字段过多或无法编码的字符串时，编译会报错并显示 CSV 位置。
 
 ---
 
@@ -537,7 +547,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 
 `%EMPTY` 表示未找到角色名。目录名中的非法字符会按百分号转义，CSV 中保留原始角色名。仅大小写不同的名称遵循输出文件系统的规则。
 
-未被引用的归档条目写入 `unreferenced/`。摘要中的语音总时长仅包括被引用条目。无法读取的时长计入 `Duration failed`，不妨碍 CSV 输出。
+遇到场景扫描或 OVK 索引错误时，命令会在写出 CSV 或语音前退出。CSV 不能覆盖用于读取密钥的文件。未被引用的归档条目写入 `unreferenced/`。摘要中的语音总时长仅包括被引用条目。无法读取的时长计入 `Duration failed`，不妨碍 CSV 输出。
 
 #### `koe_master.csv` 格式（仅普通模式）
 
@@ -593,11 +603,11 @@ siglus-ssu -m <path_to_dat | path_to_dir> [--angou VALUE]
 siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 ```
 
-目录输入会递归扫描，并排除 `Gameexe.dat` 和 `暗号.dat`。加密文件可能需要[解密密钥来源](#解密密钥)。
+目录输入会递归扫描，并跳过配置和密钥文件。加密文件可能需要[解密密钥来源](#解密密钥)。
 
 #### 操作流程
 
-1. 在 DAT 旁导出 `chapter1.dat.csv`：
+1. 在 DAT 旁导出 `chapter1.dat.csv`。重新导出会保留已有的 CSV。
 
    ```bash
    siglus-ssu -m /path/to/chapter1.dat
@@ -612,7 +622,7 @@ siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 
 命令会重写 DAT，并保留原有加密和压缩状态。应用译文前请备份原文件。
 
-编号无效或 `original` 不匹配时，该 DAT 不会被改写，命令返回 `1`。已应用的行可以重复提交。目录处理会在失败后继续，并在任一文件失败时返回 `1`。
+CSV 必须包含 `index`、`original` 和 `replacement`。遇到无效或重复编号、原文不匹配时，命令会保留原 DAT 并返回 `1`。已应用的行可以重复提交。目录处理会在失败后继续，并在任一文件失败时返回 `1`。
 
 #### `.dat.csv` 格式
 
@@ -667,7 +677,9 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 
 不带 `--refer` 时，PNG 默认创建 type0，JPEG 默认创建 type3。创建 type2 请使用 `--type 2` 和 `.type2.json` 布局，不支持创建 type1。
 
-省略输出路径时，创建结果写在输入旁，更新结果覆盖参考文件。更新前请备份原始资源。JSON 布局不能与 `--refer` 同用。通过参考目录更新单个 cut 时，请将替换图片命名为 `<basename>_cut###.png`。
+省略输出路径时，创建结果写在输入旁，更新结果覆盖参考文件。输出须指向不同的文件，不能覆盖源图片、布局文件或其他目标使用的参考图。更新同一输出目录时，后启动的命令最多等待 30 秒。更新中断后，请先确认没有更新在运行，再删除 `.siglus-g00.lockdir`。
+
+更新前请备份原始资源。JSON 布局不能与 `--refer` 同用。通过参考目录更新单个 cut 时，请将替换图片命名为 `<basename>_cut###.png`。
 
 ```bash
 siglus-ssu -g --x /path/to/sprite.g00 /path/to/work/
@@ -733,7 +745,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 
 | 参数 | 说明 |
 |---|---|
-| `--x` | 提取音频，目录输入会递归扫描并保留子目录。已存在输出会被覆盖，批次内输出重名会被拒绝。 |
+| `--x` | 提取音频，目录输入会递归扫描并保留子目录。会覆盖已有输出，批次内的输出不得相互冲突，也不能覆盖本次操作读取的文件。 |
 | `--a` | 分析一个音频文件，或比较两个 OVK 的条目。 |
 | `--c` | 按下方命名规则从 Ogg 创建 OWP 或 OVK，目录输入会递归扫描并保留子目录。 |
 | `--play` | 按 Gameexe 循环点在终端中预览 BGM，需要 `PATH` 中的 `ffplay` 和 `psutil`（`pip install psutil`）。支持 NWA/OWP/Ogg，不支持 OVK。 |
@@ -805,7 +817,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 
 创建时，已存在的目录、以分隔符结尾或不带扩展名的输出均按目录处理。指定输出文件时请使用 `.omv` 扩展名。
 
-覆盖现有文件需要在 `Overwrite? [y/N]` 提示后输入 `y` 或 `yes`。拒绝覆盖会返回失败，批量提取会继续处理其他文件。
+覆盖现有文件需要在 `Overwrite? [y/N]` 提示后输入 `y` 或 `yes`。收到拒绝覆盖的答复，或遇到转换期间才创建的目标文件时，命令会保留该文件并报错。批量提取会继续处理其他文件。
 
 #### 像素布局与 `.ogv` 输入
 
@@ -856,12 +868,12 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | 参数 | 说明 |
 |---|---|
 | `<input_exe>` | 引擎程序，不接受符号链接输入或输出路径。 |
-| `<input_key>` | 仅用于 `--altkey`，接受 `key.txt`、`暗号.dat`、`SiglusEngine*.exe`、`Scene.pck` 文件或 `key=bytes` / `angou=text` 字面量，不接受目录。 |
+| `<input_key>` | 仅用于 `--altkey`，接受 `key.txt`、`暗号.dat`、`SiglusEngine*.exe`、`Scene.pck` 文件或 `key=bytes` / `angou=text` 字面量，不接受目录。输出不能指向密钥文件。 |
 | `-o`、`--output` | 指定输出程序。默认后缀为 `_alt.exe`、`_CJK.exe`、`_CJKPATH.exe`、`_LOC0.exe` 或 `_LOC1.exe`，JSON 使用 `_<CONFIG>.exe`，还原使用 `_ORIGINAL.exe`。 |
 | `--inplace` | 覆盖输入，不能与 `-o` 同用。 |
 | `--lang cjk` | 设置 CJK 字体字符集、区域 `chinese` 和语言代码 `zh`，保留游戏文件及存档路径。 |
 | `--lang cjk-path` | 在 `cjk` 基础上改用 `GameexeZH.dat`、`SceneZH.pck` 和 `savedata_zh`。 |
-| `--lang config.json` | 从 JSON 文件读取全部六项配置，也可传入一个加引号的 JSON 对象。 |
+| `--lang config.json` | 从 JSON 文件读取全部六项配置，也可传入一个加引号的 JSON 对象。输出不能覆盖配置文件。 |
 | `--allow-partial` | 即使部分配置不可用，也应用支持的语言补丁。默认必须全部支持才会写出。 |
 | `--revert` | 从先前语言补丁还原字节一致的原程序，须与 `--lang` 同用，不能与 `--allow-partial` 同用。 |
 | `--info` | 查看可修改的密钥、语言和地区设置，不写文件。 |
@@ -916,7 +928,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 | `--decompile` | 不依赖内嵌源码，重建源码、回编并比较 payload。必须显式指定全局 profile，使用严格 UTF-8，不重试其他设置。 |
 | `--allow-invalid` | 在指定 profile 的源码回编模式下，按 UTF-8 替换非法字节，不可用于 `--decompile`。 |
 | `--serial` | 禁用回编阶段的并行编译。 |
-| `--report-json FILE` | 将结果与耗时写入 JSON，不允许覆盖输入 PCK。 |
+| `--report-json FILE` | 将结果与耗时写入 JSON，不允许覆盖输入 PCK 或用于读取密钥的文件。 |
 
 显式 `--const-profile` 仅按该 profile 尝试一次，除 `--allow-invalid` 外均正常检测源码编码。未显式指定时，源码回编会先尝试 profile `0`–`10`，必要时再以 UTF-8 替换解码重试。显式字符串乘数用于全部尝试。
 

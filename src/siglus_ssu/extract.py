@@ -8,7 +8,6 @@ from .common import (
     read_bytes,
     new_disam_stats,
     write_disam_totals,
-    format_exe_el_source,
     split_end_of_options,
     first_option_token,
 )
@@ -56,10 +55,6 @@ def _disassemble_dat_dir(
     for dat_path in dat_paths:
         blob = read_bytes(dat_path)
         name = os.path.basename(dat_path)
-        if D.is_decompiler_excluded_dat(dat_path):
-            sys.stdout.write(f"Skipped: {name}\n")
-            skip_cnt += 1
-            continue
         blob = D.decode_scn_dat_with_candidates(blob, exe_el_candidates)
         if not looks_like_siglus_dat(blob):
             sys.stdout.write(f"Skipped: {name}\n")
@@ -113,7 +108,7 @@ def main(argv):
         args.extend(positional_args)
     if not args:
         return 2
-    if explicit_angou:
+    if explicit_angou and not gei:
         try:
             list(
                 pck.iter_exe_el_candidates(
@@ -143,37 +138,18 @@ def main(argv):
                 )
             except (FileNotFoundError, NotADirectoryError):
                 return 2
-        os_dir = os.path.dirname(os.path.abspath(in_path))
         try:
-            cands = list(
-                pck.iter_exe_el_candidates(
-                    os_dir,
-                    explicit_angou=explicit_angou,
-                    with_sources=True,
-                )
+            out_path = GEI.restore_gameexe_ini(
+                in_path, out_dir, explicit_angou=explicit_angou
             )
-        except ValueError as e:
-            sys.stderr.write(str(e) + "\n")
+        except ValueError as exc:
+            sys.stderr.write(str(exc) + "\n")
             return 2
-        if not cands:
-            cands = [b""]
-        last_err = None
-        for cand in cands:
-            src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
-            exe_el = src.get("exe_el")
-            sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
-            try:
-                out_path = GEI.restore_gameexe_ini(in_path, out_dir, exe_el=exe_el)
-                sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-                sys.stdout.write(f"Wrote: {out_path}\n")
-                return 0
-            except Exception as e:
-                last_err = e
-                sys.stderr.write(
-                    f"key source rejected, falling back: {format_exe_el_source(src)}\n"
-                )
-        sys.stderr.write(str(last_err) + "\n")
-        return 1
+        except (OSError, RuntimeError) as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return 1
+        sys.stdout.write(f"Wrote: {out_path}\n")
+        return 0
     if len(args) == 1:
         in_path = args[0]
         out_dir = None
