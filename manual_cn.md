@@ -183,6 +183,8 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 
 支持诊断、语义高亮、补全、悬停说明、定义与引用查找、重命名和文档符号。分析范围包括当前场景及同目录 `.inc` 文件，也包括编辑器中未保存的修改。请像编译时一样选择对应作品的全局 `--const-profile`。
 
+使用推送诊断时，服务器会在编辑期间更新文件内的诊断，并沿用最近一次链接检查的结果。服务器会在打开或保存源文件时重新检查链接，关闭带有未保存修改的源文件时也会重新检查。客户端主动请求诊断时，服务器会按当前工作区检查。
+
 工作区索引会跨会话缓存，并在不兼容时重新生成。可用 `SIGLUS_SSU_LSP_CACHE_DIR` 更改缓存位置，默认位置为：
 
 - Windows：`%LOCALAPPDATA%\siglus_ssu\lsp-index`，缺失时使用 `%APPDATA%\siglus_ssu\lsp-index`。
@@ -262,7 +264,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 
 - **源码编码：** 仅在复现按 UTF-8 替换解码得到的历史产物时使用 `--charset utf8 --allow-invalid`，否则可能保留乱码。编译在首个 DOS EOF 字符（U+001A）处停止，并忽略后续字节。字面量与字符规则见[语言参考](#siglusss-language-spec)。
 - **密钥兼容性：** 从 `暗号.dat` 或 `angou=text` 派生的密钥使用 CP932，可能与官方 Windows 转换结果不同。处理现有官方文件时，优先使用原始 16 字节密钥或对应引擎程序。普通编译时请将原始密钥写入 `key.txt`，并移走输入目录中优先级更高的 `暗号.dat`。
-- **增量编译：** 修改过的场景会重新编译。增删改 `.inc`、更改编译设置或升级程序后，可能需要全量重编译。缓存更新失败或中断后，下次运行会全量重建。
+- **增量编译：** 场景源码有改动，或对应的 DAT、LZSS 缓存文件缺失或有改动时，程序会重新编译该场景。增删改 `.inc`、更改编译设置或升级程序后，可能需要全量重编译。缓存更新失败或中断后，下次运行会全量重建。
 - **乱序搜索：** 字符串表顺序不影响普通翻译工作。后续场景不匹配时，命令会生成请求的输出，但返回失败。已知正确种子时可使用 `--set-shuffle`。
 - **路径与名称：** 路径按所在文件系统的规则查找。多文件操作会按固定的 Windows 文件名大小写映射检查选中输入路径，并拒绝冲突，例如同一目录内的 `A.ss` 与 `a.ss`；无关目录项不参与检查。程序自动查找文件名时，仅对大小写归约后同名的候选发出警告，按原有顺序选取一份，在内嵌配置源码中也仅保留选中的文件。各命令原有的输出命名规则继续适用。运行时场景名仅将 ASCII `A`–`Z` 转为小写，内嵌源码文件名保留原拼写。
 
@@ -603,7 +605,7 @@ siglus-ssu -m <path_to_dat | path_to_dir> [--angou VALUE]
 siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 ```
 
-目录输入会递归扫描，并跳过配置和密钥文件。加密文件可能需要[解密密钥来源](#解密密钥)。
+程序会递归扫描指定目录，并跳过配置和密钥文件。处理加密文件时，程序先按指定目录查找[解密密钥](#解密密钥)。如果这些密钥无法解开子目录中的 DAT，程序会从该 DAT 所在的目录继续查找。
 
 #### 操作流程
 
@@ -643,7 +645,7 @@ CSV 必须包含 `index`、`original` 和 `replacement`。遇到无效或重复�
 
 | 类型 | 内容 |
 |---|---|
-| type0 | 32 位 BGRA 图片。 |
+| type0 | 不透明图片，解码为 32 位 BGRA。 |
 | type1 | 调色板图片，最多 256 色。 |
 | type2 | 多个图片 cut 及位置数据。 |
 | type3 | JPEG 图片。 |
@@ -671,11 +673,11 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--refer <ref_g00 \| ref_dir>` | 更新现有 G00。目录输入需参考目录，单文件输入可用参考文件或目录。省略输出路径时会覆盖参考文件。 |
 | `:cutNNN` | 合并时指定 type2 cut，例如 `sprite.g00:cut002`。 |
 
-目录提取和创建仅扫描当前层。
+目录提取和创建仅扫描当前层。生成新的 type2 布局时，程序会校验已有 cut PNG 的可读性和未裁剪尺寸。校验失败时，程序会报错。
 
 #### 创建与更新
 
-不带 `--refer` 时，PNG 默认创建 type0，JPEG 默认创建 type3。创建 type2 请使用 `--type 2` 和 `.type2.json` 布局，不支持创建 type1。
+不带 `--refer` 时，PNG 默认创建 type0，JPEG 默认创建 type3。创建或更新 type0 时，程序会将 alpha 设为 255。创建 type2 请使用 `--type 2` 和 `.type2.json` 布局，不支持创建 type1。
 
 省略输出路径时，创建结果写在输入旁，更新结果覆盖参考文件。输出须指向不同的文件，不能覆盖源图片、布局文件或其他目标使用的参考图。更新同一输出目录时，后启动的命令最多等待 30 秒。更新中断后，请先确认没有更新在运行，再删除 `.siglus-g00.lockdir`。
 
@@ -751,6 +753,8 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 | `--play` | 按 Gameexe 循环点在终端中预览 BGM，需要 `PATH` 中的 `ffplay` 和 `psutil`（`pip install psutil`）。支持 NWA/OWP/Ogg，不支持 OVK。 |
 | `--trim <Gameexe.dat \| Gameexe.ini>` | 仅提取匹配 NWA/OWP 的 `repeat`–`end` 循环段。OWP 裁剪需要 `ffmpeg`，NWA 不需要。不裁剪 OVK。 |
 | `--angou VALUE` | 用于裁剪或播放时解密 Gameexe 数据的[密钥来源](#解密密钥)，其他音频操作会忽略。 |
+
+所选循环段没有音频采样时，程序会报错并保留该曲目的已有输出。
 
 #### OVK 命名
 

@@ -26,8 +26,7 @@ from .common import (
     build_sections,
     parse_i32_header_checked,
     read_bytes,
-    unique_out_path,
-    write_text,
+    write_unique_text,
     looks_like_siglus_dat,
     new_disam_stats,
     add_elapsed_seconds,
@@ -326,8 +325,6 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text
         return str(dat_path)
     out_name = os.path.basename(str(dat_path)) + ".txt"
     out_path = os.path.join(str(out_dir), out_name)
-    os.makedirs(str(out_dir), exist_ok=True)
-    out_path = unique_out_path(out_path)
     lines = []
     lines.append("==== DAT DISASSEMBLY ====")
     lines.append(f"file: {dat_path}")
@@ -424,8 +421,7 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text
     lines.append("---- scn_bytes disassembly ----")
     lines.extend(dis)
     lines.append("")
-    write_text(out_path, "\n".join(lines), enc="utf-8")
-    return out_path
+    return write_unique_text(out_path, "\n".join(lines))
 
 
 def _write_dat_txt(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):

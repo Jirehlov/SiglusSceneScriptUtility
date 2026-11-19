@@ -149,12 +149,9 @@ pub struct CompileContext {
 }
 
 pub struct CompileCache {
-    pub digest_path: String,
-    pub pending_digests_json: String,
     pub compile_scene_names: Vec<String>,
     pub dat_paths: HashMap<String, String>,
     pub lzss_paths: HashMap<String, String>,
-    pub lzss_remove_paths: Vec<String>,
     pub compiled_scene_files: usize,
     pub full_compile_stats: bool,
 }
@@ -341,12 +338,9 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         easy_link: extract_item(&context_dict, "easy_link")?,
     };
     let cache = CompileCache {
-        digest_path: extract_item(&cache_dict, "digest_path")?,
-        pending_digests_json: extract_item(&cache_dict, "pending_digests_json")?,
         compile_scene_names: extract_item(&cache_dict, "compile_scene_names")?,
         dat_paths: extract_item(&cache_dict, "dat_paths")?,
         lzss_paths: extract_item(&cache_dict, "lzss_paths")?,
-        lzss_remove_paths: extract_item(&cache_dict, "lzss_remove_paths")?,
         compiled_scene_files: extract_item::<i64>(&cache_dict, "compiled_scene_files")? as usize,
         full_compile_stats: extract_item(&cache_dict, "full_compile_stats")?,
     };

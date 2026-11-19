@@ -37,6 +37,7 @@ from .common import (
     record_stage_time,
     build_source_angou_layout,
     content_digest,
+    content_digest_file,
     decode_text_auto,
     read_bytes,
     read_scn_header,
@@ -50,7 +51,6 @@ from .common import (
     angou_to_exe_el,
     writable_file_mode,
     write_bytes,
-    write_text,
     parse_code,
     KEY_TXT_NAME,
     MACRO_STAT_KINDS,
@@ -165,11 +165,7 @@ def _check_compile_cache(tmp, scenes, inputs, outputs):
     bs = root / "bs"
     if bs.is_symlink() or bs.is_junction():
         raise ValueError(f"compile cache uses a directory link: {bs}")
-    files = [
-        root / _SOURCE_DIGEST_NAME,
-        root / (_SOURCE_DIGEST_NAME + ".tmp"),
-        root / "EXE_ANGOU.h",
-    ]
+    files = [root / _SOURCE_DIGEST_NAME, root / "EXE_ANGOU.h"]
     for path in scenes:
         stem = Path(path).stem
         files.extend((bs / f"{stem}.dat", bs / f"{stem}.lzss"))
@@ -352,31 +348,39 @@ def _parse_u32_token(t, opt):
     return n
 
 
-def _write_digest_cache(path, payload):
-    tmp_path = path + ".tmp"
-    try:
-        write_text(
-            tmp_path,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True),
-            enc="utf-8",
-        )
-        os.replace(tmp_path, path)
-    except Exception:
-        with suppress(OSError):
-            os.remove(tmp_path)
-        raise
+def _remove_cached_lzss(tmp_dir, scenes):
+    bs_dir = Path(tmp_dir) / "bs"
+    for scene in scenes:
+        with suppress(FileNotFoundError):
+            (bs_dir / f"{Path(scene).stem}.lzss").unlink()
+
+
+def _scene_cache_hashes(bs_dir, scene):
+    stem = Path(scene).stem
+    return [
+        content_digest_file(bs_dir / f"{stem}.dat"),
+        content_digest_file(bs_dir / f"{stem}.lzss"),
+    ]
+
+
+def _write_digest_cache(tmp_dir, payload, compiled_scenes):
+    root = Path(tmp_dir)
+    if "artifacts" in payload:
+        for scene in compiled_scenes:
+            payload["artifacts"][ascii_lower(Path(scene).name)] = _scene_cache_hashes(
+                root / "bs", scene
+            )
+    with open_atomic_output(
+        root / _SOURCE_DIGEST_NAME, "w", encoding="utf-8", newline="\r\n"
+    ) as out:
+        json.dump(payload, out, ensure_ascii=False, sort_keys=True)
 
 
 def _compile_cache_state(
     *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid
 ):
-    compile_list = list(ss or [])
-    digest_path = os.path.join(tmp_dir, _SOURCE_DIGEST_NAME) if tmp_dir else ""
-    cur_inc = source_digests["inc"]
-    cur_ss = source_digests["ss"]
-    full_compile = True
     cache_meta = {
-        "schema": 9,
+        "schema": 10,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
@@ -385,142 +389,42 @@ def _compile_cache_state(
         "const_sha512": C.CONST_SHA512,
         "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
     }
-    if incremental:
+    pending = {**source_digests, "meta": cache_meta}
+    if not incremental:
+        return ss, pending
+    root = Path(tmp_dir)
+    digest_path = root / _SOURCE_DIGEST_NAME
+    try:
+        old = json.loads(read_text_auto(digest_path, force_charset="utf-8"))
+    except (OSError, ValueError):
         old = None
-        try:
-            existing_digest_path = resolve_read_path(digest_path, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            existing_digest_path = ""
-        if existing_digest_path:
+    with suppress(FileNotFoundError):
+        digest_path.unlink()
+    verified = pending["artifacts"] = {}
+    if (
+        not isinstance(old, dict)
+        or old.get("meta") != cache_meta
+        or old.get("inc") != source_digests["inc"]
+        or not isinstance(old.get("ss"), dict)
+        or not isinstance(old.get("artifacts"), dict)
+    ):
+        return ss, pending
+    compile_list = []
+    bs_dir = root / "bs"
+    for scene in ss:
+        name = ascii_lower(Path(scene).name)
+        hashes = old["artifacts"].get(name)
+        if hashes and old["ss"].get(name) == source_digests["ss"][name]:
             try:
-                old = json.loads(
-                    read_text_auto(existing_digest_path, force_charset="utf-8")
-                )
-            except Exception:
-                old = None
-        full_compile = False
-        if not isinstance(old, dict):
-            full_compile = True
-        else:
-            old_meta = old.get("meta") or {}
-            if old_meta != cache_meta:
-                full_compile = True
-            else:
-                old_inc = old.get("inc") or {}
-                for k in cur_inc.keys() | old_inc.keys():
-                    if str(cur_inc.get(k, "")) != str(old_inc.get(k, "")):
-                        full_compile = True
-                        break
-        bs_dir = os.path.join(tmp_dir, "bs")
-        if not full_compile:
-            old_ss = old.get("ss") or {}
-            comp = set()
-            for p in ss or []:
-                b = ascii_lower(os.path.basename(p))
-                nm = os.path.splitext(os.path.basename(p))[0]
-                dat_path = os.path.join(bs_dir, nm + ".dat")
-                need = str(cur_ss.get(b, "")) != str(old_ss.get(b, ""))
-                if not need:
-                    try:
-                        resolve_read_path(dat_path, kind="file")
-                    except (FileNotFoundError, NotADirectoryError):
-                        need = True
-                if need:
-                    comp.add(p)
-            compile_list = sorted(comp, key=lambda x: ascii_lower(os.path.basename(x)))
-        if existing_digest_path:
-            os.remove(existing_digest_path)
-        for p in compile_list:
-            name = os.path.splitext(os.path.basename(p))[0] + ".dat"
-            try:
-                existing_dat_path = resolve_read_path(
-                    os.path.join(bs_dir, name), kind="file"
-                )
-            except (FileNotFoundError, NotADirectoryError):
-                continue
-            if os.path.basename(existing_dat_path) != name:
-                os.remove(existing_dat_path)
-    pending_digests = {"inc": cur_inc, "meta": cache_meta, "ss": cur_ss}
-    return compile_list, digest_path, pending_digests
-
-
-def _stale_lzss_paths(tmp_dir, scenes):
-    bs_dir = os.path.join(tmp_dir, "bs")
-    stale = []
-    for scene in scenes:
-        stem = os.path.splitext(os.path.basename(scene))[0]
-        path = os.path.join(bs_dir, stem + ".lzss")
-        try:
-            stale.append(resolve_read_path(path, kind="file"))
-        except (FileNotFoundError, NotADirectoryError):
-            continue
-    return stale
-
-
-def _native_cache_read_paths(tmp_dir, ss, compile_list, use_lzss):
-    compiled = {
-        ascii_lower(os.path.splitext(os.path.basename(path))[0])
-        for path in compile_list or []
-    }
-    dat_paths = {}
-    lzss_paths = {}
-    for path in ss or []:
-        stem = os.path.splitext(os.path.basename(path))[0]
-        key = ascii_lower(stem)
-        if key in compiled:
-            continue
-        candidate = os.path.join(tmp_dir, "bs", stem + ".dat")
-        try:
-            dat_paths[key] = resolve_read_path(candidate, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
-            pass
-        if use_lzss:
-            candidate = os.path.join(tmp_dir, "bs", stem + ".lzss")
-            try:
-                lzss_paths[key] = resolve_read_path(candidate, kind="file")
-            except (FileNotFoundError, NotADirectoryError):
+                current = _scene_cache_hashes(bs_dir, scene)
+            except OSError:
                 pass
-    return dat_paths, lzss_paths
-
-
-def _native_compile_cache_config(
-    *, args, tmp_dir, enc, charset, ss, source_digests, test_shuffle
-):
-    compile_list, digest_path, pending_digests = _compile_cache_state(
-        tmp_dir=tmp_dir,
-        enc=enc,
-        charset=charset,
-        ss=ss,
-        source_digests=source_digests,
-        incremental=bool(args.tmp_dir),
-        allow_invalid=args.allow_invalid,
-    )
-    dat_paths, lzss_paths = _native_cache_read_paths(
-        tmp_dir,
-        ss,
-        compile_list,
-        use_lzss=not args.no_angou and not args.no_lzss,
-    )
-    lzss_remove_paths = _stale_lzss_paths(tmp_dir, compile_list) if args.tmp_dir else []
-    full_compile_stats = (
-        (not args.dat_repack)
-        and not args.tmp_dir
-        and (not test_shuffle)
-        and bool(ss)
-        and len(compile_list) == len(ss or [])
-    )
-    return {
-        "digest_path": digest_path,
-        "pending_digests_json": json.dumps(
-            pending_digests, ensure_ascii=False, sort_keys=True
-        ),
-        "compile_scene_names": [os.path.basename(p) for p in compile_list],
-        "dat_paths": dat_paths,
-        "lzss_paths": lzss_paths,
-        "lzss_remove_paths": lzss_remove_paths,
-        "compiled_scene_files": len(compile_list or []),
-        "full_compile_stats": bool(full_compile_stats),
-    }
+            else:
+                if hashes == current:
+                    verified[name] = current
+                    continue
+        compile_list.append(scene)
+    return compile_list, pending
 
 
 def _tmp_incompatible_options(argv, test_shuffle=False):
@@ -1048,13 +952,22 @@ def _native_compile_config(
     scene_pck,
     tmp_dir,
     ss,
-    enc,
-    charset_force,
+    compile_list,
+    full_compile_stats,
     test_shuffle,
     force_serial_compile,
 ):
     if not args.tmp_dir and not args.debug:
         tmp_dir = ""
+    compiled = set(compile_list)
+    dat_paths = {}
+    lzss_paths = {}
+    for path in ss:
+        if path not in compiled:
+            stem = Path(path).stem
+            key = ascii_lower(stem)
+            dat_paths[key] = os.path.join(tmp_dir, "bs", stem + ".dat")
+            lzss_paths[key] = os.path.join(tmp_dir, "bs", stem + ".lzss")
     scene_display_names = {}
     for scn_name in ctx.get("scn_list") or []:
         scene_display_names[os.path.basename(str(scn_name))] = format_scene_name(
@@ -1066,15 +979,13 @@ def _native_compile_config(
         "scene_pck": scene_pck,
         "tmp_dir": tmp_dir,
         "constants": _native_compile_constants_config(),
-        "cache": _native_compile_cache_config(
-            args=args,
-            tmp_dir=tmp_dir,
-            enc=enc,
-            charset=charset_force,
-            ss=ss,
-            source_digests=ctx["source_digests"],
-            test_shuffle=test_shuffle,
-        ),
+        "cache": {
+            "compile_scene_names": [os.path.basename(p) for p in compile_list],
+            "dat_paths": dat_paths,
+            "lzss_paths": lzss_paths,
+            "compiled_scene_files": len(compile_list),
+            "full_compile_stats": full_compile_stats,
+        },
         "options": {
             "dat_repack": bool(args.dat_repack),
             "max_workers": args.max_workers,
@@ -1469,6 +1380,18 @@ def _compile_cli(argv, resources, *, collect_statistics):
             )
         outputs = _CompileOutputs(out, output_names)
         resources.callback(outputs.close)
+        compile_list = ss
+        pending_digests = None
+        if tmp and (a.tmp_dir or a.debug):
+            compile_list, pending_digests = _compile_cache_state(
+                tmp_dir=tmp,
+                enc=enc,
+                charset=charset,
+                ss=ss,
+                source_digests=source_digests,
+                incremental=bool(a.tmp_dir),
+                allow_invalid=a.allow_invalid,
+            )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
         return 1
@@ -1510,7 +1433,6 @@ def _compile_cli(argv, resources, *, collect_statistics):
         "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,
         "source_texts": source_texts,
-        "source_digests": source_digests,
         "original_sources": original_sources,
         "utf8": bool(use_utf8),
         "charset": enc,
@@ -1526,9 +1448,16 @@ def _compile_cli(argv, resources, *, collect_statistics):
         "stats": stats,
     }
     stats["angou_content"] = angou_content
+    full_compile_stats = (
+        collect_statistics
+        and not (a.gei or a.dat_repack or a.tmp_dir or test_shuffle)
+        and bool(ss)
+    )
     native_rc = None
     if is_native_available() and not _runtime._LEGACY_COMPILE:
         try:
+            if a.tmp_dir:
+                _remove_cached_lzss(tmp, compile_list)
             native_config = _native_compile_config(
                 args=a,
                 ctx=ctx,
@@ -1537,15 +1466,15 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 scene_pck=scene_pck,
                 tmp_dir=tmp,
                 ss=ss,
-                enc=enc,
-                charset_force=charset,
+                compile_list=compile_list,
+                full_compile_stats=full_compile_stats,
                 test_shuffle=test_shuffle,
                 force_serial_compile=force_serial_compile,
             )
-            if not collect_statistics:
-                native_config["cache"]["full_compile_stats"] = False
             native_rc = _try_native_compile(native_config, ctx)
             if native_rc == 0:
+                if pending_digests is not None:
+                    _write_digest_cache(tmp, pending_digests, compile_list)
                 outputs.publish(input_paths)
         except (OSError, ValueError) as exc:
             sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1574,19 +1503,9 @@ def _compile_cli(argv, resources, *, collect_statistics):
             )
         record_stage_time(ctx, "GEI", time.time() - t)
         if not a.gei:
-            stage = "compile cache"
-            compile_list, digest_path, pending_digests = _compile_cache_state(
-                tmp_dir=tmp,
-                enc=enc,
-                charset=charset,
-                ss=ss,
-                source_digests=source_digests,
-                incremental=bool(a.tmp_dir),
-                allow_invalid=a.allow_invalid,
-            )
             if a.tmp_dir:
-                for path in _stale_lzss_paths(tmp, compile_list):
-                    os.remove(path)
+                stage = "compile cache"
+                _remove_cached_lzss(tmp, compile_list)
             if a.dat_repack:
                 from .dat import scn_structure_valid
 
@@ -1622,14 +1541,6 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 check_output_inputs(output_paths, dats)
                 ctx["scn_list"] = [os.path.basename(x) for x in dats]
                 compile_list = []
-            full_compile_stats = (
-                collect_statistics
-                and (not a.dat_repack)
-                and not a.tmp_dir
-                and (not test_shuffle)
-                and bool(ss)
-                and len(compile_list) == len(ss)
-            )
             stats["inc_files"] = len(inc)
             stats["scene_files"] = len(ss)
             stats["compiled_scene_files"] = len(compile_list)
@@ -1778,7 +1689,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
             link_pack(ctx)
             if pending_digests is not None:
                 stage = "compile cache"
-                _write_digest_cache(digest_path, pending_digests)
+                _write_digest_cache(tmp, pending_digests, compile_list)
         stage = "publish"
         outputs.publish(input_paths, seed_report=seed_report)
         if seed_report is not None:

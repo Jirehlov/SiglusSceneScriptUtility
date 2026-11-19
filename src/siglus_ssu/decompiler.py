@@ -18,8 +18,8 @@ from .common import (
     quote_ss_text,
     scn_expression_tables,
     split_element_code as _element_owner,
-    unique_out_path,
     write_text,
+    write_unique_text,
 )
 
 _OPEN_NAME = "\u3010"
@@ -3386,15 +3386,14 @@ def write_decompiled_ss(dat_path, bundle, out_dir, hints):
     try:
         out_root = os.path.join(out_dir, "decompiled")
         stem = os.path.splitext(os.path.basename(str(dat_path)))[0]
-        out_path = unique_out_path(os.path.join(out_root, stem + ".ss"))
+        out_path = os.path.join(out_root, stem + ".ss")
         if "_native" in hints:
             from .native_ops import decompile_source_native
 
             source = decompile_source_native(bundle, hints)
         else:
             source = _Decompiler(bundle, hints=hints).decompile()
-        write_text(out_path, source, enc="utf-8")
-        return out_path
+        return write_unique_text(out_path, source)
     except Exception as exc:
         sys.stderr.write(f"decompile: {dat_path}: {exc}\n")
         return None

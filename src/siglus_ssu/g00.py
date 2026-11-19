@@ -343,32 +343,39 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
     canvas_w, canvas_h, cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
     outer_rects = _type2_outer_rects(d, cut_cnt)
     single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
-    wrote = sk = 0
-    cuts_meta = None if trim else [None] * max(int(cut_cnt), 0)
+    layout_path = out / f"{pre}.type2.json"
+    have_layout = not trim and layout_path.is_file()
+    cuts_meta = None if trim or have_layout else [None] * max(int(cut_cnt), 0)
+    wrote, sk = 0, int(have_layout)
     for ci, o, s in cuts:
         dst = out / (f"{pre}.png" if single else f"{pre}_cut{ci:03d}.png")
-        if _extract_cut_png(unp[o : o + s], dst, trim):
-            wrote += 1
-        else:
-            sk += 1
+        block = unp[o : o + s]
+        created = _extract_cut_png(block, dst, trim)
+        wrote += created
+        sk += not created
         if cuts_meta is not None:
+            meta = _type2_extract_meta(ci, block, outer_rects, dst.name)
+            if not created:
+                with Image.open(dst, formats=["PNG"]) as image:
+                    if image.size != meta["canvas"]:
+                        raise ValueError(
+                            f"cannot write {layout_path.name}: existing PNG {dst} "
+                            f"has size {image.size}, expected {meta['canvas']}. "
+                            "Use a separate output directory for untrimmed extraction."
+                        )
+                    image.load()
             if ci >= len(cuts_meta):
                 cuts_meta.extend([None] * (ci + 1 - len(cuts_meta)))
-            cuts_meta[ci] = _type2_extract_meta(
-                ci, unp[o : o + s], outer_rects, dst.name
-            )
+            cuts_meta[ci] = meta
     if cuts_meta is not None:
-        layout_path = out / f"{pre}.type2.json"
         try:
-            if layout_path.is_file():
-                sk += 1
-            else:
-                _dump_type2_layout_json(layout_path, canvas_w, canvas_h, cuts_meta)
-                wrote += 1
+            _dump_type2_layout_json(layout_path, canvas_w, canvas_h, cuts_meta)
         except FileExistsError:
             if not layout_path.is_file():
                 raise
             sk += 1
+        else:
+            wrote += 1
     return ("skip", 0, sk) if wrote == 0 and sk > 0 else ("ok", wrote, sk)
 
 

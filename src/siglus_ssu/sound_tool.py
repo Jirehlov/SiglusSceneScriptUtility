@@ -472,8 +472,10 @@ def _ffmpeg_trim_ogg_bytes(
         if p.returncode != 0:
             err = (p.stderr or b"").decode("utf-8", "backslashreplace").strip()
             raise RuntimeError("ffmpeg trim failed: " + (err or "unknown error"))
-        with open_read(out_path) as f:
-            return f.read()
+        trimmed = read_bytes(out_path)
+        if sound.ogg_calc_smp_cnt(trimmed) <= 0:
+            raise RuntimeError("ffmpeg trim produced no audio samples")
+        return trimmed
     finally:
         with suppress(OSError):
             os.remove(in_path)
@@ -584,7 +586,8 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
     ext = ext.lower()
     if ext in (".owp", ".ogg"):
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
-        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg)
+        sample_rate, pre_skip = sound._ogg_ident_info(ogg) or (44100, 0)
+        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg) - pre_skip
         if total_sample_cnt <= 0:
             raise RuntimeError("failed to determine audio sample count")
         tmp_dir = ""
@@ -594,14 +597,6 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
             try:
                 play_path = os.path.join(tmp_dir, base_name + ".ogg")
                 write_bytes(play_path, ogg)
-                return _PreparedPlaybackInput(
-                    base_name=base_name,
-                    play_path=play_path,
-                    tmp_dir=tmp_dir,
-                    total_sample_cnt=total_sample_cnt,
-                    sample_rate=_get_ogg_sample_rate(ogg),
-                    channel_layout="",
-                )
             except Exception:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 raise
@@ -610,7 +605,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
             play_path=play_path,
             tmp_dir=tmp_dir,
             total_sample_cnt=total_sample_cnt,
-            sample_rate=_get_ogg_sample_rate(ogg),
+            sample_rate=sample_rate,
             channel_layout="",
         )
     if ext == ".nwa":
@@ -688,11 +683,6 @@ def _make_playback_entry(path: str, root: str = "") -> _PlaybackEntry:
     )
     base_name = os.path.splitext(os.path.basename(path))[0]
     return _PlaybackEntry(path=path, display_name=display_name, base_name=base_name)
-
-
-def _get_ogg_sample_rate(ogg_bytes: bytes) -> int:
-    info = sound._ogg_ident_info(ogg_bytes)
-    return info[0] if info is not None else 44100
 
 
 def _format_player_time(seconds: float) -> str:

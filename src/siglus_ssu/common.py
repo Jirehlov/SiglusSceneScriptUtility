@@ -113,18 +113,6 @@ def quote_ss_text(text):
     return f'"{s}"'
 
 
-def unique_out_path(path):
-    if not path or not os.path.exists(path):
-        return path
-    root, ext = os.path.splitext(path)
-    i = 1
-    while True:
-        candidate = f"{root}.{i:d}{ext}"
-        if not os.path.exists(candidate):
-            return candidate
-        i += 1
-
-
 def normalize_atom(a):
     a = a if isinstance(a, dict) else {}
     return {
@@ -2071,6 +2059,26 @@ def write_text(path: str, text: str, enc: str = "utf-8") -> None:
     ensure_parent_dir(path)
     with open(path, "w", encoding=enc, newline="\r\n") as f:
         f.write(text)
+
+
+def write_unique_text(path: str, text: str) -> str:
+    root, ext = os.path.splitext(path)
+    index = 0
+    while True:
+        candidate = f"{root}.{index:d}{ext}" if index else path
+        index += 1
+        if os.path.lexists(candidate):
+            continue
+        try:
+            with open_atomic_output(
+                candidate, "w", exclusive=True, encoding="utf-8", newline="\r\n"
+            ) as output:
+                output.write(text)
+        except FileExistsError:
+            if not os.path.lexists(candidate):
+                raise
+        else:
+            return candidate
 
 
 def write_status(text: str) -> None:

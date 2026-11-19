@@ -183,6 +183,8 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 
 Features include diagnostics, semantic highlighting, completion, hover, definition and reference lookup, rename, and document symbols. Analysis uses the current scene and same-directory `.inc` files, including unsaved editor changes. Select the game's global `--const-profile` as for compilation.
 
+For pushed diagnostics, the server updates local checks while you edit and reuses the last available link results. Link checks refresh on open or save and when a document closes with unsaved changes. A diagnostic request checks the current workspace.
+
 Workspace indexes are cached between sessions and rebuilt when incompatible. Set `SIGLUS_SSU_LSP_CACHE_DIR` to change the cache location. Defaults are:
 
 - Windows: `%LOCALAPPDATA%\siglus_ssu\lsp-index`, falling back to `%APPDATA%\siglus_ssu\lsp-index`.
@@ -262,7 +264,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 
 - **Source encoding:** Use `--charset utf8 --allow-invalid` only to reproduce output made by interpreting invalid UTF-8 with replacement. It can preserve garbled text. Compilation stops at the first DOS EOF character (U+001A); later bytes are ignored. See the [language reference](#siglusss-language-spec) for literal and character rules.
 - **Key compatibility:** Keys derived from `暗号.dat` or `angou=text` use CP932 and can differ from official Windows conversion. For existing official files, prefer the raw 16-byte key or matching engine executable. For normal compilation, put the raw key in `key.txt` and remove any higher-priority `暗号.dat` from the input directory.
-- **Incremental builds:** Changed scenes are rebuilt. Adding, changing, or removing an `.inc`, changing compiler settings, or upgrading the program can require a full rebuild. Failed or interrupted cache updates trigger a full rebuild on the next run.
+- **Incremental builds:** Scenes are rebuilt when their source changes or their cached DAT or LZSS file goes missing or changes. Adding, changing, or removing an `.inc`, changing compiler settings, or upgrading the program can require a full rebuild. Failed or interrupted cache updates trigger a full rebuild on the next run.
 - **Shuffle search:** String-table order does not affect normal translation work. A later scene mismatch still produces the requested output but returns failure. Use `--set-shuffle` once the correct seed is known.
 - **Paths and names:** Paths follow the host filesystem's lookup rules. Multi-file operations reject selected input paths that collide under a fixed Windows filename case mapping, such as `A.ss` and `a.ss` in one directory; unrelated directory entries are ignored. Automatic filename discovery warns about case-colliding candidates and selects one in its usual order, including for embedded configuration sources. Existing output naming rules still apply. Runtime scene names fold only ASCII `A`–`Z` to lowercase; embedded source filenames retain their spelling.
 
@@ -603,7 +605,7 @@ siglus-ssu -m <path_to_dat | path_to_dir> [--angou VALUE]
 siglus-ssu -m --apply <path_to_dat | path_to_dir> [--angou VALUE]
 ```
 
-Directory inputs are scanned recursively. Configuration and key files are skipped. Encrypted files may need a [decryption key source](#decryption-keys).
+Directory inputs are scanned recursively. Configuration and key files are skipped. For encrypted files, the command first tries [decryption keys](#decryption-keys) found for the selected directory. If those fail on a nested DAT, it also looks for keys starting in that DAT’s directory.
 
 #### Workflow
 
@@ -643,7 +645,7 @@ Analyzes, extracts, merges, creates, and updates SiglusEngine images.
 
 | Type | Contents |
 |---|---|
-| type0 | 32-bit BGRA image. |
+| type0 | Opaque image, decoded as 32-bit BGRA. |
 | type1 | Paletted image, up to 256 colors. |
 | type2 | Multiple image cuts with placement information. |
 | type3 | JPEG image. |
@@ -671,11 +673,11 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--refer <ref_g00 \| ref_dir>` | Update an existing G00. Directory input requires a reference directory; a single input accepts a reference file or directory. With no output path, the reference is overwritten. |
 | `:cutNNN` | Select a type2 cut for merging, for example `sprite.g00:cut002`. |
 
-Extraction and creation scan directory inputs at the immediate level only.
+Extraction and creation scan directory inputs at the immediate level only. When creating a new type2 layout, extraction fails if an existing cut PNG is unreadable or has a different size from the untrimmed cut.
 
 #### Create and Update
 
-Without `--refer`, PNG creates type0 and JPEG creates type3. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
+Without `--refer`, PNG creates type0 and JPEG creates type3. Creating or updating type0 sets alpha to 255. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
 
 With no output path, creation writes beside the input and updates overwrite the reference. Outputs cannot overwrite a source image, layout, or another target's reference, and must resolve to distinct files. Concurrent updates to the same output directory wait up to 30 seconds for the active update. After an interrupted update, remove `.siglus-g00.lockdir` only after confirming no update is running.
 
@@ -751,6 +753,8 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 | `--play` | Preview BGM with Gameexe loop points in a terminal player. Requires `ffplay` on `PATH` and `psutil` (`pip install psutil`). Supports NWA/OWP/Ogg, not OVK. |
 | `--trim <Gameexe.dat \| Gameexe.ini>` | Extract only the `repeat`–`end` loop region of matching NWA/OWP tracks. OWP trimming requires `ffmpeg`; NWA trimming does not. OVK is unaffected. |
 | `--angou VALUE` | [Key source](#decryption-keys) for encrypted Gameexe data used by trimming or playback. Ignored by other sound operations. |
+
+Trimming fails if the selected loop region contains no audio samples. An existing output for that track is preserved.
 
 #### OVK Naming
 

@@ -186,9 +186,27 @@ def find_oggs_offset(path, start_off=0):
     raise ValueError("OggS not found")
 
 
+def _omv_ogg_offset(path, outer):
+    if outer is not None:
+        offset = (
+            OUTER_STRUCT.size
+            + outer.dword_4c * TABLEA_STRUCT.size
+            + outer.dword_50 * TABLEB_STRUCT.size
+        )
+        try:
+            with open_read(path) as file_obj:
+                page = next(_iter_ogg_pages(file_obj, offset, max_pages=1), None)
+        except _OMV_PARSE_ERRORS:
+            pass
+        else:
+            if page is not None and page.header_type & 2:
+                return offset
+    return find_oggs_offset(path, 0)
+
+
 def extract_ogv_from_omv(omv_path, out_ogv_path, *, exclusive):
     omv_path = resolve_read_path(omv_path, kind="file")
-    oggs_off = find_oggs_offset(omv_path, 0)
+    oggs_off = _omv_ogg_offset(omv_path, _parse_outer_header(omv_path))
     with (
         open_atomic_output(out_ogv_path, exclusive=exclusive) as fout,
         open_read(omv_path) as fin,
@@ -197,27 +215,13 @@ def extract_ogv_from_omv(omv_path, out_ogv_path, *, exclusive):
         shutil.copyfileobj(fin, fout, length=1024 * 1024)
 
 
-def read_omv_info(path):
-    size = int(read_file_stat(path).st_size)
-    oggs_off = find_oggs_offset(path, 0)
-    header_size = int(oggs_off)
-    ogv_size = int(size - oggs_off)
-    try:
-        kinds_by_serial = _parse_ogg_stream_kinds_by_serial(path, oggs_off)
-        stream_kinds = tuple(
-            kinds_by_serial[serial] for serial in sorted(kinds_by_serial)
-        )
-    except _OMV_PARSE_ERRORS:
-        stream_kinds = ()
-    return OMVInfo(str(path), size, oggs_off, header_size, ogv_size, stream_kinds)
-
-
 def read_omv_full_info(path):
-    basic = read_omv_info(path)
+    size = read_file_stat(path).st_size
     outer = _parse_outer_header(path)
+    oggs_off = _omv_ogg_offset(path, outer)
     table_a = ()
     table_b = ()
-    ogg_data_offset = basic.oggs_offset
+    ogg_data_offset = oggs_off
     if outer:
         table_a, table_b, data_off = _try_parse_tables(path, outer)
         if data_off is not None:
@@ -225,8 +229,10 @@ def read_omv_full_info(path):
     theora_serial = theora_fps_num = theora_fps_den = theora_kfgshift = (
         theora_pixfmt
     ) = theora_pic_w = theora_pic_h = None
+    stream_kinds = ()
     try:
         kinds = _parse_ogg_stream_kinds_by_serial(path, ogg_data_offset)
+        stream_kinds = tuple(kinds[serial] for serial in sorted(kinds))
         theora_serial = next(
             (serial for serial, kind in kinds.items() if kind == "theora"), None
         )
@@ -246,7 +252,7 @@ def read_omv_full_info(path):
     except _OMV_PARSE_ERRORS:
         pass
     return OMVFullInfo(
-        basic,
+        OMVInfo(str(path), size, oggs_off, oggs_off, size - oggs_off, stream_kinds),
         outer,
         table_a,
         table_b,

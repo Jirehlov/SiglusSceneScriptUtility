@@ -1447,33 +1447,6 @@ fn finalize_scene<const FULL_STATS: bool>(
     }
 }
 
-fn write_digest_cache(config: &CompileConfig) -> Result<(), String> {
-    if config.cache.digest_path.is_empty() || config.cache.pending_digests_json.is_empty() {
-        return Ok(());
-    }
-    let path = Path::new(&config.cache.digest_path);
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;
-    }
-    let tmp_path = PathBuf::from(format!("{}.tmp", path.display()));
-    fs::write(&tmp_path, config.cache.pending_digests_json.as_bytes())
-        .map_err(|error| format_path_error(&tmp_path, error))?;
-    fs::rename(&tmp_path, path).map_err(|error| {
-        let _ = fs::remove_file(&tmp_path);
-        format_path_error(path, error)
-    })
-}
-
-fn invalidate_lzss_cache(config: &CompileConfig) -> Result<(), String> {
-    for value in &config.cache.lzss_remove_paths {
-        let path = Path::new(value);
-        fs::remove_file(path).map_err(|error| format_path_error(path, error))?;
-    }
-    Ok(())
-}
-
 fn compile_project_inner<const FULL_STATS: bool>(
     config: &CompileConfig,
     stdout: &mut OutputLog<'_>,
@@ -1547,7 +1520,6 @@ fn compile_project_inner<const FULL_STATS: bool>(
     if !config.tmp_dir.is_empty() {
         fs::create_dir_all(&bs_dir).map_err(|error| format_path_error(&bs_dir, error))?;
     }
-    invalidate_lzss_cache(config)?;
 
     let tasks = config
         .context
@@ -1932,7 +1904,6 @@ fn compile_project_inner<const FULL_STATS: bool>(
         fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;
     }
     fs::write(&output_path, &pack).map_err(|error| format_path_error(&output_path, error))?;
-    write_digest_cache(config)?;
     let (macro_counts, source_stats) = if FULL_STATS {
         finalize_source_stats(&mut aggregate_source_stats, &base_ia);
         (

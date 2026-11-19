@@ -249,14 +249,6 @@ def resolve_read_path(path, kind=None):
     return absolute
 
 
-def read_file_exists(path):
-    try:
-        resolve_read_path(path, kind="file")
-    except (FileNotFoundError, NotADirectoryError):
-        return False
-    return True
-
-
 def open_read(path, mode="rb", **kwargs):
     if "r" not in mode or any(flag in mode for flag in "wax+"):
         raise ValueError(f"not a read-only mode: {mode}")

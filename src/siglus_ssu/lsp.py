@@ -3980,47 +3980,35 @@ class SSLanguageServer:
         self.save_persistent_link_diagnostics(directory, paths, entry)
         return entry
 
-    def analyze(self, doc: DocumentState) -> AnalysisResult:
-        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
+    def analyze(
+        self, doc: DocumentState, *, refresh_link: bool = True
+    ) -> AnalysisResult:
         base = self.analyze_base(doc)
-        if not doc.path.lower().endswith(".ss") or any(
-            item.severity == SEVERITY_ERROR for item in base.diagnostics
+        if (
+            not doc.path.lower().endswith(".ss")
+            or not _project_link_command_names(base.project)
+            or any(item.severity == SEVERITY_ERROR for item in base.diagnostics)
         ):
-            doc.analysis = base
-            doc.analysis_signature = doc.base_analysis_signature
-            return doc.analysis
-        if not _project_link_command_names(base.project):
-            doc.analysis = base
-            doc.analysis_signature = doc.base_analysis_signature
-            return doc.analysis
-        link_entry = self.link_diagnostics_for_directory(directory)
+            return base
+        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
+        link_entry = (
+            self.link_diagnostics_for_directory(directory)
+            if refresh_link
+            else self.link_diagnostics_cache.get(directory)
+        )
+        if link_entry is None:
+            return base
         signature = (link_entry.project_signature, link_entry.revision)
         if doc.analysis is not None and doc.analysis_signature == signature:
             return doc.analysis
-        extras = list(_diagnostics_for_path(link_entry.diagnostics, doc.path))
-        if not extras:
-            doc.analysis = base
-        else:
-            doc.analysis = AnalysisResult(
-                path=base.path,
-                text=base.text,
-                project=base.project,
-                diagnostics=[*base.diagnostics, *extras],
-                lad=base.lad,
-                mad=base.mad,
-                local_definitions=base.local_definitions,
-                label_definitions=base.label_definitions,
-                z_label_definitions=base.z_label_definitions,
-                document_symbols=base.document_symbols,
-                occurrences=base.occurrences,
-                string_semantics=base.string_semantics,
-                replace_uses=base.replace_uses,
-                directive_tokens=base.directive_tokens,
-                unmapped_bindings=base.unmapped_bindings,
-                read_flag_ranges=base.read_flag_ranges,
-            )
-        doc.analysis_signature = signature
-        return doc.analysis
+        extras = _diagnostics_for_path(link_entry.diagnostics, doc.path)
+        result = (
+            replace(base, diagnostics=[*base.diagnostics, *extras]) if extras else base
+        )
+        if refresh_link:
+            doc.analysis = result
+            doc.analysis_signature = signature
+        return result
 
     def lsp_diagnostics_for_result(
         self, result: AnalysisResult
@@ -4031,13 +4019,13 @@ class SSLanguageServer:
         ]
 
     def document_diagnostic_report(
-        self, doc: DocumentState, *, include_link: bool = True
+        self, doc: DocumentState, *, refresh_link: bool = True
     ) -> dict[str, Any]:
-        result = self.analyze(doc) if include_link else self.analyze_base(doc)
+        result = self.analyze(doc, refresh_link=refresh_link)
         return {"kind": "full", "items": self.lsp_diagnostics_for_result(result)}
 
     def publish_diagnostics(
-        self, doc: DocumentState, *, include_link: bool = True
+        self, doc: DocumentState, *, refresh_link: bool = True
     ) -> None:
         if self.pull_diagnostics_enabled:
             return
@@ -4050,7 +4038,7 @@ class SSLanguageServer:
                 "params": {
                     "uri": doc.uri,
                     "diagnostics": self.document_diagnostic_report(
-                        doc, include_link=include_link
+                        doc, refresh_link=refresh_link
                     )["items"],
                 },
             }
@@ -4061,7 +4049,7 @@ class SSLanguageServer:
         directory: str,
         skip_uri: str | None = None,
         clear_base: bool = False,
-        include_link: bool = True,
+        refresh_link: bool = True,
     ) -> None:
         directory = os.path.abspath(directory or ".")
         docs = [
@@ -4078,7 +4066,7 @@ class SSLanguageServer:
             else:
                 doc.analysis = None
                 doc.analysis_signature = None
-            self.publish_diagnostics(doc, include_link=include_link)
+            self.publish_diagnostics(doc, refresh_link=refresh_link)
 
     def command_implementation_locations(
         self, directory: str, symbol_id: str
@@ -4350,20 +4338,20 @@ class SSLanguageServer:
         doc.open_uris[uri] = (doc.text, doc.version)
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
-        self.publish_diagnostics(doc, include_link=False)
+        self.publish_diagnostics(doc, refresh_link=False)
         if old_signature != self.document_source_signature(doc):
             if doc.path.lower().endswith(".inc"):
                 self.refresh_directory(
                     os.path.dirname(doc.path) or ".",
                     skip_uri=doc.uri,
                     clear_base=True,
-                    include_link=False,
+                    refresh_link=False,
                 )
             elif doc.path.lower().endswith(".ss"):
                 self.refresh_directory(
                     os.path.dirname(doc.path) or ".",
                     skip_uri=doc.uri,
-                    include_link=False,
+                    refresh_link=False,
                 )
 
     def handle_did_save(self, params: dict[str, Any]) -> None:

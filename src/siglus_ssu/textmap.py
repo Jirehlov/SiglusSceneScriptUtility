@@ -658,13 +658,10 @@ def _process_dat(
     except Exception:
         eprint(f"textmap: failed to read: {dat_path}", errors="replace")
         return 1
-    candidates = exe_el_candidates or []
-    if not candidates:
-        candidates = [b""]
     parsed = None
     enc = None
     used_exe_el = b""
-    for cand in candidates:
+    for cand in exe_el_candidates or (b"",):
         src = cand if isinstance(cand, dict) else {"exe_el": cand, "kind": "bytes"}
         exe_el = src.get("exe_el")
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
@@ -786,12 +783,34 @@ def main(argv):
         except ValueError as exc:
             eprint(str(exc), errors="replace")
             return 2
+        base_keys = {source["exe_el"] for source in exe_el_candidates}
+        local_sources = {dat_path: ()}
+
+        def candidates_for(file_path):
+            yield from exe_el_candidates or (b"",)
+            directory = os.path.dirname(file_path)
+            if directory not in local_sources:
+                try:
+                    local_sources[directory] = [
+                        source
+                        for source in pck.iter_exe_el_candidates(
+                            directory,
+                            explicit_angou=explicit_angou,
+                            with_sources=True,
+                        )
+                        if source["exe_el"] not in base_keys
+                    ]
+                except (OSError, ValueError) as exc:
+                    eprint(f"textmap: {directory}: {exc}", errors="replace")
+                    local_sources[directory] = ()
+            yield from local_sources[directory]
+
         errors = processed = 0
         for file_path in dat_files:
             rc = _process_dat(
                 file_path,
                 apply_mode,
-                exe_el_candidates=exe_el_candidates,
+                exe_el_candidates=candidates_for(file_path),
                 skip_auxiliary=True,
             )
             if rc is not None:
