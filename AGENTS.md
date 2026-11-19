@@ -18,4 +18,4 @@
 16. Do not duplicate constants defined in `const.py` elsewhere; always reference their definitions in `const.py`.
 17. Support only official PCK formats (those this project can generate); compatibility with nonstandard PCKs is not required.
 18. Record only major changes in the changelog.
-19. Interact with the operating system only through Python's built-ins and standard library or Rust's standard library. Do not call OS APIs directly, including through FFI such as `ctypes` or through third-party bindings.
+19. Use Python's built-ins, the Python standard library, or the Rust standard library to interact with the operating system. High-level cross-platform Python APIs such as psutil are allowed. Project code must not call platform OS APIs directly through FFI or low-level bindings.
