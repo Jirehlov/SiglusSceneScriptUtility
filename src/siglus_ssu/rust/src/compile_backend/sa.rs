@@ -27,6 +27,7 @@ struct SyntaxCodes {
     la: LexCodes,
     op: OperatorCodes,
     logical_and_precedence: i32,
+    unary_precedence: i32,
 }
 
 pub struct SyntaxAnalyzer<'lex, 'src> {
@@ -50,6 +51,7 @@ impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
                 la: codes.la.clone(),
                 op: codes.op.clone(),
                 logical_and_precedence: codes.logical_and_precedence,
+                unary_precedence: codes.unary_precedence,
             },
             atoms: &lex.atom_list,
             string_count: lex.str_list.len(),
@@ -1690,7 +1692,8 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
                     self.syntax.start_expression(next);
                     pos = next;
                 }
-                let result = parse_step!(@queued self, executor, parse_expression_inner(index = pos, minimum_precedence = 999));
+                let unary_precedence = self.syntax.codes.unary_precedence;
+                let result = parse_step!(@queued self, executor, parse_expression_inner(index = pos, minimum_precedence = unary_precedence));
                 let successful = matches!(&result, Ok(Some(_)));
                 for nested in nested_indices.into_iter().rev() {
                     self.syntax.finish_expression(nested, successful);

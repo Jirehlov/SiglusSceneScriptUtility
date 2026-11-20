@@ -246,6 +246,7 @@ fn collect_definitions_node<'a>(
     lex: &LexResult,
     path: &'a PyBackedStr,
     current_command: &str,
+    scene_scope: &str,
     document_details: bool,
     document_symbols: &mut Vec<LspDefinition<'a>>,
 ) {
@@ -309,7 +310,7 @@ fn collect_definitions_node<'a>(
                     symbol_id: String::new(),
                     atom_id: name_atom.id,
                     detail: format!("command {signature}"),
-                    scope: "scene".to_string(),
+                    scope: scene_scope.to_owned(),
                     signature,
                     start_char: -1,
                     end_char: -1,
@@ -344,7 +345,7 @@ fn collect_definitions_node<'a>(
                 ..
             } if document_details => {
                 let scope = if current_command.is_empty() {
-                    "scene".to_string()
+                    scene_scope.to_owned()
                 } else {
                     format!("command {current_command}")
                 };
@@ -641,10 +642,13 @@ fn add_inline_inc_definitions<'a>(
     }
 }
 
-fn scene_commands<'a, 's>(document_symbols: &'s [LspDefinition<'a>]) -> Vec<&'s LspDefinition<'a>> {
+fn scene_commands<'a, 's>(
+    document_symbols: &'s [LspDefinition<'a>],
+    scene_scope: &str,
+) -> Vec<&'s LspDefinition<'a>> {
     let mut out = document_symbols
         .iter()
-        .filter(|record| record.kind == "command" && record.scope == "scene")
+        .filter(|record| record.kind == "command" && record.scope == scene_scope)
         .collect::<Vec<_>>();
     out.sort_by(|left, right| {
         (
@@ -758,7 +762,16 @@ pub fn lsp_scan_document(
         return diagnostic_result(py);
     }
     let mut document_symbols = Vec::new();
-    collect_definitions_node(&root, &lex, path, "", run_bs, &mut document_symbols);
+    let scene_scope = ia_data.codes.forms.scene.name.as_str();
+    collect_definitions_node(
+        &root,
+        &lex,
+        path,
+        "",
+        scene_scope,
+        run_bs,
+        &mut document_symbols,
+    );
     let source_lines = source_text
         .split('\n')
         .map(|line| line.chars().collect::<Vec<_>>())
@@ -803,7 +816,7 @@ pub fn lsp_scan_document(
     let commands = if run_bs {
         Vec::new()
     } else {
-        scene_commands(&document_symbols)
+        scene_commands(&document_symbols, scene_scope)
     };
     let (occurrences, unmapped_bindings) = if run_bs {
         (Vec::new(), Vec::new())

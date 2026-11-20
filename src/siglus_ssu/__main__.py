@@ -59,7 +59,7 @@ def _usage():
         "    --max-workers   Limit parallel workers to a positive integer (default: auto; parallel only)\n"
         "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial (not with --tmp)\n"
         "    --tmp           Use specific temp directory (not with --debug/--dat-repack/--no-angou/--no-lzss/--set-shuffle/--test-shuffle/--csv/--gei/--const-profile)\n"
-        "    --test-shuffle  Bruteforce initial shuffle seed (MSVCRand) for .dat string order (not with --tmp/--gei)\n"
+        "    --test-shuffle  Find a continuous MSVCRand seed chain matching all reference scenes (not with --tmp/--gei)\n"
         "    --csv           With --test-shuffle, write per-object initial/final seeds to CSV (not with --tmp)\n"
         "    --gei           Only generate Gameexe.dat when Gameexe.ini exists; missing input is warned and skipped (not with --tmp/--test-shuffle)\n"
         "\n"

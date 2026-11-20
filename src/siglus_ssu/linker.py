@@ -1,6 +1,7 @@
 import os
 import struct
 import time
+from heapq import nsmallest
 from . import const as C
 from .CA import new_replace_tree
 from .common import (
@@ -94,12 +95,10 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
         total_scn += read_scn_header(dat)["scn_size"]
         total_lzss += len(lzss_list[i]) if lzss_mode else 0
         dat_rows.append({"name": name, "dat_bytes": dat_size})
-    dat_rows.sort(
-        key=lambda x: (
-            -x["dat_bytes"],
-            ascii_lower(x["name"]),
-            x["name"],
-        )
+    top_dat_scenes = nsmallest(
+        5,
+        dat_rows,
+        key=lambda row: (-row["dat_bytes"], ascii_lower(row["name"]), row["name"]),
     )
     ctx["stats"]["binary_size_stats"] = {
         "lzss_mode": lzss_mode,
@@ -107,7 +106,7 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
         "scn_bytes": total_scn,
         "lzss_bytes": total_lzss,
         "lzss_ratio": total_lzss / total_dat if total_dat and lzss_mode else None,
-        "top_dat_scenes": dat_rows[:5],
+        "top_dat_scenes": top_dat_scenes,
     }
 
 

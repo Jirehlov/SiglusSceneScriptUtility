@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, nullcontext, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from itertools import islice
 import siglus_ssu as _runtime
 from . import const as C
-from .native_ops import find_shuffle_seed_first, is_native_available
+from .native_ops import (
+    _draw_shuffle_index,
+    _shuffle_parameters,
+    is_native_available,
+    native_accel,
+)
 from .path_policy import resolve_read_path
 
 
@@ -501,111 +506,140 @@ def parallel_g00_extract(g00_files, out_dir, trim=False):
     return ok, sk, bad
 
 
-def _seed_chunk_worker(args):
-    seed_start, count, n, target_pairs = args
-    from .BS import MSVCRand
+def _prepare_shuffle_targets(scene_indexes):
+    targets = []
+    for index in scene_indexes:
+        order = sorted(range(len(index)), key=index.__getitem__)
+        offset = 0
+        previous_empty = None
+        ambiguous = False
+        for original in order:
+            expected_offset, length = index[original]
+            if expected_offset != offset or length < 0:
+                raise ValueError("invalid reference string index layout")
+            if not length:
+                ambiguous |= previous_empty == offset
+                previous_empty = offset
+            offset += length
+        if len(index) < 2:
+            continue
+        if ambiguous:
+            targets.append(([], index))
+            continue
+        positions = [0] * len(order)
+        for position, original in enumerate(order):
+            positions[original] = position
+        swaps = [0] * (len(order) - 1)
+        for position in range(len(order) - 1, 0, -1):
+            selected = positions[position]
+            swaps[position - 1] = selected
+            order[selected] = order[position]
+            positions[order[selected]] = selected
+        targets.append((swaps, []))
+    return targets
 
-    target_ofs = [p[0] for p in target_pairs]
-    lens = [p[1] for p in target_pairs]
-    for s in range(seed_start, seed_start + count):
-        rng = MSVCRand(s)
-        a = list(range(n))
-        rng.shuffle(a)
-        ofs = 0
-        ofs_out = [0] * n
-        for orig in a:
-            ofs_out[orig] = ofs
-            ln = lens[orig]
-            if ln > 0:
-                ofs += ln
-        ok = True
-        for i0 in range(n):
-            if ofs_out[i0] != target_ofs[i0]:
-                ok = False
+
+_SHUFFLE_SEARCH = ((), ())
+
+
+def _init_shuffle_search(search):
+    global _SHUFFLE_SEARCH
+    _SHUFFLE_SEARCH = search
+
+
+def _shuffle_seed_chunk(start, end, search=None):
+    targets, params = _SHUFFLE_SEARCH if search is None else search
+    for seed in range(start, end):
+        state = seed
+        for swaps, index in targets:
+            if swaps:
+                for expected, step in zip(swaps, params):
+                    state, selected = _draw_shuffle_index(state, *step)
+                    if selected != expected:
+                        break
+                else:
+                    continue
                 break
-        if ok:
-            return s
+            order = list(range(len(index)))
+            for width, draws, limit in islice(params, len(index) - 1):
+                state, selected = _draw_shuffle_index(state, width, draws, limit)
+                order[width - 1], order[selected] = order[selected], order[width - 1]
+            offset = 0
+            for original in order:
+                expected_offset, length = index[original]
+                if offset != expected_offset:
+                    break
+                offset += length
+            else:
+                continue
+            break
+        else:
+            return seed
     return None
 
 
-def find_shuffle_seed_parallel(target_idx_pairs, seed0=0):
-    import concurrent.futures
+def find_shuffle_chain_seed(scene_indexes, seed0=0):
     import time
-    import math
 
-    target = [(int(o), int(ln)) for o, ln in target_idx_pairs]
-    n = len(target)
-    workers = get_max_workers(None)
-    chunk = 200
-    progress_iv = 1.0
+    targets = _prepare_shuffle_targets(scene_indexes)
     seed0 = int(seed0) & 0xFFFFFFFF
-    prefix = "[test-shuffle]"
-    if is_native_available():
-        return find_shuffle_seed_first(target, seed0, workers=workers)
-    t0 = time.time()
-    last = t0
-    limit = 2**32
-    total = limit - seed0
-    sys.stderr.write(
-        f"{prefix} seed scan (slow python): workers={workers} chunk={chunk} start={seed0}\n"
+    if not targets:
+        return seed0
+    workers = get_max_workers()
+    search_native = getattr(native_accel, "find_shuffle_chain_seed", None)
+    if search_native is not None and is_native_available():
+        sys.stderr.write("[test-shuffle] Accelerated by Rust\n")
+        return search_native(targets, seed0, workers)
+    count = max(len(swaps) + 1 if swaps else len(index) for swaps, index in targets)
+    search = targets, tuple(_shuffle_parameters(count))
+    limit = min(1 << 32, seed0 + (1 << 31))
+    start = min(seed0 + 256, limit)
+    found = _shuffle_seed_chunk(seed0, start, search)
+    if found is not None or start == limit:
+        return found
+    chunk = 4096
+    workers = min(workers, (limit - start + chunk - 1) // chunk)
+    t0 = last = time.monotonic()
+    sys.stderr.write(f"[test-shuffle] Python search: workers={workers}\n")
+    executor_context = (
+        process_pool(workers, initializer=_init_shuffle_search, initargs=(search,))
+        if workers > 1
+        else nullcontext()
     )
-    sys.stderr.flush()
-    _flush_stdio_before_process_pool()
-
-    def _fmt_eta(sec: float) -> str:
-        if not math.isfinite(sec) or sec <= 0:
-            return "00:00:00"
-        s = int(round(sec))
-        h = s // 3600
-        m = (s % 3600) // 60
-        ss = s % 60
-        return f"{h:02}:{m:02}:{ss:02}"
-
-    def _scan_bits():
-        done = 0
-        nonlocal last
-        with process_pool(workers) as ex:
-            while done < total:
-                futs = []
-                base = seed0 + done
-                scheduled = 0
-                for w in range(workers):
-                    st = base + w * chunk
-                    if st >= limit:
-                        break
-                    count = min(chunk, limit - st)
-                    futs.append(
-                        ex.submit(
-                            _seed_chunk_worker,
-                            (st, count, n, target),
-                        )
-                    )
-                    scheduled += count
-                found = None
-                for fut in concurrent.futures.as_completed(futs):
-                    r = fut.result()
-                    if r is not None:
-                        found = r
-                        break
+    with executor_context as executor:
+        while start < limit:
+            if executor is None:
+                end = min(start + chunk, limit)
+                found = _shuffle_seed_chunk(start, end, search)
                 if found is not None:
-                    for fut in futs:
-                        with suppress(Exception):
-                            fut.cancel()
                     return found
-                done += scheduled
-                now = time.time()
-                if now - last >= progress_iv:
-                    elapsed = now - t0
-                    if elapsed <= 0:
-                        elapsed = 1e-9
-                    rate = done / elapsed
-                    eta = (total - done) / rate if rate > 0 else float("inf")
-                    next_seed = min(seed0 + done, limit - 1)
-                    sys.stderr.write(
-                        f"{prefix} next_seed={next_seed} elapsed={elapsed:.1f}s rate~{rate:.0f}/s ETA={_fmt_eta(eta)}\n"
+            else:
+                end = min(start + workers * chunk, limit)
+                futures = [
+                    executor.submit(
+                        _shuffle_seed_chunk, position, min(position + chunk, end)
                     )
-                    sys.stderr.flush()
-                    last = now
-        return None
-
-    return _scan_bits()
+                    for position in range(start, end, chunk)
+                ]
+                for future in as_completed(futures):
+                    found = future.result()
+                    if found is not None:
+                        for pending in futures:
+                            pending.cancel()
+                        return found
+            start = end
+            now = time.monotonic()
+            if now - last >= 1:
+                elapsed = now - t0
+                done = start - seed0
+                rate = done / elapsed
+                eta = int(round((limit - start) / rate))
+                hours, remainder = divmod(eta, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                sys.stderr.write(
+                    f"[test-shuffle] checked={done}/{limit - seed0} elapsed={elapsed:.1f}s "
+                    f"rate~{rate:.0f}/s ETA={hours:02}:{minutes:02}:{seconds:02}\n"
+                )
+                sys.stderr.flush()
+                last = now
+    return None

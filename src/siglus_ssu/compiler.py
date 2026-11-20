@@ -7,9 +7,11 @@ import time
 import shutil
 import csv
 import tempfile
+from collections import Counter
 from contextlib import ExitStack, suppress
 from pathlib import Path
 from functools import partial
+from heapq import nsmallest
 import siglus_ssu as _runtime
 from . import const as C, package_version
 from .BS import (
@@ -17,7 +19,6 @@ from .BS import (
     compile_one_pipeline,
     set_shuffle_seed,
     get_shuffle_seed,
-    build_ia_data,
     empty_source_stat_counts,
 )
 from .GEI import write_gameexe_dat
@@ -33,6 +34,7 @@ from .native_ops import (
 )
 from .common import (
     ascii_lower,
+    I32_PAIR_STRUCT,
     looks_like_siglus_dat,
     record_stage_time,
     build_source_angou_layout,
@@ -46,7 +48,6 @@ from .common import (
     decode_exe_el_key,
     find_angou_dat,
     directory_lock,
-    read_text_auto,
     decode_angou_first_line,
     angou_to_exe_el,
     StagedOutputs,
@@ -329,7 +330,9 @@ def _compile_cache_state(
     root = Path(tmp_dir)
     digest_path = root / _SOURCE_DIGEST_NAME
     try:
-        old = json.loads(read_text_auto(digest_path, force_charset="utf-8"))
+        old = json.loads(
+            decode_text_auto(read_bytes(digest_path), force_charset="utf-8")[0]
+        )
     except (OSError, ValueError):
         old = None
     with suppress(FileNotFoundError):
@@ -387,19 +390,17 @@ def _tmp_incompatible_options(argv, test_shuffle=False):
     return bad
 
 
-def _read_scn_dat(path):
-    b = read_bytes(path)
-    h = read_scn_header(b)
-    if not h:
+def _scn_dat_string_index(blob, path):
+    header = read_scn_header(blob)
+    if not header:
         raise ValueError(f"{path}: bad dat header")
-    ofs = h.get("str_index_list_ofs", 0)
-    cnt = h.get("str_index_cnt", 0)
-    if cnt < 0:
-        raise ValueError("bad str_index_cnt")
-    if ofs < C.SCN_HDR_SIZE or ofs + cnt * 8 > len(b):
-        raise ValueError("bad str_index_list")
-    idx = [struct.unpack_from("<ii", b, ofs + i * 8) for i in range(cnt)]
-    return b, h, idx
+    start = header["str_index_list_ofs"]
+    count = header["str_index_cnt"]
+    end = start + count * I32_PAIR_STRUCT.size
+    if count < 0 or start < C.SCN_HDR_SIZE or end > len(blob):
+        raise ValueError(f"{path}: bad str_index_list")
+    index = list(I32_PAIR_STRUCT.iter_unpack(memoryview(blob)[start:end]))
+    return header, index
 
 
 def _read_scn_dat_header(path):
@@ -409,13 +410,10 @@ def _read_scn_dat_header(path):
     return h
 
 
-def _read_scn_dat_str_pool(path):
-    b, h, idx = _read_scn_dat(path)
-    order = sorted(range(len(idx)), key=lambda o: idx[o][0])
-    base = h.get("str_list_ofs", 0)
+def _scn_dat_str_pool(b, h, idx):
+    base = h["str_list_ofs"]
     out = []
-    for orig in order:
-        ofs_u16, ln_u16 = idx[orig]
+    for orig, (ofs_u16, ln_u16) in enumerate(idx):
         if ln_u16 <= 0:
             out.append("")
             continue
@@ -456,6 +454,85 @@ def _write_test_shuffle_csv(csv_path, rows):
                     int(bool(row.get("matched"))),
                 ]
             )
+
+
+def _compile_shuffle_chain(
+    ctx, compile_list, test_dir, output_paths, input_paths, seed0, *, report
+):
+    from .parallel import find_shuffle_chain_seed
+
+    targets = []
+    for index, ss_path in enumerate(compile_list):
+        name = Path(ss_path).stem
+        expected_path = os.path.join(test_dir, name + ".dat")
+        try:
+            expected_path = resolve_read_path(expected_path, kind="file")
+        except (FileNotFoundError, NotADirectoryError):
+            raise FileNotFoundError(
+                f"expected dat not found: {expected_path}"
+            ) from None
+        check_output_inputs(output_paths, [expected_path])
+        input_paths.append(expected_path)
+        blob = read_bytes(expected_path)
+        header, target = _scn_dat_string_index(blob, expected_path)
+        targets.append(target)
+        if index == 0:
+            expected_pool = Counter(_scn_dat_str_pool(blob, header, target))
+
+    first_scene = compile_list[0]
+    set_shuffle_seed(seed0)
+    probe = compile_one_pipeline(
+        ctx, first_scene, debug_outputs=True, record_time=True
+    )["out_scn"]
+    probe_end_seed = get_shuffle_seed()
+    header, probe_index = _scn_dat_string_index(probe, first_scene)
+    probe_pool = Counter(_scn_dat_str_pool(probe, header, probe_index))
+    if probe_pool != expected_pool:
+        for label, difference in (
+            ("only-in-generated", probe_pool - expected_pool),
+            ("only-in-expected", expected_pool - probe_pool),
+        ):
+            if difference:
+                sys.stderr.write(f"[test-shuffle] {label}: {list(difference)[:8]!r}\n")
+        raise ValueError(f"reference string pool differs for {first_scene}")
+    if [length for _, length in probe_index] != [length for _, length in targets[0]]:
+        raise ValueError(f"reference string lengths differ for {first_scene}")
+
+    sys.stderr.write(f"[test-shuffle] searching from seed={seed0}\n")
+    sys.stderr.flush()
+    seed = find_shuffle_chain_seed(targets, seed0)
+    if seed is None:
+        raise RuntimeError(
+            f"no continuous shuffle seed chain matches all scenes from seed {seed0}"
+        )
+    sys.stderr.write(f"[test-shuffle] seed={seed} matches the reference chain\n")
+
+    set_shuffle_seed(seed)
+    seed_rows = []
+    for number, (ss_path, target) in enumerate(zip(compile_list, targets)):
+        initial = get_shuffle_seed()
+        if number == 0 and seed == seed0:
+            actual = probe_index
+            set_shuffle_seed(probe_end_seed)
+        else:
+            blob = compile_one_pipeline(
+                ctx, ss_path, debug_outputs=True, record_time=True
+            )["out_scn"]
+            _, actual = _scn_dat_string_index(blob, ss_path)
+        if actual != target:
+            raise ValueError(
+                f"reference string index differs after replay for {ss_path}"
+            )
+        if report:
+            seed_rows.append(
+                {
+                    "object": os.path.basename(ss_path),
+                    "initial_seed": initial,
+                    "final_seed": get_shuffle_seed(),
+                    "matched": True,
+                }
+            )
+    return seed_rows
 
 
 def _scene_ssid_from_text(text):
@@ -585,8 +662,10 @@ def _collect_read_flag_stats(bs_dir, scene_paths):
         if cnt > 0:
             scene_total += 1
             scene_counts.append((nm, cnt))
-    scene_counts.sort(key=lambda item: (-item[1], ascii_lower(item[0]), item[0]))
-    return total, scene_total, scene_counts[:5]
+    top_scenes = nsmallest(
+        5, scene_counts, key=lambda item: (-item[1], ascii_lower(item[0]), item[0])
+    )
+    return total, scene_total, top_scenes
 
 
 def _finalize_source_stats(ctx, compile_stats):
@@ -616,7 +695,8 @@ def _sorted_counter_text(counter, sep="="):
 def _top_scene_text(items, value_key, extra_key=None):
     if not items:
         return "none"
-    rows = sorted(
+    rows = nsmallest(
+        5,
         items,
         key=lambda item: (
             -item[value_key],
@@ -625,7 +705,7 @@ def _top_scene_text(items, value_key, extra_key=None):
         ),
     )
     out = []
-    for item in rows[:5]:
+    for item in rows:
         name = item["name"]
         value = item[value_key]
         if extra_key:
@@ -878,6 +958,7 @@ def _native_compile_constants_config():
         "pack_header_size": int(C.PACK_HDR_SIZE),
         "z_label_count": int(C.TNM_Z_LABEL_CNT),
         "logical_and_precedence": C.LOGICAL_AND_PRECEDENCE,
+        "unary_precedence": C.SA_PRI_MAX,
         "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
         "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
         "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
@@ -906,7 +987,6 @@ def _native_compile_config(
     ss,
     compile_list,
     full_compile_stats,
-    test_shuffle,
     force_serial_compile,
     initial_seed,
 ):
@@ -944,7 +1024,6 @@ def _native_compile_config(
             "max_workers": args.max_workers,
             "set_shuffle": str(initial_seed) if force_serial_compile else None,
             "gei": bool(args.gei),
-            "test_shuffle": bool(test_shuffle),
             "force_serial_compile": bool(force_serial_compile),
         },
         "context": {
@@ -1429,7 +1508,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         and bool(ss)
     )
     native_rc = None
-    if is_native_available() and not _runtime._LEGACY_COMPILE:
+    if not test_shuffle and is_native_available() and not _runtime._LEGACY_COMPILE:
         try:
             if a.tmp_dir:
                 _remove_cached_lzss(tmp, compile_list)
@@ -1443,7 +1522,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 ss=ss,
                 compile_list=compile_list,
                 full_compile_stats=full_compile_stats,
-                test_shuffle=test_shuffle,
                 force_serial_compile=force_serial_compile,
                 initial_seed=initial_seed,
             )
@@ -1464,7 +1542,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             shutil.rmtree(tmp, ignore_errors=True)
         return native_rc
     ok = False
-    test_shuffle_failed = False
     seed_report = None
     compile_stats = {
         "parallel": False,
@@ -1527,120 +1604,17 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             if compile_list:
                 stage = "compile"
                 if test_shuffle:
-                    bs_dir = os.path.join(tmp, "bs")
-                    os.makedirs(bs_dir, exist_ok=True)
-                    if ctx.get("ia_data") is None:
-                        ctx["ia_data"] = build_ia_data(ctx)
-                    first_ss = compile_list[0]
-                    first_nm = os.path.splitext(os.path.basename(first_ss))[0]
-                    exp_first = os.path.join(test_dir, first_nm + ".dat")
-                    try:
-                        exp_first = resolve_read_path(exp_first, kind="file")
-                    except (FileNotFoundError, NotADirectoryError):
-                        raise FileNotFoundError(f"expected dat not found: {exp_first}")
-                    set_shuffle_seed(0)
-                    compile_one_pipeline(
-                        ctx, first_ss, debug_outputs=True, record_time=True
+                    seed_rows = _compile_shuffle_chain(
+                        ctx,
+                        compile_list,
+                        test_dir,
+                        output_paths,
+                        input_paths,
+                        test_seed0,
+                        report=bool(test_shuffle_csv_path),
                     )
-                    my_first = os.path.join(bs_dir, first_nm + ".dat")
-                    try:
-                        my_first = resolve_read_path(my_first, kind="file")
-                    except (FileNotFoundError, NotADirectoryError):
-                        raise FileNotFoundError(f"generated dat not found: {my_first}")
-                    from collections import Counter
-
-                    pool_my = Counter(_read_scn_dat_str_pool(my_first))
-                    pool_off = Counter(_read_scn_dat_str_pool(exp_first))
-                    if pool_my != pool_off:
-                        sys.stderr.write(
-                            f"{test_shuffle_prefix} pool mismatch: not the same string pool -> skip brute force\n"
-                        )
-                        only_my = list((pool_my - pool_off).elements())[:8]
-                        only_off = list((pool_off - pool_my).elements())[:8]
-                        if only_my:
-                            sys.stderr.write("  only-in-my (sample):\n")
-                            for s0 in only_my:
-                                sys.stderr.write("    " + repr(s0) + "\n")
-                        if only_off:
-                            sys.stderr.write("  only-in-expected (sample):\n")
-                            for s0 in only_off:
-                                sys.stderr.write("    " + repr(s0) + "\n")
-                        return 1
-                    targets = []
-                    for ss_path in compile_list:
-                        nm = os.path.splitext(os.path.basename(ss_path))[0]
-                        exp_dat = os.path.join(test_dir, nm + ".dat")
-                        try:
-                            exp_dat = resolve_read_path(exp_dat, kind="file")
-                        except (FileNotFoundError, NotADirectoryError):
-                            raise FileNotFoundError(
-                                f"expected dat not found: {exp_dat}"
-                            )
-                        check_output_inputs(output_paths, [exp_dat])
-                        input_paths.append(exp_dat)
-                        targets.append(_read_scn_dat(exp_dat)[2])
-                    seed0 = int(test_seed0) & 0xFFFFFFFF
-                    if is_native_available():
-                        sys.stderr.write(f"{test_shuffle_prefix} Accelerated by Rust\n")
-                    sys.stderr.write(
-                        f"{test_shuffle_prefix} parallel scan starting at seed={seed0}\n"
-                    )
-                    from .parallel import find_shuffle_seed_parallel
-
-                    sys.stderr.flush()
-                    seed = find_shuffle_seed_parallel(targets[0], seed0)
-                    if seed is None:
-                        sys.stderr.write(
-                            f"{test_shuffle_prefix} no seed found in u32\n"
-                        )
-                        sys.stderr.flush()
-                        return 1
-                    sys.stderr.write(
-                        f"{test_shuffle_prefix} using seed={seed} (matched first script)\n"
-                    )
-                    sys.stderr.flush()
-                    set_shuffle_seed(seed)
-                    all_ok = True
-                    seed_rows = []
-                    for i, ss_path in enumerate(compile_list):
-                        initial_seed = get_shuffle_seed()
-                        compile_one_pipeline(
-                            ctx, ss_path, debug_outputs=True, record_time=True
-                        )
-                        final_seed = get_shuffle_seed()
-                        nm = os.path.splitext(os.path.basename(ss_path))[0]
-                        my_dat = os.path.join(bs_dir, nm + ".dat")
-                        try:
-                            my_dat = resolve_read_path(my_dat, kind="file")
-                        except (FileNotFoundError, NotADirectoryError):
-                            raise FileNotFoundError(
-                                f"generated dat not found: {my_dat}"
-                            )
-                        try:
-                            my_idx = _read_scn_dat(my_dat)[2]
-                        except Exception:
-                            my_idx = None
-                        if my_idx != targets[i]:
-                            all_ok = False
-                            sys.stderr.write(
-                                f"{test_shuffle_prefix} index mismatch: {os.path.basename(ss_path)}\n"
-                            )
-                        seed_rows.append(
-                            {
-                                "object": os.path.basename(ss_path),
-                                "initial_seed": initial_seed,
-                                "final_seed": final_seed,
-                                "matched": my_idx == targets[i],
-                            }
-                        )
                     if test_shuffle_csv_path:
                         seed_report = (test_shuffle_csv_path, seed_rows)
-                    if not all_ok:
-                        test_shuffle_failed = True
-                        sys.stderr.write(
-                            f"{test_shuffle_prefix} ERROR: seed matched first script but mismatch found in later scripts; output will be built with a failure status\n"
-                        )
-                        sys.stderr.flush()
                 else:
                     set_shuffle_seed(initial_seed)
                     compile_stats = compile_all(
@@ -1679,7 +1653,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         outputs.publish(input_paths, final_output=final_output)
         if seed_report is not None:
             sys.stderr.write(f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n")
-        ok = not test_shuffle_failed
+        ok = True
     except Exception as exc:
         sys.stderr.write(
             f"{prog}: error: {stage} ({inp}): {type(exc).__name__}: {exc}\n"

@@ -1965,15 +1965,6 @@ def decode_text_auto(
     return _fix(t9), "cp932", had_bom
 
 
-def read_text_auto(
-    path: str, force_charset: str = "", *, allow_invalid: bool = False
-) -> str:
-    data = read_bytes(path)
-    return decode_text_auto(
-        data, force_charset=force_charset, allow_invalid=allow_invalid
-    )[0]
-
-
 def read_compile_source(ctx: dict, path: str) -> str:
     source_texts = ctx.get("source_texts") or {}
     name = os.path.basename(path)
@@ -2992,24 +2983,16 @@ def build_sections(blob, header_fields, header_size, header_size_validator=None)
 def iter_files_by_ext(
     root: str,
     extensions,
-    exclude_pred=None,
     recursive: bool = True,
 ):
     ext_set = {windows_filename_key(ext) for ext in extensions}
     out = []
-
-    def should_skip(path):
-        if exclude_pred is not None and exclude_pred(path):
-            return True
-        return False
 
     try:
         root = resolve_read_path(root)
     except (FileNotFoundError, NotADirectoryError):
         return []
     if os.path.isfile(root):
-        if should_skip(root):
-            return []
         if windows_filename_key(os.path.splitext(root)[1]) in ext_set:
             return [root]
         return []
@@ -3022,8 +3005,6 @@ def iter_files_by_ext(
             if windows_filename_key(os.path.splitext(name)[1]) not in ext_set:
                 continue
             path = entry.path
-            if should_skip(path):
-                continue
             out.append(path)
         return sorted(validate_input_paths(out))
     for dirpath, _dirs, filenames in walk_read_directory(root):
@@ -3031,8 +3012,6 @@ def iter_files_by_ext(
             if windows_filename_key(os.path.splitext(name)[1]) not in ext_set:
                 continue
             path = os.path.join(dirpath, name)
-            if should_skip(path):
-                continue
             out.append(path)
     return sorted(validate_input_paths(out))
 
@@ -3076,7 +3055,6 @@ def decode_utf16le_strings(
     errors: str = "replace",
     strip_null: bool = True,
     on_error: str = "skip",
-    min_blob_ofs: int = 0,
     allow_empty_blob: bool = False,
     strict_blob_end: bool = False,
 ):
@@ -3086,10 +3064,9 @@ def decode_utf16le_strings(
     try:
         blob_ofs = int(blob_ofs)
         blob_end = int(blob_end)
-        min_blob_ofs = int(min_blob_ofs)
     except Exception:
         return out
-    if blob_ofs < min_blob_ofs or blob_ofs < 0:
+    if blob_ofs < 0:
         return out
     if blob_ofs > len(dat):
         return out

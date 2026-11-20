@@ -3,6 +3,7 @@ import struct
 import io
 import ntpath
 from contextlib import redirect_stdout
+from heapq import nsmallest
 import itertools
 from pathlib import PureWindowsPath
 import os
@@ -15,6 +16,7 @@ from . import compiler
 from .word_count import count_text_units
 from .common import (
     BinaryFormatError,
+    ascii_lower,
     hx,
     dn,
     I32_PAIR_STRUCT,
@@ -554,17 +556,6 @@ def _scene_script_id_pair(left, right):
     return _scene_script_id_text(left) + "/" + _scene_script_id_text(right)
 
 
-def _iter_pck_original_source_items(blob: bytes, hdr=None):
-    if not looks_like_siglus_pck(blob):
-        return
-    if not hdr:
-        hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    if not hdr:
-        return
-    for name, _a, _b, raw in _pck_original_source_entries(blob, hdr):
-        yield {"name": name, "raw": raw}
-
-
 def iter_pck_key_items(blob: bytes, hdr=None, source_entries=None):
     key_names = {windows_filename_key(name) for name in (ANGOU_DAT_NAME, KEY_TXT_NAME)}
     if source_entries is None:
@@ -611,45 +602,29 @@ def _pck_angou_content(
     return ""
 
 
-def _read_pck_scene_lists(blob: bytes, hdr, input_pck):
-    names, entries, _ = _read_pck_scene_directory(blob, hdr, input_pck)
-    start = hdr["scn_data_list_ofs"]
-    return names, [
-        blob[start + offset : start + offset + size] for offset, size in entries
-    ]
-
-
 def _resolve_pck_scene_exe_el(
     blob: bytes,
-    input_pck: str = "",
-    hdr=None,
-    scn_data=None,
+    input_pck: str,
+    hdr,
+    data_entries,
     explicit_angou: str = "",
-    trace_key: bool = False,
     source_entries=None,
     read_paths=None,
 ):
     from .dat import scn_structure_valid
 
-    try:
-        if not hdr:
-            hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-        if int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0) == 0:
-            return b""
-    except Exception:
+    if not hdr["scn_data_exe_angou_mod"]:
         return b""
+    data_start = hdr["scn_data_list_ofs"]
     base_dir = os.path.dirname(os.path.abspath(input_pck)) if input_pck else ""
-    try:
-        sources = iter_exe_el_sources(
-            explicit_angou=explicit_angou,
-            input_path=input_pck,
-            base_dir=base_dir,
-            input_blob=blob,
-            input_source_entries=source_entries,
-            read_paths=read_paths,
-        )
-    except Exception:
-        return b""
+    sources = iter_exe_el_sources(
+        explicit_angou=explicit_angou,
+        input_path=input_pck,
+        base_dir=base_dir,
+        input_blob=blob,
+        input_source_entries=source_entries,
+        read_paths=read_paths,
+    )
     while True:
         try:
             src = next(sources)
@@ -662,55 +637,38 @@ def _resolve_pck_scene_exe_el(
         except Exception:
             return b""
         exe_el = src["exe_el"]
-        if trace_key:
-            sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
-        if scn_data:
-            for scn_blob in scn_data:
-                out_dat = _decode_scene_blob(
-                    scn_blob,
-                    hdr,
-                    exe_el,
-                    require_exe=True,
-                )
-                if out_dat and scn_structure_valid(out_dat):
-                    if trace_key:
-                        sys.stderr.write(
-                            f"key source accepted: {format_exe_el_source(src)}\n"
-                        )
-                    return exe_el
-            if trace_key:
-                sys.stderr.write(
-                    f"key source rejected, falling back: {format_exe_el_source(src)}\n"
-                )
-            continue
-        if trace_key:
-            sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
-        return exe_el
+        sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
+        for offset, size in data_entries:
+            start = data_start + offset
+            out_dat = _decode_scene_blob(blob[start : start + size], hdr, exe_el)
+            if out_dat and scn_structure_valid(out_dat):
+                sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
+                return exe_el
+        sys.stderr.write(
+            f"key source rejected, falling back: {format_exe_el_source(src)}\n"
+        )
     return b""
 
 
 def require_pck_scene_exe_el(
     blob: bytes,
-    input_pck: str = "",
-    hdr=None,
-    scn_data=None,
+    input_pck: str,
+    hdr,
+    data_entries=None,
     explicit_angou: str = "",
     source_entries=None,
     read_paths=None,
 ):
-    if not hdr:
-        hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    if int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0) == 0:
+    if not hdr["scn_data_exe_angou_mod"]:
         return b""
-    if scn_data is None:
-        _, scn_data = _read_pck_scene_lists(blob, hdr, input_pck)
+    if data_entries is None:
+        _, data_entries, _ = _read_pck_scene_directory(blob, hdr, input_pck)
     exe_el = _resolve_pck_scene_exe_el(
         blob,
         input_pck=input_pck,
         hdr=hdr,
-        scn_data=scn_data,
+        data_entries=data_entries,
         explicit_angou=explicit_angou,
-        trace_key=True,
         source_entries=source_entries,
         read_paths=read_paths,
     )
@@ -726,47 +684,46 @@ def iter_pck_scene_dat_items(
     blob: bytes,
     input_pck: str = "",
     hdr=None,
-    require_exe: bool = False,
     explicit_angou: str = "",
-    trace_key: bool = False,
     scene_exe_el=None,
-    scene_lists=None,
+    scene_directory=None,
     source_entries=None,
     read_paths=None,
+    *,
+    wanted_scene_names=None,
+    with_pack_context=True,
 ):
     if not looks_like_siglus_pck(blob):
         return
     if not hdr:
         hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    if not hdr:
-        return
-    scn_names, scn_data = (
-        _read_pck_scene_lists(blob, hdr, input_pck)
-        if scene_lists is None
-        else scene_lists
+    if scene_directory is None:
+        scene_directory = _read_pck_scene_directory(blob, hdr, input_pck)
+    scn_names, data_entries, _ = scene_directory
+    pack_context = (
+        _build_disam_pack_context(blob, hdr=hdr, scene_names=scn_names)
+        if with_pack_context
+        else None
     )
-    pack_context = _build_disam_pack_context(blob, hdr=hdr, scene_names=scn_names)
     if scene_exe_el is None:
         exe_el = _resolve_pck_scene_exe_el(
             blob,
             input_pck=input_pck,
             hdr=hdr,
-            scn_data=scn_data,
+            data_entries=data_entries,
             explicit_angou=explicit_angou,
-            trace_key=trace_key,
             source_entries=source_entries,
             read_paths=read_paths,
         )
     else:
         exe_el = bytes(scene_exe_el)
-    for scn_no, (nm, scn_blob) in enumerate(zip(scn_names, scn_data)):
+    data_start = hdr["scn_data_list_ofs"]
+    for scn_no, (nm, (offset, size)) in enumerate(zip(scn_names, data_entries)):
+        if wanted_scene_names is not None and ascii_lower(nm) not in wanted_scene_names:
+            continue
         rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
-        out_dat = _decode_scene_blob(
-            scn_blob,
-            hdr,
-            exe_el,
-            require_exe=require_exe,
-        )
+        start = data_start + offset
+        out_dat = _decode_scene_blob(blob[start : start + size], hdr, exe_el)
         yield {
             "scene_no": scn_no,
             "scene_name": nm,
@@ -791,17 +748,13 @@ def _collect_pck_read_flag_stats(
         "unavailable_scene_files": 0,
     }
     scene_counts = []
-    for item in (
-        iter_pck_scene_dat_items(
-            blob,
-            input_pck=input_pck,
-            hdr=hdr,
-            require_exe=True,
-            explicit_angou=explicit_angou,
-            trace_key=True,
-            source_entries=source_entries,
-        )
-        or []
+    for item in iter_pck_scene_dat_items(
+        blob,
+        input_pck=input_pck,
+        hdr=hdr,
+        explicit_angou=explicit_angou,
+        source_entries=source_entries,
+        with_pack_context=False,
     ):
         nm = str(item.get("scene_name") or "")
         scn_blob = item.get("blob")
@@ -826,8 +779,9 @@ def _collect_pck_read_flag_stats(
         if cnt > 0:
             stats["read_flags_scenes"] += 1
             scene_counts.append((nm, cnt))
-    scene_counts.sort(key=lambda item: (-item[1], item[0].casefold(), item[0]))
-    stats["top5_read_flags_scenes"] = scene_counts[:5]
+    stats["top5_read_flags_scenes"] = nsmallest(
+        5, scene_counts, key=lambda item: (-item[1], item[0].casefold(), item[0])
+    )
     return stats
 
 
@@ -869,11 +823,10 @@ def _write_pck_word_csv(csv_path: str, rows) -> None:
 
 def _pck_cd_word_rows(
     blob: bytes,
-    input_pck: str = "",
-    hdr=None,
-    explicit_angou: str = "",
-    scene_exe_el=None,
-    scene_lists=None,
+    input_pck: str,
+    hdr,
+    scene_exe_el,
+    scene_directory,
 ) -> dict:
     from . import dat as _dat
     from . import textmap as _textmap
@@ -885,17 +838,12 @@ def _pck_cd_word_rows(
         "cd_text_dialogue_lines": 0,
         "cd_text_dialogue_count": 0,
     }
-    for item in (
-        iter_pck_scene_dat_items(
-            blob,
-            input_pck=input_pck,
-            hdr=hdr,
-            explicit_angou=explicit_angou,
-            require_exe=True,
-            scene_exe_el=scene_exe_el,
-            scene_lists=scene_lists,
-        )
-        or []
+    for item in iter_pck_scene_dat_items(
+        blob,
+        input_pck=input_pck,
+        hdr=hdr,
+        scene_exe_el=scene_exe_el,
+        scene_directory=scene_directory,
     ):
         stats["scene_files"] += 1
         row = {
@@ -955,7 +903,7 @@ def _pck_cd_word_rows(
     return stats
 
 
-def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
+def _pck_ss_word_rows(blob: bytes, hdr) -> dict:
     from . import textmap as _textmap
 
     stats = {
@@ -965,7 +913,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
         "ss_dialogue_lines": 0,
         "ss_dialogue_count": 0,
     }
-    sources = list(_iter_pck_original_source_items(blob, hdr=hdr) or [])
+    sources = _pck_original_source_entries(blob, hdr)
     if not sources:
         return stats
     with tempfile.TemporaryDirectory(prefix="siglus_ssu_textmap_") as tmpdir:
@@ -974,9 +922,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
         seen_ss_paths = set()
         restored_paths = {}
         output_names = {}
-        for item in sources:
-            raw = bytes(item.get("raw") or b"")
-            name = str(item.get("name") or "")
+        for name, _start, _end, raw in sources:
             rel = _safe_relpath(name)
             if not rel:
                 rel = "unknown.bin"
@@ -1086,13 +1032,13 @@ def pck_word_count(
         print("unsupported --word input: only Siglus .pck is supported")
         return 1
     hdr = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    scene_lists = _read_pck_scene_lists(blob, hdr, input_pck)
+    scene_directory = _read_pck_scene_directory(blob, hdr, input_pck)
     try:
         scene_exe_el = require_pck_scene_exe_el(
             blob,
             input_pck=input_pck,
             hdr=hdr,
-            scn_data=scene_lists[1],
+            data_entries=scene_directory[1],
             explicit_angou=explicit_angou,
             read_paths=inputs,
         )
@@ -1108,9 +1054,8 @@ def pck_word_count(
         blob,
         input_pck=input_pck,
         hdr=hdr,
-        explicit_angou=explicit_angou,
         scene_exe_el=scene_exe_el,
-        scene_lists=scene_lists,
+        scene_directory=scene_directory,
     )
     ss_error = ""
     try:
@@ -1362,14 +1307,14 @@ def _payload_compare_scene_task(args):
     try:
         from . import dat as DAT
 
-        blob1 = _decode_scene_blob(raw1, h1, exe_el1, require_exe=True)
+        blob1 = _decode_scene_blob(raw1, h1, exe_el1)
         same_encoding = (h1 or {}).get("scn_data_exe_angou_mod", 0) == (h2 or {}).get(
             "scn_data_exe_angou_mod", 0
         ) and exe_el1 == exe_el2
         blob2 = (
             blob1
             if raw1 == raw2 and same_encoding
-            else _decode_scene_blob(raw2, h2, exe_el2, require_exe=True)
+            else _decode_scene_blob(raw2, h2, exe_el2)
         )
         return int(row_index), DAT.compare_scn_payload(
             blob1 or None,
@@ -1710,7 +1655,7 @@ def compare_pck(
     return 1 if source_failed or payload_cmp_counts["INCOMPLETE"] else 0
 
 
-def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
+def _decode_scene_blob(blob, hdr, exe_el):
     if not isinstance(blob, (bytes, bytearray)) or not blob:
         return None
     try:
@@ -1720,15 +1665,13 @@ def _decode_scene_blob(blob, hdr, exe_el=b"", require_exe=False):
     b = bytes(blob)
     if exe_mod != 0:
         if not exe_el:
-            if require_exe:
-                return None
-        else:
-            try:
-                _b = bytearray(b)
-                xor_cycle_inplace(_b, exe_el, 0)
-                b = bytes(_b)
-            except Exception:
-                return None
+            return None
+        try:
+            _b = bytearray(b)
+            xor_cycle_inplace(_b, exe_el, 0)
+            b = bytes(_b)
+        except Exception:
+            return None
     easy_code = C.EASY_ANGOU_CODE
     lz = b""
     cand = b""
@@ -1919,16 +1862,6 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_names=()):
     return (raw, name)
 
 
-def iter_exe_el_candidates(
-    os_dir: str, explicit_angou: str = "", with_sources: bool = False
-):
-    for src in iter_exe_el_sources(
-        explicit_angou=explicit_angou,
-        base_dir=os_dir,
-    ):
-        yield src if with_sources else src["exe_el"]
-
-
 def _build_disam_pack_context(blob: bytes, *, hdr, scene_names):
     try:
         _, meta = _pck_sections(blob, preview=False)
@@ -2009,7 +1942,7 @@ def extract_pck(
         return 1
     hdr = parse_i32_header(dat, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
     try:
-        scene_lists = _read_pck_scene_lists(dat, hdr, input_pck)
+        scene_directory = _read_pck_scene_directory(dat, hdr, input_pck)
     except BinaryFormatError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
@@ -2026,7 +1959,7 @@ def extract_pck(
             dat,
             input_pck=input_pck,
             hdr=hdr,
-            scn_data=scene_lists[1],
+            data_entries=scene_directory[1],
             explicit_angou=explicit_angou,
             source_entries=source_entries,
             read_paths=read_paths,
@@ -2039,7 +1972,7 @@ def extract_pck(
     key_output_names = set()
     angou_name = windows_filename_key(os.path.splitext(ANGOU_DAT_NAME)[0])
     separate_key = any(
-        windows_filename_key(name) == angou_name for name in scene_lists[0]
+        windows_filename_key(name) == angou_name for name in scene_directory[0]
     )
     if separate_key:
         output_names.add(windows_filename_key(PCK_KEY_DIR))
@@ -2077,10 +2010,9 @@ def extract_pck(
             dat,
             input_pck=input_pck,
             hdr=hdr,
-            require_exe=True,
-            explicit_angou=explicit_angou,
             scene_exe_el=scene_exe_el,
-            scene_lists=scene_lists,
+            scene_directory=scene_directory,
+            with_pack_context=dat_txt or decompile,
         ):
             nm = str(item.get("scene_name") or "")
             rel = str(

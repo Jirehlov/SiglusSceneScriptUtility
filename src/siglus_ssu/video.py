@@ -1,6 +1,7 @@
 import struct
 from collections import namedtuple
 from hashlib import sha256
+from heapq import heappop, heappush
 from os import fstat
 from .common import (
     OGGS_SIGNATURE,
@@ -294,19 +295,29 @@ def _index_ogv(source, theora_serial, flags_hi24):
     payload_digest = sha256()
     stream_ended = False
     if isinstance(flags_hi24, int):
-        _flags_ranges = None
-        _flags_base = int(flags_hi24) & 0xFFFFFF00
+        flags_base = int(flags_hi24) & 0xFFFFFF00
+        pending_ranges = iter(())
     else:
-        _flags_ranges = list(flags_hi24)
-        _flags_base = 0
+        flags_base = 0
+        pending_ranges = iter(
+            sorted(enumerate(flags_hi24), key=lambda item: item[1][0])
+        )
+    next_range = next(pending_ranges, None)
+    active_ranges = []
 
-    def _flags_base_for(_i):
-        if _flags_ranges is None:
-            return _flags_base
-        for _s, _e, _v in _flags_ranges:
-            if _i >= _s and (_e is None or _i <= _e):
-                return int(_v) & 0xFFFFFF00
-        return 0
+    def flags_base_for(frame_index):
+        nonlocal next_range
+        while next_range is not None and next_range[1][0] <= frame_index:
+            order, (_, end, value) = next_range
+            if end is None or end >= frame_index:
+                heappush(active_ranges, (order, end, value))
+            next_range = next(pending_ranges, None)
+        while active_ranges:
+            _, end, value = active_ranges[0]
+            if end is None or end >= frame_index:
+                return int(value) & 0xFFFFFF00
+            heappop(active_ranges)
+        return flags_base
 
     seq = 0
     x0 = 0
@@ -353,7 +364,7 @@ def _index_ogv(source, theora_serial, flags_hi24):
             if is_key:
                 last_key_seq = int(seq)
                 last_key_page = int(last_page)
-            flags = int(_flags_base_for(int(seq)) | (1 if is_key else 0))
+            flags = flags_base_for(seq) | (1 if is_key else 0)
             time_ms = int(ratio * float(seq + 1) * 1000.0) & 4294967295
             table_b.append(
                 TableBEntry(

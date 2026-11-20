@@ -181,13 +181,9 @@ def _iter_scene_bundles(scene_root: str, explicit_angou: str, read_paths):
             blob,
             input_pck=scene_root,
             hdr=hdr,
-            require_exe=True,
             explicit_angou=explicit_angou,
-            trace_key=True,
             read_paths=read_paths,
         ):
-            if not isinstance(item, dict):
-                continue
             scene_blob = item.get("blob")
             rel = str(item.get("relpath") or "")
             scene_name = item.get("scene_name")

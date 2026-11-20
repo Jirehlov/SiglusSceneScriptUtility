@@ -891,7 +891,6 @@ class _Decompiler:
         unused_strings.subtract({"dummy": 1})
         self.preserve_string_pool = any(count > 0 for count in unused_strings.values())
         self.string_pool_carrier = False
-        self._range_inline_cache = {}
         self._for_init_block_cache = {}
         self._for_init_block_prefix = None
         self._simple_line_cache = {}
@@ -905,7 +904,21 @@ class _Decompiler:
         self.event_lines = [ev["line"] for ev in self.events]
         self.event_targets = [ev.get("target_ofs") for ev in self.events]
         self.event_conds = [ev.get("_cond") or "" for ev in self.events]
-        self.next_nl_index = self._build_next_op_index("CD_NL")
+        event_count = len(self.events)
+        self.next_nl_index = [event_count] * event_count
+        self.next_different_line_offsets = [None] * event_count
+        next_nl = event_count
+        next_line_offset = None
+        for idx in range(event_count - 1, -1, -1):
+            if self.event_ops[idx] == "CD_NL":
+                if (
+                    next_nl < event_count
+                    and self.event_lines[idx] != self.event_lines[next_nl]
+                ):
+                    next_line_offset = self.event_offsets[next_nl]
+                self.next_different_line_offsets[idx] = next_line_offset
+                next_nl = idx
+            self.next_nl_index[idx] = next_nl
         self.next_goto_index = self._build_next_op_index("CD_GOTO")
         self.next_goto_false_index = self._build_next_op_index("CD_GOTO_FALSE")
         self.next_goto_true_index = self._build_next_op_index("CD_GOTO_TRUE")
@@ -1239,22 +1252,18 @@ class _Decompiler:
         return start_idx, end_idx
 
     def _range_is_inline(self, start_idx, end_ofs, source_line):
-        cache_key = (start_idx, end_ofs, source_line)
-        cached = self._range_inline_cache.get(cache_key)
-        if cached is not None:
-            return bool(cached)
-        saw_stmt = False
-        stop_idx = self._end_index_for_ofs(end_ofs)
-        idx = int(start_idx)
-        while idx < stop_idx:
-            if self.event_ops[idx] == "CD_NL":
-                if self.event_lines[idx] != source_line:
-                    self._range_inline_cache[cache_key] = False
-                    return False
-                saw_stmt = True
-            idx += 1
-        self._range_inline_cache[cache_key] = bool(saw_stmt)
-        return bool(saw_stmt)
+        event_count = len(self.events)
+        if start_idx >= event_count:
+            return False
+        first_nl = self.next_nl_index[start_idx]
+        if (
+            first_nl == event_count
+            or self.event_offsets[first_nl] >= end_ofs
+            or self.event_lines[first_nl] != source_line
+        ):
+            return False
+        next_line_offset = self.next_different_line_offsets[first_nl]
+        return next_line_offset is None or next_line_offset >= end_ofs
 
     def _label_lines(self, labels):
         zs = [label for label in labels if label.startswith("Z")]

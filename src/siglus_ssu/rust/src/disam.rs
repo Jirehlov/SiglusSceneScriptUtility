@@ -450,7 +450,8 @@ impl NativeValue {
         };
         let base = scene.annotations.borrow().len() * std::mem::size_of::<Annotation>()
             + scene.events.len()
-                * (std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>());
+                * (std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>())
+            + scene.next_different_line_offsets.len() * std::mem::size_of::<i64>();
         if base > maximum {
             return None;
         }
@@ -4816,6 +4817,7 @@ struct DecompileScene {
     offsets: Vec<i64>,
     index: HashMap<i64, usize>,
     next_nl: Vec<usize>,
+    next_different_line_offsets: Vec<i64>,
     next_goto: Vec<usize>,
     next_false: Vec<usize>,
     next_true: Vec<usize>,
@@ -4885,13 +4887,30 @@ impl DecompileScene {
             }
             out
         };
-        let next_nl = next(Opcode::Nl);
         let next_goto = next(Opcode::Goto);
         let next_false = next(Opcode::GotoFalse);
         let next_true = next(Opcode::GotoTrue);
+        let mut next_nl = Vec::new();
+        let mut next_different_line_offsets = Vec::new();
         let mut active_z = 0;
         let mut for_blockers = Vec::new();
         if prepare_output {
+            let mut newline = events.len();
+            let mut next_line_offset = i64::MAX;
+            next_nl = vec![newline; events.len()];
+            next_different_line_offsets = vec![next_line_offset; events.len()];
+            for (index, event) in events.iter().enumerate().rev() {
+                if event.op == Opcode::Nl {
+                    if let Some(next_event) = events.get(newline)
+                        && next_event.line != event.line
+                    {
+                        next_line_offset = next_event.offset;
+                    }
+                    next_different_line_offsets[index] = next_line_offset;
+                    newline = index;
+                }
+                next_nl[index] = newline;
+            }
             active_z = z_labels
                 .iter()
                 .enumerate()
@@ -4930,6 +4949,7 @@ impl DecompileScene {
             offsets,
             index,
             next_nl,
+            next_different_line_offsets,
             next_goto,
             next_false,
             next_true,
@@ -7941,16 +7961,17 @@ impl<'a> SourceParser<'a> {
         line: Option<i64>,
     ) -> Result<ParsedBody, Failure> {
         let body = self.block(executor.clone(), start, end, context).await?;
-        let stop = self.scene.end(end);
-        let mut same = false;
-        let mut index = self.scene.next_nl.get(start).copied().unwrap_or(stop);
-        while index < stop {
-            if self.scene.events[index].line != line {
-                return Ok((body, None, false));
-            }
-            same = true;
-            index = self.scene.next_nl.get(index + 1).copied().unwrap_or(stop);
-        }
+        let first_nl = self
+            .scene
+            .next_nl
+            .get(start)
+            .copied()
+            .unwrap_or(self.scene.events.len());
+        let same = self.scene.events.get(first_nl).is_some_and(|event| {
+            event.offset < end
+                && event.line == line
+                && self.scene.next_different_line_offsets[first_nl] >= end
+        });
         let inline = if same {
             let mut texts = Vec::with_capacity(body.len());
             let mut valid = true;

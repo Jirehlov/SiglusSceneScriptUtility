@@ -228,53 +228,102 @@ fn palette_bgra(py: Python<'_>, palette: Vec<u32>, indices: &[u8]) -> PyResult<P
 }
 
 struct ShuffleParam {
-    iu: u32,
-    chunks: u32,
-    q1: u32,
-    r1: u32,
+    width: u32,
+    draws: u32,
+    accepted_max: u32,
 }
 
-fn precompute_params(n: usize) -> Vec<ShuffleParam> {
-    let maxv: u32 = 0x7FFF;
-    let mut out = Vec::with_capacity(n - 1);
-    for i in 2..=n {
-        let iu = i as u32;
-        let mut mask: u32 = 0;
-        let mut chunks: u32 = 0;
-        while mask < iu - 1 {
-            mask = (mask << 15) | maxv;
-            chunks += 1;
-        }
-        let q1 = mask / iu;
-        let r1 = mask % iu;
-        out.push(ShuffleParam { iu, chunks, q1, r1 });
-    }
-    out
-}
-
-fn shuffle_inplace_vec(x0: u32, a: &mut [u32], params: &[ShuffleParam]) {
-    let mut x = x0;
-    for (i_idx, p) in params.iter().enumerate() {
-        let i = (i_idx + 2) as u32;
-        let iu = p.iu;
-        let j: usize;
+impl ShuffleParam {
+    fn choose(&self, state: &mut u32) -> u32 {
         loop {
-            let mut rnd: u32 = 0;
-            for _ in 0..p.chunks {
-                let r = msvc_rand15(&mut x);
-                rnd = (rnd << 15) | r;
+            let mut value = msvc_rand15(state);
+            for _ in 1..self.draws {
+                value = (value << 15) | msvc_rand15(state);
             }
-            let q2 = rnd / iu;
-            let r2 = rnd % iu;
-            if q2 < p.q1 || p.r1 == iu - 1 {
-                j = r2 as usize;
-                break;
+            if value <= self.accepted_max {
+                return value % self.width;
             }
         }
-        let ii = (i - 1) as usize;
-        if ii != j {
-            a.swap(ii, j);
+    }
+}
+
+type ShuffleTarget = (Vec<u32>, Vec<(u32, u32)>);
+
+struct ShuffleSearch {
+    targets: Vec<ShuffleTarget>,
+    params: Vec<ShuffleParam>,
+    identity: Vec<usize>,
+}
+
+impl ShuffleSearch {
+    fn new(targets: Vec<ShuffleTarget>) -> Self {
+        let longest_swaps = targets
+            .iter()
+            .map(|(swaps, _)| swaps.len())
+            .max()
+            .unwrap_or(0);
+        let longest_index = targets
+            .iter()
+            .map(|(_, index)| index.len())
+            .max()
+            .unwrap_or(0);
+        let count = (longest_swaps + 1).max(longest_index);
+        let params = (2..=count)
+            .map(|width| {
+                let width = width as u32;
+                let mut mask = 0u32;
+                let mut draws = 0;
+                while mask < width - 1 {
+                    mask = (mask << 15) | 0x7fff;
+                    draws += 1;
+                }
+                let total = u64::from(mask) + 1;
+                let accepted_max = (total - total % u64::from(width) - 1) as u32;
+                ShuffleParam {
+                    width,
+                    draws,
+                    accepted_max,
+                }
+            })
+            .collect();
+        Self {
+            targets,
+            params,
+            identity: (0..longest_index).collect(),
         }
+    }
+
+    fn matches(&self, mut state: u32, order: &mut [usize]) -> bool {
+        for (swaps, index) in &self.targets {
+            if index.is_empty() {
+                if let Some((&first, rest)) = swaps.split_first() {
+                    if msvc_rand15(&mut state) & 1 != first {
+                        return false;
+                    }
+                    for (&expected, param) in rest.iter().zip(&self.params[1..]) {
+                        if param.choose(&mut state) != expected {
+                            return false;
+                        }
+                    }
+                }
+            } else {
+                let order = &mut order[..index.len()];
+                order.copy_from_slice(&self.identity[..index.len()]);
+                for param in &self.params[..index.len() - 1] {
+                    let selected = param.choose(&mut state);
+                    order.swap(param.width as usize - 1, selected as usize);
+                }
+                let mut offset = 0u64;
+                for &original in order.iter() {
+                    let (expected, length) = index[original];
+                    if offset != u64::from(expected) {
+                        return false;
+                    }
+                    offset += u64::from(length);
+                }
+            }
+        }
+        true
     }
 }
 
@@ -313,170 +362,117 @@ where
 }
 
 #[pyfunction]
-fn find_shuffle_seed_first(
+fn find_shuffle_chain_seed(
     py: Python<'_>,
-    target_idx: Vec<(i32, i32)>,
+    targets: Vec<ShuffleTarget>,
     seed0: u32,
     workers: usize,
 ) -> PyResult<Option<u32>> {
-    let n = target_idx.len();
-    if n < 2 {
+    const NO_SEED: u64 = 1 << 32;
+    const CHUNK: u64 = 16_384;
+
+    let search = Arc::new(ShuffleSearch::new(targets));
+    let first = u64::from(seed0);
+    let limit = (first + (1 << 31)).min(NO_SEED);
+    if search.matches(seed0, &mut vec![0; search.identity.len()]) {
         return Ok(Some(seed0));
     }
-    let params = Arc::new(precompute_params(n));
-    let base: Vec<u32> = (0..(n as u32)).collect();
-    let base = Arc::new(base);
-    let target_ofs: Vec<i32> = target_idx.iter().map(|p| p.0).collect();
-    let lens: Vec<i32> = target_idx.iter().map(|p| p.1).collect();
-    let target_ofs = Arc::new(target_ofs);
-    let lens = Arc::new(lens);
+    let total = limit - first;
+    if total == 1 {
+        return Ok(None);
+    }
 
-    let w = workers.clamp(1, 64);
-    let chunk: u32 = 200;
-    let progress_iv = 1.0;
-
-    let prefix: &'static str = "[test-shuffle]";
-
+    let workers = workers
+        .clamp(1, 64)
+        .min((total - 1).div_ceil(CHUNK) as usize);
     let stop = Arc::new(AtomicBool::new(false));
-    let found = Arc::new(AtomicBool::new(false));
-    let found_seed = Arc::new(AtomicU64::new(0));
-    let next_attempt = Arc::new(AtomicU64::new(0));
-    let done_attempts = Arc::new(AtomicU64::new(0));
-    let active = Arc::new(AtomicU64::new(w as u64));
-
-    let limit: u64 = 1u64 << 32;
-    let total: u64 = limit - (seed0 as u64);
+    let found_seed = Arc::new(AtomicU64::new(NO_SEED));
+    let next_seed = Arc::new(AtomicU64::new(first + 1));
+    let done_attempts = Arc::new(AtomicU64::new(1));
+    let active = Arc::new(AtomicU64::new(workers as u64));
     let t0 = Instant::now();
+    let waiting_thread = std::thread::current();
 
-    let mut handles = Vec::with_capacity(w);
-    py.detach(|| {
-        for _ in 0..w {
-            let params = Arc::clone(&params);
-            let base = Arc::clone(&base);
-            let target_ofs = Arc::clone(&target_ofs);
-            let lens = Arc::clone(&lens);
-            let stop = Arc::clone(&stop);
-            let found = Arc::clone(&found);
-            let found_seed = Arc::clone(&found_seed);
-            let next_attempt = Arc::clone(&next_attempt);
-            let done_attempts = Arc::clone(&done_attempts);
-            let active = Arc::clone(&active);
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let search = Arc::clone(&search);
+        let stop = Arc::clone(&stop);
+        let found_seed = Arc::clone(&found_seed);
+        let next_seed = Arc::clone(&next_seed);
+        let done_attempts = Arc::clone(&done_attempts);
+        let active = Arc::clone(&active);
+        let waiting_thread = waiting_thread.clone();
 
-            let h = std::thread::spawn(move || {
-                let mut buf = vec![0u32; base.len()];
-                let mut ofs_out = vec![0i32; base.len()];
-                let mut local_done: u64 = 0;
-                loop {
-                    if stop.load(Ordering::Relaxed) || found.load(Ordering::Relaxed) {
-                        break;
+        handles.push(std::thread::spawn(move || {
+            let mut order = vec![0; search.identity.len()];
+            let mut done = 0u64;
+            'scan: while !stop.load(Ordering::Relaxed) {
+                let start = next_seed.fetch_add(CHUNK, Ordering::Relaxed);
+                if start >= limit {
+                    break;
+                }
+                let end = (start + CHUNK).min(limit);
+                for candidate in start..end {
+                    if stop.load(Ordering::Relaxed) {
+                        break 'scan;
                     }
-                    let start = next_attempt.fetch_add(chunk as u64, Ordering::Relaxed);
-                    if start >= total {
-                        break;
-                    }
-                    let end = (start + chunk as u64).min(total);
-                    for a in start..end {
-                        if stop.load(Ordering::Relaxed) || found.load(Ordering::Relaxed) {
-                            break;
-                        }
-                        buf.copy_from_slice(&base);
-                        let seed = seed0 + a as u32;
-                        shuffle_inplace_vec(seed, &mut buf, &params);
-
-                        let mut ofs: i32 = 0;
-                        for &orig_u32 in buf.iter() {
-                            let orig = orig_u32 as usize;
-                            ofs_out[orig] = ofs;
-                            let ln = lens[orig];
-                            if ln > 0 {
-                                ofs = ofs.wrapping_add(ln);
-                            }
-                        }
-
-                        let mut ok = true;
-                        for i0 in 0..ofs_out.len() {
-                            if ofs_out[i0] != target_ofs[i0] {
-                                ok = false;
-                                break;
-                            }
-                        }
-
-                        if ok {
-                            found_seed.store(seed as u64, Ordering::Relaxed);
-                            found.store(true, Ordering::Relaxed);
+                    if search.matches(candidate as u32, &mut order) {
+                        if found_seed
+                            .compare_exchange(
+                                NO_SEED,
+                                candidate,
+                                Ordering::Relaxed,
+                                Ordering::Relaxed,
+                            )
+                            .is_ok()
+                        {
                             stop.store(true, Ordering::Relaxed);
-                            break;
+                            waiting_thread.unpark();
                         }
-                        local_done += 1;
-                        if (local_done & 1023) == 0 {
-                            done_attempts.fetch_add(1024, Ordering::Relaxed);
-                        }
+                        break 'scan;
                     }
+                    done += 1;
                 }
-                let rem = local_done & 1023;
-                if rem != 0 {
-                    done_attempts.fetch_add(rem, Ordering::Relaxed);
-                }
-                active.fetch_sub(1, Ordering::Relaxed);
-            });
-            handles.push(h);
-        }
-    });
+                done_attempts.fetch_add(done, Ordering::Relaxed);
+                done = 0;
+            }
+            done_attempts.fetch_add(done, Ordering::Relaxed);
+            if active.fetch_sub(1, Ordering::Relaxed) == 1 {
+                waiting_thread.unpark();
+            }
+        }));
+    }
 
-    let mut last_print = Instant::now();
-    loop {
-        if found.load(Ordering::Relaxed) {
+    let mut last_print = t0;
+    let mut signal_error = None;
+    while found_seed.load(Ordering::Relaxed) == NO_SEED && active.load(Ordering::Relaxed) != 0 {
+        if let Err(error) = py.check_signals() {
             stop.store(true, Ordering::Relaxed);
+            signal_error = Some(error);
             break;
         }
-        if active.load(Ordering::Relaxed) == 0 {
-            break;
-        }
-
-        if last_print.elapsed() >= Duration::from_secs_f64(progress_iv) {
+        if last_print.elapsed() >= Duration::from_secs(1) {
             let done = done_attempts.load(Ordering::Relaxed);
             let elapsed = t0.elapsed().as_secs_f64();
-            let rate = if elapsed > 0.0 {
-                (done as f64) / elapsed
-            } else {
-                0.0
-            };
-            let remain = (total - done) as f64;
-            let eta = if rate > 0.0 {
-                remain / rate
-            } else {
-                f64::INFINITY
-            };
-            let next_seed = (seed0 as u64 + done).min(limit - 1);
+            let rate = done as f64 / elapsed;
+            let eta = (total - done) as f64 / rate;
             eprintln!(
-                "{} next_seed={} elapsed={:.1}s rate~{:.0}/s ETA={}",
-                prefix,
-                next_seed,
-                elapsed,
-                rate,
+                "[test-shuffle] checked={done}/{total} elapsed={elapsed:.1}s rate~{rate:.0}/s ETA={}",
                 fmt_hms(eta)
             );
             last_print = Instant::now();
         }
-
-        std::thread::sleep(Duration::from_millis(50));
-        if let Err(e) = py.check_signals() {
-            stop.store(true, Ordering::Relaxed);
-            for h in handles {
-                let _ = h.join();
-            }
-            return Err(e);
-        }
+        py.detach(|| std::thread::park_timeout(Duration::from_millis(50)));
     }
 
-    for h in handles {
-        let _ = h.join();
+    for handle in handles {
+        let _ = handle.join();
     }
-    if found.load(Ordering::Relaxed) {
-        Ok(Some(found_seed.load(Ordering::Relaxed) as u32))
-    } else {
-        Ok(None)
+    if let Some(error) = signal_error {
+        return Err(error);
     }
+    let seed = found_seed.load(Ordering::Relaxed);
+    Ok((seed != NO_SEED).then_some(seed as u32))
 }
 
 #[pyfunction]
@@ -609,7 +605,7 @@ fn native_accel(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nwa_decode_pcm, m)?)?;
     m.add_function(wrap_pyfunction!(tile_copy, m)?)?;
     m.add_function(wrap_pyfunction!(msvcrand_shuffle_inplace, m)?)?;
-    m.add_function(wrap_pyfunction!(find_shuffle_seed_first, m)?)?;
+    m.add_function(wrap_pyfunction!(find_shuffle_chain_seed, m)?)?;
     m.add_function(wrap_pyfunction!(find_rand_skip, m)?)?;
     m.add_function(wrap_pyfunction!(palette_bgra, m)?)?;
     m.add_function(wrap_pyfunction!(compile_project, m)?)?;

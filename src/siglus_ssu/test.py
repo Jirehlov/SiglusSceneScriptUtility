@@ -545,7 +545,7 @@ def _test_one(
     result_allow_invalid = None
     result_backend = None
     try:
-        C.set_profile(0 if const_profile is None else const_profile)
+        C.set_profile(const_profile)
         step_started = time.perf_counter()
         try:
             original_blob, hdr, err = _read_siglus_pck(path)

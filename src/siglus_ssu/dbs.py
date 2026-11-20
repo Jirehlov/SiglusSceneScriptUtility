@@ -2,6 +2,7 @@ import struct
 import sys
 import csv
 import re
+from heapq import nsmallest
 from . import const as C
 from .native_ops import (
     is_native_available,
@@ -225,8 +226,8 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
         set2 = set(r2)
         print()
         print("row call_no diffs:")
-        only1 = sorted(list(set1 - set2))[: C.MAX_LIST_PREVIEW]
-        only2 = sorted(list(set2 - set1))[: C.MAX_LIST_PREVIEW]
+        only1 = nsmallest(C.MAX_LIST_PREVIEW, set1 - set2)
+        only2 = nsmallest(C.MAX_LIST_PREVIEW, set2 - set1)
         if only1:
             print(f"  only in file1 (preview): {', '.join([str(x) for x in only1])}")
         if only2:
@@ -236,12 +237,12 @@ def compare_dbs(b1: bytes, b2: bytes) -> int:
     if c1 != c2:
         map1 = dict(c1)
         map2 = dict(c2)
-        only1 = sorted(list(set(map1.keys()) - set(map2.keys())))[: C.MAX_LIST_PREVIEW]
-        only2 = sorted(list(set(map2.keys()) - set(map1.keys())))[: C.MAX_LIST_PREVIEW]
-        common = sorted(list(set(map1.keys()) & set(map2.keys())))
-        typechg = [cn for cn in common if map1.get(cn) != map2.get(cn)][
-            : C.MAX_LIST_PREVIEW
-        ]
+        only1 = nsmallest(C.MAX_LIST_PREVIEW, map1.keys() - map2.keys())
+        only2 = nsmallest(C.MAX_LIST_PREVIEW, map2.keys() - map1.keys())
+        typechg = nsmallest(
+            C.MAX_LIST_PREVIEW,
+            (cn for cn, kind in map1.items() if cn in map2 and kind != map2[cn]),
+        )
         print()
         print("column call_no diffs:")
         if only1:

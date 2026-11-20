@@ -20,12 +20,6 @@ def is_native_available() -> bool:
 
 
 def compile_project_native(config):
-    if not _USE_NATIVE or _runtime._LEGACY_FULL:
-        return {
-            "handled": False,
-            "fallback_kind": "unavailable",
-            "reason": "native extension is not available",
-        }
     try:
         return native_accel.compile_project(config)
     except Exception as exc:
@@ -671,39 +665,34 @@ def palette_bgra(palette, indices: bytes) -> bytes:
     return _py_palette_bgra(palette, indices)
 
 
+def _shuffle_parameters(count):
+    for width in range(2, count + 1):
+        mask = draws = 0
+        while mask < width - 1:
+            mask = ((mask << 15) | 0x7FFF) & 0xFFFFFFFF
+            draws += 1
+        yield width, draws, (mask + 1) // width * width
+
+
+def _draw_shuffle_index(state, width, draws, limit):
+    while True:
+        state, value = msvcrt_rand15(state)
+        for _ in range(1, draws):
+            state, part = msvcrt_rand15(state)
+            value = ((value << 15) | part) & 0xFFFFFFFF
+        if value < limit:
+            return state, value % width
+
+
 def _py_msvcrand_shuffle_inplace(state: int, a) -> int:
-    s = int(state) & 0xFFFFFFFF
-    n = len(a)
-    if n < 2:
-        return s
-    n32 = 15
-    i_1 = 0x7FFF
-    for i in range(2, n + 1):
-        mask = 0
-        chunks = 0
-        while mask < i - 1 and mask != 0xFFFFFFFF:
-            mask = ((mask << n32) | i_1) & 0xFFFFFFFF
-            chunks += 1
-        q1, r1 = divmod(mask, i)
-        while 1:
-            rnd = 0
-            for _ in range(chunks):
-                s, v = msvcrt_rand15(s)
-                rnd = ((rnd << n32) | v) & 0xFFFFFFFF
-            q2, j = divmod(rnd, i)
-            if q2 < q1 or r1 == i - 1:
-                break
-        a[i - 1], a[j] = a[j], a[i - 1]
-    return s
+    state = int(state) & 0xFFFFFFFF
+    for width, draws, limit in _shuffle_parameters(len(a)):
+        state, index = _draw_shuffle_index(state, width, draws, limit)
+        a[width - 1], a[index] = a[index], a[width - 1]
+    return state
 
 
 def msvcrand_shuffle_inplace(state: int, a) -> int:
     if _USE_NATIVE and not _runtime._LEGACY_FULL:
         return int(native_accel.msvcrand_shuffle_inplace(int(state) & 0xFFFFFFFF, a))
     return _py_msvcrand_shuffle_inplace(state, a)
-
-
-def find_shuffle_seed_first(target_idx_pairs, seed0: int, *, workers):
-    if not _USE_NATIVE or _runtime._LEGACY_FULL:
-        return None
-    return native_accel.find_shuffle_seed_first(target_idx_pairs, seed0, workers)

@@ -176,6 +176,7 @@ pub struct RuntimeCodes {
     pub elm: ElementCodes,
     pub element_type: ElementTypeCodes,
     pub logical_and_precedence: i32,
+    pub unary_precedence: i32,
     pub allow_property_out_of_command: bool,
 }
 
@@ -346,6 +347,7 @@ impl RuntimeCodes {
                 .collect(),
             read_flag_command_codes: constants.read_flag_command_codes.iter().copied().collect(),
             logical_and_precedence: constants.logical_and_precedence,
+            unary_precedence: constants.unary_precedence,
             allow_property_out_of_command: constants.allow_property_out_of_command,
         }))
     }

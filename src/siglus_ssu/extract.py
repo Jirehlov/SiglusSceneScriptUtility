@@ -3,6 +3,7 @@ import sys
 from .common import (
     find_named_path,
     iter_files_by_ext,
+    iter_exe_el_sources,
     looks_like_siglus_dat,
     parse_gei_disam_args,
     consume_angou_option,
@@ -33,10 +34,9 @@ def _disassemble_dat_dir(
     output_dir = os.path.abspath(output_dir)
     try:
         exe_el_candidates = list(
-            pck.iter_exe_el_candidates(
-                input_dir,
+            iter_exe_el_sources(
                 explicit_angou=explicit_angou,
-                with_sources=True,
+                base_dir=input_dir,
             )
         )
     except ValueError as e:
@@ -111,12 +111,7 @@ def main(argv):
         return 2
     if explicit_angou and not gei:
         try:
-            list(
-                pck.iter_exe_el_candidates(
-                    "",
-                    explicit_angou=explicit_angou,
-                )
-            )
+            list(iter_exe_el_sources(explicit_angou=explicit_angou))
         except ValueError as e:
             sys.stderr.write(str(e) + "\n")
             return 2

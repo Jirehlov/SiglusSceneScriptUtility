@@ -322,7 +322,7 @@ where
 }
 
 pub fn supported(config: &CompileConfig) -> bool {
-    !config.options.dat_repack && !config.options.test_shuffle
+    !config.options.dat_repack
 }
 
 fn format_path_error(path: &Path, error: std::io::Error) -> String {
@@ -1837,16 +1837,11 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 return Err(format!("{}: bad dat header", dat_path.display()));
             }
             let command_labels = parse_command_labels(config, &dat);
-            let read_flag_count = if FULL_STATS {
-                scn_header_value(config, &dat, "read_flag_cnt").max(0) as usize
-            } else {
-                0
-            };
             SceneData {
                 stem,
                 bytes: SceneBytes::Dat(dat),
                 command_labels,
-                read_flag_count,
+                read_flag_count: 0,
                 compiled: false,
             }
         };

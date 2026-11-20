@@ -16,6 +16,6 @@
 14. Avoid pure forwarding functions with only a few references.
 15. Unsafe Rust is prohibited.
 16. Do not duplicate constants defined in `const.py` elsewhere; always reference their definitions in `const.py`.
-17. Limit scene PCK support to official formats this project can generate. Flix resource PCKs are a separate, read-only format and an explicit exception.
+17. Limit PCK compatibility work and parsing accuracy guarantees to combinations of on-disk layout, metadata, and payload encodings that this project can produce through a supported generation path using valid inputs and supported options. Flix resource PCKs are the sole exception and have read-only support. Successful parsing or extraction of an unsupported PCK is permitted, with no accuracy guarantee. Skip work aimed solely at cataloging unsupported variants, improving their decoding, or adding checks to identify or reject them.
 18. Record only major changes in the changelog.
 19. Use Python's built-ins, the Python standard library, or the Rust standard library to interact with the operating system. High-level cross-platform Python APIs such as psutil are allowed. Project code must not call platform OS APIs directly through FFI or low-level bindings.

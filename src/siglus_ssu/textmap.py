@@ -16,6 +16,7 @@ from .common import (
     hint_help as _hint_help,
     max_pair_end,
     iter_files_by_ext,
+    iter_exe_el_sources,
     is_auxiliary_dat_name,
     looks_like_siglus_dat,
     is_trace_command_base as _is_trace_command_base,
@@ -565,9 +566,6 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
 
 
 def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
-    parsed = _parse_scn_dat(blob)
-    if parsed:
-        return parsed, blob, {"exe": False, "easy": False, "lzss": False}
     easy_code = C.EASY_ANGOU_CODE or b""
 
     def _try(b: bytes, used_exe: bool, used_easy: bool, used_lzss: bool):
@@ -774,10 +772,9 @@ def main(argv):
             return 1
         try:
             exe_el_candidates = list(
-                pck.iter_exe_el_candidates(
-                    os.path.abspath(dat_path),
+                iter_exe_el_sources(
                     explicit_angou=explicit_angou,
-                    with_sources=True,
+                    base_dir=os.path.abspath(dat_path),
                 )
             )
         except ValueError as exc:
@@ -793,10 +790,9 @@ def main(argv):
                 try:
                     local_sources[directory] = [
                         source
-                        for source in pck.iter_exe_el_candidates(
-                            directory,
+                        for source in iter_exe_el_sources(
                             explicit_angou=explicit_angou,
-                            with_sources=True,
+                            base_dir=directory,
                         )
                         if source["exe_el"] not in base_keys
                     ]
@@ -828,10 +824,9 @@ def main(argv):
     base_dir = os.path.dirname(os.path.abspath(dat_path)) or "."
     try:
         exe_el_candidates = list(
-            pck.iter_exe_el_candidates(
-                base_dir,
+            iter_exe_el_sources(
                 explicit_angou=explicit_angou,
-                with_sources=True,
+                base_dir=base_dir,
             )
         )
     except ValueError as exc:

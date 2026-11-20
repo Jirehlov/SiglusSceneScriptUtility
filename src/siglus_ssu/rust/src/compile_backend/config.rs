@@ -71,6 +71,7 @@ pub struct CompileConstants {
     pub pack_header_size: usize,
     pub z_label_count: usize,
     pub logical_and_precedence: i32,
+    pub unary_precedence: i32,
     pub easy_angou_code: Vec<u8>,
     pub gameexe_dat_angou_code: Vec<u8>,
     pub exe_angou_a_idx: Vec<usize>,
@@ -130,7 +131,6 @@ pub struct CompileOptions {
     pub max_workers: Option<usize>,
     pub set_shuffle: Option<String>,
     pub gei: bool,
-    pub test_shuffle: bool,
     pub force_serial_compile: bool,
 }
 
@@ -287,6 +287,7 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
         z_label_count: extract_item::<i64>(&constants_dict, "z_label_count")? as usize,
         logical_and_precedence: extract_item::<i64>(&constants_dict, "logical_and_precedence")?
             as i32,
+        unary_precedence: extract_item(&constants_dict, "unary_precedence")?,
         easy_angou_code: extract_item(&constants_dict, "easy_angou_code")?,
         gameexe_dat_angou_code: extract_item(&constants_dict, "gameexe_dat_angou_code")?,
         exe_angou_a_idx: extract_item(&constants_dict, "exe_angou_a_idx")?,
@@ -321,7 +322,6 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         max_workers: extract_item(&options_dict, "max_workers")?,
         set_shuffle: extract_item(&options_dict, "set_shuffle")?,
         gei: extract_item(&options_dict, "gei")?,
-        test_shuffle: extract_item(&options_dict, "test_shuffle")?,
         force_serial_compile: extract_item(&options_dict, "force_serial_compile")?,
     };
     let context = CompileContext {

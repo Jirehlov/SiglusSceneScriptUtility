@@ -158,10 +158,9 @@ def analyze_file(
         if explicit_angou or not looks_like_siglus_dat(blob):
             try:
                 cands = list(
-                    pck.iter_exe_el_candidates(
-                        os.path.dirname(os.path.abspath(path)) or ".",
+                    iter_exe_el_sources(
                         explicit_angou=explicit_angou,
-                        with_sources=True,
+                        base_dir=os.path.dirname(os.path.abspath(path)) or ".",
                     )
                 )
             except ValueError as e:
@@ -267,18 +266,15 @@ def analyze_read_flags(
             blob = read_bytes(input_pck)
             if not looks_like_siglus_pck(blob):
                 raise ValueError("--read-flags requires a Siglus scene PCK")
-            wanted = info["flags"]
             for item in pck.iter_pck_scene_dat_items(
                 blob,
                 input_pck=input_pck,
-                require_exe=True,
                 explicit_angou=explicit_angou,
-                trace_key=True,
                 read_paths=inputs,
+                wanted_scene_names=info["flags"],
+                with_pack_context=False,
             ):
                 name = ascii_lower(item["scene_name"])
-                if name not in wanted:
-                    continue
                 scene = item["blob"]
                 header = (
                     parse_i32_header_checked(scene, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
@@ -457,17 +453,15 @@ def compare_files(
         if need_decode1 or need_decode2:
             try:
                 cands1 = list(
-                    pck.iter_exe_el_candidates(
-                        os.path.dirname(os.path.abspath(p1)) or ".",
+                    iter_exe_el_sources(
                         explicit_angou=explicit_angou,
-                        with_sources=True,
+                        base_dir=os.path.dirname(os.path.abspath(p1)) or ".",
                     )
                 )
                 cands2 = list(
-                    pck.iter_exe_el_candidates(
-                        os.path.dirname(os.path.abspath(p2)) or ".",
+                    iter_exe_el_sources(
                         explicit_angou=explicit_angou,
-                        with_sources=True,
+                        base_dir=os.path.dirname(os.path.abspath(p2)) or ".",
                     )
                 )
             except ValueError as e:

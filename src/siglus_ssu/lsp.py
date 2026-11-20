@@ -159,6 +159,23 @@ class ProjectContext:
     _completion_keys: list[tuple[str, int]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    _inc_documents: dict[str, tuple[dict[str, Any], list[DefinitionRecord]]] | None = (
+        field(default=None, init=False, repr=False, compare=False)
+    )
+
+    def inc_document(self, path: str) -> tuple[dict[str, Any], list[DefinitionRecord]]:
+        if self._inc_documents is None:
+            by_path: dict[str, tuple[dict[str, Any], list[DefinitionRecord]]] = {}
+            for inc_path, data in self.inc_iad2_by_path.items():
+                by_path.setdefault(_path_identity(inc_path), (data, []))
+            for records in self.definitions.values():
+                for record in records:
+                    _, definitions = by_path.setdefault(
+                        _path_identity(record.path), ({}, [])
+                    )
+                    definitions.append(record)
+            self._inc_documents = by_path
+        return self._inc_documents.get(_path_identity(path), ({}, []))
 
     def completion_definitions(self, prefix: str) -> Iterable[DefinitionRecord]:
         if prefix and self._completion_keys is None:
@@ -649,6 +666,19 @@ def _char_to_lsp_character(
 ) -> int:
     idx = max(0, min(len(line_text), int(character or 0)))
     return _encoding_units(line_text[:idx], position_encoding)
+
+
+def _line_lsp_positions(
+    line_text: str, columns: Iterable[int], position_encoding: str
+) -> dict[int, int]:
+    positions = {}
+    previous = units = 0
+    for column in sorted(set(columns)):
+        point = max(0, min(len(line_text), column))
+        units += _encoding_units(line_text[previous:point], position_encoding)
+        positions[column] = units
+        previous = point
+    return positions
 
 
 def _lsp_character_to_char(
@@ -1310,16 +1340,10 @@ def analyze_document(
         )
         return result
     if kind == "inc":
-        path_identity = _path_identity(abs_path)
-        for inc_path, data in project.inc_iad2_by_path.items():
-            if _path_identity(inc_path) == path_identity:
-                result.replace_uses = data.get("replace_uses", [])
-                result.directive_tokens = data.get("directive_tokens", [])
-                break
-        for rec in project.definitions.values():
-            for item in rec:
-                if _path_identity(item.path) == path_identity:
-                    result.document_symbols.append(item)
+        data, definitions = project.inc_document(abs_path)
+        result.replace_uses = data.get("replace_uses", [])
+        result.directive_tokens = data.get("directive_tokens", [])
+        result.document_symbols = definitions.copy()
         return result
     result = _analyze_ss_document(
         abs_path, text, project, run_bs=run_bs, read_flags=read_flags
@@ -2060,23 +2084,15 @@ def semantic_tokens_for_result(
     for line, group in groupby(sorted(selected), key=lambda item: item[0]):
         tokens = list(group)
         line_text = lines[line] if 0 <= line < len(lines) else ""
-        points = sorted(
-            {
-                max(0, min(len(line_text), point))
-                for _, start, end in tokens
-                for point in (start, end)
-            }
+        positions = _line_lsp_positions(
+            line_text,
+            (point for _, start, end in tokens for point in (start, end)),
+            position_encoding,
         )
-        positions = {}
-        previous = units = 0
-        for point in points:
-            units += _encoding_units(line_text[previous:point], position_encoding)
-            positions[point] = units
-            previous = point
         for _, start_char, end_char in tokens:
             token_type_id, modifiers = selected[(line, start_char, end_char)]
-            start_char = positions[max(0, min(len(line_text), start_char))]
-            end_char = positions[max(0, min(len(line_text), end_char))]
+            start_char = positions[start_char]
+            end_char = positions[end_char]
             if end_char <= start_char:
                 continue
             delta_line = line - prev_line
@@ -2101,9 +2117,10 @@ def _occurrence_locations(
     text_for_path: Any,
     uri_for_path: Any,
 ) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+    unique: list[SymbolOccurrence] = []
     seen: set[tuple[str, int, int, int]] = set()
     files: dict[str, tuple[str, str, tuple[str, ...]]] = {}
+    columns: dict[tuple[str, int], set[int]] = {}
     for occurrence in occurrences:
         file = files.get(occurrence.path)
         if file is None:
@@ -2114,31 +2131,52 @@ def _occurrence_locations(
                 _split_lines_cached(text),
             )
             files[occurrence.path] = file
-        path, uri, lines = file
-        key = (
-            path,
-            occurrence.line,
-            occurrence.start_char,
-            occurrence.end_char,
-        )
+        path, _, _ = file
+        key = (path, occurrence.line, occurrence.start_char, occurrence.end_char)
         if key in seen:
             continue
         seen.add(key)
-        line = occurrence.line
+        unique.append(occurrence)
+        columns.setdefault((occurrence.path, occurrence.line), set()).update(
+            (occurrence.start_char, occurrence.end_char)
+        )
+    positions = {}
+    for (path, line), points in columns.items():
+        lines = files[path][2]
         line_text = lines[line] if 0 <= line < len(lines) else ""
+        positions[path, line] = _line_lsp_positions(
+            line_text, points, position_encoding
+        )
+    out = []
+    for occurrence in unique:
+        line_positions = positions[occurrence.path, occurrence.line]
         out.append(
             {
-                "uri": uri,
+                "uri": files[occurrence.path][1],
                 "range": _range(
                     occurrence.line,
-                    occurrence.start_char,
-                    occurrence.end_char,
-                    line_text,
-                    position_encoding,
+                    line_positions[occurrence.start_char],
+                    line_positions[occurrence.end_char],
                 ),
             }
         )
     return out
+
+
+def _rewrite_rename_line(
+    line: str, edits: list[SymbolOccurrence], new_name: str
+) -> str:
+    parts = []
+    previous_end = 0
+    for item in edits:
+        if item.start_char < previous_end:
+            for edit in reversed(edits):
+                line = line[: edit.start_char] + new_name + line[edit.end_char :]
+            return line
+        parts.extend((line[previous_end : item.start_char], new_name))
+        previous_end = item.end_char
+    parts.append(line[previous_end:])
+    return "".join(parts)
 
 
 def _file_document_path(path: str) -> str:
@@ -2541,6 +2579,9 @@ class DirectoryLinkDiagnosticsEntry:
     occurrences: dict[str, list[SymbolOccurrence]]
     diagnostics: dict[str, list[SourceDiagnostic]]
     revision: int = 0
+    occurrences_by_path: dict[str, list[SymbolOccurrence]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
 
 def _definition_record_to_cache(record: DefinitionRecord) -> dict[str, Any]:
@@ -3832,14 +3873,17 @@ class SSLanguageServer:
         entry = self.link_diagnostics_for_directory(
             os.path.dirname(doc.path), project_entry=project_entry
         )
+        if entry.occurrences_by_path is None:
+            by_path: dict[str, list[SymbolOccurrence]] = {}
+            for occurrences in entry.occurrences.values():
+                for item in occurrences:
+                    by_path.setdefault(_path_identity(item.path), []).append(item)
+            entry.occurrences_by_path = by_path
         return replace(
             result,
-            occurrences=[
-                item
-                for items in entry.occurrences.values()
-                for item in items
-                if _path_identity(item.path) == _path_identity(doc.path)
-            ],
+            occurrences=entry.occurrences_by_path.get(
+                _path_identity(doc.path), []
+            ).copy(),
         )
 
     def scan_one_document(
@@ -4919,29 +4963,11 @@ class SSLanguageServer:
             return
         self.report_work_done_progress("Building workspace edit...", 85)
         changes: dict[str, list[dict[str, Any]]] = {}
-        seen: set[tuple[str, int, int, int]] = set()
-        for item in matches:
-            key = (
-                os.path.abspath(item.path),
-                item.line,
-                item.start_char,
-                item.end_char,
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            item_text = self.text_for_path(item.path)
-            changes.setdefault(self.uri_for_path(item.path), []).append(
-                {
-                    "range": _range(
-                        item.line,
-                        item.start_char,
-                        item.end_char,
-                        _line_text_at(item_text, item.line),
-                        self.position_encoding,
-                    ),
-                    "newText": new_name,
-                }
+        for location in _occurrence_locations(
+            matches, self.position_encoding, self.text_for_path, self.uri_for_path
+        ):
+            changes.setdefault(location["uri"], []).append(
+                {"range": location["range"], "newText": new_name}
             )
         workspace_edit: dict[str, Any] = {"changes": changes}
         workspace = _dict_member(self.client_capabilities, "workspace")
@@ -5114,10 +5140,9 @@ class SSLanguageServer:
             unique = {_occurrence_position(item): item for item in items}
             edits[path] = sorted(unique.values(), key=_occurrence_position)
             lines = list(_split_lines_cached(texts[path]))
-            for item in reversed(edits[path]):
-                line = lines[item.line]
-                lines[item.line] = (
-                    line[: item.start_char] + new_name + line[item.end_char :]
+            for line_no, group in groupby(edits[path], key=lambda item: item.line):
+                lines[line_no] = _rewrite_rename_line(
+                    lines[line_no], list(group), new_name
                 )
             texts[path] = "\n".join(lines)
         inc_changed = any(path.lower().endswith(".inc") for path in edits)
