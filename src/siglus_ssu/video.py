@@ -1,15 +1,17 @@
-import shutil
 import struct
 from collections import namedtuple
-from .common import open_atomic_output
+from .common import (
+    OGGS_SIGNATURE,
+    iter_complete_ogg_pages,
+    iter_ogg_pages,
+    open_atomic_output,
+)
 from .path_policy import (
     open_read,
     read_file_stat,
     resolve_read_path,
 )
 
-OGGS_SIGNATURE = b"OggS"
-OGG_HEADER_STRUCT = struct.Struct("<4sBBqIIIB")
 TABLEA_STRUCT = struct.Struct("<IBBHIIiii")
 TABLEB_STRUCT = struct.Struct("<IIIIIIII")
 OUTER_STRUCT = struct.Struct("<42I")
@@ -32,9 +34,6 @@ TableBEntry = namedtuple(
 OMVFullInfo = namedtuple(
     "OMVFullInfo",
     "basic outer table_a table_b ogg_data_offset theora_serial theora_fps_num theora_fps_den theora_kfgshift theora_pixfmt theora_pic_w theora_pic_h",
-)
-_OggPage = namedtuple(
-    "_OggPage", "serial seq header_type granulepos segments body page_bytes"
 )
 _OMV_PARSE_ERRORS = (EOFError, OSError, ValueError, struct.error)
 
@@ -195,7 +194,7 @@ def _omv_ogg_offset(path, outer):
         )
         try:
             with open_read(path) as file_obj:
-                page = next(_iter_ogg_pages(file_obj, offset, max_pages=1), None)
+                page = next(iter_ogg_pages(file_obj, offset, max_pages=1), None)
         except _OMV_PARSE_ERRORS:
             pass
         else:
@@ -211,8 +210,8 @@ def extract_ogv_from_omv(omv_path, out_ogv_path, *, exclusive):
         open_atomic_output(out_ogv_path, exclusive=exclusive) as fout,
         open_read(omv_path) as fin,
     ):
-        fin.seek(oggs_off)
-        shutil.copyfileobj(fin, fout, length=1024 * 1024)
+        for page in iter_complete_ogg_pages(fin, oggs_off):
+            fout.write(page.page_bytes)
 
 
 def read_omv_full_info(path):
@@ -322,7 +321,7 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, exclusive, mode=None, flags_hi
     x0 = 0
     video_page_no = -1
     with open_read(ogv_path) as file_obj:
-        for page in _iter_ogg_pages(file_obj, 0):
+        for page in iter_complete_ogg_pages(file_obj):
             if page.serial != theora_serial:
                 continue
             video_page_no += 1
@@ -434,44 +433,9 @@ def build_omv_from_ogv(ogv_path, out_omv_path, *, exclusive, mode=None, flags_hi
             for entry in table_b
         )
         with open_read(ogv_path) as file_obj:
-            for page in _iter_ogg_pages(file_obj, 0):
+            for page in iter_complete_ogg_pages(file_obj):
                 if page.serial == theora_serial:
                     out.write(page.page_bytes)
-
-
-def _iter_ogg_pages(file_obj, oggs_off, *, max_pages=None):
-    file_obj.seek(int(oggs_off))
-    pages = 0
-    while True:
-        if max_pages is not None and pages >= max_pages:
-            return
-        signature = file_obj.read(4)
-        if not signature:
-            return
-        if signature != OGGS_SIGNATURE:
-            raise ValueError("OGG: missing OggS signature")
-        rest = _read_exact(file_obj, OGG_HEADER_STRUCT.size - 4)
-        _cap, version, header_type, granulepos, serial, seq, _crc, segment_count = (
-            OGG_HEADER_STRUCT.unpack(signature + rest)
-        )
-        if version != 0:
-            raise ValueError("OGG: unsupported version")
-        segments = _read_exact(file_obj, int(segment_count))
-        body_len = int(sum(segments))
-        body = _read_exact(file_obj, body_len)
-        granulepos = int(granulepos)
-        granulepos = None if granulepos < 0 else granulepos
-        page_bytes = signature + rest + segments + body
-        yield _OggPage(
-            int(serial),
-            int(seq),
-            int(header_type),
-            granulepos,
-            segments,
-            body,
-            page_bytes,
-        )
-        pages += 1
 
 
 def _detect_packet_kind(packet):
@@ -491,7 +455,7 @@ def _detect_packet_kind(packet):
 def _iter_ogg_packets(path, oggs_off, *, serial_filter=None, max_pages=4096):
     assemblers = {}
     with open_read(path) as file_obj:
-        for page in _iter_ogg_pages(file_obj, oggs_off, max_pages=max_pages):
+        for page in iter_ogg_pages(file_obj, oggs_off, max_pages=max_pages):
             serial = int(page.serial)
             if serial_filter is not None and serial != int(serial_filter):
                 continue

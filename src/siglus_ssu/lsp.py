@@ -30,7 +30,6 @@ from .common import (
     ascii_lower,
     build_empty_ia_data,
     content_digest,
-    content_digest_file,
     decode_text_auto,
     read_bytes,
     split_end_of_options,
@@ -364,18 +363,23 @@ def _read_text(path: str, overlays: dict[str, str]) -> str:
     if overlay_text is not None:
         return _normalize_source_text(overlay_text)
     try:
-        raw = read_bytes(norm)
+        return _read_disk_text(norm)
     except (OSError, ValueError):
         return ""
-    return decode_text_auto(raw, stop_at_dos_eof=True, allow_invalid=True)[0]
 
 
-def _file_state(path: str) -> tuple[int, int] | None:
+def _read_disk_text(path: str) -> str:
+    return decode_text_auto(read_bytes(path), stop_at_dos_eof=True, allow_invalid=True)[
+        0
+    ]
+
+
+def _file_state(path: str) -> tuple[int, ...] | None:
     try:
         stat = read_file_stat(path)
     except (OSError, ValueError):
         return None
-    return stat.st_mtime_ns, stat.st_size
+    return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
 
 
 def _sorted_dir_paths(
@@ -422,7 +426,7 @@ def _project_input_signature(
         if state is None:
             signature.append((path, "missing"))
             continue
-        signature.append((path, "file", state[0], state[1]))
+        signature.append((path, "file", state))
     return tuple(signature)
 
 
@@ -1359,25 +1363,17 @@ def _link_scan_result(result: AnalysisResult) -> LinkScanResult:
     )
 
 
-def _native_lsp_project_config(
-    directory: str,
-    project: ProjectContext,
-    overlays: dict[str, str],
-) -> dict[str, Any] | None:
+def _native_lsp_project_config(project: ProjectContext) -> dict[str, Any] | None:
     if not is_native_available() or project.build_error is not None:
         return None
     try:
         from .compiler import _native_compile_constants_config
 
-        inc_paths = _sorted_dir_paths(directory, overlays, ".inc")
         return {
             "constants": _native_compile_constants_config(),
             "inc_docs": [
-                {
-                    "path": os.path.abspath(path),
-                    "text": _analysis_source_text(_read_text(path, overlays)),
-                }
-                for path in inc_paths
+                {"path": path, "text": _analysis_source_text(text)}
+                for path, text in project.source_files.values()
             ],
         }
     except Exception:
@@ -2460,7 +2456,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 33
+LSP_INDEX_CACHE_VERSION = 34
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -2473,7 +2469,7 @@ class DocumentState:
     opened: bool = False
     version: int | None = None
     overlay_active: bool = False
-    file_state: tuple[int, int] | None = None
+    file_state: tuple[int, ...] | None = None
     base_analysis: AnalysisResult | None = None
     base_analysis_signature: tuple[Any, ...] | None = None
     analysis: AnalysisResult | None = None
@@ -2485,6 +2481,7 @@ class DocumentState:
 class DirectoryLinkDiagnosticsEntry:
     project_signature: tuple[Any, ...]
     file_signatures: dict[str, tuple[Any, ...]]
+    file_digests: dict[str, str]
     file_commands: dict[str, list[DefinitionRecord]]
     file_has_diagnostics: dict[str, bool]
     file_occurrences: dict[str, list[SymbolOccurrence]]
@@ -2696,22 +2693,38 @@ def _lsp_index_const_signature() -> dict[str, Any]:
     }
 
 
-def _lsp_index_cache_inputs(directory: str) -> dict[str, dict[str, str]] | None:
-    root = os.path.abspath(directory or ".")
+def _source_digest(text: str) -> str:
+    return content_digest(text.encode("utf-8", "surrogatepass"))
+
+
+def _project_inc_digests(project: ProjectContext) -> dict[str, str]:
+    return {
+        os.path.basename(path): _source_digest(text)
+        for path, text in project.source_files.values()
+    }
+
+
+def _lsp_index_cache_inputs(
+    directory: str,
+) -> tuple[dict[str, dict[str, str]], dict[str, tuple[Any, ...]]] | None:
     inputs: dict[str, dict[str, str]] = {"inc": {}, "ss": {}}
+    signatures: dict[str, tuple[Any, ...]] = {}
     try:
-        groups = (
-            ("inc", _sorted_dir_paths(root, {}, ".inc")),
-            ("ss", _sorted_dir_paths(root, {}, ".ss")),
-        )
-        for key, paths in groups:
-            for path in paths:
-                inputs[key][os.path.basename(path)] = content_digest_file(path)
+        for group in inputs:
+            for path in _sorted_dir_paths(directory, {}, "." + group):
+                state = _file_state(path)
+                if state is None:
+                    return None
+                digest = _source_digest(_read_disk_text(path))
+                if state != _file_state(path):
+                    return None
+                inputs[group][os.path.basename(path)] = digest
+                signatures[path] = ("file", state)
     except FilenameCaseCollisionError:
         raise
     except (OSError, ValueError):
         return None
-    return inputs
+    return inputs, signatures
 
 
 def _read_lsp_index_cache_header(
@@ -3329,9 +3342,11 @@ class SSLanguageServer:
 
     def text_for_path(self, path: str) -> str:
         doc = self.document_for_path(path)
-        if doc is not None:
-            return doc.text
-        return _read_text(path, {})
+        if doc is None:
+            return _read_text(path, {})
+        if not doc.opened and not doc.overlay_active:
+            doc = self.get_or_load_document(doc.uri)
+        return doc.text if doc is not None else ""
 
     def uri_for_path(self, path: str) -> str:
         doc = self.document_for_path(path)
@@ -3377,12 +3392,14 @@ class SSLanguageServer:
         out: dict[str, str] = {}
         directory = os.path.abspath(directory)
         for doc in self.documents.values():
-            if not doc.overlay_active:
+            if not (doc.opened or doc.overlay_active):
                 continue
             path = os.path.abspath(doc.path)
             if suffix is not None and not path.lower().endswith(suffix):
                 continue
-            if same_read_path(os.path.dirname(path), directory):
+            if same_read_path(os.path.dirname(path), directory) and (
+                doc.overlay_active or doc.file_state != _file_state(path)
+            ):
                 out[path] = doc.text
         return out
 
@@ -3423,39 +3440,6 @@ class SSLanguageServer:
         doc.overlay_active = False
         return old_signature
 
-    def persistent_cache_file_usable(self, path: str) -> bool:
-        doc = self.document_for_path(path)
-        if doc is None:
-            return True
-        if doc.overlay_active:
-            return False
-        if doc.opened and doc.file_state != _file_state(doc.path):
-            return False
-        return True
-
-    def persistent_index_inputs(
-        self, directory: str, *, scene_paths: list[str] | None = None
-    ) -> dict[str, dict[str, str]] | None:
-        directory = os.path.abspath(directory or ".")
-        scene_overlays = set()
-        for doc in self.documents.values():
-            path = os.path.abspath(doc.path)
-            lower = path.lower()
-            if not same_read_path(os.path.dirname(path), directory):
-                continue
-            if lower.endswith(".inc"):
-                if not self.persistent_cache_file_usable(path):
-                    return None
-            elif (
-                scene_paths is not None and lower.endswith(".ss") and doc.overlay_active
-            ):
-                scene_overlays.add(document_key_for_path(path))
-        if scene_overlays and any(
-            document_key_for_path(path) in scene_overlays for path in scene_paths
-        ):
-            return None
-        return _lsp_index_cache_inputs(directory)
-
     def load_persistent_link_diagnostics(
         self,
         directory: str,
@@ -3467,8 +3451,11 @@ class SSLanguageServer:
             "Checking workspace index cache...",
             5,
         )
-        inputs = self.persistent_index_inputs(directory)
-        if inputs is None:
+        snapshot = _lsp_index_cache_inputs(directory)
+        if snapshot is None:
+            return None
+        inputs, disk_signatures = snapshot
+        if inputs["inc"] != _project_inc_digests(project_entry.project):
             return None
         self.report_work_done_progress("Reading cached workspace symbols...", 10)
         data = _read_lsp_index_cache_header(directory, inputs)
@@ -3545,12 +3532,14 @@ class SSLanguageServer:
             file_unmapped_bindings: dict[str, list[str]] = {}
             diagnostics: dict[str, list[SourceDiagnostic]] = {}
             file_signatures: dict[str, tuple[Any, ...]] = {}
+            file_digests: dict[str, str] = {}
             record_paths_by_directory: dict[str, dict[str, str]] = {}
             for name in cached_names:
                 path = current_path_by_name.get(name)
                 if path is None:
                     continue
-                if not self.persistent_cache_file_usable(path):
+                signature = disk_signatures.get(path)
+                if signature is None or signature != self.path_source_signature(path):
                     continue
                 if not _cache_file_unchanged_in_inputs(payload_inputs, inputs, name):
                     continue
@@ -3577,7 +3566,9 @@ class SSLanguageServer:
                 ]
                 file_occurrences[path] = occurrences_for_path
                 file_unmapped_bindings[path] = raw_unmapped_by_name[name]
-                file_signatures[path] = self.path_source_signature(path)
+                file_signatures[path] = signature
+                group = os.path.splitext(name)[1].lower()[1:]
+                file_digests[path] = inputs[group][name]
             occurrences = _index_occurrences(file_occurrences.values())
             for name, items in raw_diagnostics.items():
                 name = _cache_file_name(name)
@@ -3596,6 +3587,7 @@ class SSLanguageServer:
             return DirectoryLinkDiagnosticsEntry(
                 project_signature=project_entry.signature,
                 file_signatures=file_signatures,
+                file_digests=file_digests,
                 file_commands=file_commands,
                 file_has_diagnostics=file_has_diagnostics,
                 file_occurrences=file_occurrences,
@@ -3612,19 +3604,17 @@ class SSLanguageServer:
         directory: str,
         paths: list[str],
         entry: DirectoryLinkDiagnosticsEntry,
+        project: ProjectContext,
     ) -> None:
-        inputs = self.persistent_index_inputs(directory, scene_paths=paths)
-        if inputs is None:
+        inputs: dict[str, dict[str, str]] = {"inc": {}, "ss": {}}
+        for path in paths:
+            if entry.file_signatures.get(path, (None,))[0] != "file":
+                return
+            group = os.path.splitext(path)[1].lower()[1:]
+            inputs[group][os.path.basename(path)] = entry.file_digests[path]
+        if inputs["inc"] != _project_inc_digests(project):
             return
-        paths = [os.path.abspath(path) for path in paths]
-        if any(
-            path.lower().endswith(".ss") and not self.persistent_cache_file_usable(path)
-            for path in paths
-        ):
-            return
-        name_by_path = {
-            os.path.abspath(path): _cache_file_name_from_path(path) for path in paths
-        }
+        name_by_path = {path: _cache_file_name_from_path(path) for path in paths}
         payload = {
             "inputs": inputs,
             "paths": [name_by_path[path] for path in paths],
@@ -3688,12 +3678,7 @@ class SSLanguageServer:
             self.report_work_done_progress("Using cached Rust scanner context.", 25)
             return cached[1], cached[2]
         self.report_work_done_progress("Preparing Rust scanner context...", 25)
-        overlays = self.overlays_for_dir(directory, ".inc")
-        native_config = _native_lsp_project_config(
-            directory,
-            project_entry.project,
-            overlays,
-        )
+        native_config = _native_lsp_project_config(project_entry.project)
         native_project = _build_native_lsp_project(native_config)
         self.native_lsp_project_cache[directory] = (
             project_entry.signature,
@@ -3841,6 +3826,7 @@ class SSLanguageServer:
             entry = DirectoryLinkDiagnosticsEntry(
                 project_signature=project_entry.signature,
                 file_signatures={},
+                file_digests={},
                 file_commands={},
                 file_has_diagnostics={},
                 file_occurrences={},
@@ -3868,6 +3854,7 @@ class SSLanguageServer:
             entry = replace(
                 entry,
                 file_signatures=entry.file_signatures.copy(),
+                file_digests=entry.file_digests.copy(),
                 file_commands=entry.file_commands.copy(),
                 file_has_diagnostics=entry.file_has_diagnostics.copy(),
                 file_occurrences=entry.file_occurrences.copy(),
@@ -3875,6 +3862,7 @@ class SSLanguageServer:
             )
         for path in removed_paths:
             entry.file_signatures.pop(path, None)
+            entry.file_digests.pop(path, None)
             entry.file_commands.pop(path, None)
             entry.file_has_diagnostics.pop(path, None)
             entry.file_occurrences.pop(path, None)
@@ -3889,6 +3877,7 @@ class SSLanguageServer:
                 doc = self.get_or_load_document(path_to_uri(path))
                 if doc is None:
                     entry.file_signatures.pop(path, None)
+                    entry.file_digests.pop(path, None)
                     entry.file_commands.pop(path, None)
                     entry.file_has_diagnostics[path] = True
                     entry.file_occurrences.pop(path, None)
@@ -3896,6 +3885,9 @@ class SSLanguageServer:
                     self.report_scan_progress(progress)
                     continue
                 scan_docs.append((path, doc))
+            for path, doc in scan_docs:
+                entry.file_signatures[path] = self.document_source_signature(doc)
+                entry.file_digests[path] = _source_digest(doc.text)
             scan_results = self.scan_documents(
                 project_entry,
                 native_project,
@@ -3903,7 +3895,7 @@ class SSLanguageServer:
                 scan_docs,
                 progress,
             )
-            for path, doc in scan_docs:
+            for path, _ in scan_docs:
                 self.raise_if_request_cancelled()
                 (
                     result_has_diagnostics,
@@ -3911,7 +3903,6 @@ class SSLanguageServer:
                     result_occurrences,
                     result_unmapped_bindings,
                 ) = scan_results[path]
-                entry.file_signatures[path] = self.document_source_signature(doc)
                 entry.file_has_diagnostics[path] = result_has_diagnostics
                 entry.file_commands[path] = result_commands
                 entry.file_occurrences[path] = result_occurrences
@@ -3956,7 +3947,9 @@ class SSLanguageServer:
         entry.revision += 1
         entry.diagnostics = diagnostics
         self.link_diagnostics_cache[directory] = entry
-        self.save_persistent_link_diagnostics(directory, paths, entry)
+        self.save_persistent_link_diagnostics(
+            directory, paths, entry, project_entry.project
+        )
         return entry
 
     def analyze(
@@ -4389,7 +4382,7 @@ class SSLanguageServer:
             doc.overlay_active = doc.text != doc.disk_text
         else:
             doc.version = None
-            if doc.overlay_active:
+            if doc.overlay_active or doc.file_state != _file_state(doc.path):
                 old_signature = self.sync_document_from_disk(doc)
         if old_signature != self.document_source_signature(doc):
             self.clear_document_cache(doc)
@@ -5037,7 +5030,7 @@ class SSLanguageServer:
                 if expected_declarations != project_after.iad[key]:
                     return "The replacement name changes compiled declarations."
         project_entry = ProjectCacheEntry(entry.project_signature, project_after)
-        native_config = _native_lsp_project_config(directory, project_after, texts)
+        native_config = _native_lsp_project_config(project_after)
         native_project = _build_native_lsp_project(native_config)
         scan_paths = paths if inc_changed else list(edits)
         docs = [

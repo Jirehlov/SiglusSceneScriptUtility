@@ -74,12 +74,11 @@ def _compare_two(p1, p2):
     return dbs.compare_dbs(b1, b2)
 
 
-def _is_int_token(s) -> bool:
+def _parse_number(text: str) -> int:
     try:
-        int(str(s).strip(), 0)
-        return True
-    except Exception:
-        return False
+        return int(text, 0)
+    except ValueError:
+        return int(text, 10)
 
 
 def _map_out_name(csv_path: str):
@@ -117,8 +116,8 @@ def main(argv):
             hint_help()
             return 2
         try:
-            opt_type = int(argv[i + 1], 0)
-        except Exception:
+            opt_type = _parse_number(argv[i + 1])
+        except ValueError:
             eprint("error: invalid --type value")
             hint_help()
             return 2
@@ -135,8 +134,8 @@ def main(argv):
             hint_help()
             return 2
         try:
-            opt_seed = int(argv[i + 1], 0) & 0xFFFFFFFF
-        except Exception:
+            opt_seed = _parse_number(argv[i + 1]) & 0xFFFFFFFF
+        except ValueError:
             eprint("error: invalid --set-shuffle value")
             hint_help()
             return 2
@@ -144,7 +143,6 @@ def main(argv):
         del argv[i : i + 2]
     test_shuffle = False
     test_skip0 = 0
-    test_skip0_given = False
     if "--test-shuffle" in argv:
         if argv.count("--test-shuffle") != 1:
             eprint("error: --test-shuffle specified more than once")
@@ -154,10 +152,13 @@ def main(argv):
         argv.pop(i)
         test_shuffle = True
         remaining_count = len(argv) - i + len(positional_args or ())
-        if i < len(argv) and _is_int_token(argv[i]) and remaining_count >= 4:
-            test_skip0 = int(str(argv[i]).strip(), 0)
-            test_skip0_given = True
-            argv.pop(i)
+        if i < len(argv) and remaining_count >= 4:
+            try:
+                test_skip0 = _parse_number(argv[i])
+            except ValueError:
+                pass
+            else:
+                argv.pop(i)
     unknown_option = first_option_token(argv)
     if unknown_option is not None:
         eprint(f"error: unknown option: {unknown_option}")
@@ -303,8 +304,7 @@ def main(argv):
         exp_m_type, pat = _extract_padding_pattern_from_dbs(expected_blob)
         m_type = int(opt_type) if opt_type is not None else int(exp_m_type)
         seed = int(opt_seed) & 0xFFFFFFFF
-        skip0 = int(test_skip0) if test_skip0_given else 0
-        found = find_rand_skip(seed, pat, start_skip=skip0)
+        found = find_rand_skip(seed, pat, start_skip=test_skip0)
         if found is None:
             eprint("error: test-shuffle failed to locate rand-skip")
             return 1

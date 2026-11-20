@@ -8,13 +8,16 @@ import struct
 import hashlib
 import re
 import stat
-from contextlib import contextmanager, nullcontext, suppress
+from collections import namedtuple
+from contextlib import ExitStack, contextmanager, nullcontext, suppress
 from uuid import uuid4
 from functools import lru_cache, partial, wraps
 from types import SimpleNamespace
+from zlib import crc32
 import siglus_ssu as _runtime
 from . import command_name, const as C
 from .path_policy import (
+    check_output_inputs,
     open_read,
     read_directory,
     resolve_read_path,
@@ -27,6 +30,83 @@ ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
 PCK_KEY_DIR = ".siglus-ssu-keys"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
+
+
+OGGS_SIGNATURE = b"OggS"
+OGG_HEADER_STRUCT = struct.Struct("<4sBBqIIIB")
+_OGG_REVERSED_BITS = bytes(int(f"{value:08b}"[::-1], 2) for value in range(256))
+_OggPage = namedtuple(
+    "_OggPage", "serial seq header_type granulepos segments body page_bytes"
+)
+
+
+def iter_ogg_pages(file_obj, offset=0, *, max_pages=None):
+    file_obj.seek(offset)
+    pages = 0
+    while max_pages is None or pages < max_pages:
+        header = file_obj.read(OGG_HEADER_STRUCT.size)
+        if not header:
+            return
+        if len(header) != OGG_HEADER_STRUCT.size:
+            raise EOFError("Ogg page header truncated")
+        magic, version, flags, granule, serial, seq, _, count = (
+            OGG_HEADER_STRUCT.unpack(header)
+        )
+        if magic != OGGS_SIGNATURE or version != 0:
+            raise ValueError("invalid Ogg page header")
+        segments = file_obj.read(count)
+        if len(segments) != count:
+            raise EOFError("Ogg segment table truncated")
+        size = sum(segments)
+        body = file_obj.read(size)
+        if len(body) != size:
+            raise EOFError("Ogg page data truncated")
+        yield _OggPage(
+            serial,
+            seq,
+            flags,
+            None if granule < 0 else granule,
+            segments,
+            body,
+            header + segments + body,
+        )
+        pages += 1
+
+
+def iter_complete_ogg_pages(file_obj, offset=0):
+    active = {}
+    saw_page = False
+    for page in iter_ogg_pages(file_obj, offset):
+        previous = active.get(page.serial)
+        if bool(page.header_type & 2) != (previous is None):
+            raise ValueError("invalid beginning of Ogg stream")
+        continued = False
+        if previous is not None:
+            seq, continued = previous
+            if page.seq != (seq + 1) & 0xFFFFFFFF:
+                raise ValueError("Ogg stream is missing a page")
+        if bool(page.header_type & 1) != continued:
+            raise ValueError("invalid Ogg packet continuation")
+        if page.segments:
+            continued = page.segments[-1] == 255
+        reflected = bytearray(page.page_bytes.translate(_OGG_REVERSED_BITS))
+        reflected[22:26] = b"\x00" * 4
+        checksum = crc32(reflected, 0xFFFFFFFF) ^ 0xFFFFFFFF
+        if (
+            checksum.to_bytes(4, "big").translate(_OGG_REVERSED_BITS)
+            != page.page_bytes[22:26]
+        ):
+            raise ValueError("Ogg page checksum mismatch")
+        if page.header_type & 4:
+            if continued:
+                raise ValueError("Ogg stream ended inside a packet")
+            active.pop(page.serial, None)
+        else:
+            active[page.serial] = (page.seq, continued)
+        saw_page = True
+        yield page
+    if not saw_page or active:
+        raise EOFError("incomplete Ogg stream")
 
 
 class BinaryFormatError(ValueError):
@@ -1983,6 +2063,91 @@ def directory_lock(path, *, timeout=0):
         os.rmdir(path)
 
 
+class StagedOutputs:
+    def __init__(self, directory, names):
+        directory = os.path.realpath(directory)
+        self.directory = directory
+        self.names = names
+        self.staging_dirs = {}
+        self.keep = False
+        self.staging = self._stage_in(directory) if names else directory
+
+    def _stage_in(self, directory):
+        if directory not in self.staging_dirs:
+            staging = os.path.join(directory, f".ssu-stage-{uuid4().hex}")
+            os.mkdir(staging, 0o777 if os.name == "nt" else 0o700)
+            self.staging_dirs[directory] = staging
+        return self.staging_dirs[directory]
+
+    def close(self):
+        if not self.keep:
+            for staging in self.staging_dirs.values():
+                shutil.rmtree(staging, ignore_errors=True)
+
+    def publish(self, inputs, *, final_output=None):
+        if not self.names:
+            return
+        targets = [
+            os.path.realpath(os.path.join(self.directory, name)) for name in self.names
+        ]
+        with ExitStack() as locks:
+            locked = set()
+            for directory in sorted({os.path.dirname(target) for target in targets}):
+                info = os.stat(directory)
+                identity = (info.st_dev, info.st_ino) if info.st_ino else directory
+                if identity not in locked:
+                    locks.enter_context(
+                        directory_lock(
+                            os.path.join(directory, ".siglus-publish.lockdir")
+                        )
+                    )
+                    locked.add(identity)
+            destinations = (
+                targets if final_output is None else [*targets, final_output[0]]
+            )
+            check_output_inputs(destinations, inputs, distinct=True)
+            entries = []
+            for name, target in zip(self.names, targets, strict=True):
+                stage = self._stage_in(os.path.dirname(target))
+                source = os.path.join(self.staging, name)
+                if stage != self.staging:
+                    source = shutil.move(source, os.path.join(stage, name))
+                mode = writable_file_mode(target)
+                backup = None
+                if mode is not None:
+                    backup = os.path.join(stage, f".previous-{uuid4().hex}")
+                    try:
+                        os.link(target, backup)
+                    except OSError:
+                        shutil.copy2(target, backup)
+                    os.chmod(source, mode)
+                entries.append((source, target, backup))
+            published = []
+            try:
+                for source, target, backup in entries:
+                    os.replace(source, target)
+                    published.append((target, backup))
+                if final_output is not None:
+                    final_output[1]()
+            except BaseException:
+                restore_errors = []
+                for target, backup in reversed(published):
+                    try:
+                        if backup is None:
+                            os.unlink(target)
+                        else:
+                            os.replace(backup, target)
+                    except OSError as exc:
+                        restore_errors.append(str(exc))
+                if restore_errors:
+                    self.keep = True
+                    raise OSError(
+                        f"rollback failed: {'; '.join(restore_errors)}; "
+                        f"recovery files: {', '.join(self.staging_dirs.values())}"
+                    )
+                raise
+
+
 def _publish_exclusive_output(staged, target, opener):
     if os.name == "nt":
         os.rename(staged, target)
@@ -2168,8 +2333,8 @@ def looks_like_siglus_dat(blob: bytes) -> bool:
 
 
 def looks_like_siglus_pck(blob: bytes) -> bool:
-    h = parse_i32_header_checked(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
-    if not h:
+    h = parse_i32_header(blob, C.PACK_HDR_FIELDS, C.PACK_HDR_SIZE)
+    if h.get("header_size") != C.PACK_HDR_SIZE:
         return False
     for k in (
         "scn_name_index_list_ofs",

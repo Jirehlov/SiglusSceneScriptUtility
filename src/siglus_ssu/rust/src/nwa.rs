@@ -39,10 +39,7 @@ fn read_i32_le(b: &[u8], off: usize) -> Result<i32, String> {
 }
 
 #[inline]
-fn read_i16_le_or0(b: &[u8], off: usize) -> i32 {
-    if off + 2 > b.len() {
-        return 0;
-    }
+fn read_i16_le(b: &[u8], off: usize) -> i32 {
     i16::from_le_bytes([b[off], b[off + 1]]) as i32
 }
 
@@ -80,40 +77,54 @@ impl<'a> BitReader<'a> {
     }
 
     #[inline]
-    fn get(&mut self, nbits: u8) -> u32 {
-        let b0 = if self.bp < self.data.len() {
-            self.data[self.bp]
-        } else {
-            0
-        };
-        let b1 = if self.bp + 1 < self.data.len() {
-            self.data[self.bp + 1]
-        } else {
-            0
-        };
-        let w = (b0 as u32) | ((b1 as u32) << 8);
-        let mask = (1u32 << nbits) - 1;
-        let val = (w >> (self.bit as u32)) & mask;
-        let bit2 = (self.bit as u32) + (nbits as u32);
-        self.bp += (bit2 >> 3) as usize;
-        self.bit = (bit2 & 7) as u8;
-        val
+    fn get(&mut self, nbits: u8) -> Result<u32, &'static str> {
+        let bit_end = self.bit + nbits;
+        let mut word = u32::from(
+            *self
+                .data
+                .get(self.bp)
+                .ok_or("NWA unit sample data truncated")?,
+        );
+        if bit_end > 8 {
+            word |= u32::from(
+                *self
+                    .data
+                    .get(self.bp + 1)
+                    .ok_or("NWA unit sample data truncated")?,
+            ) << 8;
+        }
+        let value = (word >> self.bit) & ((1 << nbits) - 1);
+        self.bp += usize::from(bit_end >> 3);
+        self.bit = bit_end & 7;
+        Ok(value)
     }
 }
 
 #[inline]
-fn apply_delta(br: &mut BitReader<'_>, nowsmp: &mut i32, nbits: u8, sign_bit: u32, shift: u8) {
-    let mut code = br.get(nbits);
+fn apply_delta(
+    br: &mut BitReader<'_>,
+    nowsmp: &mut i32,
+    nbits: u8,
+    sign_bit: u32,
+    shift: u8,
+) -> Result<(), &'static str> {
+    let mut code = br.get(nbits)?;
     if (code & sign_bit) != 0 {
         code &= sign_bit - 1;
         *nowsmp = nowsmp.wrapping_sub((code as i32) << (shift as i32));
     } else {
         *nowsmp = nowsmp.wrapping_add((code as i32) << (shift as i32));
     }
+    Ok(())
 }
 
 #[inline]
-fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
+fn apply_by_mod(
+    br: &mut BitReader<'_>,
+    nowsmp: &mut i32,
+    m: u8,
+    which: u8,
+) -> Result<(), &'static str> {
     let (bits, base_shift, large_bits, large_shift) = match m {
         3 => (3, 5, 6, 11),
         4 => (4, 4, 7, 10),
@@ -126,7 +137,7 @@ fn apply_by_mod(br: &mut BitReader<'_>, nowsmp: &mut i32, m: u8, which: u8) {
     } else {
         (large_bits, large_shift)
     };
-    apply_delta(br, nowsmp, bits, 1 << (bits - 1), shift);
+    apply_delta(br, nowsmp, bits, 1 << (bits - 1), shift)
 }
 
 #[inline]
@@ -147,53 +158,59 @@ fn decode_sample(
     m: u8,
     zero_mod: i32,
     zero_cnt: &mut usize,
-) {
+) -> Result<(), &'static str> {
     if *zero_cnt != 0 {
         *zero_cnt -= 1;
-        return;
+        return Ok(());
     }
-    let mod_code = br.get(3) as u8;
+    let mod_code = br.get(3)? as u8;
     match mod_code {
         0 => {
             if zero_mod != 0 {
-                let mut z = br.get(1);
+                let mut z = br.get(1)?;
                 if z == 1 {
-                    z = br.get(2);
+                    z = br.get(2)?;
                     if z == 3 {
-                        z = br.get(8);
+                        z = br.get(8)?;
                     }
                 }
                 *zero_cnt = z as usize;
             }
         }
-        1..=6 => apply_by_mod(br, nowsmp, m, mod_code),
+        1..=6 => apply_by_mod(br, nowsmp, m, mod_code)?,
         _ => {
-            if br.get(1) == 0 {
-                apply_by_mod(br, nowsmp, m, 7)
+            if br.get(1)? == 0 {
+                apply_by_mod(br, nowsmp, m, 7)?;
             } else {
                 *nowsmp = 0;
             }
         }
     }
+    Ok(())
 }
 
-fn unpack_unit_16_into(chunk: &[u8], header: &NwaHeader, pack_mod: u8, dst: &mut [u8]) {
+fn unpack_unit_16_into(
+    chunk: &[u8],
+    header: &NwaHeader,
+    pack_mod: u8,
+    dst: &mut [u8],
+) -> Result<(), &'static str> {
     let m = 3u8 + pack_mod;
 
     if header.channels == 1 {
-        let mut nowsmp = read_i16_le_or0(chunk, 0);
+        let mut nowsmp = read_i16_le(chunk, 0);
         let mut br = BitReader::new(chunk, 2);
         let mut zero_cnt: usize = 0;
 
         for out in dst.as_chunks_mut::<2>().0 {
-            decode_sample(&mut br, &mut nowsmp, m, header.zero_mod, &mut zero_cnt);
+            decode_sample(&mut br, &mut nowsmp, m, header.zero_mod, &mut zero_cnt)?;
             out.copy_from_slice(&(nowsmp as i16).to_le_bytes());
         }
-        return;
+        return Ok(());
     }
 
-    let mut nowsmp_l = read_i16_le_or0(chunk, 0);
-    let mut nowsmp_r = read_i16_le_or0(chunk, 2);
+    let mut nowsmp_l = read_i16_le(chunk, 0);
+    let mut nowsmp_r = read_i16_le(chunk, 2);
     let mut br = BitReader::new(chunk, 4);
     let mut zero_cnt: usize = 0;
 
@@ -204,10 +221,10 @@ fn unpack_unit_16_into(chunk: &[u8], header: &NwaHeader, pack_mod: u8, dst: &mut
             &mut nowsmp_r
         };
 
-        decode_sample(&mut br, nowsmp, m, header.zero_mod, &mut zero_cnt);
-
+        decode_sample(&mut br, nowsmp, m, header.zero_mod, &mut zero_cnt)?;
         out.copy_from_slice(&(*nowsmp as i16).to_le_bytes());
     }
+    Ok(())
 }
 
 pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -242,10 +259,11 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("NWA sample size mismatch".into());
     }
     let table_off = NWA_HEADER_SIZE;
-    let table_size = unit_cnt
+    let table_end = unit_cnt
         .checked_mul(4)
-        .ok_or_else(|| "NWA table size overflow".to_string())?;
-    if data.len() < table_off + table_size {
+        .and_then(|size| table_off.checked_add(size))
+        .ok_or("NWA table size overflow")?;
+    if data.len() < table_end {
         return Err("NWA table truncated".into());
     }
     let mut offsets: Vec<u32> = Vec::with_capacity(unit_cnt);
@@ -260,13 +278,8 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
     }
 
     let mut out = Vec::new();
-    out.try_reserve_exact(original_size)
-        .map_err(|_| "NWA output is too large".to_string())?;
-    out.resize(original_size, 0);
-    let mut dst = 0usize;
-
-    for unit_no in 0..unit_cnt {
-        let start = offsets[unit_no] as usize;
+    for (unit_no, &start) in offsets.iter().enumerate() {
+        let start = start as usize;
         let (end, unit_smp_cnt) = if unit_no + 1 == unit_cnt {
             (
                 start
@@ -278,15 +291,31 @@ pub fn decode_pcm(data: &[u8]) -> Result<Vec<u8>, String> {
             (offsets[unit_no + 1] as usize, h.unit_sample_cnt as usize)
         };
 
-        if end < start || end > data.len() {
+        if start < table_end || end < start || end > data.len() {
             return Err("Invalid NWA unit offsets".into());
         }
-
-        let write_len = unit_smp_cnt * 2;
-
+        if unit_smp_cnt == 0 {
+            continue;
+        }
         let chunk = &data[start..end];
-        unpack_unit_16_into(chunk, &h, pack_mod, &mut out[dst..dst + write_len]);
-        dst += write_len;
+        let seed_size = usize::from(h.channels) * 2;
+        if chunk.len() < seed_size {
+            return Err("NWA unit initial samples truncated".into());
+        }
+        let groups = if h.zero_mod != 0 {
+            unit_smp_cnt.div_ceil(256)
+        } else {
+            unit_smp_cnt
+        };
+        if (groups as u64 * 3).div_ceil(8) > (chunk.len() - seed_size) as u64 {
+            return Err("NWA unit sample data truncated".into());
+        }
+        let write_len = unit_smp_cnt * 2;
+        out.try_reserve(write_len)
+            .map_err(|_| "NWA output is too large".to_string())?;
+        let dst = out.len();
+        out.resize(dst + write_len, 0);
+        unpack_unit_16_into(chunk, &h, pack_mod, &mut out[dst..])?;
     }
 
     Ok(out)

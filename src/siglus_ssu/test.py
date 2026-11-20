@@ -42,6 +42,7 @@ class _TestResult:
     timings: tuple[tuple[str, float], ...]
     profile: int | None
     allow_invalid: bool | None
+    compile_backend: str | None
 
 
 def _usage(out=None) -> None:
@@ -332,7 +333,10 @@ def _compile_payload_attempt(
     elif decompile:
         compile_args.extend(["--charset", "utf8", "--no-lzss"])
     compile_args.extend([extract_dir, rebuilt_pck])
-    rc, out, err = _capture(compiler.main, compile_args, collect_statistics=False)
+    stats = {}
+    rc, out, err = _capture(
+        compiler.main, compile_args, collect_statistics=False, statistics=stats
+    )
     elapsed = max(0.0, time.perf_counter() - started)
     try:
         rebuilt_read_path = resolve_read_path(rebuilt_pck, kind="file")
@@ -345,6 +349,7 @@ def _compile_payload_attempt(
         "profile": profile,
         "allow_invalid": allow_invalid,
         "decompile": decompile,
+        "compile_backend": stats.get("backend"),
         "rc": rc,
         "ok": ok,
         "stdout": out,
@@ -538,6 +543,7 @@ def _test_one(
     original_blob = b""
     result_profile = None
     result_allow_invalid = None
+    result_backend = None
     try:
         C.set_profile(0 if const_profile is None else const_profile)
         step_started = time.perf_counter()
@@ -710,6 +716,7 @@ def _test_one(
                     status = result
                     result_profile = int(selected_profile)
                     result_allow_invalid = bool(selected_attempt.get("allow_invalid"))
+                    result_backend = selected_attempt["compile_backend"]
                     detail = f"profile={int(selected_profile):d} {detail_text}".strip()
     finally:
         if tmp_root:
@@ -740,6 +747,7 @@ def _test_one(
         tuple(timings),
         result_profile,
         result_allow_invalid,
+        result_backend,
     )
 
 

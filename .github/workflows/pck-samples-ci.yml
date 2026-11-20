@@ -10,6 +10,10 @@ jobs:
   pck-samples:
     name: PCK Samples
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [rust, python]
     permissions:
       contents: read
     steps:
@@ -39,24 +43,24 @@ jobs:
       - name: Run exact pck samples
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --expected-status EXACT --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --serial --expected-status EXACT --command siglus-ssu --backend ${{ matrix.backend }}
 
       - name: Run payload-same pck samples
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --expected-status PAYLOAD_SAME --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --expected-status PAYLOAD_SAME --command siglus-ssu --backend ${{ matrix.backend }}
 
       - name: Decompile exact pck samples with preset profiles
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 0 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu --backend ${{ matrix.backend }}
 
       - name: Decompile payload-same pck samples with preset profiles
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 1 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu --backend ${{ matrix.backend }}
 
       - name: Decompile pck samples without usable original sources
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 2 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu
+        run: uv run --no-sync python scripts/run_pck_samples_test.py --work-dir .cache/pck-samples --subdir 2 --decompile --expected-status PAYLOAD_SAME --command siglus-ssu --backend ${{ matrix.backend }}

@@ -24,6 +24,7 @@ from .common import (
     content_digest,
     read_bytes,
     open_atomic_output,
+    StagedOutputs,
     write_bytes,
     missing_input_file,
     decode_text_auto,
@@ -97,30 +98,17 @@ def _analyze_one(path: str) -> int:
         print(_fmt_kv("last_sample_pack_size", last_sample_pack_size))
         return 0
     if ext == ".ovk":
-        import struct
-
-        entry_struct = struct.Struct("<IIii")
-        with open_read(path) as f:
-            cnt_b = f.read(4)
-            if len(cnt_b) != 4:
-                eprint("error: OVK header truncated")
-                return 1
-            cnt = struct.unpack("<I", cnt_b)[0]
-            print(_fmt_kv("entry_count", cnt))
-            if cnt == 0:
-                return 0
-            table = f.read(entry_struct.size * cnt)
-            if len(table) != entry_struct.size * cnt:
-                eprint("error: OVK table truncated")
-                return 1
-        for i in range(cnt):
-            size_, offset_, no_, smp_cnt_ = entry_struct.unpack_from(
-                table, i * entry_struct.size
-            )
-            print(_fmt_kv(f"entry[{i}].no", int(no_)))
-            print(_fmt_kv(f"entry[{i}].offset", int(offset_)))
-            print(_fmt_kv(f"entry[{i}].size", int(size_)))
-            print(_fmt_kv(f"entry[{i}].smp_cnt", int(smp_cnt_)))
+        try:
+            entries = sound.read_ovk_table(path)
+        except (OSError, EOFError, ValueError) as exc:
+            eprint(f"error: {exc}")
+            return 1
+        print(_fmt_kv("entry_count", len(entries)))
+        for i, entry in enumerate(entries):
+            print(_fmt_kv(f"entry[{i}].no", entry.entry_no))
+            print(_fmt_kv(f"entry[{i}].offset", entry.offset))
+            print(_fmt_kv(f"entry[{i}].size", entry.size))
+            print(_fmt_kv(f"entry[{i}].smp_cnt", entry.sample_count))
         return 0
     if ext == ".owp":
         try:
@@ -447,21 +435,21 @@ def _ffmpeg_trim_ogg_bytes(
     try:
         with open(in_path, "wb") as f:
             f.write(ogg_bytes)
-        if end_sample == -1:
-            af = f"atrim=start_sample={start_sample},asetpts=PTS-STARTPTS"
-        else:
-            af = f"atrim=start_sample={start_sample}:end_sample={end_sample},asetpts=PTS-STARTPTS"
+        af = f"atrim=start_sample={start_sample}"
+        if end_sample != -1:
+            af += f":end_sample={end_sample}"
         cmd = [
             ffmpeg_path,
             "-hide_banner",
             "-loglevel",
             "error",
+            "-xerror",
             "-y",
             "-i",
             in_path,
             "-vn",
             "-af",
-            af,
+            f"{af},asettb=1/sr,asetpts=N",
             "-c:a",
             "libvorbis",
             "-q:a",
@@ -473,7 +461,7 @@ def _ffmpeg_trim_ogg_bytes(
             err = (p.stderr or b"").decode("utf-8", "backslashreplace").strip()
             raise RuntimeError("ffmpeg trim failed: " + (err or "unknown error"))
         trimmed = read_bytes(out_path)
-        if sound.ogg_calc_smp_cnt(trimmed) <= 0:
+        if sound.ogg_sample_info(trimmed)[1] <= 0:
             raise RuntimeError("ffmpeg trim produced no audio samples")
         return trimmed
     finally:
@@ -586,8 +574,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
     ext = ext.lower()
     if ext in (".owp", ".ogg"):
         ogg = sound.decode_owp_to_ogg_bytes(src_path)
-        sample_rate, pre_skip = sound._ogg_ident_info(ogg) or (44100, 0)
-        total_sample_cnt = sound.ogg_calc_smp_cnt(ogg) - pre_skip
+        sample_rate, total_sample_cnt, _ = sound.ogg_sample_info(ogg, for_playback=True)
         if total_sample_cnt <= 0:
             raise RuntimeError("failed to determine audio sample count")
         tmp_dir = ""
@@ -605,7 +592,7 @@ def _prepare_playback_input(src_path: str) -> _PreparedPlaybackInput:
             play_path=play_path,
             tmp_dir=tmp_dir,
             total_sample_cnt=total_sample_cnt,
-            sample_rate=sample_rate,
+            sample_rate=sample_rate or 44100,
             channel_layout="",
         )
     if ext == ".nwa":
@@ -1470,11 +1457,22 @@ def _run_interactive_player(entries, trim_table, ffplay_path: str) -> int:
 
 def _extract_one(src_path, outputs, entries, trim_table, ffmpeg_path, tmp_dir):
     if entries is not None:
-        for out_path, (_, ogg) in zip(
-            outputs, sound.iter_ovk_entries(src_path, entries), strict=True
-        ):
-            with open_atomic_output(out_path) as output:
-                output.write(ogg)
+        if not outputs:
+            return 0
+        directory = os.path.dirname(outputs[0])
+        os.makedirs(directory, exist_ok=True)
+        staged = StagedOutputs(directory, [os.path.basename(path) for path in outputs])
+        try:
+            for name, (_, ogg) in zip(
+                staged.names, sound.iter_ovk_entries(src_path, entries), strict=True
+            ):
+                with open(os.path.join(staged.staging, name), "wb") as output:
+                    output.write(ogg)
+                    output.flush()
+                    os.fsync(output.fileno())
+            staged.publish([src_path])
+        finally:
+            staged.close()
         return len(outputs)
 
     base_name, ext = os.path.splitext(os.path.basename(src_path))

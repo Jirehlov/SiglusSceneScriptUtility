@@ -228,7 +228,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--serial` | 依次编译场景脚本。打包可以使用多个工作线程。 |
 | `--max-workers N` | 场景并行编译的最大工作数，必须为正整数。默认使用可用 CPU 数的一半，限制为 1–16。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
 | `--set-shuffle SEED` | 设置字符串表乱序种子（`0`–`0xFFFFFFFF`，十进制或十六进制，默认 `1`），并启用串行编译。不能与 `--tmp` 同用。 |
-| `--tmp <tmp_dir>` | 复用指定目录进行增量编译，不允许并发构建共用。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
+| `--tmp <tmp_dir>` | 复用指定目录进行增量编译。串行构建从首个变化的场景开始重新编译，以保持字符串表顺序。并发构建需要各用一个缓存目录。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，复现 `<test_dir>` 中首个场景的字符串表顺序，再验证全部场景。可选种子后必须保留三个路径参数。不能与 `--tmp` 或 `--gei` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，随链接后的 PCK 一并发布各场景的初始和最终种子。目录目标下的文件名为 `test_shuffle_seeds.csv`。 |
 | `--gei` | 仅将 `Gameexe.ini` 编译为 `Gameexe.dat`，输出始终按目录处理。缺少 INI 时会警告并成功结束，不创建 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
@@ -650,7 +650,7 @@ CSV 必须包含 `index`、`original` 和 `replacement`。遇到无效或重复�
 | type2 | 多个图片 cut 及位置数据。 |
 | type3 | JPEG 图片。 |
 
-图像处理需要 [Pillow](https://pillow.readthedocs.io/)（`pip install pillow`）。分析和不裁剪的 type3 JPEG 提取无需 Pillow。
+图像处理需要 [Pillow](https://pillow.readthedocs.io/)（`pip install pillow`）。分析和不裁剪的 type3 JPEG 提取无需 Pillow。不裁剪时，程序会校验 JPEG 主图的标记，并原样写出 JPEG 数据。
 
 #### 语法
 
@@ -754,13 +754,13 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 | `--trim <Gameexe.dat \| Gameexe.ini>` | 仅提取匹配 NWA/OWP 的 `repeat`–`end` 循环段。OWP 裁剪需要 `ffmpeg`，NWA 不需要。不裁剪 OVK。 |
 | `--angou VALUE` | 用于裁剪或播放时解密 Gameexe 数据的[密钥来源](#解密密钥)，其他音频操作会忽略。 |
 
-所选循环段没有音频采样时，程序会报错并保留该曲目的已有输出。
+程序会在音频解码失败、所选循环段没有采样或 NWA 压缩块不完整时报错，并保留该曲目的已有输出。
 
 #### OVK 命名
 
-单条目提取为 `<basename>.ogg`，多条目提取为 `<basename>_<entry_no>.ogg`。
+单条目提取为 `<basename>.ogg`，多条目提取为 `<basename>_<entry_no>.ogg`。创建或提取 OWP 和 OVK 时，Ogg 流必须完整。提取 OVK 时，程序会读完归档的全部条目再写出文件。如果写入失败，程序会撤销本次对该归档输出文件的更改。
 
-创建时，至少两个 `<basename>_<N>.ogg` 会合并为 `<basename>.ovk`。其他文件，包括只有一份的编号文件，均单独生成 OWP。
+创建时，至少两个 `<basename>_<N>.ogg` 会合并为 `<basename>.ovk`。其他文件，包括只有一份的编号文件，均单独生成 OWP。创建 OVK 和循环播放时，串联 Ogg 音频的各段须使用相同采样率。循环播放还要求各段的编码和声道数一致，FLAC 还要求各段位深一致。对于 Vorbis、Opus、Speex 和 FLAC，程序从各段的实际音频起点计算采样数。
 
 #### 循环播放
 
@@ -800,7 +800,7 @@ siglus-ssu -s --play /path/to/BGM/
 
 ### `-v` / `--video` — 处理 `.omv` 视频文件
 
-从 OMV 提取 Ogg 视频，或将 Theora 视频包装为 OMV，不重新编码或转换颜色、透明度。提取会保留内嵌音频，创建仅保留首个 Theora 视频流，并丢弃音频及其他流。
+从 OMV 提取 Ogg 视频，或将 Theora 视频包装为 OMV，不重新编码或转换颜色、透明度。提取会保留内嵌音频，创建只保留首个 Theora 视频流。如果 Ogg 流缺页、某页不完整或校验和有误，提取和创建都会报错。
 
 #### 语法
 
@@ -947,7 +947,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 
 至少一个文件通过且没有失败时，命令返回 `0`。任一失败或全部跳过时返回 `1`。摘要会显示耗时及失败文件。
 
-JSON 包含 `decompile` 标记和 `results`。每个结果包含 `path`、`status`、`detail`、`elapsed`、`timings`、`profile` 和 `allow_invalid`，最后两项在失败或跳过时为 `null`。
+JSON 包含 `decompile` 标记和 `results`。每个结果包含 `path`、`status`、`detail`、`elapsed`、`timings`、`profile`、`allow_invalid` 和 `compile_backend`（`rust` 或 `python`）。失败或跳过时，最后三项为 `null`。
 
 ```bash
 siglus-ssu test /path/to/Scene.pck

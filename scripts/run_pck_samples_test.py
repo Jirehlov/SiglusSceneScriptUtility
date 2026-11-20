@@ -347,12 +347,15 @@ def _run_siglus_test(
     const_profile=None,
     profiles_from="",
     report_json="",
+    backend=None,
 ) -> int:
     from siglus_ssu.common import iter_directory_key_paths, open_atomic_output
     from siglus_ssu.path_policy import check_output_inputs, validate_input_paths
 
     validate_input_paths(pcks)
     prefix = _command_prefix(command)
+    if backend == "python":
+        prefix.append("--legacy")
     report_path = Path(report_json).resolve() if report_json else None
     report_inputs = list(pcks)
     if profiles_from:
@@ -368,7 +371,9 @@ def _run_siglus_test(
     report_results = []
     rc = 0
     report_dir = (
-        tempfile.TemporaryDirectory() if report_path is not None else nullcontext()
+        tempfile.TemporaryDirectory()
+        if report_path is not None or backend
+        else nullcontext()
     )
     with report_dir as tmp:
         for index, (path, (profile, allow_invalid)) in enumerate(
@@ -393,7 +398,14 @@ def _run_siglus_test(
                     rows = report.get("results")
                     if not isinstance(rows, list) or len(rows) != 1:
                         raise ValueError(f"expected one test result for {path}")
-                    report_results.extend(rows)
+                    if report_path is not None:
+                        report_results.extend(rows)
+                    actual_backend = rows[0].get("compile_backend")
+                    if rc == 0 and backend and actual_backend != backend:
+                        sys.stderr.write(
+                            f"expected {backend} compilation for {path.name}, got {actual_backend}\n"
+                        )
+                        rc = 1
                 elif rc == 0:
                     raise RuntimeError("test did not write the requested JSON report")
             if rc != 0:
@@ -436,6 +448,7 @@ def main(argv=None) -> int:
     parser.add_argument("--work-dir", default=DEFAULT_WORK_DIR)
     parser.add_argument("--samples-dir", default="")
     parser.add_argument("--command", default="")
+    parser.add_argument("--backend", choices=("rust", "python"))
     parser.add_argument("--serial", action="store_true")
     parser.add_argument("--decompile", action="store_true")
     profiles = parser.add_mutually_exclusive_group()
@@ -497,6 +510,7 @@ def main(argv=None) -> int:
         profiles_from=args.profiles_from
         or (str(profile_path) if args.const_profile is None else ""),
         report_json=args.report_json,
+        backend=args.backend,
     )
 
 

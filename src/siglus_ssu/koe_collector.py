@@ -112,23 +112,11 @@ def _duration_from_path(path: str):
         return None
 
 
-def _duration_from_ogg_bytes(ogg: bytes):
-    try:
-        return sound.estimate_ogg_duration_seconds(ogg)
-    except (ValueError, EOFError):
-        return None
-
-
 def _duration_from_ovk_entry_ogg(entry, ogg: bytes):
     try:
-        duration = sound.ogg_duration_seconds_from_sample_count(
-            ogg, getattr(entry, "sample_count", 0)
-        )
-    except (TypeError, ValueError, EOFError):
-        duration = None
-    if duration is not None:
-        return duration
-    return _duration_from_ogg_bytes(ogg)
+        return sound.estimate_ogg_duration_seconds(ogg, entry.sample_count)
+    except (ValueError, EOFError):
+        return None
 
 
 def _maybe_add_duration(

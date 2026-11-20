@@ -9,7 +9,7 @@ import csv
 import tempfile
 from contextlib import ExitStack, suppress
 from pathlib import Path
-from uuid import uuid4
+from functools import partial
 import siglus_ssu as _runtime
 from . import const as C, package_version
 from .BS import (
@@ -29,6 +29,7 @@ from .native_ops import (
     tile_copy,
     compile_project_native,
     is_native_available,
+    msvcrand_shuffle_inplace,
 )
 from .common import (
     ascii_lower,
@@ -48,7 +49,7 @@ from .common import (
     read_text_auto,
     decode_angou_first_line,
     angou_to_exe_el,
-    writable_file_mode,
+    StagedOutputs,
     write_bytes,
     parse_code,
     KEY_TXT_NAME,
@@ -63,6 +64,7 @@ from .common import (
 )
 from .path_policy import (
     check_output_inputs,
+    open_read,
     read_directory,
     resolve_read_path,
     windows_filename_key,
@@ -72,91 +74,6 @@ from .path_policy import (
 
 _SOURCE_DIGEST_NAME = "_source_hashes.json"
 SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
-
-
-class _CompileOutputs:
-    def __init__(self, directory, names):
-        directory = os.path.realpath(directory)
-        self.directory = directory
-        self.names = names
-        self.staging_dirs = {}
-        self.keep = False
-        self.staging = self._stage_in(directory) if names else directory
-
-    def _stage_in(self, directory):
-        if directory not in self.staging_dirs:
-            staging = os.path.join(directory, f".ssu-build-{uuid4().hex}")
-            os.mkdir(staging, 0o777 if os.name == "nt" else 0o700)
-            self.staging_dirs[directory] = staging
-        return self.staging_dirs[directory]
-
-    def close(self):
-        if not self.keep:
-            for staging in self.staging_dirs.values():
-                shutil.rmtree(staging, ignore_errors=True)
-
-    def publish(self, inputs, *, seed_report=None):
-        if not self.names:
-            return
-        targets = [
-            os.path.realpath(os.path.join(self.directory, name)) for name in self.names
-        ]
-        with ExitStack() as locks:
-            locked = set()
-            for directory in sorted({os.path.dirname(target) for target in targets}):
-                info = os.stat(directory)
-                identity = (info.st_dev, info.st_ino) if info.st_ino else directory
-                if identity not in locked:
-                    locks.enter_context(
-                        directory_lock(
-                            os.path.join(directory, ".siglus-publish.lockdir")
-                        )
-                    )
-                    locked.add(identity)
-            destinations = (
-                targets if seed_report is None else [*targets, seed_report[0]]
-            )
-            check_output_inputs(destinations, inputs, distinct=True)
-            entries = []
-            for name, target in zip(self.names, targets):
-                stage = self._stage_in(os.path.dirname(target))
-                source = os.path.join(self.staging, name)
-                if stage != self.staging:
-                    source = shutil.move(source, os.path.join(stage, name))
-                mode = writable_file_mode(target)
-                backup = None
-                if mode is not None:
-                    backup = os.path.join(stage, f".previous-{uuid4().hex}")
-                    try:
-                        os.link(target, backup)
-                    except OSError:
-                        shutil.copy2(target, backup)
-                    os.chmod(source, mode)
-                entries.append((source, target, backup))
-            published = []
-            try:
-                for source, target, backup in entries:
-                    os.replace(source, target)
-                    published.append((target, backup))
-                if seed_report is not None:
-                    _write_test_shuffle_csv(*seed_report)
-            except BaseException:
-                restore_errors = []
-                for target, backup in reversed(published):
-                    try:
-                        if backup is None:
-                            os.unlink(target)
-                        else:
-                            os.replace(backup, target)
-                    except OSError as exc:
-                        restore_errors.append(str(exc))
-                if restore_errors:
-                    self.keep = True
-                    raise OSError(
-                        f"rollback failed: {'; '.join(restore_errors)}; "
-                        f"recovery files: {', '.join(self.staging_dirs.values())}"
-                    )
-                raise
 
 
 def _check_compile_cache(tmp, scenes, inputs, outputs):
@@ -384,10 +301,20 @@ def _write_digest_cache(tmp_dir, payload, compiled_scenes, workers):
 
 
 def _compile_cache_state(
-    *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid, workers
+    *,
+    tmp_dir,
+    enc,
+    charset,
+    ss,
+    source_digests,
+    incremental,
+    allow_invalid,
+    workers,
+    serial,
 ):
     cache_meta = {
-        "schema": 10,
+        "schema": 11,
+        "serial": serial,
         "siglus_ssu_version": str(package_version() or ""),
         "charset": enc,
         "charset_force": charset,
@@ -418,16 +345,24 @@ def _compile_cache_state(
         return ss, pending
     names = {scene: ascii_lower(os.path.basename(scene)) for scene in ss}
     expected = old["artifacts"]
-    candidates = [
-        scene
-        for scene, name in names.items()
-        if expected.get(name) and old["ss"].get(name) == source_digests["ss"][name]
-    ]
+    old_order = iter(sorted(old["ss"])) if serial else None
+    candidates = []
+    for scene, name in names.items():
+        if serial and next(old_order, None) != name:
+            break
+        if expected.get(name) and old["ss"].get(name) == source_digests["ss"][name]:
+            candidates.append(scene)
+        elif serial:
+            break
     hashes = _scene_cache_hashes(root, candidates, workers, skip_unreadable=True)
     compile_list = []
     for scene, name in names.items():
         current = hashes.get(scene)
-        if current is not None and current == expected.get(name):
+        if (
+            current is not None
+            and current == expected.get(name)
+            and not (serial and compile_list)
+        ):
             verified[name] = current
         else:
             compile_list.append(scene)
@@ -973,6 +908,7 @@ def _native_compile_config(
     full_compile_stats,
     test_shuffle,
     force_serial_compile,
+    initial_seed,
 ):
     if not args.tmp_dir and not args.debug:
         tmp_dir = ""
@@ -1006,7 +942,7 @@ def _native_compile_config(
         "options": {
             "dat_repack": bool(args.dat_repack),
             "max_workers": args.max_workers,
-            "set_shuffle": args.set_shuffle,
+            "set_shuffle": str(initial_seed) if force_serial_compile else None,
             "gei": bool(args.gei),
             "test_shuffle": bool(test_shuffle),
             "force_serial_compile": bool(force_serial_compile),
@@ -1053,12 +989,17 @@ def _try_native_compile(config, ctx):
     return 0 if ok else 1
 
 
-def main(argv, *, collect_statistics=True):
+def main(argv, *, collect_statistics=True, statistics=None):
     with ExitStack() as resources:
-        return _compile_cli(argv, resources, collect_statistics=collect_statistics)
+        return _compile_cli(
+            argv,
+            resources,
+            collect_statistics=collect_statistics,
+            stats={} if statistics is None else statistics,
+        )
 
 
-def _compile_cli(argv, resources, *, collect_statistics):
+def _compile_cli(argv, resources, *, collect_statistics, stats):
     import argparse
 
     prog = "siglus-ssu -c"
@@ -1227,9 +1168,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
     if test_shuffle:
         if (not test_seed0_given) and (user_seed is not None):
             test_seed0 = int(user_seed) & 0xFFFFFFFF
-    else:
-        if user_seed is not None:
-            set_shuffle_seed(int(user_seed) & 0xFFFFFFFF)
+    initial_seed = 1 if user_seed is None else user_seed
     try:
         inp = resolve_read_path(a.input_dir)
     except (FileNotFoundError, NotADirectoryError):
@@ -1396,7 +1335,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
                 dir=out,
             )
-        outputs = _CompileOutputs(out, output_names)
+        outputs = StagedOutputs(out, output_names)
         resources.callback(outputs.close)
         compile_list = ss
         pending_digests = None
@@ -1405,6 +1344,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
             from .parallel import get_max_workers
 
             cache_workers = get_max_workers(a.max_workers)
+            force_serial_compile = cache_workers == 1
         if tmp and (a.tmp_dir or a.debug):
             compile_list, pending_digests = _compile_cache_state(
                 tmp_dir=tmp,
@@ -1415,7 +1355,15 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 incremental=bool(a.tmp_dir),
                 allow_invalid=a.allow_invalid,
                 workers=cache_workers,
+                serial=force_serial_compile,
             )
+            if a.tmp_dir and force_serial_compile and compile_list:
+                for path in ss[: len(ss) - len(compile_list)]:
+                    with open_read(Path(tmp, "bs", Path(path).stem + ".dat")) as stream:
+                        header = read_scn_header(stream.read(C.SCN_HDR_SIZE))
+                    initial_seed = msvcrand_shuffle_inplace(
+                        initial_seed, [None] * header["str_index_cnt"]
+                    )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
         return 1
@@ -1432,19 +1380,22 @@ def _compile_cli(argv, resources, *, collect_statistics):
             except UnicodeEncodeError:
                 use_utf8 = True
                 break
-    stats = {
-        "stage_time": {},
-        "inc_files": 0,
-        "scene_files": 0,
-        "compiled_scene_files": 0,
-        "full_compile_stats": False,
-        "macro_counts": None,
-        "read_flags": None,
-        "read_flags_scenes": None,
-        "top5_read_flags_scenes": None,
-        "source_stats": None,
-        "binary_size_stats": None,
-    }
+    stats.update(
+        {
+            "backend": "python",
+            "stage_time": {},
+            "inc_files": 0,
+            "scene_files": 0,
+            "compiled_scene_files": 0,
+            "full_compile_stats": False,
+            "macro_counts": None,
+            "read_flags": None,
+            "read_flags_scenes": None,
+            "top5_read_flags_scenes": None,
+            "source_stats": None,
+            "binary_size_stats": None,
+        }
+    )
     ctx = {
         "project": {},
         "scn_path": inp,
@@ -1494,6 +1445,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 full_compile_stats=full_compile_stats,
                 test_shuffle=test_shuffle,
                 force_serial_compile=force_serial_compile,
+                initial_seed=initial_seed,
             )
             native_rc = _try_native_compile(native_config, ctx)
             if native_rc == 0:
@@ -1506,6 +1458,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
             sys.stderr.write(f"{prog}: error: {exc}\n")
             native_rc = 1
     if native_rc is not None:
+        stats["backend"] = "rust"
         _print_summary(ctx, ok=native_rc == 0)
         if native_rc == 0 and not a.debug and tmp_auto:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -1689,6 +1642,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
                         )
                         sys.stderr.flush()
                 else:
+                    set_shuffle_seed(initial_seed)
                     compile_stats = compile_all(
                         ctx,
                         compile_list,
@@ -1717,7 +1671,12 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 stage = "compile cache"
                 _write_digest_cache(tmp, pending_digests, compile_list, cache_workers)
         stage = "publish"
-        outputs.publish(input_paths, seed_report=seed_report)
+        final_output = (
+            (seed_report[0], partial(_write_test_shuffle_csv, *seed_report))
+            if seed_report is not None
+            else None
+        )
+        outputs.publish(input_paths, final_output=final_output)
         if seed_report is not None:
             sys.stderr.write(f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n")
         ok = not test_shuffle_failed

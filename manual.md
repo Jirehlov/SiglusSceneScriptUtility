@@ -228,7 +228,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--serial` | Compile scene scripts sequentially. Packaging can use multiple workers. |
 | `--max-workers N` | Positive maximum worker count for parallel scene compilation. Default: half the available CPUs, limited to 1–16. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
 | `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
-| `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Concurrent builds cannot share it. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
+| `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Serial builds reuse cached scenes up to the first change and rebuild the rest to preserve string-table order. Concurrent builds cannot share the cache. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Search seeds from `seed0` (default `0`) through `0xFFFFFFFF` to reproduce the first scene's string-table order in `<test_dir>`, then verify all scenes. Requires three paths after the optional seed. Cannot be combined with `--tmp` or `--gei`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, publish per-scene initial and final seeds with the linked PCK. A directory target receives `test_shuffle_seeds.csv`. |
 | `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. Output is always a directory. A missing INI produces a warning and succeeds without creating `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
@@ -650,7 +650,7 @@ Analyzes, extracts, merges, creates, and updates SiglusEngine images.
 | type2 | Multiple image cuts with placement information. |
 | type3 | JPEG image. |
 
-Image processing requires [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`). Analysis and untrimmed type3 JPEG extraction can run without it.
+Image processing requires [Pillow](https://pillow.readthedocs.io/) (`pip install pillow`). Analysis and untrimmed type3 JPEG extraction can run without it. Untrimmed extraction checks the primary JPEG's markers and writes the original JPEG bytes.
 
 #### Syntax
 
@@ -754,13 +754,13 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 | `--trim <Gameexe.dat \| Gameexe.ini>` | Extract only the `repeat`–`end` loop region of matching NWA/OWP tracks. OWP trimming requires `ffmpeg`; NWA trimming does not. OVK is unaffected. |
 | `--angou VALUE` | [Key source](#decryption-keys) for encrypted Gameexe data used by trimming or playback. Ignored by other sound operations. |
 
-Trimming fails if the selected loop region contains no audio samples. An existing output for that track is preserved.
+Trimming fails if decoding fails or the selected loop region contains no audio samples. NWA extraction fails if a compressed block is incomplete. The tool preserves any existing output for the track in these cases.
 
 #### OVK Naming
 
-Extraction writes `<basename>.ogg` for one entry, or `<basename>_<entry_no>.ogg` for multiple entries.
+Extraction writes `<basename>.ogg` for one entry, or `<basename>_<entry_no>.ogg` for multiple entries. Creating or extracting OWP and OVK requires complete Ogg streams. OVK extraction reads all entries before publishing files and rolls back that archive's outputs if publishing fails.
 
-Creation groups at least two `<basename>_<N>.ogg` files into `<basename>.ovk`. Other files, including a lone numbered file, become individual OWP files.
+Creation groups at least two `<basename>_<N>.ogg` files into `<basename>.ovk`. Other files, including a lone numbered file, become individual OWP files. OVK creation and loop playback require a constant sample rate across the links of chained Ogg audio. Loop playback also requires the same codec and channel count across links, and the same bit depth for FLAC. For Vorbis, Opus, Speex, and FLAC, sample counts start at each link's audio origin.
 
 #### Loop Playback
 
@@ -800,7 +800,7 @@ siglus-ssu -s --play /path/to/BGM/
 
 ### `-v` / `--video` — Work with `.omv` Video Files
 
-Extracts Ogg video from OMV and wraps Theora video as OMV without re-encoding or converting colors/transparency. Extraction preserves embedded audio; creation keeps only the first Theora video stream and drops audio and other streams.
+Extracts Ogg video from OMV and wraps Theora video as OMV without re-encoding or converting colors/transparency. Extraction preserves embedded audio. Creation keeps only the first Theora video stream. Both operations reject Ogg streams with missing pages, truncated pages, or invalid page checksums.
 
 #### Syntax
 
@@ -947,7 +947,7 @@ An explicit `--const-profile` makes one attempt with that profile and normal enc
 
 The command exits with `0` if at least one file passes and none fail; any failure or an all-skipped run returns `1`. The summary includes timings and failed files.
 
-JSON contains a `decompile` flag and `results`. Each result has `path`, `status`, `detail`, `elapsed`, `timings`, `profile`, and `allow_invalid`; the last two are `null` for failed or skipped files.
+JSON contains a `decompile` flag and `results`. Each result has `path`, `status`, `detail`, `elapsed`, `timings`, `profile`, `allow_invalid`, and `compile_backend` (`rust` or `python`). The last three fields are `null` for failed or skipped files.
 
 ```bash
 siglus-ssu test /path/to/Scene.pck

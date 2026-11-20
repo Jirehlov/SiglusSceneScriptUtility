@@ -2,6 +2,7 @@ import json
 import struct
 import sys
 import re
+from io import BytesIO
 from pathlib import Path
 from . import const as C
 from .native_ops import (
@@ -130,43 +131,33 @@ def _write_png_bgra(bgra: bytes, w: int, h: int, output, trim: bool):
     img.save(output, "PNG")
 
 
-def cuts_from_unp(unp: bytes):
-    if len(unp) < 4:
-        return []
-    cc = struct.unpack_from("<I", unp, 0)[0]
-    r = []
-    base = 4
-    for ci in range(cc):
-        o = base + ci * 8
-        if o + 8 > len(unp):
-            break
-        off, size = struct.unpack_from("<II", unp, o)
-        if off and size and off + size <= len(unp) and size >= C.G00_CUT_SZ:
-            r.append((ci, off, size))
-    return r
-
-
-def _type2_outer_rects(d: bytes, cut_cnt: int):
-    rects = []
-    pos = 9
-    for _ in range(max(cut_cnt, 0)):
-        if pos + 24 > len(d):
-            break
-        rects.append(struct.unpack_from("<6i", d, pos))
-        pos += 24
-    return rects
-
-
 def _type2_unp_and_cuts(d: bytes):
-    off = 1
-    w, h = struct.unpack_from("<HH", d, off)
-    off += 4
-    cut_cnt = struct.unpack_from("<i", d, off)[0]
-    off += 4
-    off += 24 * max(cut_cnt, 0)
-    comp_off = off
+    if len(d) < 9:
+        raise ValueError("type2 header is truncated")
+    w, h, cut_cnt = struct.unpack_from("<HHi", d, 1)
+    comp_off = 9 + cut_cnt * 24
+    if cut_cnt < 0 or comp_off > len(d):
+        raise ValueError("invalid type2 outer cut table")
+
     unp = lzss(d[comp_off:])
-    cuts = cuts_from_unp(unp)
+    table_end = 4 + cut_cnt * 8
+    if len(unp) < table_end or struct.unpack_from("<I", unp, 0)[0] != cut_cnt:
+        raise ValueError("invalid type2 inner cut table")
+    cuts = []
+    stored_blocks = set()
+    for index, (offset, length) in enumerate(
+        struct.iter_unpack("<Ii", memoryview(unp)[4:table_end])
+    ):
+        if length == 0:
+            continue
+        size = abs(length)
+        if offset < table_end or size < C.G00_CUT_SZ or offset + size > len(unp):
+            raise ValueError(f"type2 cut {index} is outside the image data")
+        if length > 0:
+            stored_blocks.add((offset, size))
+        elif (offset, size) not in stored_blocks:
+            raise ValueError(f"type2 cut {index} does not refer to an earlier block")
+        cuts.append((index, offset, size))
     return w, h, cut_cnt, comp_off, unp, cuts
 
 
@@ -187,11 +178,44 @@ def _parse_g00_spec(s: str):
     return p, cut, label
 
 
+def _decode_type3_jpeg(payload: bytes) -> bytes:
+    jpeg = de_xor(payload)
+    if not jpeg.startswith(b"\xff\xd8"):
+        raise ValueError("G00 type3 payload is not JPEG")
+    pos = 2
+    in_scan = saw_scan = False
+    while pos < len(jpeg):
+        if in_scan:
+            pos = jpeg.find(b"\xff", pos)
+            if pos < 0:
+                break
+        elif jpeg[pos] != 0xFF:
+            break
+        while pos < len(jpeg) and jpeg[pos] == 0xFF:
+            pos += 1
+        if pos == len(jpeg):
+            break
+        marker = jpeg[pos]
+        pos += 1
+        if marker == 0x01 or (in_scan and (marker == 0 or 0xD0 <= marker <= 0xD7)):
+            continue
+        if marker == 0xD9 and saw_scan:
+            return jpeg
+        if marker == 0 or 0xD0 <= marker <= 0xD9 or pos + 2 > len(jpeg):
+            break
+        length = struct.unpack_from(">H", jpeg, pos)[0]
+        in_scan = marker == 0xDA
+        if length < (8 if in_scan else 2) or pos + length > len(jpeg):
+            break
+        saw_scan |= in_scan
+        pos += length
+    raise ValueError("G00 type3 JPEG data is incomplete")
+
+
 def _simple_to_pil(t: int, pay: bytes, w: int, h: int):
     if t == 3:
-        from io import BytesIO
-
-        return Image.open(BytesIO(de_xor(pay))).convert("RGBA")
+        with Image.open(BytesIO(_decode_type3_jpeg(pay)), formats=["JPEG"]) as image:
+            return image.convert("RGBA")
     return Image.frombytes(
         "RGBA", (w, h), _decode_simple_g00_bgra(t, pay, w, h), "raw", "BGRA"
     )
@@ -282,12 +306,10 @@ def _extract_simple(pre: str, d: bytes, out: Path, trim: bool = False):
     try:
         with open_atomic_output(dst, exclusive=True) as output:
             if t == 3:
-                jpeg = de_xor(pay)
+                jpeg = _decode_type3_jpeg(pay)
                 if trim:
                     need_pil()
-                    from io import BytesIO
-
-                    with Image.open(BytesIO(jpeg)) as img:
+                    with Image.open(BytesIO(jpeg), formats=["JPEG"]) as img:
                         image, cropped = _trim_image_edges(img)
                         if cropped:
                             image.save(output, "JPEG")
@@ -340,8 +362,8 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
     if t != 2:
         raise ValueError("unknown type")
     need_pil()
-    canvas_w, canvas_h, cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
-    outer_rects = _type2_outer_rects(d, cut_cnt)
+    canvas_w, canvas_h, cut_cnt, comp_off, unp, cuts = _type2_unp_and_cuts(d)
+    outer_rects = list(struct.iter_unpack("<6i", memoryview(d)[9:comp_off]))
     single = cut_cnt == 1 and len(cuts) == 1 and cuts[0][0] == 0
     layout_path = out / f"{pre}.type2.json"
     have_layout = not trim and layout_path.is_file()
@@ -514,11 +536,21 @@ def _is_jpeg_file(p: Path) -> bool:
 def _load_image_bgra(p: Path):
     need_pil()
     p = Path(resolve_read_path(p, kind="file"))
-    img = Image.open(p)
-    rgba = img.convert("RGBA")
-    w, h = rgba.size
-    bgra = rgba.tobytes("raw", "BGRA")
-    return bgra, w, h
+    with Image.open(p) as img:
+        rgba = img.convert("RGBA")
+        w, h = rgba.size
+        return rgba.tobytes("raw", "BGRA"), w, h
+
+
+def _load_type3_jpeg(path: Path):
+    if not _is_jpeg_file(path):
+        raise ValueError("type3 expects .jpg/.jpeg input")
+    need_pil()
+    data = read_bytes(resolve_read_path(path, kind="file"))
+    with Image.open(BytesIO(data), formats=["JPEG"]) as image:
+        image.load()
+        width, height = image.size
+    return data, width, height
 
 
 def _force_bgra_opaque(bgra: bytes):
@@ -541,37 +573,29 @@ def _load_type0_image_bgra(p: Path):
     return bgra, w, h
 
 
-def _parse_cut_block(blk: bytes, strict: bool = False):
+def _render_cut_canvas(blk: bytes):
     if len(blk) < C.G00_CUT_SZ:
         raise ValueError("cut block short")
-    _, cc, _, _, _, _, _, _, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
-    pos = C.G00_CUT_SZ
+    _, chip_count, _, _, _, _, _, _, cw, ch = struct.unpack_from("<B x H 8i", blk, 0)
+    if not (0 < cw <= 0xFFFF and 0 < ch <= 0xFFFF):
+        raise ValueError("invalid cut canvas dimensions")
+    view = memoryview(blk)
     chips = []
-    for _ in range(cc):
-        if pos + C.G00_CHIP_SZ > len(blk):
-            if strict:
-                raise ValueError("cut block chip header short")
-            break
-        hdr = blk[pos : pos + C.G00_CHIP_SZ]
-        px, py, _ctype, xl, yl = struct.unpack_from("<HHB x HH", hdr, 0)
-        pos += C.G00_CHIP_SZ
-        n = xl * yl * 4
-        if pos + n > len(blk):
-            if strict:
-                raise ValueError("cut block chip data short")
-            break
-        chip = blk[pos : pos + n]
-        pos += n
-        chips.append((hdr, px, py, xl, yl, chip))
-    return blk[: C.G00_CUT_SZ], cw, ch, chips
-
-
-def _render_cut_canvas(blk: bytes):
-    _, cw, ch, chips = _parse_cut_block(blk)
-    canvas = bytearray(cw * ch * 4)
-    for _hdr, px, py, xl, yl, chip in chips:
-        if px + xl > cw or py + yl > ch:
+    pos = C.G00_CUT_SZ
+    for _ in range(chip_count):
+        if pos + C.G00_CHIP_SZ > len(view):
+            raise ValueError("cut block chip header short")
+        px, py, _ctype, xl, yl = struct.unpack_from("<HHB x HH", view, pos)
+        if xl == 0 or yl == 0 or px + xl > cw or py + yl > ch:
             raise ValueError("chip out of bounds")
+        pos += C.G00_CHIP_SZ
+        end = pos + xl * yl * 4
+        if end > len(view):
+            raise ValueError("cut block chip data short")
+        chips.append((px, py, xl, yl, view[pos:end]))
+        pos = end
+    canvas = bytearray(cw * ch * 4)
+    for px, py, xl, yl, chip in chips:
         row_bytes = xl * 4
         for ry in range(yl):
             so = ry * row_bytes
@@ -1137,13 +1161,7 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout):
         bgra, w, h = _load_type0_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
     if g00_type == 3:
-        if not _is_jpeg_file(img_p):
-            raise ValueError("type3 create expects .jpg/.jpeg input")
-        need_pil()
-        img_p = Path(resolve_read_path(img_p, kind="file"))
-        with Image.open(img_p) as img:
-            w, h = img.size
-        jpeg = read_bytes(img_p)
+        jpeg, w, h = _load_type3_jpeg(img_p)
         return bytes([3]) + struct.pack("<HH", w, h) + de_xor(jpeg)
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
@@ -1191,15 +1209,11 @@ def _plan_type2_updates(unp: bytes, cuts: list, updates: list):
     return planned
 
 
-def _rebuild_type2_cut_block(blk: bytes, bgra_canvas: bytes) -> bytes:
-    hdr, cw, ch, chips = _parse_cut_block(blk, strict=True)
-    for _chip_hdr, px, py, xl, yl, _chip in chips:
-        if xl <= 0 or yl <= 0:
-            raise ValueError("bad chip size")
-        if px + xl > cw or py + yl > ch:
-            raise ValueError("chip rect out of bounds")
-    rebuilt = _build_type2_official_cut_block(bgra_canvas, cw, ch)
-    return hdr[:2] + rebuilt[2:20] + hdr[20:] + rebuilt[C.G00_CUT_SZ :]
+def _rebuild_type2_cut_block(
+    blk: bytes, bgra_canvas: bytes, width: int, height: int
+) -> bytes:
+    rebuilt = _build_type2_official_cut_block(bgra_canvas, width, height)
+    return blk[:2] + rebuilt[2:20] + blk[20 : C.G00_CUT_SZ] + rebuilt[C.G00_CUT_SZ :]
 
 
 def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=None):
@@ -1229,16 +1243,10 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
     if t == 3:
         img_p, _ = updates[0]
-        if not _is_jpeg_file(img_p):
-            raise ValueError("type3 expects .jpg/.jpeg")
-        img_p = Path(resolve_read_path(img_p, kind="file"))
         bw, bh = struct.unpack_from("<HH", base_bytes, 1)
-        need_pil()
-        with Image.open(img_p) as img:
-            w, h = img.size
+        jpeg, w, h = _load_type3_jpeg(img_p)
         if (w, h) != (bw, bh):
             raise ValueError(f"size mismatch: image={w}x{h} base={bw}x{bh}")
-        jpeg = read_bytes(img_p)
         base_jpeg = de_xor(base_bytes[5:])
         is_changed = base_jpeg != jpeg
         _report_single_update(report, img_p, (bw, bh), is_changed)
@@ -1280,7 +1288,7 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
             + lzss_pack(bytes(new_unp), suppress_empty_tail_group=True)
         )
     if t == 2:
-        bw, bh, _cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes)
+        bw, bh, cut_cnt, off, unp, cuts = _type2_unp_and_cuts(base_bytes)
         if not cuts:
             raise ValueError("type2 no cuts")
         planned = _plan_type2_updates(unp, cuts, updates)
@@ -1301,46 +1309,38 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
         if not changed:
             return base_bytes
         repl = {
-            item["cut"]: _rebuild_type2_cut_block(item["blk"], item["bgra"])
+            item["cut"]: _rebuild_type2_cut_block(
+                item["blk"], item["bgra"], *item["wh"]
+            )
             for item in planned
             if item["changed"]
         }
-        if len(unp) < 4:
-            raise ValueError("type2 unp short")
-        table_cnt = struct.unpack_from("<I", unp, 0)[0]
-        table_end = 4 + table_cnt * 8
-        if table_end > len(unp):
-            raise ValueError("type2 unp table short")
-        entries = []
-        for ci in range(table_cnt):
-            o, s = struct.unpack_from("<II", unp, 4 + ci * 8)
-            if o and s and o + s <= len(unp):
-                entries.append((ci, o, s))
-        entries.sort(key=lambda x: x[1])
+        by_range = {}
+        for index, offset, size in cuts:
+            by_range.setdefault((offset, size), []).append(index)
+        table_end = 4 + cut_cnt * 8
         out = bytearray(unp[:table_end])
-        new_os = {}
-        cur = table_end
-        for ci, o, s in entries:
-            if o < cur:
-                continue
-            out.extend(unp[cur:o])
-            new_off = len(out)
-            nb = repl.get(ci)
-            if nb is None:
-                out.extend(unp[o : o + s])
-                new_sz = s
-            else:
-                out.extend(nb)
-                new_sz = len(nb)
-            new_os[ci] = (new_off, new_sz)
-            cur = o + s
-        out.extend(unp[cur:])
-        for ci in range(table_cnt):
-            o0, s0 = struct.unpack_from("<II", unp, 4 + ci * 8)
-            if not (o0 and s0 and o0 + s0 <= len(unp)):
-                continue
-            no, ns = new_os.get(ci, (o0, s0))
-            struct.pack_into("<II", out, 4 + ci * 8, no, ns)
+        pos = table_end
+        for (offset, size), indices in sorted(by_range.items()):
+            if offset < pos:
+                raise ValueError("overlapping type2 cut blocks")
+            out.extend(unp[pos:offset])
+            pos = offset + size
+            unchanged = [index for index in indices if index not in repl]
+            if unchanged:
+                for position, index in enumerate(unchanged):
+                    entry = 4 + index * 8
+                    length = struct.unpack_from("<i", unp, entry + 4)[0]
+                    struct.pack_into(
+                        "<Ii", out, entry, len(out), size if position == 0 else length
+                    )
+                out.extend(unp[offset:pos])
+            for index in indices:
+                block = repl.get(index)
+                if block is not None:
+                    struct.pack_into("<Ii", out, 4 + index * 8, len(out), len(block))
+                    out.extend(block)
+        out.extend(unp[pos:])
         return base_bytes[:off] + lzss_pack(bytes(out), suppress_empty_tail_group=True)
     raise ValueError("unknown type")
 
