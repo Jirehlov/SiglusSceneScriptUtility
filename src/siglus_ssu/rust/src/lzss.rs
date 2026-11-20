@@ -107,9 +107,9 @@ impl LzssTree {
         &mut self,
         target: usize,
         next: usize,
-        matching_result: i32,
+        goes_right: bool,
     ) -> (bool, usize) {
-        let child = if matching_result >= 0 {
+        let child = if goes_right {
             &mut self.nodes[target].big
         } else {
             &mut self.nodes[target].sml
@@ -131,6 +131,7 @@ struct LzssTreeFind<'a> {
     src: &'a [u8],
     src_index: usize,
     tree: LzssTree,
+    previous_match_distance: usize,
 }
 
 impl<'a> LzssTreeFind<'a> {
@@ -139,6 +140,7 @@ impl<'a> LzssTreeFind<'a> {
             src,
             src_index: 0,
             tree: LzssTree::new(),
+            previous_match_distance: 0,
         }
     }
 
@@ -156,41 +158,80 @@ impl<'a> LzssTreeFind<'a> {
             return (0, window_top);
         }
         let source = &self.src[self.src_index..];
-        let matching_loop_cnt = LOOK_AHEAD.min(source.len());
+        let count = LOOK_AHEAD.min(source.len());
+        let source = &source[..count];
+        let distance = self.previous_match_distance;
+        if count == LOOK_AHEAD && distance != 0 {
+            let candidate = self.src_index - distance;
+            let slot = candidate % WINDOW_SIZE;
+            if self.src[candidate + LOOK_AHEAD - 1] == source[LOOK_AHEAD - 1]
+                && self.tree.nodes[slot].parent != UNUSED_NODE as u32
+            {
+                self.tree.replace(slot, window_top);
+                return (LOOK_AHEAD, slot);
+            }
+        }
+        self.previous_match_distance = 0;
+
+        let key = source.first_chunk::<LOOK_AHEAD>().map(|source| {
+            (
+                u64::from_be_bytes(source[..8].try_into().unwrap()),
+                u64::from_be_bytes(source[8..16].try_into().unwrap()),
+                source[16],
+            )
+        });
 
         loop {
             let offset = self.src_index.wrapping_sub(target) % WINDOW_SIZE;
-            let p2 = self.src_index.wrapping_sub(offset);
-
-            let mut matching_counter = 0;
-            let mut matching_result = 0i32;
-
-            while matching_counter < matching_loop_cnt {
-                matching_result =
-                    source[matching_counter] as i32 - self.src[p2 + matching_counter] as i32;
-                if matching_result != 0 {
-                    break;
-                }
-                matching_counter += 1;
-            }
-
-            if TRACK_MATCH {
-                if matching_counter > match_size {
-                    match_size = matching_counter;
-                    match_target = target;
-                    if match_size == matching_loop_cnt {
-                        self.tree.replace(target, window_top);
-                        break;
+            let candidate_start = self.src_index.wrapping_sub(offset);
+            let (matched, goes_right) = if let Some((first, second, last)) = key {
+                let candidate = self.src[candidate_start..]
+                    .first_chunk::<LOOK_AHEAD>()
+                    .unwrap();
+                let other = u64::from_be_bytes(candidate[..8].try_into().unwrap());
+                if first != other {
+                    let prefix = if TRACK_MATCH {
+                        ((first ^ other).leading_zeros() / 8) as usize
+                    } else {
+                        0
+                    };
+                    (prefix, first > other)
+                } else {
+                    let other = u64::from_be_bytes(candidate[8..16].try_into().unwrap());
+                    if second != other {
+                        let prefix = if TRACK_MATCH {
+                            8 + ((second ^ other).leading_zeros() / 8) as usize
+                        } else {
+                            0
+                        };
+                        (prefix, second > other)
+                    } else if last != candidate[16] {
+                        (16, last > candidate[16])
+                    } else {
+                        (LOOK_AHEAD, false)
                     }
                 }
-            } else if matching_counter == matching_loop_cnt {
+            } else {
+                let candidate = &self.src[candidate_start..candidate_start + count];
+                match source.iter().zip(candidate).position(|(a, b)| a != b) {
+                    Some(index) => (index, source[index] > candidate[index]),
+                    None => (count, false),
+                }
+            };
+
+            if matched == count {
+                if count == LOOK_AHEAD {
+                    self.previous_match_distance = offset;
+                }
                 self.tree.replace(target, window_top);
-                break;
+                return (matched, target);
+            }
+            if TRACK_MATCH && matched > match_size {
+                match_size = matched;
+                match_target = target;
             }
 
-            let (done, new_target) =
-                self.tree
-                    .additional_connect(target, window_top, matching_result);
+            let (done, new_target) = self.tree.additional_connect(target, window_top, goes_right);
             if done {
                 break;
             }

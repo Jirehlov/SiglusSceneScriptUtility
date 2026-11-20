@@ -1842,6 +1842,8 @@ def decode_text_auto(
                 parts.append(decoder.decode(b"", final=True))
             text = "".join(parts)
         return _fix(text), cs, had_bom
+    if b.isascii():
+        return _fix(b.decode("ascii")), "utf-8", had_bom
     t8 = t9 = None
     try:
         t8 = _d8()
@@ -2791,11 +2793,8 @@ def content_digest(data):
 
 
 def content_digest_file(path):
-    digest = hashlib.sha256()
-    with open_read(path) as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+    with open_read(path, buffering=0) as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def build_sections(blob, header_fields, header_size, header_size_validator=None):

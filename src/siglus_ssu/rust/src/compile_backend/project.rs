@@ -66,9 +66,36 @@ struct PreparedScene {
     global_macro_usage_delta: BTreeMap<usize, usize>,
 }
 
+enum SceneBytes {
+    Dat(Vec<u8>),
+    Packed {
+        data: Vec<u8>,
+        dat_size: usize,
+        scn_size: usize,
+    },
+}
+
+impl SceneBytes {
+    fn pack<const FULL_STATS: bool>(self, config: &CompileConfig) -> Self {
+        let Self::Dat(dat) = self else {
+            return self;
+        };
+        let scn_size = if FULL_STATS {
+            scn_header_value(config, &dat, "scn_size").max(0) as usize
+        } else {
+            0
+        };
+        Self::Packed {
+            data: pack_scene_data(&dat, &config.constants.easy_angou_code),
+            dat_size: dat.len(),
+            scn_size,
+        }
+    }
+}
+
 struct FinalizedScene {
     stem: String,
-    dat: Vec<u8>,
+    bytes: SceneBytes,
     command_labels: Vec<(i32, i32)>,
     read_flag_count: usize,
     source_stats: SourceStats,
@@ -78,7 +105,7 @@ struct FinalizedScene {
 
 struct SceneData {
     stem: String,
-    dat: Vec<u8>,
+    bytes: SceneBytes,
     command_labels: Vec<(i32, i32)>,
     read_flag_count: usize,
     compiled: bool,
@@ -223,8 +250,8 @@ fn default_parallel_worker_count(item_count: usize) -> usize {
     (cpu_count / 2).clamp(1, 16)
 }
 
-fn parallel_visit_unordered_with_state<T, U, S, I, F, V>(
-    items: Vec<T>,
+fn parallel_visit_unordered_with_state<T, U, S, Items, I, F, V>(
+    items: Items,
     workers: usize,
     initialize: I,
     process: F,
@@ -234,23 +261,26 @@ where
     T: Send,
     U: Send,
     S: Send,
+    Items: IntoIterator<Item = T>,
+    Items::IntoIter: Send,
     I: Fn() -> S + Sync,
     F: Fn(&mut S, T) -> U + Sync,
     V: FnMut(usize, U) -> Result<(), String>,
 {
-    if workers <= 1 || items.len() <= 1 {
+    let items = items.into_iter();
+    let workers = workers.min(items.size_hint().1.unwrap_or(workers));
+    if workers <= 1 {
         let mut state = initialize();
-        for (index, item) in items.into_iter().enumerate() {
+        for (index, item) in items.enumerate() {
             visit(index, process(&mut state, item))?;
         }
         return Ok(());
     }
 
-    let item_count = items.len();
-    let queue = Mutex::new(Some(items.into_iter().enumerate()));
+    let queue = Mutex::new(Some(items.enumerate()));
     let (tx, rx) = mpsc::channel();
     let error = std::thread::scope(|scope| {
-        for _ in 0..workers.min(item_count) {
+        for _ in 0..workers {
             let queue = &queue;
             let tx = tx.clone();
             let initialize = &initialize;
@@ -1122,12 +1152,19 @@ fn build_original_source_chunks(
             workers
         ))?;
         let mut chunks = vec![Vec::new(); sources.len()];
+        let mut tasks = sources.iter().enumerate().collect::<Vec<_>>();
+        tasks.sort_unstable_by_key(|(_, (_, raw))| std::cmp::Reverse(raw.len()));
         parallel_visit_unordered_with_state(
-            sources.iter().collect(),
+            tasks,
             workers,
             || (),
-            |(), (name, raw)| encrypt_source(raw, name, &config.constants.source_angou),
-            |index, encrypted| {
+            |(), (index, (name, raw))| {
+                (
+                    index,
+                    encrypt_source(raw, name, &config.constants.source_angou),
+                )
+            },
+            |_, (index, encrypted)| {
                 chunks[index] = encrypted?;
                 log.push_line(format!("  OS: {}", sources[index].0))
             },
@@ -1138,9 +1175,12 @@ fn build_original_source_chunks(
         ))?;
         chunks
     } else {
-        let (name, raw) = &sources[0];
-        log_stage(log, "OS", scene_display_name(config, name))?;
-        vec![encrypt_source(raw, name, &config.constants.source_angou)?]
+        let mut chunks = Vec::with_capacity(sources.len());
+        for (name, raw) in sources {
+            log_stage(log, "OS", scene_display_name(config, name))?;
+            chunks.push(encrypt_source(raw, name, &config.constants.source_angou)?);
+        }
+        chunks
     };
     let sizes: Vec<u8> = chunks
         .iter()
@@ -1438,13 +1478,67 @@ fn finalize_scene<const FULL_STATS: bool>(
     }
     FinalizedScene {
         stem: prepared.stem,
-        dat,
+        bytes: SceneBytes::Dat(dat),
         command_labels: prepared.scene.cmd_label_list,
         read_flag_count: prepared.scene.read_flag_list.len(),
         source_stats: prepared.source_stats,
         scene_macro_counts: prepared.scene_macro_counts,
         global_macro_usage_delta: prepared.global_macro_usage_delta,
     }
+}
+
+fn pack_scene_data(dat: &[u8], code: &[u8]) -> Vec<u8> {
+    let mut packed = crate::lzss::pack(dat, false);
+    crate::xor::cycle_inplace(&mut packed, code, 0);
+    packed
+}
+
+fn link_compiled_scenes<'a, const FULL_STATS: bool>(
+    config: &CompileConfig,
+    workers: usize,
+    compiled: &mut Vec<(&'a str, FinalizedScene)>,
+    produce: impl FnOnce(
+        &mut dyn FnMut(&'a str, FinalizedScene) -> Result<(), String>,
+    ) -> Result<(), String>,
+) -> Result<Option<f64>, String> {
+    if workers == 0 {
+        produce(&mut |key, scene| {
+            compiled.push((key, scene));
+            Ok(())
+        })?;
+        return Ok(None);
+    }
+    std::thread::scope(|scope| {
+        let (tx, rx) = mpsc::sync_channel::<(&str, FinalizedScene)>(workers * 2);
+        let linker = scope.spawn(move || {
+            let mut window: Option<(Instant, Instant)> = None;
+            parallel_visit_unordered_with_state(
+                rx,
+                workers,
+                || (),
+                |(), (key, mut scene)| {
+                    let started = Instant::now();
+                    scene.bytes = scene.bytes.pack::<FULL_STATS>(config);
+                    (key, scene, started, Instant::now())
+                },
+                |_, (key, scene, started, finished)| {
+                    window = Some(match window {
+                        Some((first, last)) => (first.min(started), last.max(finished)),
+                        None => (started, finished),
+                    });
+                    compiled.push((key, scene));
+                    Ok(())
+                },
+            )?;
+            Ok(window.map(|(first, last)| (last - first).as_secs_f64()))
+        });
+        produce(&mut |key, scene| {
+            tx.send((key, scene))
+                .map_err(|_| "scene linker closed".to_string())
+        })?;
+        drop(tx);
+        linker.join().expect("scene linker panicked")
+    })
 }
 
 fn compile_project_inner<const FULL_STATS: bool>(
@@ -1534,12 +1628,32 @@ fn compile_project_inner<const FULL_STATS: bool>(
         })
         .collect::<Vec<_>>();
     let mut compiled = Vec::new();
-    if compile_workers > 1 && compile_targets.len() > 1 {
+    let code = config.constants.easy_angou_code.as_slice();
+    let prepack = use_lzss
+        && !code.is_empty()
+        && config.tmp_dir.is_empty()
+        && link_workers > 1
+        && compile_targets.len() > 1;
+    let concurrent_lzss_elapsed = if compile_workers > 1 && compile_targets.len() > 1 {
         let stage_start = Instant::now();
-        let compile_tasks = tasks
+        let mut compile_tasks = tasks
             .iter()
             .filter(|task| compile_targets.contains(&task.key))
             .collect::<Vec<_>>();
+        compile_tasks.sort_by_cached_key(|task| {
+            std::cmp::Reverse(
+                config
+                    .context
+                    .source_texts
+                    .get(task.name)
+                    .map_or(0, String::len),
+            )
+        });
+        let concurrent_link_workers = if prepack && compile_workers == link_workers {
+            link_workers
+        } else {
+            0
+        };
         stdout.push_line(format!(
             "[PARALLEL] Compiling {} files with {} processes...",
             compile_tasks.len(),
@@ -1547,83 +1661,99 @@ fn compile_project_inner<const FULL_STATS: bool>(
         ))?;
         let total = compile_tasks.len();
         let mut completed_count = 0usize;
-        parallel_visit_unordered_with_state(
-            compile_tasks,
-            compile_workers,
-            || MsvcRand::new(1),
-            |worker_rand, task| {
-                let key = task.key.as_str();
-                let status = task.status_display_name;
-                let mut warnings = Vec::new();
-                let result = match prepare_scene::<FULL_STATS>(
-                    config,
-                    &task.path,
-                    task.display_name,
-                    &base_ia,
-                    None,
-                    None,
-                    &mut warnings,
-                ) {
-                    Ok(mut scene) => {
-                        if scene.stem.is_empty() {
-                            scene.stem = scene_stem(task.name);
+        link_compiled_scenes::<FULL_STATS>(
+            config,
+            concurrent_link_workers,
+            &mut compiled,
+            |emit| {
+                parallel_visit_unordered_with_state(
+                    compile_tasks,
+                    compile_workers,
+                    || MsvcRand::new(1),
+                    |worker_rand, task| {
+                        let key = task.key.as_str();
+                        let status = task.status_display_name;
+                        let mut warnings = Vec::new();
+                        let result = match prepare_scene::<FULL_STATS>(
+                            config,
+                            &task.path,
+                            task.display_name,
+                            &base_ia,
+                            None,
+                            None,
+                            &mut warnings,
+                        ) {
+                            Ok(mut scene) => {
+                                if scene.stem.is_empty() {
+                                    scene.stem = scene_stem(task.name);
+                                }
+                                Ok(finalize_scene::<FULL_STATS>(config, scene, worker_rand))
+                            }
+                            Err(message) => Err(message),
+                        };
+                        (key, status, warnings, result)
+                    },
+                    |_, (key, status, warnings, result)| {
+                        for warning in warnings {
+                            stdout.push_warning(&warning)?;
                         }
-                        Ok(finalize_scene::<FULL_STATS>(config, scene, worker_rand))
-                    }
-                    Err(message) => Err(message),
-                };
-                (key, status, warnings, result)
+                        completed_count += 1;
+                        match result {
+                            Ok(scene) => {
+                                stdout.push_line(format!(
+                                    "  [{}/{}] OK: {}",
+                                    completed_count, total, status
+                                ))?;
+                                emit(key, scene)
+                            }
+                            Err(message) => {
+                                stdout.push_line(format!(
+                                    "  [{}/{}] FAIL: {}",
+                                    completed_count, total, status
+                                ))?;
+                                stdout.push_line(format!("  ERROR in {status}: {message}"))?;
+                                Err(message)
+                            }
+                        }
+                    },
+                )?;
+                stdout.push_line(format!("[PARALLEL] Compilation complete: {} files", total))?;
+                record_stage_time(stage_times, "Compiling", stage_start);
+                Ok(())
             },
-            |_, (key, status, warnings, result)| {
-                for warning in warnings {
-                    stdout.push_warning(&warning)?;
-                }
-                completed_count += 1;
-                match result {
-                    Ok(scene) => {
-                        stdout.push_line(format!(
-                            "  [{}/{}] OK: {}",
-                            completed_count, total, status
-                        ))?;
-                        compiled.push((key, scene));
+        )?
+    } else {
+        let concurrent_link_workers = if prepack { link_workers - 1 } else { 0 };
+        link_compiled_scenes::<FULL_STATS>(
+            config,
+            concurrent_link_workers,
+            &mut compiled,
+            |emit| {
+                for task in tasks
+                    .iter()
+                    .filter(|task| compile_targets.contains(&task.key))
+                {
+                    let mut scene = prepare_scene::<FULL_STATS>(
+                        config,
+                        &task.path,
+                        task.display_name,
+                        &base_ia,
+                        Some(&mut *stdout),
+                        Some(stage_times),
+                        &mut Vec::new(),
+                    )?;
+                    if scene.stem.is_empty() {
+                        scene.stem = scene_stem(task.name);
                     }
-                    Err(message) => {
-                        stdout.push_line(format!(
-                            "  [{}/{}] FAIL: {}",
-                            completed_count, total, status
-                        ))?;
-                        stdout.push_line(format!("  ERROR in {status}: {message}"))?;
-                        return Err(message);
-                    }
+                    emit(
+                        task.key.as_str(),
+                        finalize_scene::<FULL_STATS>(config, scene, &mut rand),
+                    )?;
                 }
                 Ok(())
             },
-        )?;
-        stdout.push_line(format!("[PARALLEL] Compilation complete: {} files", total))?;
-        record_stage_time(stage_times, "Compiling", stage_start);
-    } else {
-        for task in tasks
-            .iter()
-            .filter(|task| compile_targets.contains(&task.key))
-        {
-            let mut scene = prepare_scene::<FULL_STATS>(
-                config,
-                &task.path,
-                task.display_name,
-                &base_ia,
-                Some(&mut *stdout),
-                Some(stage_times),
-                &mut Vec::new(),
-            )?;
-            if scene.stem.is_empty() {
-                scene.stem = scene_stem(task.name);
-            }
-            compiled.push((
-                task.key.as_str(),
-                finalize_scene::<FULL_STATS>(config, scene, &mut rand),
-            ));
-        }
-    }
+        )?
+    };
     let mut compiled_map = compiled
         .into_iter()
         .collect::<std::collections::HashMap<_, _>>();
@@ -1644,14 +1774,15 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     *aggregate_global_usage_delta.entry(key).or_default() += value;
                 }
             }
-            if !config.tmp_dir.is_empty() {
+            if !config.tmp_dir.is_empty()
+                && let SceneBytes::Dat(dat) = &scene.bytes
+            {
                 let dat_path = bs_dir.join(format!("{}.dat", scene.stem));
-                fs::write(&dat_path, &scene.dat)
-                    .map_err(|error| format_path_error(&dat_path, error))?;
+                fs::write(&dat_path, dat).map_err(|error| format_path_error(&dat_path, error))?;
             }
             SceneData {
                 stem: scene.stem,
-                dat: scene.dat,
+                bytes: scene.bytes,
                 command_labels: scene.command_labels,
                 read_flag_count: scene.read_flag_count,
                 compiled: true,
@@ -1682,7 +1813,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             };
             SceneData {
                 stem,
-                dat,
+                bytes: SceneBytes::Dat(dat),
                 command_labels,
                 read_flag_count,
                 compiled: false,
@@ -1735,6 +1866,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
             ));
         }
     }
+    if let Some(elapsed) = concurrent_lzss_elapsed {
+        stdout.push_line("[PARALLEL] LZSS compressed scenes alongside compilation")?;
+        stage_times.push(("LZSS".to_string(), elapsed));
+    }
     let mut lzss_results = std::collections::HashMap::new();
     let mut lzss_tasks = Vec::new();
     let lzss_parallel_stage_start = if use_lzss && link_workers > 1 && scene_records.len() > 1 {
@@ -1744,6 +1879,9 @@ fn compile_project_inner<const FULL_STATS: bool>(
     };
     if use_lzss {
         for record in &scene_records {
+            let SceneBytes::Dat(dat) = &record.bytes else {
+                continue;
+            };
             if !record.compiled
                 && let Some(cached_path) = config
                     .cache
@@ -1758,17 +1896,19 @@ fn compile_project_inner<const FULL_STATS: bool>(
             }
             let path =
                 (!config.tmp_dir.is_empty()).then(|| bs_dir.join(format!("{}.lzss", record.stem)));
-            lzss_tasks.push((record.stem.clone(), record.dat.as_slice(), path));
+            lzss_tasks.push((record.stem.clone(), dat.as_slice(), path));
         }
     }
     if use_lzss
         && lzss_tasks.is_empty()
+        && concurrent_lzss_elapsed.is_none()
         && let Some(stage_start) = lzss_parallel_stage_start
     {
         record_stage_time(stage_times, "LZSS", stage_start);
     }
     if use_lzss && !lzss_tasks.is_empty() {
         if link_workers > 1 && scene_records.len() > 1 {
+            lzss_tasks.sort_unstable_by_key(|(_, dat, _)| std::cmp::Reverse(dat.len()));
             let stage_start = lzss_parallel_stage_start.unwrap_or_else(Instant::now);
             stdout.push_line(format!(
                 "[PARALLEL] LZSS compressing {} scenes with {} workers...",
@@ -1780,11 +1920,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 link_workers,
                 || (),
                 |(), (stem, dat, path)| -> Result<(String, Vec<u8>), String> {
-                    if config.constants.easy_angou_code.is_empty() {
+                    if code.is_empty() {
                         return Err("ctx.easy_angou_code is not set".to_string());
                     }
-                    let mut packed = crate::lzss::pack(dat, false);
-                    crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
+                    let packed = pack_scene_data(dat, code);
                     if let Some(path) = path {
                         fs::write(&path, &packed)
                             .map_err(|error| format_path_error(&path, error))?;
@@ -1806,11 +1945,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
         } else {
             for (stem, dat, path) in lzss_tasks {
                 let stage_start = Instant::now();
-                if config.constants.easy_angou_code.is_empty() {
+                if code.is_empty() {
                     return Err("ctx.easy_angou_code is not set".to_string());
                 }
-                let mut packed = crate::lzss::pack(dat, false);
-                crate::xor::cycle_inplace(&mut packed, &config.constants.easy_angou_code, 0);
+                let packed = pack_scene_data(dat, code);
                 if let Some(path) = path {
                     fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
                 }
@@ -1831,15 +1969,17 @@ fn compile_project_inner<const FULL_STATS: bool>(
         };
         let mut top = TopSceneCounts::default();
         for record in &scene_records {
-            let dat_size = record.dat.len();
-            let scn_size = scn_header_value(config, &record.dat, "scn_size").max(0) as usize;
-            let lzss_size = if use_lzss {
-                lzss_results
-                    .get(&record.stem)
-                    .map(Vec::len)
-                    .unwrap_or_default()
-            } else {
-                0
+            let (dat_size, scn_size, lzss_size) = match &record.bytes {
+                SceneBytes::Dat(dat) => (
+                    dat.len(),
+                    scn_header_value(config, dat, "scn_size").max(0) as usize,
+                    lzss_results.get(&record.stem).map_or(0, Vec::len),
+                ),
+                SceneBytes::Packed {
+                    data,
+                    dat_size,
+                    scn_size,
+                } => (*dat_size, *scn_size, data.len()),
             };
             stats.dat_bytes += dat_size;
             stats.scn_bytes += scn_size;
@@ -1850,10 +1990,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
         stats
     });
     let encoded_scenes = scene_records.into_iter().map(|scene| {
-        let mut encoded = if use_lzss {
-            lzss_results.remove(&scene.stem).unwrap_or_default()
-        } else {
-            scene.dat
+        let mut encoded = match scene.bytes {
+            SceneBytes::Packed { data, .. } => data,
+            SceneBytes::Dat(_) if use_lzss => lzss_results.remove(&scene.stem).unwrap_or_default(),
+            SceneBytes::Dat(dat) => dat,
         };
         if let Some(key) = exe_key {
             crate::xor::cycle_inplace(&mut encoded, key, 0);

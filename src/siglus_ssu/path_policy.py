@@ -173,10 +173,13 @@ def same_file_path(first, second):
         return False
 
 
-def check_output_inputs(outputs, inputs, *, distinct=False, paired_inputs=()):
+def check_output_inputs(
+    outputs, inputs, *, distinct=False, paired_inputs=(), standalone_outputs=False
+):
     destinations = set()
     identities = {}
     resolved_paths = {}
+    read_output_stat = os.lstat if standalone_outputs else os.stat
     for path in outputs:
         path = os.path.abspath(path)
         destinations.add(path)
@@ -188,9 +191,11 @@ def check_output_inputs(outputs, inputs, *, distinct=False, paired_inputs=()):
                 )
             resolved_paths[key] = path
         try:
-            info = os.stat(path)
+            info = read_output_stat(path)
         except FileNotFoundError:
             continue
+        if standalone_outputs and (not stat.S_ISREG(info.st_mode) or info.st_nlink > 1):
+            raise ValueError(f"output is not a standalone regular file: {path}")
         identity = (info.st_dev, info.st_ino)
         if distinct and identity in identities:
             raise ValueError(

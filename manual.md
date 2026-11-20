@@ -225,8 +225,8 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--dat-repack` | Pack existing scene `.dat` files without recompiling. A damaged scene aborts the repack and preserves the existing PCK. Only `Gameexe.dat` and `暗号.dat` may be skipped as auxiliary files. Same-directory `.inc` files supply package command metadata; missing `.inc` files produce a warning. Use `--charset` or `--allow-invalid` for text inputs. A valid `key.txt` takes priority over `暗号.dat` when repacking. Also accepts `--no-os` and `--no-lzss`. |
 | `--no-angou` | Disable LZSS compression, outer XOR encryption, and original-source embedding. Does not disable scene-string XOR. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable LZSS compression and original-source embedding, retaining script encryption. Cannot be combined with `--tmp`. |
-| `--serial` | Compile serially instead of in parallel. |
-| `--max-workers N` | Positive maximum parallel worker count. Default: half the available CPUs, limited to 1–16. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
+| `--serial` | Compile scene scripts sequentially. Packaging can use multiple workers. |
+| `--max-workers N` | Positive maximum worker count for parallel scene compilation. Default: half the available CPUs, limited to 1–16. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
 | `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Concurrent builds cannot share it. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Search seeds from `seed0` (default `0`) through `0xFFFFFFFF` to reproduce the first scene's string-table order in `<test_dir>`, then verify all scenes. Requires three paths after the optional seed. Cannot be combined with `--tmp` or `--gei`. |
@@ -270,7 +270,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 
 #### Compiling Stats
 
-The final summary reports stage timings and file counts. `scene_files` is the total scene count; `compiled_scene_files` is the number rebuilt this run. Normal full builds also report source, read-flag, and binary-size statistics.
+The final summary reports stage timings and file counts. Compilation and scene compression timings can overlap. `scene_files` is the total scene count. `compiled_scene_files` is the number rebuilt this run. Normal full builds also report source, read-flag, and binary-size statistics.
 
 ---
 

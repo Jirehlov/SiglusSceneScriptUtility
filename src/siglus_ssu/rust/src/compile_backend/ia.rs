@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::ca::{
-    MacroArg, ReplaceKind, ReplaceTree, ReplaceUse, Replacement, ReplacementSource, SceneExpansion,
+    MacroArgs, ReplaceKind, ReplaceTree, ReplaceUse, Replacement, ReplacementSource, SceneExpansion,
 };
 use super::codes::RuntimeCodes;
 use super::form_table::{ArgInfo, ArgList, ElementInfo, FormTable, create_elm_code};
@@ -45,7 +45,7 @@ pub struct IaData {
     pub replace_tree: ReplaceTree,
     pub name_set: Arc<HashSet<String>>,
     pub macro_usage: Vec<MacroUsage>,
-    pub macro_map: HashMap<String, usize>,
+    macro_map: Arc<HashMap<String, usize>>,
     pub property_cnt: i32,
     pub command_cnt: i32,
     pub inc_property_cnt: i32,
@@ -117,7 +117,7 @@ impl IaData {
             replace_tree: ReplaceTree::default(),
             name_set: Arc::new(defined_names.into_iter().collect()),
             macro_usage: Vec::new(),
-            macro_map: HashMap::new(),
+            macro_map: Arc::default(),
             property_cnt: 0,
             command_cnt: 0,
             inc_property_cnt: 0,
@@ -163,7 +163,7 @@ impl IaData {
             };
             let name = replacement.name.clone();
             self.replace_tree.add(replacement);
-            self.macro_map.insert(name, self.macro_usage.len());
+            Arc::make_mut(&mut self.macro_map).insert(name, self.macro_usage.len());
             self.macro_usage.push(usage);
         } else {
             self.replace_tree.add(replacement);
@@ -851,8 +851,8 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         &mut self,
         mut pos: usize,
         mut line: usize,
-    ) -> Result<(Vec<MacroArg>, usize, usize), ()> {
-        let mut args = Vec::new();
+    ) -> Result<(MacroArgs, usize, usize), ()> {
+        let mut args = MacroArgs::default();
         self.default_maps.clear();
         let (i, line2, ok) = self.skip(pos, line);
         pos = i;
@@ -878,7 +878,11 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             if pos == start {
                 return self.err(line, "Could not find argument name in list.");
             }
-            let name: String = self.text[start..pos].iter().collect();
+            let reversed_name = self.text[start..pos]
+                .iter()
+                .rev()
+                .copied()
+                .collect::<Vec<_>>();
             let (i, line2, ok) = self.skip(pos, line);
             pos = i;
             line = line2;
@@ -911,10 +915,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             if self.sidecar {
                 self.default_maps.push(default_map);
             }
-            args.push(MacroArg {
-                name,
-                default_value,
-            });
+            args.push(&reversed_name, default_value);
             let (i, line2, ok) = self.skip(pos, line);
             pos = i;
             line = line2;
@@ -972,7 +973,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 },
                 name,
                 after,
-                args: Vec::new(),
+                args: MacroArgs::default(),
                 decl_type: if TRACK_USAGE { kind } else { "" },
                 source: self.take_replacement_source(record_kind),
             });

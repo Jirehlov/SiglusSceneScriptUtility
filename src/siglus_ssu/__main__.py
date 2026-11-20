@@ -55,7 +55,7 @@ def _usage():
         "    --dat-repack    Repack existing .dat files in input_dir (mode options: --no-os, --no-lzss, --charset, --allow-invalid; global options remain available)\n"
         "    --no-angou      Disable encryption/compression (not with --tmp)\n"
         "    --no-lzss       Disable scene LZSS and omit source chunks (official easy link; not with --tmp)\n"
-        "    --serial        Disable parallel compilation\n"
+        "    --serial        Compile scene scripts sequentially. Packaging can use multiple workers.\n"
         "    --max-workers   Limit parallel workers to a positive integer (default: auto; parallel only)\n"
         "    --set-shuffle   Set initial shuffle seed (MSVCRand) for .dat string order; implies --serial (not with --tmp)\n"
         "    --tmp           Use specific temp directory (not with --debug/--dat-repack/--no-angou/--no-lzss/--set-shuffle/--test-shuffle/--csv/--gei/--const-profile)\n"

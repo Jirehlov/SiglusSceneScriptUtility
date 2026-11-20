@@ -7,7 +7,6 @@ import time
 import shutil
 import csv
 import tempfile
-import stat
 from contextlib import ExitStack, suppress
 from pathlib import Path
 from uuid import uuid4
@@ -173,16 +172,7 @@ def _check_compile_cache(tmp, scenes, inputs, outputs):
     for path in outputs:
         if os.path.normcase(os.path.realpath(path)) in names:
             raise ValueError(f"output conflicts with a compile cache file: {path}")
-    for path in files:
-        try:
-            info = path.lstat()
-        except FileNotFoundError:
-            continue
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
-            raise ValueError(
-                f"compile cache file is not a standalone regular file: {path}"
-            )
-    check_output_inputs(files, [*inputs, *outputs])
+    check_output_inputs(files, [*inputs, *outputs], standalone_outputs=True)
 
 
 def _load_compile_keys(
@@ -355,21 +345,38 @@ def _remove_cached_lzss(tmp_dir, scenes):
             (bs_dir / f"{Path(scene).stem}.lzss").unlink()
 
 
-def _scene_cache_hashes(bs_dir, scene):
-    stem = Path(scene).stem
-    return [
-        content_digest_file(bs_dir / f"{stem}.dat"),
-        content_digest_file(bs_dir / f"{stem}.lzss"),
-    ]
+def _scene_cache_hashes(tmp_dir, scenes, workers, *, skip_unreadable=False):
+    bs_dir = Path(tmp_dir) / "bs"
+
+    def read_scene(scene):
+        stem = Path(scene).stem
+        try:
+            return [
+                content_digest_file(bs_dir / f"{stem}.dat"),
+                content_digest_file(bs_dir / f"{stem}.lzss"),
+            ]
+        except OSError:
+            if not skip_unreadable:
+                raise
+            return None
+
+    workers = min(workers, len(scenes))
+    if workers < 2:
+        return {scene: read_scene(scene) for scene in scenes}
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return dict(zip(scenes, executor.map(read_scene, scenes), strict=True))
 
 
-def _write_digest_cache(tmp_dir, payload, compiled_scenes):
+def _write_digest_cache(tmp_dir, payload, compiled_scenes, workers):
     root = Path(tmp_dir)
     if "artifacts" in payload:
-        for scene in compiled_scenes:
-            payload["artifacts"][ascii_lower(Path(scene).name)] = _scene_cache_hashes(
-                root / "bs", scene
-            )
+        hashes = _scene_cache_hashes(root, compiled_scenes, workers)
+        payload["artifacts"].update(
+            (ascii_lower(os.path.basename(scene)), pair)
+            for scene, pair in hashes.items()
+        )
     with open_atomic_output(
         root / _SOURCE_DIGEST_NAME, "w", encoding="utf-8", newline="\r\n"
     ) as out:
@@ -377,7 +384,7 @@ def _write_digest_cache(tmp_dir, payload, compiled_scenes):
 
 
 def _compile_cache_state(
-    *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid
+    *, tmp_dir, enc, charset, ss, source_digests, incremental, allow_invalid, workers
 ):
     cache_meta = {
         "schema": 10,
@@ -409,21 +416,21 @@ def _compile_cache_state(
         or not isinstance(old.get("artifacts"), dict)
     ):
         return ss, pending
+    names = {scene: ascii_lower(os.path.basename(scene)) for scene in ss}
+    expected = old["artifacts"]
+    candidates = [
+        scene
+        for scene, name in names.items()
+        if expected.get(name) and old["ss"].get(name) == source_digests["ss"][name]
+    ]
+    hashes = _scene_cache_hashes(root, candidates, workers, skip_unreadable=True)
     compile_list = []
-    bs_dir = root / "bs"
-    for scene in ss:
-        name = ascii_lower(Path(scene).name)
-        hashes = old["artifacts"].get(name)
-        if hashes and old["ss"].get(name) == source_digests["ss"][name]:
-            try:
-                current = _scene_cache_hashes(bs_dir, scene)
-            except OSError:
-                pass
-            else:
-                if hashes == current:
-                    verified[name] = current
-                    continue
-        compile_list.append(scene)
+    for scene, name in names.items():
+        current = hashes.get(scene)
+        if current is not None and current == expected.get(name):
+            verified[name] = current
+        else:
+            compile_list.append(scene)
     return compile_list, pending
 
 
@@ -554,6 +561,8 @@ def _guess_charset(source_bytes, ini, inc, ss):
         b = b.partition(b"\x1a")[0]
         if b.startswith(b"\xef\xbb\xbf"):
             return "utf-8"
+        if b.isascii():
+            continue
         try:
             t = b.decode("utf-8", "strict")
         except UnicodeDecodeError:
@@ -569,7 +578,15 @@ def _guess_charset(source_bytes, ini, inc, ss):
 
 
 def _load_project_sources(
-    base_dir, gameexe_ini, inc, ss, charset, original_files, *, allow_invalid
+    base_dir,
+    gameexe_ini,
+    inc,
+    ss,
+    charset,
+    original_files,
+    *,
+    allow_invalid,
+    collect_digests,
 ):
     paths = {}
     if gameexe_ini:
@@ -594,7 +611,7 @@ def _load_project_sources(
                     allow_invalid=allow_invalid,
                 )[0]
                 kind = paths[name]
-                if kind is not None:
+                if collect_digests and kind is not None:
                     digests[kind][ascii_lower(name)] = content_digest(data)
         except UnicodeError as exc:
             raise ValueError(f"{path}: {exc}") from exc
@@ -1141,7 +1158,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
     ap.add_argument(
         "--serial",
         action="store_true",
-        help="Disable parallel compilation.",
+        help="Compile scene scripts sequentially. Packaging can use multiple workers.",
     )
     ap.add_argument(
         "--max-workers",
@@ -1330,6 +1347,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
             charset,
             original_files,
             allow_invalid=a.allow_invalid,
+            collect_digests=bool(a.tmp_dir or a.debug),
         )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1382,6 +1400,11 @@ def _compile_cli(argv, resources, *, collect_statistics):
         resources.callback(outputs.close)
         compile_list = ss
         pending_digests = None
+        cache_workers = 1
+        if a.tmp_dir and not force_serial_compile:
+            from .parallel import get_max_workers
+
+            cache_workers = get_max_workers(a.max_workers)
         if tmp and (a.tmp_dir or a.debug):
             compile_list, pending_digests = _compile_cache_state(
                 tmp_dir=tmp,
@@ -1391,6 +1414,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
                 source_digests=source_digests,
                 incremental=bool(a.tmp_dir),
                 allow_invalid=a.allow_invalid,
+                workers=cache_workers,
             )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1474,7 +1498,9 @@ def _compile_cli(argv, resources, *, collect_statistics):
             native_rc = _try_native_compile(native_config, ctx)
             if native_rc == 0:
                 if pending_digests is not None:
-                    _write_digest_cache(tmp, pending_digests, compile_list)
+                    _write_digest_cache(
+                        tmp, pending_digests, compile_list, cache_workers
+                    )
                 outputs.publish(input_paths)
         except (OSError, ValueError) as exc:
             sys.stderr.write(f"{prog}: error: {exc}\n")
@@ -1689,7 +1715,7 @@ def _compile_cli(argv, resources, *, collect_statistics):
             link_pack(ctx)
             if pending_digests is not None:
                 stage = "compile cache"
-                _write_digest_cache(tmp, pending_digests, compile_list)
+                _write_digest_cache(tmp, pending_digests, compile_list, cache_workers)
         stage = "publish"
         outputs.publish(input_paths, seed_report=seed_report)
         if seed_report is not None:

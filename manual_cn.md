@@ -225,8 +225,8 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--dat-repack` | 直接打包现有场景 `.dat`。遇到损坏的场景时，程序会终止回包并保留已有 PCK。仅 `Gameexe.dat` 和 `暗号.dat` 可作为辅助文件跳过。同目录 `.inc` 用于提供包级命令元数据，缺失时会打印警告。可用 `--charset` 或 `--allow-invalid` 解码文本输入。回包时优先使用有效的 `key.txt`，其次是 `暗号.dat`。也支持 `--no-os` 和 `--no-lzss`。 |
 | `--no-angou` | 禁用 LZSS 压缩、外层 XOR 加密和原始源码嵌入，不关闭场景字符串 XOR。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 压缩和原始源码嵌入，保留脚本加密。不能与 `--tmp` 同用。 |
-| `--serial` | 串行编译，默认并行。 |
-| `--max-workers N` | 最大并行工作数，必须为正整数。默认使用可用 CPU 数的一半，限制为 1–16。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
+| `--serial` | 依次编译场景脚本。打包可以使用多个工作线程。 |
+| `--max-workers N` | 场景并行编译的最大工作数，必须为正整数。默认使用可用 CPU 数的一半，限制为 1–16。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
 | `--set-shuffle SEED` | 设置字符串表乱序种子（`0`–`0xFFFFFFFF`，十进制或十六进制，默认 `1`），并启用串行编译。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 复用指定目录进行增量编译，不允许并发构建共用。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，复现 `<test_dir>` 中首个场景的字符串表顺序，再验证全部场景。可选种子后必须保留三个路径参数。不能与 `--tmp` 或 `--gei` 同用。 |
@@ -270,7 +270,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 
 #### 编译统计
 
-编译结束时会显示各阶段耗时及文件数。`scene_files` 为场景总数，`compiled_scene_files` 为本次重建数。普通全量编译还会显示源码、已读标记和二进制大小统计。
+编译结束时会显示各阶段耗时及文件数。编译与场景压缩的计时区间可能重叠。`scene_files` 为场景总数，`compiled_scene_files` 为本次重建数。普通全量编译还会显示源码、已读标记和二进制大小统计。
 
 ---
 

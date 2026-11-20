@@ -14,10 +14,19 @@ pub enum ReplaceKind {
     Macro,
 }
 
-#[derive(Clone)]
-pub struct MacroArg {
-    pub name: String,
-    pub default_value: Option<String>,
+#[derive(Clone, Default)]
+pub struct MacroArgs {
+    names: NameTree<usize>,
+    defaults: Vec<Option<String>>,
+}
+
+impl MacroArgs {
+    pub fn push(&mut self, reversed_name: &[char], default_value: Option<String>) {
+        if let Some(entry) = self.names.entry(reversed_name) {
+            entry.get_or_insert(self.defaults.len());
+        }
+        self.defaults.push(default_value);
+    }
 }
 
 #[derive(Clone)]
@@ -25,7 +34,7 @@ pub struct Replacement {
     pub kind: ReplaceKind,
     pub name: String,
     pub after: String,
-    pub args: Vec<MacroArg>,
+    pub args: MacroArgs,
     pub decl_type: &'static str,
     pub source: Option<Arc<ReplacementSource>>,
 }
@@ -36,57 +45,131 @@ pub struct ReplacementSource {
     pub declaration: Option<(String, usize)>,
 }
 
-#[derive(Clone, Default)]
-pub struct ReplaceTree {
-    children: Arc<BTreeMap<char, ReplaceTree>>,
-    replacement: Option<Replacement>,
+#[derive(Clone)]
+struct NameBranch<T> {
+    suffix: Arc<[char]>,
+    children: Option<Arc<BTreeMap<char, NameBranch<T>>>>,
+    value: Option<T>,
 }
 
-impl Drop for ReplaceTree {
+impl<T> Drop for NameBranch<T> {
     fn drop(&mut self) {
-        if Arc::strong_count(&self.children) != 1 || self.children.is_empty() {
+        let Some(children) = self.children.take().and_then(Arc::into_inner) else {
             return;
-        }
-        let empty = Arc::default();
-        let mut pending = vec![std::mem::replace(&mut self.children, Arc::clone(&empty))];
-        while let Some(children) = pending.pop() {
-            if let Some(children) = Arc::into_inner(children) {
-                for mut node in children.into_values() {
-                    pending.push(std::mem::replace(&mut node.children, Arc::clone(&empty)));
-                }
+        };
+        let mut pending = children.into_values().collect::<Vec<_>>();
+        while let Some(mut branch) = pending.pop() {
+            if let Some(children) = branch.children.take().and_then(Arc::into_inner) {
+                pending.extend(children.into_values());
             }
         }
     }
 }
 
-impl ReplaceTree {
-    pub fn add(&mut self, replacement: Replacement) {
-        let mut node = self;
-        for ch in replacement.name.chars() {
-            node = Arc::make_mut(&mut node.children).entry(ch).or_default();
+#[derive(Clone)]
+pub struct NameTree<T> {
+    root: NameBranch<T>,
+    ascii_initials: u128,
+    other_initials: u128,
+}
+
+impl<T> Default for NameTree<T> {
+    fn default() -> Self {
+        Self {
+            root: NameBranch {
+                suffix: Arc::default(),
+                children: None,
+                value: None,
+            },
+            ascii_initials: 0,
+            other_initials: 0,
         }
-        node.replacement = Some(replacement);
+    }
+}
+
+pub type ReplaceTree = NameTree<Arc<Replacement>>;
+
+impl NameTree<Arc<Replacement>> {
+    pub fn add(&mut self, replacement: Replacement) {
+        let name = replacement.name.chars().rev().collect::<Vec<_>>();
+        if let Some(entry) = self.entry(&name) {
+            *entry = Some(Arc::new(replacement));
+        }
+    }
+}
+
+impl<T: Clone> NameTree<T> {
+    fn entry(&mut self, reversed_name: &[char]) -> Option<&mut Option<T>> {
+        if reversed_name.contains(&'\0') {
+            return None;
+        }
+        if let Some(&initial) = reversed_name.last() {
+            let bit = 1 << (u32::from(initial) % u128::BITS);
+            if initial.is_ascii() {
+                self.ascii_initials |= bit;
+            } else {
+                self.other_initials |= bit;
+            }
+        }
+        let mut remaining = reversed_name;
+        let mut branch = &mut self.root;
+        while let Some((&first, tail)) = remaining.split_last() {
+            let children = Arc::make_mut(branch.children.get_or_insert_with(Arc::default));
+            branch = children.entry(first).or_insert_with(|| NameBranch {
+                suffix: Arc::from(tail),
+                children: None,
+                value: None,
+            });
+            let common = branch
+                .suffix
+                .iter()
+                .rev()
+                .zip(tail.iter().rev())
+                .take_while(|(a, b)| a == b)
+                .count();
+            let split = branch.suffix.len() - common;
+            if split > 0 {
+                let next = branch.suffix[split - 1];
+                let old_branch = NameBranch {
+                    suffix: Arc::from(&branch.suffix[..split - 1]),
+                    children: branch.children.take(),
+                    value: branch.value.take(),
+                };
+                branch.suffix = Arc::from(&branch.suffix[split..]);
+                branch.children = Some(Arc::new(BTreeMap::from([(next, old_branch)])));
+            }
+            remaining = &tail[..tail.len() - common];
+        }
+        Some(&mut branch.value)
     }
 
-    fn search(&self, text: &ExpansionText) -> Option<(&Replacement, usize)> {
-        let mut node = self;
-        let mut best = node
-            .replacement
-            .as_ref()
-            .map(|replacement| (replacement, 0));
-        let mut i = 0;
-        while i < text.len() {
-            let ch = *text.get(i).unwrap();
-            if ch == '\0' {
-                break;
-            }
-            let Some(next) = node.children.get(&ch) else {
+    fn search(&self, text: &[char], first: char) -> Option<(&T, usize)> {
+        let initials = if first.is_ascii() {
+            self.ascii_initials
+        } else {
+            self.other_initials
+        };
+        let mut branch = &self.root;
+        let mut best = branch.value.as_ref().map(|value| (value, 0));
+        if initials & (1 << (u32::from(first) % u128::BITS)) == 0 {
+            return best;
+        }
+        let mut remaining = text;
+        while let Some((&first, tail)) = remaining.split_last() {
+            let Some(next) = branch
+                .children
+                .as_ref()
+                .and_then(|children| children.get(&first))
+            else {
                 break;
             };
-            node = next;
-            i += 1;
-            if let Some(replacement) = node.replacement.as_ref() {
-                best = Some((replacement, i));
+            let Some(rest) = tail.strip_suffix(next.suffix.as_ref()) else {
+                break;
+            };
+            branch = next;
+            remaining = rest;
+            if let Some(value) = branch.value.as_ref() {
+                best = Some((value, text.len() - remaining.len()));
             }
         }
         best
@@ -205,11 +288,16 @@ impl ExpansionText {
         }
     }
     fn advance(&mut self, count: usize) {
-        for _ in 0..count {
-            self.output.push(self.text.pop().unwrap());
-            if let Some(map) = &mut self.map {
-                self.output_map.as_mut().unwrap().push(map.pop().unwrap());
-            }
+        let remaining = self.text.len() - count;
+        self.output.extend(self.text[remaining..].iter().rev());
+        self.text.truncate(remaining);
+        if let Some(map) = &mut self.map {
+            let remaining = map.len() - count;
+            self.output_map
+                .as_mut()
+                .unwrap()
+                .extend(map[remaining..].iter().rev().copied());
+            map.truncate(remaining);
         }
     }
 }
@@ -217,6 +305,12 @@ impl ExpansionText {
 struct MappedText {
     text: String,
     map: Option<Vec<Option<SourcePoint>>>,
+}
+
+#[derive(Clone, Copy)]
+struct ParameterValues<'a> {
+    names: &'a NameTree<usize>,
+    values: &'a [MappedText],
 }
 
 pub struct CharacterAnalyzer<const TRACK_USAGE: bool = true> {
@@ -568,27 +662,13 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         })
     }
 
-    fn replacement_at<'a>(
-        default_tree: &'a ReplaceTree,
-        added_tree: &'a ReplaceTree,
-        text: &ExpansionText,
-    ) -> Option<(&'a Replacement, usize)> {
-        let default = default_tree.search(text);
-        let added = added_tree.search(text);
-        match (default, added) {
-            (Some(left), Some(right)) => Some(if left.1 > right.1 { left } else { right }),
-            (Some(replacement), None) | (None, Some(replacement)) => Some(replacement),
-            (None, None) => None,
-        }
-    }
-
     fn expand_macro(
         &mut self,
         text: &ExpansionText,
         mut pos: usize,
         macro_def: &Replacement,
         default_tree: &ReplaceTree,
-        added_tree: &ReplaceTree,
+        parameters: Option<ParameterValues<'_>>,
         read_origin: usize,
     ) -> Result<(usize, MappedText), ()> {
         let mut actual = Vec::new();
@@ -679,20 +759,20 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                 }
             }
         }
-        if macro_def.args.is_empty() && !actual.is_empty() {
+        if macro_def.args.defaults.is_empty() && !actual.is_empty() {
             return self.error(
                 self.current_line,
                 "Macros without arguments do not require parentheses.",
             );
         }
-        if macro_def.args.len() < actual.len() {
+        if macro_def.args.defaults.len() < actual.len() {
             return self.error(self.current_line, "Too many macro arguments.");
         }
         let expanded = self.expand_macro_body(
             macro_def,
             &actual,
             default_tree,
-            added_tree,
+            parameters,
             text.map.is_some(),
             read_origin,
         )?;
@@ -704,16 +784,16 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         macro_def: &Replacement,
         actual: &[MappedText],
         default_tree: &ReplaceTree,
-        added_tree: &ReplaceTree,
+        parameters: Option<ParameterValues<'_>>,
         mapped: bool,
         read_origin: usize,
     ) -> Result<MappedText, ()> {
-        let mut arg_replacements = Vec::with_capacity(macro_def.args.len());
-        for (index, arg) in macro_def.args.iter().enumerate() {
+        let mut values = Vec::with_capacity(macro_def.args.defaults.len());
+        for (index, default_value) in macro_def.args.defaults.iter().enumerate() {
             let source = actual
                 .get(index)
                 .map(|value| value.text.as_str())
-                .or(arg.default_value.as_deref())
+                .or(default_value.as_deref())
                 .filter(|value| !value.is_empty());
             let Some(source) = source else {
                 return self.error(self.current_line, "Not enough macro arguments.");
@@ -742,26 +822,13 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
             } else {
                 points
             };
-            let expanded =
-                self.expand_text(source, default_tree, added_tree, points, Some("argument"))?;
-            arg_replacements.push(Replacement {
-                kind: ReplaceKind::Replace,
-                name: arg.name.clone(),
-                after: expanded.text,
-                args: Vec::new(),
-                decl_type: if TRACK_USAGE { "parameter" } else { "" },
-                source: expanded.map.map(|map| {
-                    Arc::new(ReplacementSource {
-                        map,
-                        defaults: Vec::new(),
-                        declaration: None,
-                    })
-                }),
-            });
-        }
-        let mut arg_tree = ReplaceTree::default();
-        for replacement in arg_replacements.into_iter().rev() {
-            arg_tree.add(replacement);
+            values.push(self.expand_text(
+                source,
+                default_tree,
+                parameters,
+                points,
+                Some("argument"),
+            )?);
         }
         let mut body_points;
         let points = if mapped {
@@ -785,7 +852,10 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         self.expand_text(
             &macro_def.after,
             default_tree,
-            &arg_tree,
+            (!values.is_empty()).then_some(ParameterValues {
+                names: &macro_def.args.names,
+                values: &values,
+            }),
             points,
             Some("body"),
         )
@@ -795,19 +865,35 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         &mut self,
         input: &str,
         default_tree: &ReplaceTree,
-        added_tree: &ReplaceTree,
+        parameters: Option<ParameterValues<'_>>,
         source_map: Option<&[Option<SourcePoint>]>,
         context: Option<&str>,
     ) -> Result<MappedText, ()> {
         let mut text = ExpansionText::new(input, source_map);
         let mut loop_count = 0usize;
         let mut rest_min = text.len();
-        while text.get(0) != Some(&'\0') {
-            let consumed = if context.is_none() && text.get(0) == Some(&'\n') {
+        while let Some(&ch) = text.text.last() {
+            if ch == '\0' {
+                break;
+            }
+            let consumed = if context.is_none() && ch == '\n' {
                 self.current_line += 1;
                 1
             } else {
-                self.replace_one(&mut text, default_tree, added_tree)?
+                let replacement = default_tree.search(&text.text, ch);
+                let parameter = parameters.and_then(|parameters| {
+                    let (&index, len) = parameters.names.search(&text.text, ch)?;
+                    Some((&parameters.values[index], len))
+                });
+                if let Some((value, len)) = parameter
+                    && replacement.is_none_or(|(_, other_len)| len >= other_len)
+                {
+                    text.replace::<true>(len, &value.text, value.map.clone())
+                } else if let Some((replacement, len)) = replacement {
+                    self.replace_one(&mut text, default_tree, replacement, len, parameters)?
+                } else {
+                    1
+                }
             };
             text.advance(consumed);
             let rest = text.len();
@@ -838,13 +924,11 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
         &mut self,
         text: &mut ExpansionText,
         default_tree: &ReplaceTree,
-        added_tree: &ReplaceTree,
+        replacement: &Replacement,
+        name_len: usize,
+        parameters: Option<ParameterValues<'_>>,
     ) -> Result<usize, ()> {
-        let Some((replacement, name_len)) = Self::replacement_at(default_tree, added_tree, text)
-        else {
-            return Ok(1);
-        };
-        if TRACK_USAGE && replacement.decl_type != "parameter" {
+        if TRACK_USAGE {
             self.used_replacements.push(replacement.name.clone());
         }
         let mut read_origin = 0;
@@ -925,7 +1009,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                     name_len,
                     replacement,
                     default_tree,
-                    added_tree,
+                    parameters,
                     read_origin,
                 );
                 self.macro_depth -= 1;
@@ -937,7 +1021,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
 
     pub fn analyze_line(&mut self, input: &str, replace_tree: &ReplaceTree) -> Result<String, ()> {
         self.current_line = 1;
-        self.expand_text(input, replace_tree, &ReplaceTree::default(), None, None)
+        self.expand_text(input, replace_tree, None, None, None)
             .map(|expanded| expanded.text)
     }
 
@@ -949,13 +1033,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
     ) -> Result<SceneExpansion, ()> {
         self.replace_uses.clear();
         self.current_line = 1;
-        let expanded = self.expand_text(
-            input,
-            replace_tree,
-            &ReplaceTree::default(),
-            Some(input_source_map),
-            None,
-        )?;
+        let expanded = self.expand_text(input, replace_tree, None, Some(input_source_map), None)?;
         Ok(SceneExpansion {
             text: expanded.text,
             source_map: expanded.map.unwrap(),

@@ -178,23 +178,15 @@ pub struct AstNode<'src> {
 
 impl<'src> Drop for AstNode<'src> {
     fn drop(&mut self) {
-        if matches!(
-            self.payload,
-            AstPayload::Eof
-                | AstPayload::Literal { .. }
-                | AstPayload::Label { .. }
-                | AstPayload::ZLabel { .. }
-                | AstPayload::Text { .. }
-                | AstPayload::Name { .. }
-                | AstPayload::Continue
-                | AstPayload::Break
-        ) {
+        if self.payload.is_leaf() {
             return;
         }
         let mut pending = vec![std::mem::replace(&mut self.payload, AstPayload::Eof)];
         while let Some(mut payload) = pending.pop() {
             payload.visit_children_mut(|child| {
-                pending.push(std::mem::replace(&mut child.payload, AstPayload::Eof));
+                if !child.payload.is_leaf() {
+                    pending.push(std::mem::replace(&mut child.payload, AstPayload::Eof));
+                }
             });
         }
     }
@@ -214,6 +206,20 @@ impl<'src> AstNode<'src> {
 }
 
 impl<'src> AstPayload<'src> {
+    fn is_leaf(&self) -> bool {
+        matches!(
+            self,
+            Self::Eof
+                | Self::Literal { .. }
+                | Self::Label { .. }
+                | Self::ZLabel { .. }
+                | Self::Text { .. }
+                | Self::Name { .. }
+                | Self::Continue
+                | Self::Break
+        )
+    }
+
     pub(super) fn visit_children<'a>(&'a self, mut visit: impl FnMut(&'a AstNode<'src>)) {
         match self {
             AstPayload::Root(values) | AstPayload::ExpressionList { values, .. } => {

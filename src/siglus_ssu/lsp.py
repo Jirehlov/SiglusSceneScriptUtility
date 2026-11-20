@@ -383,20 +383,16 @@ def _sorted_dir_paths(
 ) -> list[str]:
     out: dict[str, str] = {}
     root = os.path.abspath(root_dir)
-    seen = {}
     try:
         _, entries = read_directory(root)
-        paths = validate_input_paths(
+        validate_input_paths(
             (
                 entry.path
                 for entry in entries
-                if entry.is_file() and entry.name.lower().endswith(suffix)
+                if entry.name.lower().endswith(suffix) and entry.is_file()
             ),
-            seen=seen,
+            seen=out,
         )
-        for path in paths:
-            norm = os.path.abspath(path)
-            out[_path_identity(norm)] = norm
     except FilenameCaseCollisionError:
         raise
     except (OSError, ValueError):
@@ -408,8 +404,8 @@ def _sorted_dir_paths(
             os.path.dirname(norm), root
         ):
             overlay_paths.append(norm)
-    for norm in validate_input_paths(overlay_paths, seen=seen, allow_same_file=True):
-        out[_path_identity(norm)] = norm
+    for norm in validate_input_paths(overlay_paths, seen=out, allow_same_file=True):
+        out[windows_filename_key(norm)] = norm
     return sorted(out.values(), key=lambda p: ascii_lower(os.path.basename(p)))
 
 
@@ -2464,7 +2460,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 32
+LSP_INDEX_CACHE_VERSION = 33
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -3300,8 +3296,11 @@ class SSLanguageServer:
         return self._checked_document(document_key_for_uri(uri), uri_to_path(uri), uri)
 
     def document_for_path(self, path: str) -> DocumentState | None:
-        path = os.path.abspath(path)
-        return self._checked_document(document_key_for_path(path), path)
+        key = document_key_for_path(path)
+        doc = self.documents.get(key)
+        if doc is not None and doc.path == path:
+            return doc
+        return self._checked_document(key, os.path.abspath(path))
 
     def _checked_document(
         self, key: str, path: str, uri: str | None = None
@@ -3378,13 +3377,13 @@ class SSLanguageServer:
         out: dict[str, str] = {}
         directory = os.path.abspath(directory)
         for doc in self.documents.values():
-            path = os.path.abspath(doc.path)
-            if not same_read_path(os.path.dirname(path), directory):
+            if not doc.overlay_active:
                 continue
+            path = os.path.abspath(doc.path)
             if suffix is not None and not path.lower().endswith(suffix):
                 continue
-            if doc.overlay_active:
-                out[os.path.abspath(doc.path)] = doc.text
+            if same_read_path(os.path.dirname(path), directory):
+                out[path] = doc.text
         return out
 
     def clear_document_cache(self, doc: DocumentState) -> None:
@@ -3401,16 +3400,10 @@ class SSLanguageServer:
         return ("file", doc.file_state)
 
     def path_source_signature(self, path: str) -> tuple[Any, ...]:
-        norm = os.path.abspath(path)
-        doc = self.document_for_path(norm)
-        if doc is not None:
-            if doc.overlay_active:
-                return ("overlay", doc.text)
-            if doc.opened:
-                if doc.file_state is None:
-                    return ("missing",)
-                return ("file", doc.file_state)
-        state = _file_state(norm)
+        doc = self.document_for_path(path)
+        if doc is not None and (doc.overlay_active or doc.opened):
+            return self.document_source_signature(doc)
+        state = _file_state(path)
         if state is None:
             return ("missing",)
         return ("file", state)
@@ -3830,9 +3823,7 @@ class SSLanguageServer:
     ) -> DirectoryLinkDiagnosticsEntry:
         directory = os.path.abspath(directory or ".")
         project_entry = self.project_for_directory(directory)
-        inc_paths = _sorted_dir_paths(
-            directory, self.overlays_for_dir(directory), ".inc"
-        )
+        inc_paths = [item[0] for item in project_entry.signature]
         scene_paths = self.scene_paths(directory)
         paths = inc_paths + scene_paths
         entry = self.link_diagnostics_cache.get(directory)
@@ -3858,12 +3849,7 @@ class SSLanguageServer:
                 diagnostics={},
             )
         assert entry is not None
-        current_path_keys = {_path_identity(path) for path in paths}
-        removed_paths = [
-            path
-            for path in entry.file_signatures
-            if _path_identity(path) not in current_path_keys
-        ]
+        removed_paths = entry.file_has_diagnostics.keys() - set(paths)
         inc_changed = rebuild_all or any(
             entry.file_signatures.get(path) != self.path_source_signature(path)
             for path in inc_paths
@@ -3876,13 +3862,6 @@ class SSLanguageServer:
                 for path in scene_paths
                 if entry.file_signatures.get(path) != self.path_source_signature(path)
             ]
-        dirty_path_keys = {_path_identity(path) for path in dirty_paths}
-        dirty_paths.extend(
-            path
-            for path in paths
-            if _path_identity(path) not in dirty_path_keys
-            and path not in entry.file_signatures
-        )
         if not rebuild_all and not removed_paths and not dirty_paths:
             return entry
         if not rebuild_all:
