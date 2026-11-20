@@ -20,9 +20,15 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[pyfunction]
-fn lzss_pack(py: Python<'_>, data: &[u8], suppress_empty_tail_group: bool) -> Py<PyBytes> {
-    let result = py.detach(move || lzss::pack(data, suppress_empty_tail_group));
-    PyBytes::new(py, &result).into()
+fn lzss_pack(
+    py: Python<'_>,
+    data: &[u8],
+    suppress_empty_tail_group: bool,
+) -> PyResult<Py<PyBytes>> {
+    let result = py
+        .detach(move || lzss::pack(data, suppress_empty_tail_group))
+        .map_err(PyValueError::new_err)?;
+    Ok(PyBytes::new(py, &result).into())
 }
 
 #[pyfunction]

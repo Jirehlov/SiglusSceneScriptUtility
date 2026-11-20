@@ -1799,23 +1799,25 @@ def is_named_filename(name: str, target_name: str) -> bool:
     return windows_filename_key(name) == windows_filename_key(target_name)
 
 
-def list_named_paths(base_dir: str, target_name: str):
+def find_named_paths(base_dir, target_names):
+    wanted = {windows_filename_key(name) for name in target_names}
     try:
-        base_dir, entries = read_directory(base_dir)
+        _, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
-        return []
-    key = windows_filename_key(target_name)
-    paths = [
-        entry.path
-        for entry in entries
-        if windows_filename_key(entry.name) == key and entry.is_file()
-    ]
-    return validate_input_paths(paths, warn_only=True)
+        return {}
+    selected = {}
+    seen = {}
+    for entry in entries:
+        key = windows_filename_key(entry.name)
+        if key in wanted and entry.is_file():
+            validate_input_paths([entry.path], seen=seen, warn_only=True)
+            selected.setdefault(key, entry.path)
+    return selected
 
 
-def find_named_path(base_dir: str, target_name: str) -> str:
-    hits = list_named_paths(base_dir, target_name)
-    return hits[0] if hits else ""
+def find_named_path(base_dir, target_name):
+    paths = find_named_paths(base_dir, [target_name])
+    return paths.get(windows_filename_key(target_name), "")
 
 
 def find_angou_dat(base_dir: str) -> str:

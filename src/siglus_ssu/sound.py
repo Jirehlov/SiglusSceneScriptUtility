@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from io import BytesIO
 from os import SEEK_END
-from typing import Iterator, List, Tuple
+from typing import List, Tuple
 import siglus_ssu as _runtime
 from .common import (
     OGGS_SIGNATURE,
@@ -445,34 +445,34 @@ class OVKEntry:
 _OVK_ENTRY_STRUCT = struct.Struct("<IIii")
 
 
-def read_ovk_table(ovk_path: str) -> List[OVKEntry]:
-    with open_read(ovk_path) as f:
-        cnt = read_u32_le_from_file(f)
-        if cnt == 0:
-            return []
-        table_size = _OVK_ENTRY_STRUCT.size * cnt
-        table_start = f.tell()
-        table_end = table_start + table_size
-        archive_size = f.seek(0, SEEK_END)
-        if table_end > archive_size:
-            raise EOFError("Unexpected EOF while reading OVK table")
-        f.seek(table_start)
-        table = f.read(table_size)
-        if len(table) != table_size:
-            raise EOFError("Unexpected EOF while reading OVK table")
-        out: List[OVKEntry] = []
-        for size, offset, no, smp_cnt in _OVK_ENTRY_STRUCT.iter_unpack(table):
-            if offset < table_end or size < 4 or offset + size > archive_size:
-                raise ValueError(f"OVK entry {no} is outside the archive data")
-            out.append(
-                OVKEntry(
-                    entry_no=int(no),
-                    offset=int(offset),
-                    size=int(size),
-                    sample_count=max(int(smp_cnt), 0),
-                )
+def read_ovk_table(f) -> List[OVKEntry]:
+    f.seek(0)
+    cnt = read_u32_le_from_file(f)
+    if cnt == 0:
+        return []
+    table_size = _OVK_ENTRY_STRUCT.size * cnt
+    table_start = f.tell()
+    table_end = table_start + table_size
+    archive_size = f.seek(0, SEEK_END)
+    if table_end > archive_size:
+        raise EOFError("Unexpected EOF while reading OVK table")
+    f.seek(table_start)
+    table = f.read(table_size)
+    if len(table) != table_size:
+        raise EOFError("Unexpected EOF while reading OVK table")
+    out: List[OVKEntry] = []
+    for size, offset, no, smp_cnt in _OVK_ENTRY_STRUCT.iter_unpack(table):
+        if offset < table_end or size < 4 or offset + size > archive_size:
+            raise ValueError(f"OVK entry {no} is outside the archive data")
+        out.append(
+            OVKEntry(
+                entry_no=int(no),
+                offset=int(offset),
+                size=int(size),
+                sample_count=max(int(smp_cnt), 0),
             )
-        return out
+        )
+    return out
 
 
 def extract_ogg_bytes_from_ovk_stream(file_obj, entry: OVKEntry) -> bytes:
@@ -486,18 +486,6 @@ def extract_ogg_bytes_from_ovk_stream(file_obj, entry: OVKEntry) -> bytes:
     except (EOFError, ValueError) as exc:
         raise ValueError(f"OVK entry {entry.entry_no}: {exc}") from exc
     return chunk
-
-
-def iter_ovk_entries(
-    ovk_path: str,
-    entries: List[OVKEntry] | None = None,
-) -> Iterator[Tuple[int, bytes]]:
-    table = read_ovk_table(ovk_path) if entries is None else entries
-    if not table:
-        return
-    with open_read(ovk_path) as f:
-        for entry in table:
-            yield entry.entry_no, extract_ogg_bytes_from_ovk_stream(f, entry)
 
 
 NWA_HEADER_STRUCT = struct.Struct("<HHIiiIIIIIII")

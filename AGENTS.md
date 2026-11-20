@@ -2,7 +2,7 @@
 
 1. Use CRLF except in lock files and `LICENSE`, which may use LF. Manually inspect line endings after each change; do not enforce them through configuration or CI. Keep lock files in their tool-generated format.
 2. Remove dead code, including code unreachable from the CLI. Unused constants in `const.py` are exempt.
-3. No unit or integration test code. Preserve the existing CLI `test` command and CI PCK regression checks.
+3. No unit or integration test code. Preserve the existing CLI `test` command and CI PCK regression checks. PCK regression CI exercises the Rust backend only.
 4. Before each developer build, refresh relevant lock files to the latest compatible dependency versions and explain blocked updates. CI need not refresh locks. Offline or `--locked` builds alone do not count as a refresh.
 5. Ask before creating files unless the user already explicitly requested their creation. Editing existing files needs no separate approval.
 6. Prefer mainstream packages and minimize the total package count, including transitive dependencies.

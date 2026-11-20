@@ -10,7 +10,7 @@ use super::la::lex_scene_text_for_compile;
 use super::ma::SemanticAnalyzer;
 use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes};
 use super::sa::SyntaxAnalyzer;
-use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat};
+use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat, checked_i32};
 use super::source_angou::encrypt_source;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
@@ -76,20 +76,20 @@ enum SceneBytes {
 }
 
 impl SceneBytes {
-    fn pack<const FULL_STATS: bool>(self, config: &CompileConfig) -> Self {
+    fn pack<const FULL_STATS: bool>(self, config: &CompileConfig) -> Result<Self, String> {
         let Self::Dat(dat) = self else {
-            return self;
+            return Ok(self);
         };
         let scn_size = if FULL_STATS {
             scn_header_value(config, &dat, "scn_size").max(0) as usize
         } else {
             0
         };
-        Self::Packed {
-            data: pack_scene_data(&dat, &config.constants.easy_angou_code),
+        Ok(Self::Packed {
+            data: pack_scene_data(&dat, &config.constants.easy_angou_code)?,
             dat_size: dat.len(),
             scn_size,
-        }
+        })
     }
 }
 
@@ -1091,7 +1091,7 @@ fn write_gameexe_dat(
         ))?;
     }
     if !parsed.text.is_empty() {
-        payload = crate::lzss::pack(&utf16le(&parsed.text), false);
+        payload = crate::lzss::pack(&utf16le(&parsed.text), false)?;
         crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
     }
     let mode = i32::from(exe_key.is_some());
@@ -1182,12 +1182,13 @@ fn build_original_source_chunks(
         }
         chunks
     };
-    let sizes: Vec<u8> = chunks
-        .iter()
-        .flat_map(|chunk| (chunk.len() as u32).to_le_bytes())
-        .collect();
+    let mut sizes = Vec::with_capacity(chunks.len() * 4);
+    for chunk in &chunks {
+        let size = u32::try_from(chunk.len()).map_err(|_| "original source chunk is too large")?;
+        sizes.extend_from_slice(&size.to_le_bytes());
+    }
     let header = encrypt_source(&sizes, "__DummyName__", &config.constants.source_angou)?;
-    let header_size = header.len() as i32;
+    let header_size = checked_i32("original_source_header_size", header.len())?;
     chunks.insert(0, header);
     record_stage_time(stage_times, "OS", start);
     Ok((header_size, chunks))
@@ -1434,7 +1435,7 @@ fn finalize_scene<const FULL_STATS: bool>(
     config: &CompileConfig,
     mut prepared: PreparedScene,
     rand: &mut MsvcRand,
-) -> FinalizedScene {
+) -> Result<FinalizedScene, String> {
     let layout = ScnHeaderLayout {
         fields: &config.constants.scn_header_fields,
         header_size: config.constants.scn_header_size,
@@ -1469,14 +1470,14 @@ fn finalize_scene<const FULL_STATS: bool>(
                 });
             }
         },
-    );
+    )?;
     if FULL_STATS {
         prepared
             .source_stats
             .unique_strings
             .extend(prepared.scene.str_list);
     }
-    FinalizedScene {
+    Ok(FinalizedScene {
         stem: prepared.stem,
         bytes: SceneBytes::Dat(dat),
         command_labels: prepared.scene.cmd_label_list,
@@ -1484,13 +1485,13 @@ fn finalize_scene<const FULL_STATS: bool>(
         source_stats: prepared.source_stats,
         scene_macro_counts: prepared.scene_macro_counts,
         global_macro_usage_delta: prepared.global_macro_usage_delta,
-    }
+    })
 }
 
-fn pack_scene_data(dat: &[u8], code: &[u8]) -> Vec<u8> {
-    let mut packed = crate::lzss::pack(dat, false);
+fn pack_scene_data(dat: &[u8], code: &[u8]) -> Result<Vec<u8>, String> {
+    let mut packed = crate::lzss::pack(dat, false)?;
     crate::xor::cycle_inplace(&mut packed, code, 0);
-    packed
+    Ok(packed)
 }
 
 fn link_compiled_scenes<'a, const FULL_STATS: bool>(
@@ -1518,10 +1519,11 @@ fn link_compiled_scenes<'a, const FULL_STATS: bool>(
                 || (),
                 |(), (key, mut scene)| {
                     let started = Instant::now();
-                    scene.bytes = scene.bytes.pack::<FULL_STATS>(config);
-                    (key, scene, started, Instant::now())
+                    scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
+                    Ok::<_, String>((key, scene, started, Instant::now()))
                 },
-                |_, (key, scene, started, finished)| {
+                |_, result| {
+                    let (key, scene, started, finished) = result?;
                     window = Some(match window {
                         Some((first, last)) => (first.min(started), last.max(finished)),
                         None => (started, finished),
@@ -1649,26 +1651,35 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     .map_or(0, String::len),
             )
         });
-        let concurrent_link_workers = if prepack && compile_workers == link_workers {
-            link_workers
+        let combine_workers =
+            prepack && compile_workers == link_workers && config.options.max_workers.is_none();
+        let workers = if combine_workers {
+            compile_workers + link_workers
         } else {
-            0
-        };
-        stdout.push_line(format!(
-            "[PARALLEL] Compiling {} files with {} processes...",
-            compile_tasks.len(),
             compile_workers
+        };
+        let concurrent_link_workers =
+            if !combine_workers && prepack && compile_workers == link_workers {
+                link_workers
+            } else {
+                0
+            };
+        stdout.push_line(format!(
+            "[PARALLEL] Compiling {} files with {} workers...",
+            compile_tasks.len(),
+            workers
         ))?;
         let total = compile_tasks.len();
         let mut completed_count = 0usize;
-        link_compiled_scenes::<FULL_STATS>(
+        let mut compression_window: Option<(Instant, Instant)> = None;
+        let pipeline_elapsed = link_compiled_scenes::<FULL_STATS>(
             config,
             concurrent_link_workers,
             &mut compiled,
             |emit| {
                 parallel_visit_unordered_with_state(
                     compile_tasks,
-                    compile_workers,
+                    workers,
                     || MsvcRand::new(1),
                     |worker_rand, task| {
                         let key = task.key.as_str();
@@ -1687,7 +1698,18 @@ fn compile_project_inner<const FULL_STATS: bool>(
                                 if scene.stem.is_empty() {
                                     scene.stem = scene_stem(task.name);
                                 }
-                                Ok(finalize_scene::<FULL_STATS>(config, scene, worker_rand))
+                                finalize_scene::<FULL_STATS>(config, scene, worker_rand).and_then(
+                                    |mut scene| {
+                                        let compression = if combine_workers {
+                                            let start = Instant::now();
+                                            scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
+                                            Some((start, Instant::now()))
+                                        } else {
+                                            None
+                                        };
+                                        Ok((scene, compression))
+                                    },
+                                )
                             }
                             Err(message) => Err(message),
                         };
@@ -1699,7 +1721,13 @@ fn compile_project_inner<const FULL_STATS: bool>(
                         }
                         completed_count += 1;
                         match result {
-                            Ok(scene) => {
+                            Ok((scene, compression)) => {
+                                if let Some((start, end)) = compression {
+                                    compression_window = Some(match compression_window {
+                                        Some((first, last)) => (first.min(start), last.max(end)),
+                                        None => (start, end),
+                                    });
+                                }
                                 stdout.push_line(format!(
                                     "  [{}/{}] OK: {}",
                                     completed_count, total, status
@@ -1721,7 +1749,10 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 record_stage_time(stage_times, "Compiling", stage_start);
                 Ok(())
             },
-        )?
+        )?;
+        compression_window
+            .map(|(first, last)| (last - first).as_secs_f64())
+            .or(pipeline_elapsed)
     } else {
         let concurrent_link_workers = if prepack { link_workers - 1 } else { 0 };
         link_compiled_scenes::<FULL_STATS>(
@@ -1747,7 +1778,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     }
                     emit(
                         task.key.as_str(),
-                        finalize_scene::<FULL_STATS>(config, scene, &mut rand),
+                        finalize_scene::<FULL_STATS>(config, scene, &mut rand)?,
                     )?;
                 }
                 Ok(())
@@ -1849,7 +1880,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     ));
                 }
                 inc_command_defined[index] = true;
-                inc_command_locations[index] = (scene_number as i32, offset);
+                inc_command_locations[index] = (checked_i32("scene number", scene_number)?, offset);
             }
         }
     }
@@ -1923,7 +1954,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     if code.is_empty() {
                         return Err("ctx.easy_angou_code is not set".to_string());
                     }
-                    let packed = pack_scene_data(dat, code);
+                    let packed = pack_scene_data(dat, code)?;
                     if let Some(path) = path {
                         fs::write(&path, &packed)
                             .map_err(|error| format_path_error(&path, error))?;
@@ -1948,7 +1979,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 if code.is_empty() {
                     return Err("ctx.easy_angou_code is not set".to_string());
                 }
-                let packed = pack_scene_data(dat, code);
+                let packed = pack_scene_data(dat, code)?;
                 if let Some(path) = path {
                     fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
                 }
@@ -2038,7 +2069,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         fields: &config.constants.pack_header_fields,
         header_size: config.constants.pack_header_size,
     };
-    let pack = build_pack_bytes(&pack_layout, &pack_input);
+    let pack = build_pack_bytes(&pack_layout, &pack_input)?;
     let output_path = Path::new(&config.output_dir).join(&config.scene_pck);
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| format_path_error(parent, error))?;

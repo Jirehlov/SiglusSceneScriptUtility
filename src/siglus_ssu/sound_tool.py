@@ -99,7 +99,8 @@ def _analyze_one(path: str) -> int:
         return 0
     if ext == ".ovk":
         try:
-            entries = sound.read_ovk_table(path)
+            with open_read(path) as f:
+                entries = sound.read_ovk_table(f)
         except (OSError, EOFError, ValueError) as exc:
             eprint(f"error: {exc}")
             return 1
@@ -164,11 +165,10 @@ def _ovk_koe_no_label(key, scene_no: int | None) -> str:
 
 
 def _ovk_compare_entries(path: str) -> list[_OvkCompareEntry]:
-    entries = sound.read_ovk_table(path)
     seen = {}
     out = []
     with open_read(path) as f:
-        for entry in entries:
+        for entry in sound.read_ovk_table(f):
             occurrence = int(seen.get(entry.entry_no, 0))
             seen[entry.entry_no] = occurrence + 1
             payload_sha256 = ""
@@ -1463,13 +1463,17 @@ def _extract_one(src_path, outputs, entries, trim_table, ffmpeg_path, tmp_dir):
         os.makedirs(directory, exist_ok=True)
         staged = StagedOutputs(directory, [os.path.basename(path) for path in outputs])
         try:
-            for name, (_, ogg) in zip(
-                staged.names, sound.iter_ovk_entries(src_path, entries), strict=True
-            ):
-                with open(os.path.join(staged.staging, name), "wb") as output:
-                    output.write(ogg)
-                    output.flush()
-                    os.fsync(output.fileno())
+            with open_read(src_path) as source:
+                if sound.read_ovk_table(source) != entries:
+                    raise OSError(f"OVK index changed since planning: {src_path}")
+                for name, entry in zip(staged.names, entries, strict=True):
+                    ogg = sound.extract_ogg_bytes_from_ovk_stream(source, entry)
+                    with open(os.path.join(staged.staging, name), "wb") as output:
+                        output.write(ogg)
+                        output.flush()
+                        os.fsync(output.fileno())
+                if sound.read_ovk_table(source) != entries:
+                    raise OSError(f"OVK index changed during extraction: {src_path}")
             staged.publish([src_path])
         finally:
             staged.close()
@@ -1730,7 +1734,10 @@ def main(argv) -> int:
             out_dir = os.path.join(out_root, rel_dir)
             stem, ext = os.path.splitext(os.path.basename(src_path))
             ext = ext.lower()
-            entries = sound.read_ovk_table(src_path) if ext == ".ovk" else None
+            entries = None
+            if ext == ".ovk":
+                with open_read(src_path) as source:
+                    entries = sound.read_ovk_table(source)
             if entries is None:
                 suffix = ".wav" if ext == ".nwa" else ".ogg"
                 outputs = [os.path.join(out_dir, stem + suffix)]

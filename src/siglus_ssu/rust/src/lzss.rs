@@ -132,15 +132,22 @@ struct LzssTreeFind<'a> {
     src_index: usize,
     tree: LzssTree,
     previous_match_distance: usize,
+    first_keys: Box<[u64; WINDOW_SIZE]>,
 }
 
 impl<'a> LzssTreeFind<'a> {
     fn new(src: &'a [u8]) -> Self {
+        let mut first_keys = Box::new([0; WINDOW_SIZE]);
+        first_keys[0] = src
+            .first_chunk::<8>()
+            .copied()
+            .map_or(0, u64::from_be_bytes);
         Self {
             src,
             src_index: 0,
             tree: LzssTree::new(),
             previous_match_distance: 0,
+            first_keys,
         }
     }
 
@@ -167,6 +174,7 @@ impl<'a> LzssTreeFind<'a> {
             if self.src[candidate + LOOK_AHEAD - 1] == source[LOOK_AHEAD - 1]
                 && self.tree.nodes[slot].parent != UNUSED_NODE as u32
             {
+                self.first_keys[window_top] = self.first_keys[slot];
                 self.tree.replace(slot, window_top);
                 return (LOOK_AHEAD, slot);
             }
@@ -181,14 +189,12 @@ impl<'a> LzssTreeFind<'a> {
             )
         });
 
+        if let Some((first, _, _)) = key {
+            self.first_keys[window_top] = first;
+        }
         loop {
-            let offset = self.src_index.wrapping_sub(target) % WINDOW_SIZE;
-            let candidate_start = self.src_index.wrapping_sub(offset);
             let (matched, goes_right) = if let Some((first, second, last)) = key {
-                let candidate = self.src[candidate_start..]
-                    .first_chunk::<LOOK_AHEAD>()
-                    .unwrap();
-                let other = u64::from_be_bytes(candidate[..8].try_into().unwrap());
+                let other = self.first_keys[target];
                 if first != other {
                     let prefix = if TRACK_MATCH {
                         ((first ^ other).leading_zeros() / 8) as usize
@@ -197,6 +203,11 @@ impl<'a> LzssTreeFind<'a> {
                     };
                     (prefix, first > other)
                 } else {
+                    let offset = self.src_index.wrapping_sub(target) % WINDOW_SIZE;
+                    let candidate_start = self.src_index.wrapping_sub(offset);
+                    let candidate = self.src[candidate_start..]
+                        .first_chunk::<LOOK_AHEAD>()
+                        .unwrap();
                     let other = u64::from_be_bytes(candidate[8..16].try_into().unwrap());
                     if second != other {
                         let prefix = if TRACK_MATCH {
@@ -212,6 +223,8 @@ impl<'a> LzssTreeFind<'a> {
                     }
                 }
             } else {
+                let offset = self.src_index.wrapping_sub(target) % WINDOW_SIZE;
+                let candidate_start = self.src_index.wrapping_sub(offset);
                 let candidate = &self.src[candidate_start..candidate_start + count];
                 match source.iter().zip(candidate).position(|(a, b)| a != b) {
                     Some(index) => (index, source[index] > candidate[index]),
@@ -221,7 +234,8 @@ impl<'a> LzssTreeFind<'a> {
 
             if matched == count {
                 if count == LOOK_AHEAD {
-                    self.previous_match_distance = offset;
+                    self.previous_match_distance =
+                        self.src_index.wrapping_sub(target) % WINDOW_SIZE;
                 }
                 self.tree.replace(target, window_top);
                 return (matched, target);
@@ -241,10 +255,11 @@ impl<'a> LzssTreeFind<'a> {
     }
 }
 
-pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
+pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Result<Vec<u8>, String> {
     if src.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
+    let org_size = u32::try_from(src.len()).map_err(|_| "LZSS source size exceeds 32 bits")?;
 
     let mut tree_find = LzssTreeFind::new(src);
 
@@ -293,12 +308,12 @@ pub fn pack(src: &[u8], suppress_empty_tail_group: bool) -> Vec<u8> {
         }
     }
 
-    let pack_buf_size = pack_buf.len() as u32;
-    let org_size = src.len() as u32;
+    let pack_buf_size =
+        u32::try_from(pack_buf.len()).map_err(|_| "LZSS packed size exceeds 32 bits")?;
     pack_buf[0..4].copy_from_slice(&pack_buf_size.to_le_bytes());
     pack_buf[4..8].copy_from_slice(&org_size.to_le_bytes());
 
-    pack_buf
+    Ok(pack_buf)
 }
 
 pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {

@@ -555,7 +555,8 @@ def _index_ovk(voice_dir: str):
         scene_no = int(m.group(1))
         scene_map.setdefault(scene_no, full)
         try:
-            table = sound.read_ovk_table(full)
+            with open_read(full) as source:
+                table = sound.read_ovk_table(source)
         except (OSError, EOFError, ValueError) as exc:
             raise ValueError(f"koe: could not read OVK index {full}: {exc}") from exc
         ovk_entry_map[full] = {int(e.entry_no): e for e in table}
@@ -798,11 +799,18 @@ def main(argv):
     def _read_ogg_from_ovk(ovk_path: str, entry) -> bytes:
         nonlocal current_ovk_path, current_ovk_file
         if current_ovk_file is None or current_ovk_path != ovk_path:
-            prev_file = current_ovk_file
-            current_ovk_file = open_read(ovk_path)
-            current_ovk_path = ovk_path
-            if prev_file is not None:
-                prev_file.close()
+            _close_current_ovk()
+            source = open_read(ovk_path)
+            try:
+                table = {
+                    entry.entry_no: entry for entry in sound.read_ovk_table(source)
+                }
+                if table != ovk_entry_map[ovk_path]:
+                    raise OSError(f"OVK index changed since planning: {ovk_path}")
+            except BaseException:
+                source.close()
+                raise
+            current_ovk_path, current_ovk_file = ovk_path, source
         return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
 
     os.makedirs(out_dir, exist_ok=True)

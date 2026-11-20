@@ -1,6 +1,7 @@
 import os
 import sys
 from .common import (
+    find_named_path,
     iter_files_by_ext,
     looks_like_siglus_dat,
     parse_gei_disam_args,
@@ -132,11 +133,8 @@ def main(argv):
         except (FileNotFoundError, NotADirectoryError):
             return 2
         if os.path.isdir(in_path):
-            try:
-                in_path = resolve_read_path(
-                    os.path.join(in_path, "Gameexe.dat"), kind="file"
-                )
-            except (FileNotFoundError, NotADirectoryError):
+            in_path = find_named_path(in_path, "Gameexe.dat")
+            if not in_path:
                 return 2
         try:
             out_path = GEI.restore_gameexe_ini(

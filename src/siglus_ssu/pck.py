@@ -3,6 +3,8 @@ import struct
 import io
 import ntpath
 from contextlib import redirect_stdout
+import itertools
+from pathlib import PureWindowsPath
 import os
 import sys
 import time
@@ -26,7 +28,6 @@ from .common import (
     build_sections,
     build_source_angou_layout,
     read_bytes,
-    write_bytes,
     parse_i32_header,
     parse_i32_header_checked,
     parse_code,
@@ -972,6 +973,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
         ss_paths = []
         seen_ss_paths = set()
         restored_paths = {}
+        output_names = {}
         for item in sources:
             raw = bytes(item.get("raw") or b"")
             name = str(item.get("name") or "")
@@ -981,6 +983,7 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
             rel_display = rel.replace("\\", "/")
             out_path = tmpdir
             for part in rel.split(os.sep):
+                _validate_archive_output_name(part)
                 out_path = os.path.join(out_path, part)
                 out_path = restored_paths.setdefault(
                     windows_filename_key(out_path), out_path
@@ -994,27 +997,16 @@ def _pck_ss_word_rows(blob: bytes, hdr=None) -> dict:
                 inside_tmpdir = False
             if not inside_tmpdir:
                 raise OSError(f"invalid original-source path: {name!r}")
-            os.makedirs(os.path.dirname(out_path) or tmpdir, exist_ok=True)
-            if os.path.exists(out_path):
-                try:
-                    if read_bytes(out_path) != raw:
-                        out_path = _unique_outpath(
-                            os.path.dirname(out_path) or tmpdir,
-                            os.path.basename(rel) or rel,
-                        )
-                        rel_display = os.path.relpath(out_path, tmpdir).replace(
-                            "\\", "/"
-                        )
-                        write_bytes(out_path, raw)
-                except Exception:
-                    out_path = _unique_outpath(
-                        os.path.dirname(out_path) or tmpdir,
-                        os.path.basename(rel) or rel,
+            if not (os.path.isfile(out_path) and read_bytes(out_path) == raw):
+                directory, leaf = os.path.split(out_path)
+                written_path = _write_extracted_file(
+                    directory, leaf, raw, output_names.setdefault(directory, set())
+                )
+                if written_path != out_path:
+                    rel_display = os.path.relpath(written_path, tmpdir).replace(
+                        "\\", "/"
                     )
-                    rel_display = os.path.relpath(out_path, tmpdir).replace("\\", "/")
-                    write_bytes(out_path, raw)
-            else:
-                write_bytes(out_path, raw)
+                out_path = written_path
             restored_paths.setdefault(windows_filename_key(out_path), out_path)
             if os.path.splitext(out_path)[1].lower() == ".ss":
                 key = (os.path.abspath(out_path), rel_display)
@@ -1784,7 +1776,7 @@ def _safe_relpath(name: str) -> str:
         if p == "..":
             continue
         parts.append(p)
-    return os.path.join(*parts) if parts else ""
+    return os.sep.join(parts)
 
 
 def _create_extract_dir(output_dir: str) -> str:
@@ -1805,21 +1797,45 @@ def _create_extract_dir(output_dir: str) -> str:
             timestamp_ns += 1
 
 
-def _unique_outpath(out_dir: str, name: str, used_names=None) -> str:
-    s = os.path.basename(str(name or ""))
-    if not s:
-        s = "unknown.bin"
-    root, ext = os.path.splitext(s)
-    if used_names is None:
-        with os.scandir(out_dir) as entries:
-            used_names = {windows_filename_key(entry.name) for entry in entries}
-    p = os.path.join(out_dir, s)
-    i = 1
-    while windows_filename_key(os.path.basename(p)) in used_names:
-        p = os.path.join(out_dir, f"{root}_{i:d}{ext}")
-        i += 1
-    used_names.add(windows_filename_key(os.path.basename(p)))
-    return p
+def _validate_archive_output_name(name):
+    if name in ("", ".", "..") or "\0" in name or os.path.basename(name) != name:
+        raise OSError(f"invalid archive output name: {name!r}")
+    try:
+        os.fsencode(name)
+    except UnicodeEncodeError as exc:
+        raise OSError(f"invalid archive output name: {name!r}") from exc
+    if os.name == "nt":
+        if hasattr(os.path, "isreserved"):
+            reserved = os.path.isreserved(name)
+        else:
+            reserved = (
+                name.endswith((".", " "))
+                or any(ord(ch) < 32 or ch in '"*:<>?|/\\' for ch in name)
+                or PureWindowsPath(name).is_reserved()
+            )
+        if reserved:
+            raise OSError(f"invalid archive output name: {name!r}")
+
+
+def _write_extracted_file(directory, name, data, used_names):
+    _validate_archive_output_name(name)
+    stem, ext = os.path.splitext(name)
+    for index in itertools.count():
+        leaf = f"{stem}_{index}{ext}" if index else name
+        key = windows_filename_key(leaf)
+        if key in used_names:
+            continue
+        path = os.path.join(directory, leaf)
+        try:
+            with open_atomic_output(path, exclusive=True) as output:
+                output.write(data)
+        except FileExistsError:
+            if not os.path.lexists(path):
+                raise
+            used_names.add(key)
+        else:
+            used_names.add(key)
+            return path
 
 
 def source_angou_decrypt(enc: bytes, ctx: dict, *, only_names=()):
@@ -1980,11 +1996,11 @@ def extract_pck(
         sys.stdout.write(f"Output: {out_dir}\n")
         for i in range(flix_info["cnt"]):
             nm = names[i] or f"file_{i:d}.bin"
-            rel = _safe_relpath(nm) or nm
-            out_name = os.path.basename(rel) or rel
-            out_path = _unique_outpath(out_dir, out_name, output_names)
+            out_name = os.path.basename(_safe_relpath(nm)) or "unknown.bin"
             off, sz = entries[i]
-            write_bytes(out_path, dat[int(off) : int(off) + int(sz)])
+            _write_extracted_file(
+                out_dir, out_name, memoryview(dat)[off : off + sz], output_names
+            )
             ok_cnt += 1
         sys.stdout.write(f"Extracted files: {ok_cnt:d}\n")
         return 0
@@ -2025,6 +2041,8 @@ def extract_pck(
     separate_key = any(
         windows_filename_key(name) == angou_name for name in scene_lists[0]
     )
+    if separate_key:
+        output_names.add(windows_filename_key(PCK_KEY_DIR))
     sys.stdout.write(f"Output: {out_dir}\n")
     if (
         not decompile
@@ -2033,16 +2051,12 @@ def extract_pck(
     ):
         try:
             for name, _start, _end, raw in source_entries:
-                rel = _safe_relpath(name)
-                if not rel:
-                    rel = "unknown.bin"
-                out_name = os.path.basename(rel) or rel
+                out_name = os.path.basename(_safe_relpath(name)) or "unknown.bin"
                 if separate_key and is_named_filename(out_name, ANGOU_DAT_NAME):
                     key_dir = os.path.join(out_dir, PCK_KEY_DIR)
-                    out_path = _unique_outpath(key_dir, out_name, key_output_names)
+                    _write_extracted_file(key_dir, out_name, raw, key_output_names)
                 else:
-                    out_path = _unique_outpath(out_dir, out_name, output_names)
-                write_bytes(out_path, raw)
+                    _write_extracted_file(out_dir, out_name, raw, output_names)
             sys.stdout.write(f"Extracted original sources: {len(source_entries):d}\n")
         except Exception as e:
             source_failed = True
@@ -2079,8 +2093,7 @@ def extract_pck(
                 fail_cnt += 1
                 continue
             out_dat = bytes(blob)
-            out_path = _unique_outpath(out_dir, out_name, output_names)
-            write_bytes(out_path, out_dat)
+            out_path = _write_extracted_file(out_dir, out_name, out_dat, output_names)
             ok_cnt += 1
             if D:
                 yield {

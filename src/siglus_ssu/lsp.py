@@ -1,7 +1,7 @@
 from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections import deque
-from itertools import groupby
+from itertools import chain, groupby
 from contextlib import redirect_stdout
 from functools import lru_cache, partial
 import io
@@ -152,6 +152,23 @@ class ProjectContext:
     build_error: SourceDiagnostic | None = None
     inc_iad2_by_path: dict[str, dict[str, Any]] = field(default_factory=dict)
     source_files: dict[int, tuple[str, str]] = field(default_factory=dict)
+    _symbols: dict[str, list[DefinitionRecord]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    _completion_keys: list[tuple[str, int]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def completion_definitions(self, prefix: str) -> Iterable[DefinitionRecord]:
+        if prefix and self._completion_keys is None:
+            self._completion_keys = _completion_key_index(self.definitions)
+        return _matching_definitions(self.definitions, prefix, self._completion_keys)
+
+    def definitions_for_symbol(self, symbol_id: str) -> list[DefinitionRecord]:
+        if self._symbols is None:
+            self._symbols = _index_definition_symbols(self.definitions)
+        return self._symbols.get(symbol_id, [])
 
 
 @dataclass(slots=True)
@@ -1919,10 +1936,12 @@ def occurrence_at_position(
         _line_text_at(result.text, line), character, position_encoding
     )
     boundary = None
+    path = result.path
+    path_key = _path_identity(path)
     for occurrence in occurrences_for_result(result):
-        if _path_identity(occurrence.path) != _path_identity(result.path):
-            continue
         if occurrence.line != line:
+            continue
+        if occurrence.path != path and _path_identity(occurrence.path) != path_key:
             continue
         if occurrence.start_char <= character < occurrence.end_char:
             return occurrence
@@ -2084,9 +2103,20 @@ def _occurrence_locations(
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, int, int, int]] = set()
+    files: dict[str, tuple[str, str, tuple[str, ...]]] = {}
     for occurrence in occurrences:
+        file = files.get(occurrence.path)
+        if file is None:
+            text = text_for_path(occurrence.path)
+            file = (
+                os.path.abspath(occurrence.path),
+                uri_for_path(occurrence.path),
+                _split_lines_cached(text),
+            )
+            files[occurrence.path] = file
+        path, uri, lines = file
         key = (
-            os.path.abspath(occurrence.path),
+            path,
             occurrence.line,
             occurrence.start_char,
             occurrence.end_char,
@@ -2094,11 +2124,11 @@ def _occurrence_locations(
         if key in seen:
             continue
         seen.add(key)
-        text = text_for_path(occurrence.path)
-        line_text = _line_text_at(text, occurrence.line)
+        line = occurrence.line
+        line_text = lines[line] if 0 <= line < len(lines) else ""
         out.append(
             {
-                "uri": uri_for_path(occurrence.path),
+                "uri": uri,
                 "range": _range(
                     occurrence.line,
                     occurrence.start_char,
@@ -2111,36 +2141,29 @@ def _occurrence_locations(
     return out
 
 
+def _file_document_path(path: str) -> str:
+    directory, name = os.path.split(os.path.abspath(path))
+    return os.path.join(os.path.realpath(directory), name)
+
+
 def path_to_uri(path: str) -> str:
-    return Path(path).resolve().as_uri()
+    return Path(_file_document_path(path)).as_uri()
 
 
-def uri_to_path(uri: str) -> str:
+def _document_location(uri: str) -> tuple[str, str]:
     from urllib.parse import unquote, urlsplit
 
     parsed = urlsplit(uri)
     if parsed.scheme != "file":
-        return uri
+        return uri, "uri:" + uri
     path = unquote(parsed.path)
     host = str(parsed.netloc or "")
     if host and host.casefold() != "localhost":
         path = f"//{host}{path}"
     if os.name == "nt" and re.match(r"^/[A-Za-z]:", path):
         path = path[1:]
-    return os.path.abspath(path)
-
-
-def document_key_for_uri(uri: str) -> str:
-    from urllib.parse import urlsplit
-
-    parsed = urlsplit(uri)
-    if parsed.scheme == "file":
-        return "file:" + _path_identity(uri_to_path(uri))
-    return "uri:" + str(uri)
-
-
-def document_key_for_path(path: str) -> str:
-    return "file:" + _path_identity(path)
+    path = _file_document_path(path)
+    return path, "file:" + _path_identity(path)
 
 
 def _symbol_kind(record: DefinitionRecord) -> int:
@@ -2220,7 +2243,45 @@ def _builtin_records() -> dict[str, list[DefinitionRecord]]:
     return out
 
 
+def _index_definition_symbols(
+    definitions: dict[str, list[DefinitionRecord]],
+) -> dict[str, list[DefinitionRecord]]:
+    symbols: dict[str, list[DefinitionRecord]] = {}
+    for records in definitions.values():
+        for record in records:
+            symbols.setdefault(_definition_symbol_id(record), []).append(record)
+    return symbols
+
+
+def _completion_key_index(
+    definitions: dict[str, list[DefinitionRecord]],
+) -> list[tuple[str, int]]:
+    return sorted((key, index) for index, key in enumerate(definitions))
+
+
+def _matching_definitions(
+    definitions: dict[str, list[DefinitionRecord]],
+    prefix: str,
+    keys: list[tuple[str, int]] | None = None,
+) -> Iterable[DefinitionRecord]:
+    if not prefix or keys is None:
+        for key, records in definitions.items():
+            if key.startswith(prefix):
+                yield from records
+        return
+    matches = []
+    for index in range(bisect_left(keys, (prefix, 0)), len(keys)):
+        key, order = keys[index]
+        if not key.startswith(prefix):
+            break
+        matches.append((order, key))
+    for _, key in sorted(matches):
+        yield from definitions[key]
+
+
 BUILTIN_RECORDS = _builtin_records()
+BUILTIN_SYMBOLS = _index_definition_symbols(BUILTIN_RECORDS)
+BUILTIN_COMPLETION_KEYS = _completion_key_index(BUILTIN_RECORDS)
 FORM_NAMES = sorted({str(k) for k in C._FORM_CODE.keys()})
 KEYWORDS = sorted(COMPILER_KEYWORDS)
 DIRECTIVES = sorted(DIRECTIVE_DOCS)
@@ -2313,25 +2374,21 @@ def completion_items(
     for name in FORM_NAMES:
         if not prefix or ascii_lower(name).startswith(prefix):
             add(name, COMPLETION_KIND_TYPE_PARAMETER, FORM_DOCS.get(name, ""))
-    for mapping in (
-        result.project.definitions,
-        result.local_definitions,
-        BUILTIN_RECORDS,
+    for rec in chain(
+        result.project.completion_definitions(prefix),
+        _matching_definitions(result.local_definitions, prefix),
+        _matching_definitions(BUILTIN_RECORDS, prefix, BUILTIN_COMPLETION_KEYS),
     ):
-        for key, records in mapping.items():
-            if prefix and not key.startswith(prefix):
-                continue
-            for rec in records:
-                kind = (
-                    COMPLETION_KIND_FUNCTION
-                    if rec.kind == "command"
-                    else COMPLETION_KIND_VARIABLE
-                )
-                if rec.kind in ("label", "z_label"):
-                    kind = COMPLETION_KIND_REFERENCE
-                elif rec.kind in ("macro", "define", "replace"):
-                    kind = COMPLETION_KIND_CONSTANT
-                add(rec.name, kind, rec.detail or rec.signature or rec.scope)
+        kind = (
+            COMPLETION_KIND_FUNCTION
+            if rec.kind == "command"
+            else COMPLETION_KIND_VARIABLE
+        )
+        if rec.kind in ("label", "z_label"):
+            kind = COMPLETION_KIND_REFERENCE
+        elif rec.kind in ("macro", "define", "replace"):
+            kind = COMPLETION_KIND_CONSTANT
+        add(rec.name, kind, rec.detail or rec.signature or rec.scope)
     for rec in result.label_definitions.values():
         if not prefix or ascii_lower(rec.name).startswith(prefix):
             add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
@@ -2385,15 +2442,12 @@ def hover_for_position(
         return None
     candidates = [
         record
-        for mapping in (
-            result.local_definitions,
-            result.project.definitions,
-            BUILTIN_RECORDS,
-        )
-        for records in mapping.values()
+        for records in result.local_definitions.values()
         for record in records
         if _definition_symbol_id(record) == occurrence.symbol_id
     ]
+    candidates.extend(result.project.definitions_for_symbol(occurrence.symbol_id))
+    candidates.extend(BUILTIN_SYMBOLS.get(occurrence.symbol_id, ()))
     candidates.extend(
         record
         for record in (
@@ -2431,11 +2485,9 @@ def definition_locations_for_occurrence(
     locations = []
     seen = set()
     records = [
-        record
-        for mapping in (result.local_definitions, result.project.definitions)
-        for bucket in mapping.values()
-        for record in bucket
+        record for bucket in result.local_definitions.values() for record in bucket
     ]
+    records.extend(result.project.definitions_for_symbol(occurrence.symbol_id))
     records.extend(result.label_definitions.values())
     records.extend(result.z_label_definitions.values())
     for record in records:
@@ -2456,7 +2508,7 @@ def definition_locations_for_occurrence(
 
 
 TEXT_DOCUMENT_SYNC_FULL = 1
-LSP_INDEX_CACHE_VERSION = 34
+LSP_INDEX_CACHE_VERSION = 35
 DEFAULT_COMPLETION_KIND_VALUE_SET = set(range(1, COMPLETION_KIND_TYPE_PARAMETER + 1))
 
 
@@ -2529,13 +2581,6 @@ def _cache_int(item: dict[str, Any], key: str) -> int:
     return value
 
 
-def _cache_bool(item: dict[str, Any], key: str) -> bool:
-    value = item.get(key)
-    if not isinstance(value, bool):
-        raise ValueError(key)
-    return value
-
-
 def _cache_file_name(value: Any) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise ValueError("file")
@@ -2556,10 +2601,7 @@ def _cache_dict_list(value: Any) -> list[dict[str, Any]]:
     return value
 
 
-def _cache_record_path(
-    item: dict[str, Any], directory: str, paths: dict[str, str]
-) -> str:
-    name = item.get("file")
+def _cache_record_path(name: str, directory: str, paths: dict[str, str]) -> str:
     path = paths.get(name)
     if path is None:
         path = os.path.join(directory, _cache_file_name(name))
@@ -2572,7 +2614,7 @@ def _definition_record_from_cache(
 ) -> DefinitionRecord:
     return DefinitionRecord(
         _cache_str(item, "name"),
-        _cache_record_path(item, directory, paths),
+        _cache_record_path(item.get("file"), directory, paths),
         _cache_int(item, "line"),
         _cache_str(item, "kind"),
         _cache_str(item, "symbol_id"),
@@ -2606,39 +2648,63 @@ def _source_diagnostic_from_cache(item: dict[str, Any], path: str) -> SourceDiag
 
 def _symbol_occurrence_to_cache(
     name_by_path: dict[str, str], occurrence: SymbolOccurrence
-) -> dict[str, Any]:
+) -> tuple[Any, ...]:
     name = name_by_path.get(occurrence.path)
     if name is None:
         name = _cache_file_name_from_path(occurrence.path)
         name_by_path[occurrence.path] = name
-    return {
-        "symbol_id": occurrence.symbol_id,
-        "file": name,
-        "line": occurrence.line,
-        "start_char": occurrence.start_char,
-        "end_char": occurrence.end_char,
-        "kind": occurrence.kind,
-        "semantic_type": occurrence.semantic_type,
-        "name": occurrence.name,
-        "definition": occurrence.definition,
-        "renamable": occurrence.renamable,
-    }
+    return (
+        occurrence.symbol_id,
+        name,
+        occurrence.line,
+        occurrence.start_char,
+        occurrence.end_char,
+        occurrence.kind,
+        occurrence.semantic_type,
+        occurrence.name,
+        occurrence.definition,
+        occurrence.renamable,
+    )
 
 
 def _symbol_occurrence_from_cache(
-    item: dict[str, Any], directory: str, paths: dict[str, str]
+    item: Any, directory: str, paths: dict[str, str]
 ) -> SymbolOccurrence:
+    if not isinstance(item, list):
+        raise ValueError("occurrence")
+    (
+        symbol_id,
+        file,
+        line,
+        start,
+        end,
+        kind,
+        semantic_type,
+        name,
+        definition,
+        renamable,
+    ) = item
+    if not (
+        isinstance(symbol_id, str)
+        and isinstance(file, str)
+        and type(line) is type(start) is type(end) is int
+        and isinstance(kind, str)
+        and isinstance(semantic_type, str)
+        and isinstance(name, str)
+        and type(definition) is type(renamable) is bool
+    ):
+        raise ValueError("occurrence")
     return SymbolOccurrence(
-        _cache_str(item, "symbol_id"),
-        _cache_record_path(item, directory, paths),
-        _cache_int(item, "line"),
-        _cache_int(item, "start_char"),
-        _cache_int(item, "end_char"),
-        _cache_str(item, "kind"),
-        _cache_str(item, "semantic_type"),
-        _cache_str(item, "name"),
-        _cache_bool(item, "definition"),
-        _cache_bool(item, "renamable"),
+        symbol_id,
+        _cache_record_path(file, directory, paths),
+        line,
+        start,
+        end,
+        kind,
+        semantic_type,
+        name,
+        definition,
+        renamable,
     )
 
 
@@ -2732,11 +2798,9 @@ def _read_lsp_index_cache_header(
     inputs: dict[str, dict[str, str]],
 ) -> dict[str, Any] | None:
     try:
-        with open_read(
-            _lsp_index_cache_path(directory, inputs), mode="r", encoding="utf-8"
-        ) as f:
-            data = json.loads(f.read())
-    except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+        with open_read(_lsp_index_cache_path(directory, inputs), mode="rb") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
         return None
     if not isinstance(data, dict):
         return None
@@ -2871,6 +2935,7 @@ class SSLanguageServer:
         self._input_buffer = bytearray()
         self.deferred_messages: deque[dict[str, Any]] = deque()
         self.documents: dict[str, DocumentState] = {}
+        self.open_document_locations: dict[str, tuple[str, str]] = {}
         self.project_cache: dict[str, ProjectCacheEntry] = {}
         self.native_lsp_project_cache: dict[
             str, tuple[tuple[Any, ...], Any, dict[str, Any] | None]
@@ -3306,14 +3371,16 @@ class SSLanguageServer:
         self.write_message(payload)
 
     def document_for_uri(self, uri: str) -> DocumentState | None:
-        return self._checked_document(document_key_for_uri(uri), uri_to_path(uri), uri)
+        path, key = self.open_document_locations.get(uri) or _document_location(uri)
+        return self._checked_document(key, path, uri)
 
     def document_for_path(self, path: str) -> DocumentState | None:
-        key = document_key_for_path(path)
-        doc = self.documents.get(key)
+        path = os.path.abspath(path)
+        doc = self.documents.get("file:" + _path_identity(path))
         if doc is not None and doc.path == path:
             return doc
-        return self._checked_document(key, os.path.abspath(path))
+        path = _file_document_path(path)
+        return self._checked_document("file:" + _path_identity(path), path)
 
     def _checked_document(
         self, key: str, path: str, uri: str | None = None
@@ -3345,7 +3412,9 @@ class SSLanguageServer:
         if doc is None:
             return _read_text(path, {})
         if not doc.opened and not doc.overlay_active:
-            doc = self.get_or_load_document(doc.uri)
+            doc = self.get_or_load_document(
+                doc.uri, location=(doc.path, "file:" + windows_filename_key(doc.path))
+            )
         return doc.text if doc is not None else ""
 
     def uri_for_path(self, path: str) -> str:
@@ -3354,9 +3423,12 @@ class SSLanguageServer:
             return doc.uri
         return path_to_uri(path)
 
-    def get_or_load_document(self, uri: str) -> DocumentState | None:
-        path = uri_to_path(uri)
-        key = document_key_for_uri(uri)
+    def get_or_load_document(
+        self, uri: str, *, location: tuple[str, str] | None = None
+    ) -> DocumentState | None:
+        path, key = (
+            location or self.open_document_locations.get(uri) or _document_location(uri)
+        )
         doc = self._checked_document(key, path, uri)
         state = _file_state(path)
         if state is None:
@@ -3416,8 +3488,14 @@ class SSLanguageServer:
             return ("missing",)
         return ("file", doc.file_state)
 
-    def path_source_signature(self, path: str) -> tuple[Any, ...]:
-        doc = self.document_for_path(path)
+    def path_source_signature(
+        self, path: str, *, canonical: bool = False
+    ) -> tuple[Any, ...]:
+        doc = (
+            self._checked_document("file:" + windows_filename_key(path), path)
+            if canonical
+            else self.document_for_path(path)
+        )
         if doc is not None and (doc.overlay_active or doc.opened):
             return self.document_source_signature(doc)
         state = _file_state(path)
@@ -3451,15 +3529,31 @@ class SSLanguageServer:
             "Checking workspace index cache...",
             5,
         )
+        if not os.path.isdir(_lsp_index_cache_root()):
+            return None
+        inc_digests = _project_inc_digests(project_entry.project)
+        lookup_inputs = {
+            "inc": inc_digests,
+            "ss": dict.fromkeys(
+                (
+                    os.path.basename(path)
+                    for path in _sorted_dir_paths(directory, {}, ".ss")
+                ),
+                "",
+            ),
+        }
+        self.report_work_done_progress("Reading cached workspace symbols...", 10)
+        data = _read_lsp_index_cache_header(directory, lookup_inputs)
+        if data is None:
+            return None
         snapshot = _lsp_index_cache_inputs(directory)
         if snapshot is None:
             return None
         inputs, disk_signatures = snapshot
-        if inputs["inc"] != _project_inc_digests(project_entry.project):
-            return None
-        self.report_work_done_progress("Reading cached workspace symbols...", 10)
-        data = _read_lsp_index_cache_header(directory, inputs)
-        if data is None:
+        if (
+            inputs["inc"] != inc_digests
+            or inputs["ss"].keys() != lookup_inputs["ss"].keys()
+        ):
             return None
         payload = data.get("link")
         if not isinstance(payload, dict):
@@ -3504,12 +3598,12 @@ class SSLanguageServer:
                 if name in raw_has_diagnostics_by_name:
                     return None
                 raw_has_diagnostics_by_name[name] = value
-            raw_occurrences_by_name: dict[str, list[dict[str, Any]]] = {}
+            raw_occurrences_by_name: dict[str, list[Any]] = {}
             for name, items in raw_occurrences.items():
                 name = _cache_file_name(name)
-                if name in raw_occurrences_by_name:
+                if name in raw_occurrences_by_name or not isinstance(items, list):
                     return None
-                raw_occurrences_by_name[name] = _cache_dict_list(items)
+                raw_occurrences_by_name[name] = items
             raw_unmapped_by_name: dict[str, list[str]] = {}
             for name, items in raw_unmapped.items():
                 name = _cache_file_name(name)
@@ -3539,7 +3633,9 @@ class SSLanguageServer:
                 if path is None:
                     continue
                 signature = disk_signatures.get(path)
-                if signature is None or signature != self.path_source_signature(path):
+                if signature is None or signature != self.path_source_signature(
+                    path, canonical=True
+                ):
                     continue
                 if not _cache_file_unchanged_in_inputs(payload_inputs, inputs, name):
                     continue
@@ -3692,9 +3788,11 @@ class SSLanguageServer:
         directory = os.path.abspath(directory or ".")
         return _sorted_dir_paths(directory, self.overlays_for_dir(directory), ".ss")
 
-    def analyze_base(self, doc: DocumentState) -> AnalysisResult:
-        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
-        project_entry = self.project_for_directory(directory)
+    def analyze_base(
+        self, doc: DocumentState, *, project_entry: ProjectCacheEntry | None = None
+    ) -> AnalysisResult:
+        if project_entry is None:
+            project_entry = self.project_for_directory(os.path.dirname(doc.path) or ".")
         signature = (project_entry.signature, self.document_source_signature(doc))
         if doc.base_analysis is not None and doc.base_analysis_signature == signature:
             self.report_work_done_progress("Using cached current-file analysis.", 55)
@@ -3714,9 +3812,13 @@ class SSLanguageServer:
         return doc.base_analysis
 
     def analyze_symbols(
-        self, doc: DocumentState, position: tuple[int, int] | None = None
+        self,
+        doc: DocumentState,
+        position: tuple[int, int] | None = None,
+        *,
+        project_entry: ProjectCacheEntry | None = None,
     ) -> AnalysisResult:
-        result = self.analyze_base(doc)
+        result = self.analyze_base(doc, project_entry=project_entry)
         if (
             not doc.path.lower().endswith(".inc")
             or any(item.severity == SEVERITY_ERROR for item in result.diagnostics)
@@ -3727,7 +3829,9 @@ class SSLanguageServer:
             )
         ):
             return result
-        entry = self.link_diagnostics_for_directory(os.path.dirname(doc.path))
+        entry = self.link_diagnostics_for_directory(
+            os.path.dirname(doc.path), project_entry=project_entry
+        )
         return replace(
             result,
             occurrences=[
@@ -3804,10 +3908,11 @@ class SSLanguageServer:
         return out
 
     def link_diagnostics_for_directory(
-        self, directory: str
+        self, directory: str, *, project_entry: ProjectCacheEntry | None = None
     ) -> DirectoryLinkDiagnosticsEntry:
         directory = os.path.abspath(directory or ".")
-        project_entry = self.project_for_directory(directory)
+        if project_entry is None:
+            project_entry = self.project_for_directory(directory)
         inc_paths = [item[0] for item in project_entry.signature]
         scene_paths = self.scene_paths(directory)
         paths = inc_paths + scene_paths
@@ -3837,7 +3942,8 @@ class SSLanguageServer:
         assert entry is not None
         removed_paths = entry.file_has_diagnostics.keys() - set(paths)
         inc_changed = rebuild_all or any(
-            entry.file_signatures.get(path) != self.path_source_signature(path)
+            entry.file_signatures.get(path)
+            != self.path_source_signature(path, canonical=True)
             for path in inc_paths
         )
         if inc_changed:
@@ -3846,7 +3952,8 @@ class SSLanguageServer:
             dirty_paths = [
                 path
                 for path in scene_paths
-                if entry.file_signatures.get(path) != self.path_source_signature(path)
+                if entry.file_signatures.get(path)
+                != self.path_source_signature(path, canonical=True)
             ]
         if not rebuild_all and not removed_paths and not dirty_paths:
             return entry
@@ -3874,7 +3981,10 @@ class SSLanguageServer:
         try:
             scan_docs: list[tuple[str, DocumentState]] = []
             for path in dirty_paths:
-                doc = self.get_or_load_document(path_to_uri(path))
+                doc = self.get_or_load_document(
+                    Path(path).as_uri(),
+                    location=(path, "file:" + windows_filename_key(path)),
+                )
                 if doc is None:
                     entry.file_signatures.pop(path, None)
                     entry.file_digests.pop(path, None)
@@ -4229,9 +4339,9 @@ class SSLanguageServer:
         if not isinstance(raw_text, str):
             return
         text = _normalize_source_text(raw_text)
-        path = uri_to_path(uri)
-        key = document_key_for_uri(uri)
-        doc = self.get_or_load_document(uri)
+        location = self.open_document_locations.get(uri) or _document_location(uri)
+        path, key = location
+        doc = self.get_or_load_document(uri, location=location)
         old_signature: tuple[Any, ...] | None = None
         if doc is None:
             doc = DocumentState(
@@ -4264,6 +4374,7 @@ class SSLanguageServer:
         )
         doc.open_uris[uri] = (doc.text, doc.version)
         self.documents[key] = doc
+        self.open_document_locations[uri] = location
         self.publish_diagnostics(doc)
         if old_signature != self.document_source_signature(doc):
             if doc.path.lower().endswith(".inc"):
@@ -4362,7 +4473,11 @@ class SSLanguageServer:
         uri = _text_document_uri_from_params(params)
         if uri is None:
             return
-        doc = self.documents.get(document_key_for_uri(uri))
+        location = self.open_document_locations.get(uri)
+        if location is None:
+            return
+        _, key = location
+        doc = self.documents.get(key)
         if doc is None or uri not in doc.open_uris:
             return
         if not self.pull_diagnostics_enabled:
@@ -4374,14 +4489,17 @@ class SSLanguageServer:
                 }
             )
         old_signature = self.document_source_signature(doc)
+        del self.open_document_locations[uri]
         del doc.open_uris[uri]
         doc.opened = bool(doc.open_uris)
         if doc.opened:
             doc.uri, (doc.text, doc.version) = next(reversed(doc.open_uris.items()))
-            doc.path = uri_to_path(doc.uri)
+            doc.path, _ = self.open_document_locations[doc.uri]
             doc.overlay_active = doc.text != doc.disk_text
         else:
             doc.version = None
+            if key.startswith("file:"):
+                doc.uri = Path(doc.path).as_uri()
             if doc.overlay_active or doc.file_state != _file_state(doc.path):
                 old_signature = self.sync_document_from_disk(doc)
         if old_signature != self.document_source_signature(doc):
@@ -4679,7 +4797,11 @@ class SSLanguageServer:
             return
         line, character = position
         self.report_work_done_progress("Analyzing symbol at cursor...", 20)
-        result = self.analyze_symbols(doc, (line, character))
+        directory = os.path.dirname(doc.path) or "."
+        project_entry = self.project_for_directory(directory)
+        result = self.analyze_symbols(
+            doc, (line, character), project_entry=project_entry
+        )
         occurrence = occurrence_at_position(
             result,
             line,
@@ -4690,7 +4812,9 @@ class SSLanguageServer:
             self.respond(msg_id, result=[])
             return
         self.report_work_done_progress("Loading workspace references...", 75)
-        entry = self.link_diagnostics_for_directory(os.path.dirname(doc.path) or ".")
+        entry = self.link_diagnostics_for_directory(
+            directory, project_entry=project_entry
+        )
         refs = entry.occurrences.get(occurrence.symbol_id, [])
         if not include_declaration:
             refs = [item for item in refs if not item.definition]

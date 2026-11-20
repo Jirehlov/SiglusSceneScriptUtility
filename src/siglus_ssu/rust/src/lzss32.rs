@@ -193,6 +193,7 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
     if !src.len().is_multiple_of(4) {
         return Err("lzss32: source size is not a multiple of 4".to_string());
     }
+    let org = u32::try_from(src.len()).map_err(|_| "LZSS source size exceeds 32 bits")?;
     let src_cnt = src.len() / 4;
     let chunks = src.as_chunks::<4>().0;
     let mut dwords = Vec::with_capacity(src_cnt);
@@ -248,8 +249,7 @@ pub fn pack(src: &[u8]) -> Result<Vec<u8>, String> {
 
     pack_buf.extend_from_slice(&pack_data[..pack_data_count]);
 
-    let arc = pack_buf.len() as u32;
-    let org = src.len() as u32;
+    let arc = u32::try_from(pack_buf.len()).map_err(|_| "LZSS packed size exceeds 32 bits")?;
     pack_buf[0..4].copy_from_slice(&arc.to_le_bytes());
     pack_buf[4..8].copy_from_slice(&org.to_le_bytes());
     Ok(pack_buf)

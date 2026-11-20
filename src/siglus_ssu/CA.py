@@ -49,6 +49,7 @@ def copy_replace_tree(rt):
 
 
 def add_replace_tree(rt, name, rep):
+    rt.pop("prefix_pattern", None)
     n = rt
     for ch in name:
         if isinstance(n, _ReplaceTreeCopy):
@@ -80,6 +81,9 @@ def build_replace_tree(replacements):
 def _replacement_prefix_pattern(tree):
     if not tree:
         return "(?!)"
+    pattern = tree.get("prefix_pattern")
+    if pattern is not None:
+        return pattern
     pending = [(tree, "")]
     prefixes = []
     while pending:
@@ -88,7 +92,9 @@ def _replacement_prefix_pattern(tree):
             prefixes.append(re.escape(prefix))
         else:
             pending.extend((child, prefix + ch) for ch, child in node["c"].items())
-    return "|".join(prefixes) if prefixes else "(?!)"
+    pattern = "|".join(prefixes) if prefixes else "(?!)"
+    tree["prefix_pattern"] = pattern
+    return pattern
 
 
 def search_replace_tree(rt, text, pos):

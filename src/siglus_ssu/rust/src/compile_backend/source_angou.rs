@@ -27,7 +27,7 @@ pub fn encrypt_source(
     {
         return Err("invalid source angou constants".to_string());
     }
-    let mut packed = crate::lzss::pack(data, false);
+    let mut packed = crate::lzss::pack(data, false)?;
     let packed_size = packed.len();
     crate::xor::cycle_inplace(&mut packed, &config.easy_code, config.easy_index);
     let digest = crate::smd5::digest(&packed);
@@ -37,6 +37,8 @@ pub fn encrypt_source(
     write_u32(&mut smd5_code, 64, n0x40);
 
     let name_size = name.encode_utf16().count() * 2;
+    let name_size_field =
+        u32::try_from(name_size).map_err(|_| "original source name is too large")?;
 
     let mask_width = (read_u32(&smd5_code, config.mask_w_smd5_i) as usize
         % config.mask_w_sur.max(1))
@@ -71,7 +73,7 @@ pub fn encrypt_source(
     let mut output = vec![0u8; config.header_size + 4 + name_size + map_bytes * 2];
     write_u32(&mut output, 0, 1);
     output[4..config.header_size].copy_from_slice(&smd5_code[..config.header_size - 4]);
-    write_u32(&mut output, config.header_size, name_size as u32);
+    write_u32(&mut output, config.header_size, name_size_field);
     let name_offset = config.header_size + 4;
     let data_offset_1 = name_offset + name_size;
     let name_bytes = &mut output[name_offset..data_offset_1];

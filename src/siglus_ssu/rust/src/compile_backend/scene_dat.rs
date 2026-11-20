@@ -96,32 +96,41 @@ fn push_utf16_raw(out: &mut Vec<u8>, text: &str) {
     }
 }
 
-pub(super) fn push_indexed_strings(out: &mut Vec<u8>, strings: &[impl AsRef<str>]) -> usize {
+pub(super) fn checked_i32(field: &str, value: usize) -> Result<i32, String> {
+    i32::try_from(value)
+        .map_err(|_| format!("{field} exceeds the signed 32-bit format limit: {value}"))
+}
+
+pub(super) fn push_indexed_strings(
+    out: &mut Vec<u8>,
+    strings: &[impl AsRef<str>],
+) -> Result<usize, String> {
     let index_ofs = out.len();
     let string_ofs = index_ofs + strings.len() * 8;
+    checked_i32("string data offset", string_ofs)?;
     out.resize(string_ofs, 0);
-    let mut ofs = 0i32;
     for (index, text) in strings.iter().enumerate() {
         let start = out.len();
+        let ofs = checked_i32("string offset", (start - string_ofs) / 2)?;
         push_utf16_raw(out, text.as_ref());
-        let len = ((out.len() - start) / 2) as i32;
+        let len = checked_i32("string length", (out.len() - start) / 2)?;
         let entry = index_ofs + index * 8;
         out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());
         out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
-        ofs = ofs.wrapping_add(len);
     }
-    string_ofs
+    Ok(string_ofs)
 }
 
-fn section(
+pub(super) fn section(
     header: &mut HashMap<&'static str, i32>,
     ofs_key: &'static str,
     cnt_key: &'static str,
     ofs: usize,
     cnt: usize,
-) {
-    header.insert(ofs_key, ofs as i32);
-    header.insert(cnt_key, cnt as i32);
+) -> Result<(), String> {
+    header.insert(ofs_key, checked_i32(ofs_key, ofs)?);
+    header.insert(cnt_key, checked_i32(cnt_key, cnt)?);
+    Ok(())
 }
 
 pub fn build_scn_dat(
@@ -129,10 +138,13 @@ pub fn build_scn_dat(
     input: &SceneDatInput,
     string_xor_multiplier: u16,
     string_units: impl FnOnce(usize),
-) -> Vec<u8> {
-    let mut out = vec![0u8; layout.header_size];
+) -> Result<Vec<u8>, String> {
     let mut header: HashMap<&'static str, i32> = HashMap::new();
-    header.insert("header_size", layout.header_size as i32);
+    header.insert(
+        "header_size",
+        checked_i32("header_size", layout.header_size)?,
+    );
+    let mut out = vec![0u8; layout.header_size];
 
     let strings = &input.str_list;
     let n = strings.len();
@@ -144,22 +156,21 @@ pub fn build_scn_dat(
         "str_index_cnt",
         index_ofs,
         n,
-    );
-    out.resize(index_ofs + n * 8, 0);
-    let string_data_ofs = out.len();
-    section(&mut header, "str_list_ofs", "str_cnt", string_data_ofs, n);
-    let mut ofs = 0i32;
+    )?;
+    let string_data_ofs = index_ofs + n * 8;
+    section(&mut header, "str_list_ofs", "str_cnt", string_data_ofs, n)?;
+    out.resize(string_data_ofs, 0);
     for &orig in order {
         let start = out.len();
+        let ofs = checked_i32("scene string offset", (start - string_data_ofs) / 2)?;
         let key = u32::from(string_xor_multiplier).wrapping_mul(orig as u32);
         for unit in strings[orig].encode_utf16() {
             push_u16(&mut out, ((unit as u32 ^ key) & 0xffff) as u16);
         }
-        let len = ((out.len() - start) / 2) as i32;
+        let len = checked_i32("scene string length", (out.len() - start) / 2)?;
         let entry = index_ofs + orig * 8;
         out[entry..entry + 4].copy_from_slice(&ofs.to_le_bytes());
         out[entry + 4..entry + 8].copy_from_slice(&len.to_le_bytes());
-        ofs = ofs.wrapping_add(len);
     }
 
     string_units((out.len() - string_data_ofs) / 2);
@@ -170,7 +181,7 @@ pub fn build_scn_dat(
         "scn_size",
         out.len(),
         input.scn_bytes.len(),
-    );
+    )?;
     out.extend_from_slice(&input.scn_bytes);
 
     section(
@@ -179,7 +190,7 @@ pub fn build_scn_dat(
         "label_cnt",
         out.len(),
         input.label_list.len(),
-    );
+    )?;
     push_i32_array(&mut out, &input.label_list);
 
     section(
@@ -188,7 +199,7 @@ pub fn build_scn_dat(
         "z_label_cnt",
         out.len(),
         input.z_label_list.len(),
-    );
+    )?;
     push_i32_array(&mut out, &input.z_label_list);
 
     section(
@@ -197,7 +208,7 @@ pub fn build_scn_dat(
         "cmd_label_cnt",
         out.len(),
         input.cmd_label_list.len(),
-    );
+    )?;
     push_i32_pairs(&mut out, &input.cmd_label_list);
 
     section(
@@ -206,7 +217,7 @@ pub fn build_scn_dat(
         "scn_prop_cnt",
         out.len(),
         input.scn_prop_list.len(),
-    );
+    )?;
     push_i32_pairs(&mut out, &input.scn_prop_list);
 
     section(
@@ -215,15 +226,15 @@ pub fn build_scn_dat(
         "scn_prop_name_index_cnt",
         out.len(),
         input.scn_prop_name_list.len(),
-    );
-    let string_ofs = push_indexed_strings(&mut out, &input.scn_prop_name_list);
+    )?;
+    let string_ofs = push_indexed_strings(&mut out, &input.scn_prop_name_list)?;
     section(
         &mut header,
         "scn_prop_name_list_ofs",
         "scn_prop_name_cnt",
         string_ofs,
         input.scn_prop_name_list.len(),
-    );
+    )?;
 
     section(
         &mut header,
@@ -231,7 +242,7 @@ pub fn build_scn_dat(
         "scn_cmd_cnt",
         out.len(),
         input.scn_cmd_list.len(),
-    );
+    )?;
     push_i32_array(&mut out, &input.scn_cmd_list);
 
     section(
@@ -240,15 +251,15 @@ pub fn build_scn_dat(
         "scn_cmd_name_index_cnt",
         out.len(),
         input.scn_cmd_name_list.len(),
-    );
-    let string_ofs = push_indexed_strings(&mut out, &input.scn_cmd_name_list);
+    )?;
+    let string_ofs = push_indexed_strings(&mut out, &input.scn_cmd_name_list)?;
     section(
         &mut header,
         "scn_cmd_name_list_ofs",
         "scn_cmd_name_cnt",
         string_ofs,
         input.scn_cmd_name_list.len(),
-    );
+    )?;
 
     section(
         &mut header,
@@ -256,15 +267,15 @@ pub fn build_scn_dat(
         "call_prop_name_index_cnt",
         out.len(),
         input.call_prop_name_list.len(),
-    );
-    let string_ofs = push_indexed_strings(&mut out, &input.call_prop_name_list);
+    )?;
+    let string_ofs = push_indexed_strings(&mut out, &input.call_prop_name_list)?;
     section(
         &mut header,
         "call_prop_name_list_ofs",
         "call_prop_name_cnt",
         string_ofs,
         input.call_prop_name_list.len(),
-    );
+    )?;
 
     section(
         &mut header,
@@ -272,7 +283,7 @@ pub fn build_scn_dat(
         "namae_cnt",
         out.len(),
         input.namae_list.len(),
-    );
+    )?;
     push_i32_array(&mut out, &input.namae_list);
 
     section(
@@ -281,7 +292,7 @@ pub fn build_scn_dat(
         "read_flag_cnt",
         out.len(),
         input.read_flag_list.len(),
-    );
+    )?;
     push_i32_array(&mut out, &input.read_flag_list);
 
     for (bytes, field) in out.chunks_mut(4).zip(layout.fields) {
@@ -293,5 +304,5 @@ pub fn build_scn_dat(
         let len = bytes.len();
         bytes.copy_from_slice(&value[..len]);
     }
-    out
+    Ok(out)
 }

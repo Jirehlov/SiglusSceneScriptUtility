@@ -226,7 +226,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | 禁用 LZSS 压缩、外层 XOR 加密和原始源码嵌入，不关闭场景字符串 XOR。不能与 `--tmp` 同用。 |
 | `--no-lzss` | 禁用 LZSS 压缩和原始源码嵌入，保留脚本加密。不能与 `--tmp` 同用。 |
 | `--serial` | 依次编译场景脚本。打包可以使用多个工作线程。 |
-| `--max-workers N` | 场景并行编译的最大工作数，必须为正整数。默认使用可用 CPU 数的一半，限制为 1–16。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
+| `--max-workers N` | 场景并行编译的最大工作数，必须为正整数。默认每阶段使用可用 CPU 数的一半，限制为 1–16。自动分配线程的全量编译中，Rust 后端可以让编译和压缩共用两个阶段分配的线程。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
 | `--set-shuffle SEED` | 设置字符串表乱序种子（`0`–`0xFFFFFFFF`，十进制或十六进制，默认 `1`），并启用串行编译。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 复用指定目录进行增量编译。串行构建从首个变化的场景开始重新编译，以保持字符串表顺序。并发构建需要各用一个缓存目录。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
 | `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，复现 `<test_dir>` 中首个场景的字符串表顺序，再验证全部场景。可选种子后必须保留三个路径参数。不能与 `--tmp` 或 `--gei` 同用。 |
@@ -296,9 +296,9 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--disam` | 额外写出 `<scene>.dat.txt` 反汇编，不能与 `--gei` 同用。 |
 | `--decompile` | 写出反汇编及重建的 `decompiled/<scene>.ss`，并按需生成 `decompiled/__decompiled.inc`。需要包含包级元数据的完整场景 PCK，不接受单个 `.dat` 或目录。不能与 `--gei` 同用。 |
 | `--angou VALUE` | 指定[解密密钥来源](#解密密钥)。 |
-| `--gei` | 从 `Gameexe.dat` 或其父目录还原 `Gameexe.ini`。已有同名文件时，依次尝试 `Gameexe_1.ini` 等文件名。 |
+| `--gei` | 从 `Gameexe.dat` 或所在目录还原 `Gameexe.ini`。给定目录时，程序按固定的 Windows 文件名大小写映射查找，并对大小写冲突发出警告。已有同名文件时，依次尝试 `Gameexe_1.ini` 等文件名。 |
 
-在 `Output:` 后打印提取目录。要编辑内嵌源码，请在该目录中修改，再直接将该目录传给 `-c`。
+在 `Output:` 后打印提取目录。提取 PCK 时，程序会给重名的输出加上数字后缀，并报出不符合目标文件系统规则的文件名。要编辑内嵌源码，请在该目录中修改，再直接将该目录传给 `-c`。
 
 如果场景和包内密钥文件都叫 `暗号.dat`，密钥会提取到 `.siglus-ssu-keys/`。编译和回包时可以从该目录读取密钥。
 
@@ -670,7 +670,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--c` | 创建 G00，或根据 `--refer` 更新。 |
 | `--o`、`-o`、`--output`、`--output-dir` | 合并输出目录，默认当前目录。 |
 | `--type N`、`--t N` | 指定创建类型，或校验更新时的参考类型，仅用于 `--c`。 |
-| `--refer <ref_g00 \| ref_dir>` | 更新现有 G00。目录输入需参考目录，单文件输入可用参考文件或目录。省略输出路径时会覆盖参考文件。 |
+| `--refer <ref_g00 \| ref_dir>` | 更新现有 G00。目录输入须指定参考目录。单文件输入可指定参考文件或目录。给定参考目录时，程序按固定的 Windows 文件名大小写映射查找，并对大小写冲突发出警告。省略输出路径时会覆盖选中的参考文件。 |
 | `:cutNNN` | 合并时指定 type2 cut，例如 `sprite.g00:cut002`。 |
 
 目录提取和创建仅扫描当前层。生成新的 type2 布局时，程序会校验已有 cut PNG 的可读性和未裁剪尺寸。校验失败时，程序会报错。
@@ -679,7 +679,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 
 不带 `--refer` 时，PNG 默认创建 type0，JPEG 默认创建 type3。创建或更新 type0 时，程序会将 alpha 设为 255。创建 type2 请使用 `--type 2` 和 `.type2.json` 布局，不支持创建 type1。
 
-省略输出路径时，创建结果写在输入旁，更新结果覆盖参考文件。输出须指向不同的文件，不能覆盖源图片、布局文件或其他目标使用的参考图。更新同一输出目录时，后启动的命令最多等待 30 秒。更新中断后，请先确认没有更新在运行，再删除 `.siglus-g00.lockdir`。
+省略输出路径时，创建结果写在输入旁，更新结果覆盖参考文件。输出须指向不同的文件，不能覆盖源图片、布局文件或其他目标使用的参考图。原地更新时，程序会在替换前核对参考文件的原始内容。更新同一输出目录时，后启动的命令最多等待 30 秒。更新中断后，请先确认没有更新在运行，再删除 `.siglus-g00.lockdir`。
 
 更新前请备份原始资源。JSON 布局不能与 `--refer` 同用。通过参考目录更新单个 cut 时，请将替换图片命名为 `<basename>_cut###.png`。
 
@@ -758,7 +758,7 @@ siglus-ssu -s --play <input_file.(nwa | owp | ogg) | input_dir> [Gameexe.dat | G
 
 #### OVK 命名
 
-单条目提取为 `<basename>.ogg`，多条目提取为 `<basename>_<entry_no>.ogg`。创建或提取 OWP 和 OVK 时，Ogg 流必须完整。提取 OVK 时，程序会读完归档的全部条目再写出文件。如果写入失败，程序会撤销本次对该归档输出文件的更改。
+单条目提取为 `<basename>.ogg`，多条目提取为 `<basename>_<entry_no>.ogg`。创建或提取 OWP 和 OVK 时，Ogg 流必须完整。提取 OVK 时，程序会读完归档的全部条目再写出文件。发现索引变化时，程序会停止处理该归档并保留已有的输出文件。遇到写入失败时，程序会撤销本次对该归档输出文件的更改。
 
 创建时，至少两个 `<basename>_<N>.ogg` 会合并为 `<basename>.ovk`。其他文件，包括只有一份的编号文件，均单独生成 OWP。创建 OVK 和循环播放时，串联 Ogg 音频的各段须使用相同采样率。循环播放还要求各段的编码和声道数一致，FLAC 还要求各段位深一致。对于 Vorbis、Opus、Speex 和 FLAC，程序从各段的实际音频起点计算采样数。
 
@@ -821,7 +821,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 
 创建时，已存在的目录、以分隔符结尾或不带扩展名的输出均按目录处理。指定输出文件时请使用 `.omv` 扩展名。
 
-覆盖现有文件需要在 `Overwrite? [y/N]` 提示后输入 `y` 或 `yes`。收到拒绝覆盖的答复，或遇到转换期间才创建的目标文件时，命令会保留该文件并报错。批量提取会继续处理其他文件。
+覆盖现有文件需要在 `Overwrite? [y/N]` 提示后输入 `y` 或 `yes`。收到拒绝覆盖的答复，或遇到转换期间才创建的目标文件时，命令会保留该文件并报错。构建索引后的 Theora 数据变动会导致 OMV 创建失败。批量提取会继续处理其他文件。
 
 #### 像素布局与 `.ogv` 输入
 

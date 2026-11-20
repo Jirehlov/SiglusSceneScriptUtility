@@ -226,7 +226,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--no-angou` | Disable LZSS compression, outer XOR encryption, and original-source embedding. Does not disable scene-string XOR. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable LZSS compression and original-source embedding, retaining script encryption. Cannot be combined with `--tmp`. |
 | `--serial` | Compile scene scripts sequentially. Packaging can use multiple workers. |
-| `--max-workers N` | Positive maximum worker count for parallel scene compilation. Default: half the available CPUs, limited to 1–16. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
+| `--max-workers N` | Positive maximum worker count for parallel scene compilation. The default per-stage allocation is half the available CPUs, limited to 1–16. In a full build with automatic worker counts, Rust can combine the allocations for compilation and compression in one worker pool. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
 | `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Serial builds reuse cached scenes up to the first change and rebuild the rest to preserve string-table order. Concurrent builds cannot share the cache. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Search seeds from `seed0` (default `0`) through `0xFFFFFFFF` to reproduce the first scene's string-table order in `<test_dir>`, then verify all scenes. Requires three paths after the optional seed. Cannot be combined with `--tmp` or `--gei`. |
@@ -296,9 +296,9 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
 | `--decompile` | Write disassembly and reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
 | `--angou VALUE` | Specify a [decryption key source](#decryption-keys). |
-| `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. If the output already exists, use `Gameexe_1.ini` and so on. |
+| `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. If the output already exists, use `Gameexe_1.ini` and so on. |
 
-The extraction directory is printed after `Output:`. To edit embedded sources, work in that directory and pass it directly to `-c`.
+The extraction directory is printed after `Output:`. PCK extraction adds numeric suffixes to resolve output-name collisions and reports filenames that are invalid on the output filesystem. To edit embedded sources, work in the extraction directory and pass it directly to `-c`.
 
 If a scene and its embedded key file are both named `暗号.dat`, the key goes in `.siglus-ssu-keys/`. Compilation and repacking can read the key from there.
 
@@ -670,7 +670,7 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--c` | Create a new G00, or update from `--refer`. |
 | `--o`, `-o`, `--output`, `--output-dir` | Merge output directory; default is the current directory. |
 | `--type N`, `--t N` | Choose the created type, or validate the reference type during updates. Only valid with `--c`. |
-| `--refer <ref_g00 \| ref_dir>` | Update an existing G00. Directory input requires a reference directory; a single input accepts a reference file or directory. With no output path, the reference is overwritten. |
+| `--refer <ref_g00 \| ref_dir>` | Update an existing G00. Directory input requires a reference directory. A single input accepts a reference file or directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. With no output path, the selected reference is overwritten. |
 | `:cutNNN` | Select a type2 cut for merging, for example `sprite.g00:cut002`. |
 
 Extraction and creation scan directory inputs at the immediate level only. When creating a new type2 layout, extraction fails if an existing cut PNG is unreadable or has a different size from the untrimmed cut.
@@ -679,7 +679,7 @@ Extraction and creation scan directory inputs at the immediate level only. When 
 
 Without `--refer`, PNG creates type0 and JPEG creates type3. Creating or updating type0 sets alpha to 255. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
 
-With no output path, creation writes beside the input and updates overwrite the reference. Outputs cannot overwrite a source image, layout, or another target's reference, and must resolve to distinct files. Concurrent updates to the same output directory wait up to 30 seconds for the active update. After an interrupted update, remove `.siglus-g00.lockdir` only after confirming no update is running.
+With no output path, creation writes beside the input and updates overwrite the reference. Outputs cannot overwrite a source image, layout, or another target's reference, and must resolve to distinct files. An in-place update verifies the reference bytes immediately before replacement. Concurrent updates to the same output directory wait up to 30 seconds for the active update. After an interrupted update, remove `.siglus-g00.lockdir` only after confirming no update is running.
 
 Back up original assets before updating them. JSON layouts cannot be combined with `--refer`. To update an individual cut through a reference directory, name its replacement `<basename>_cut###.png`.
 
@@ -758,7 +758,7 @@ Trimming fails if decoding fails or the selected loop region contains no audio s
 
 #### OVK Naming
 
-Extraction writes `<basename>.ogg` for one entry, or `<basename>_<entry_no>.ogg` for multiple entries. Creating or extracting OWP and OVK requires complete Ogg streams. OVK extraction reads all entries before publishing files and rolls back that archive's outputs if publishing fails.
+Extraction writes `<basename>.ogg` for one entry, or `<basename>_<entry_no>.ogg` for multiple entries. Creating or extracting OWP and OVK requires complete Ogg streams. OVK extraction reads all entries before publishing files. A changed index stops publication for that archive. The tool rolls back the archive's outputs if publishing fails.
 
 Creation groups at least two `<basename>_<N>.ogg` files into `<basename>.ovk`. Other files, including a lone numbered file, become individual OWP files. OVK creation and loop playback require a constant sample rate across the links of chained Ogg audio. Loop playback also requires the same codec and channel count across links, and the same bit depth for FLAC. For Vorbis, Opus, Speex, and FLAC, sample counts start at each link's audio origin.
 
@@ -821,7 +821,7 @@ siglus-ssu -v --c <input_ogv> <output_omv | output_dir> [--refer ref.omv] [--mod
 
 Creation treats its output as a directory if it exists as one, ends in a separator, or has no extension. Use a `.omv` extension for an explicit output file.
 
-Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. The command preserves the file and reports failure if you decline or another process fills a previously unused target during conversion. Batch extraction continues with other files.
+Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. The command preserves the file and reports failure if you decline or another process fills a previously unused target during conversion. OMV creation also fails if the selected Theora data changes after indexing. Batch extraction continues with other files.
 
 #### Pixel Layouts and `.ogv` Inputs
 

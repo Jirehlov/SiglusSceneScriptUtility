@@ -15,6 +15,8 @@ from .native_ops import (
 )
 from .common import (
     directory_lock,
+    find_named_path,
+    find_named_paths,
     first_option_token,
     is_option_token,
     open_atomic_output,
@@ -648,25 +650,18 @@ def _dump_type2_layout_json(out_path: Path, canvas_w: int, canvas_h: int, cuts_m
         output.write("\n")
 
 
-def _resolve_refer_base(refer_arg, base_name: str, dir_input: bool):
-    if refer_arg is None:
-        return None
+def _resolve_refer_base(refer_arg, base_name: str):
     try:
-        rp = Path(resolve_read_path(refer_arg))
-    except (FileNotFoundError, NotADirectoryError):
-        raise ValueError(f"missing refer g00: {refer_arg}") from None
-    if dir_input:
-        if not rp.is_dir():
-            raise ValueError("--refer must be a directory when input is a directory")
-        candidate = rp / f"{base_name}.g00"
-    elif rp.is_dir():
-        candidate = rp / f"{base_name}.g00"
-    else:
-        candidate = rp
-    try:
-        return Path(resolve_read_path(candidate, kind="file"))
-    except (FileNotFoundError, NotADirectoryError):
-        raise ValueError(f"missing refer g00: {candidate}") from None
+        reference = Path(resolve_read_path(refer_arg))
+        if reference.is_dir():
+            name = f"{base_name}.g00"
+            selected = find_named_path(reference, name)
+            if not selected:
+                raise FileNotFoundError(reference / name)
+            reference = Path(selected)
+        return Path(resolve_read_path(reference, kind="file"))
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise ValueError(f"missing refer g00: {exc}") from None
 
 
 def _resolve_create_out(inp: Path, out_arg, base_name: str):
@@ -915,16 +910,11 @@ def _find_layout_sidecar(inp_p: Path):
         if suf.startswith(".") and inp_p.suffix:
             candidates.append(inp_p.with_suffix(inp_p.suffix + suf))
         candidates.append(inp_p.with_suffix(suf))
-    seen = set()
-    for c in candidates:
-        key = str(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        try:
-            return Path(resolve_read_path(c, kind="file"))
-        except (FileNotFoundError, NotADirectoryError):
-            continue
+    paths = find_named_paths(inp_p.parent, (path.name for path in candidates))
+    for candidate in candidates:
+        selected = paths.get(windows_filename_key(candidate.name))
+        if selected is not None:
+            return Path(selected)
     return None
 
 
@@ -1387,17 +1377,9 @@ def _print_create_report(
     print(f"    Result: created ({len(new_bytes)} bytes)")
 
 
-def _resolve_compose_dir(
-    out_arg,
-    default_dir: Path,
-    require_existing: bool = False,
-    missing_msg: str | None = None,
-):
+def _resolve_compose_dir(out_arg, default_dir: Path):
     if out_arg is None:
-        out_dir = Path(default_dir)
-        if require_existing and (not out_dir.exists() or not out_dir.is_dir()):
-            raise ValueError(missing_msg or "output directory is missing")
-        return out_dir
+        return default_dir
     out_dir = Path(out_arg)
     if out_dir.exists() and out_dir.is_file():
         raise ValueError("output must be a directory when input is a directory")
@@ -1407,7 +1389,7 @@ def _resolve_compose_dir(
     return out_dir
 
 
-def _create_g00_files(targets, type_opt):
+def _create_g00_files(targets, type_opt, *, use_sidecars=True):
     plans = []
     source_paths = {}
     for inp, out_path in targets:
@@ -1417,7 +1399,10 @@ def _create_g00_files(targets, type_opt):
         layout = None
         validate_input_paths([inp], seen=source_paths, allow_same_file=True)
         if kind == 2:
-            layout_path = _find_layout_sidecar(inp) if image is not None else inp
+            if image is None:
+                layout_path = inp
+            elif use_sidecars:
+                layout_path = _find_layout_sidecar(inp)
             if layout_path is not None:
                 layout = _load_type2_layout_json(layout_path, default_source_hint=image)
                 validate_input_paths(
@@ -1443,12 +1428,15 @@ def _update_g00_file(base_path, out_path, updates, type_opt):
     parent.mkdir(parents=True, exist_ok=True)
     with directory_lock(parent / ".siglus-g00.lockdir", timeout=30):
         check_output_inputs([out_path], (image for image, _ in updates))
+        in_place = same_file_path(out_path, base_path)
         base_bytes = read_bytes(base_path)
         report = {}
         data = _apply_updates_to_g00(base_bytes, updates, type_opt, report)
         changed = data != base_bytes
-        if changed or not same_file_path(out_path, base_path):
-            with open_atomic_output(out_path) as output:
+        if changed or not in_place:
+            with open_atomic_output(
+                out_path, expected=base_bytes if in_place else None
+            ) as output:
                 output.write(data)
         _print_update_report(base_path, report, base_bytes, data)
         print(f"    Output: {out_path}")
@@ -1467,11 +1455,7 @@ def _run_compose_file(ip: Path, out_arg, type_opt, refer_arg=None):
         base_name, cut_idx = _layout_base_name(ip), None
     else:
         return 2
-    base_path = (
-        _resolve_refer_base(refer_arg, base_name, dir_input=False)
-        if do_update
-        else None
-    )
+    base_path = _resolve_refer_base(refer_arg, base_name) if do_update else None
     out_path = (
         base_path
         if do_update and out_arg is None
@@ -1549,36 +1533,25 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
                 raise ValueError(
                     f"create mode does not support multi-cut target: {base_name}"
                 )
+    total = len(groups)
     if do_update:
         refer_dir = Path(resolve_read_path(refer_arg, kind="dir"))
-        out_dir = _resolve_compose_dir(
-            out_arg,
-            refer_dir,
-            require_existing=True,
-            missing_msg="--refer must be a directory when input is a directory",
-        )
+        out_dir = _resolve_compose_dir(out_arg, refer_dir)
         print(
-            f"Compose(update): {ip} refer={refer_arg} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
+            f"Compose(update): {ip} refer={refer_arg} -> {out_dir} ({len(imgs)} images, {total} targets)"
         )
-    else:
-        out_dir = _resolve_compose_dir(out_arg, ip)
-        print(
-            f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {len(groups)} targets)"
+        references = find_named_paths(
+            refer_dir, (f"{base_name}.g00" for base_name, _ in groups.values())
         )
-    targets = [
-        (base_name, out_dir / f"{base_name}.g00", updates)
-        for base_name, updates in groups.values()
-    ]
-    total = len(targets)
-    if do_update:
-        plans = [
-            (
-                _resolve_refer_base(refer_dir, base_name, dir_input=True),
-                out_path,
-                updates,
-            )
-            for base_name, out_path, updates in targets
-        ]
+        plans = []
+        for base_name, updates in groups.values():
+            name = f"{base_name}.g00"
+            reference = references.get(windows_filename_key(name))
+            if reference is None:
+                raise ValueError(f"missing refer g00: {refer_dir / name}")
+            base_path = Path(reference)
+            out_path = base_path if out_arg is None else out_dir / name
+            plans.append((base_path, out_path, updates))
         check_output_inputs(
             (out_path for _, out_path, _ in plans),
             imgs,
@@ -1590,8 +1563,17 @@ def _run_compose_dir(ip: Path, out_arg, type_opt, refer_arg=None):
             changed += _update_g00_file(base_path, out_path, updates, type_opt)
         print(f"Done. Targets={total} UPDATED={changed} SAME={total - changed}")
     else:
+        out_dir = _resolve_compose_dir(out_arg, ip)
+        print(
+            f"Compose(create): {ip} -> {out_dir} ({len(imgs)} images, {total} targets)"
+        )
         _create_g00_files(
-            ((updates[0][0], out_path) for _, out_path, updates in targets), type_opt
+            (
+                (updates[0][0], out_dir / f"{base_name}.g00")
+                for base_name, updates in groups.values()
+            ),
+            type_opt,
+            use_sidecars=False,
         )
         print(f"Done. Targets={total} CREATED={total}")
     return 0

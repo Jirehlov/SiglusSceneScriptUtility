@@ -296,6 +296,8 @@ def _lzss_matches(src, window_size, max_match_len):
 def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
     if not src:
         return b""
+    if len(src) > 0xFFFFFFFF:
+        raise ValueError("LZSS source size exceeds 32 bits")
     INDEX_BITS = 12
     BREAK_EVEN = 1
     LENGTH_BITS = 16 - INDEX_BITS
@@ -326,6 +328,8 @@ def _py_lzss_pack(src: bytes, suppress_empty_tail_group: bool = False) -> bytes:
             pack_data[0] = 0
     if pack_data_count > 1 or (pack_data_count == 1 and not suppress_empty_tail_group):
         pack_buf.extend(pack_data[:pack_data_count])
+    if len(pack_buf) > 0xFFFFFFFF:
+        raise ValueError("LZSS packed size exceeds 32 bits")
     struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
     return bytes(pack_buf)
 
@@ -335,6 +339,8 @@ def _py_lzss32_pack(src: bytes) -> bytes:
         return b""
     if (len(src) & 3) != 0:
         raise ValueError("lzss32: source size is not a multiple of 4")
+    if len(src) > 0xFFFFFFFF:
+        raise ValueError("LZSS source size exceeds 32 bits")
     src_cnt = len(src) // 4
     dwords = struct.unpack(f"<{src_cnt}I", src)
     INDEX_BITS = 12
@@ -369,6 +375,8 @@ def _py_lzss32_pack(src: bytes) -> bytes:
             pack_data_count = 1
             pack_data[0] = 0
     pack_buf.extend(pack_data[:pack_data_count])
+    if len(pack_buf) > 0xFFFFFFFF:
+        raise ValueError("LZSS packed size exceeds 32 bits")
     struct.pack_into("<II", pack_buf, 0, len(pack_buf), len(src))
     return bytes(pack_buf)
 

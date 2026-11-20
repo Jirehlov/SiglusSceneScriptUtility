@@ -291,7 +291,7 @@ def walk_read_directory(path):
         for entry in entries:
             if entry.is_dir():
                 dirs.append(entry)
-            else:
+            elif entry.is_file():
                 files.append(entry.name)
         yield directory, [entry.name for entry in dirs], files
         children = [
