@@ -362,34 +362,32 @@ fn lex_scene_text_inner<const WITH_SPANS: bool>(
             atom.atom_type = codes.val_int;
             atom.opt = to_i32(value);
         } else if ch == '\'' {
-            let len = if chars.get(i + 1) == Some(&'\\') {
-                2
-            } else {
-                1
-            };
+            let len = if chars[i + 1] == '\\' { 2 } else { 1 };
+            if chars[i + len] == '\0' || chars[i + len + 1] != '\'' {
+                return Err(LexError { line: cur_line });
+            }
             atom.atom_type = codes.val_int;
-            atom.opt = to_i32(*chars.get(i + len).unwrap_or(&'\0') as i64);
+            atom.opt = to_i32(chars[i + len] as i64);
             i += 2 + len;
         } else if ch == '"' {
             i += 1;
             let mut value = String::new();
-            while i < chars.len() && chars[i] != '"' {
-                if chars[i] == '\\' {
-                    if chars.get(i + 1) == Some(&'n') {
-                        value.push('\n');
-                    } else if let Some(next) = chars.get(i + 1) {
-                        value.push(*next);
-                    }
-                    i += 2;
-                } else {
-                    value.push(chars[i]);
+            while chars[i] != '"' {
+                let mut part = chars[i];
+                if part == '\\' {
                     i += 1;
+                    part = if chars[i] == 'n' { '\n' } else { chars[i] };
                 }
+                if part == '\0' {
+                    return Err(LexError { line: cur_line });
+                }
+                value.push(part);
+                i += 1;
             }
             str_list.push(value);
             atom.atom_type = codes.val_str;
             atom.opt = (str_list.len() - 1) as i32;
-            i += usize::from(i < chars.len());
+            i += 1;
         } else if ch == '#' {
             i += 1;
             let start = i;

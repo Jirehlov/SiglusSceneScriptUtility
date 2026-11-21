@@ -4,7 +4,7 @@ use pyo3::types::{
     PyAny, PyBool, PyBytes, PyDict, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple,
 };
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
@@ -397,6 +397,26 @@ struct DecompileHints {
     inc_lines: Vec<SourceText>,
     analyses: HashMap<Key, Arc<SceneAnalysis>>,
 }
+#[derive(Default)]
+struct ParsedOffsets {
+    values: HashSet<i64>,
+    order: Vec<i64>,
+}
+
+impl ParsedOffsets {
+    fn insert(&mut self, offset: i64) {
+        if self.values.insert(offset) {
+            self.order.push(offset);
+        }
+    }
+
+    fn rewind(&mut self, count: usize) {
+        for offset in self.order.drain(count..) {
+            self.values.remove(&offset);
+        }
+    }
+}
+
 struct DecompilerState {
     scene: Arc<DecompileScene>,
     hints: Arc<DecompileHints>,
@@ -410,9 +430,9 @@ struct DecompilerState {
     target_counts: HashMap<i64, i64>,
     conditional_target_counts: HashMap<i64, i64>,
     scene_inc_lines: Vec<SourceText>,
-    suppressed: RefCell<std::collections::HashSet<i64>>,
-    placed: RefCell<std::collections::HashSet<i64>>,
-    for_headers: RefCell<std::collections::HashSet<i64>>,
+    suppressed: RefCell<ParsedOffsets>,
+    placed: RefCell<ParsedOffsets>,
+    for_headers: RefCell<ParsedOffsets>,
 }
 struct ReadCommand {
     jump: usize,
@@ -2798,7 +2818,6 @@ struct Annotation {
     expr: Option<ExpressionText>,
     condition: Option<SourceText>,
     size_expr: Option<SourceText>,
-    call_name: Option<SourceText>,
     arguments: Vec<SourceText>,
     size: Option<i64>,
 }
@@ -3723,7 +3742,6 @@ impl ExpressionState {
                                 }
                             }
                         }
-                        out.call_name = Some(name.clone());
                         let args = source_join(&args, ", ");
                         expr = Some(source_concat(&[&name.chars, &[40], &args.chars, &[41]]));
                         out.expr = expr.clone().map(ExpressionText::from);
@@ -4951,6 +4969,7 @@ impl DecompileScene {
         let placed = instance
             .placed
             .borrow()
+            .values
             .contains(&self.events[index].offset);
         Ok(labels
             .iter()
@@ -5000,9 +5019,9 @@ fn new_decompiler(
         target_counts: HashMap::new(),
         conditional_target_counts: HashMap::new(),
         scene_inc_lines: vec![],
-        suppressed: RefCell::new(std::collections::HashSet::new()),
-        placed: RefCell::new(std::collections::HashSet::new()),
-        for_headers: RefCell::new(std::collections::HashSet::new()),
+        suppressed: RefCell::default(),
+        placed: RefCell::default(),
+        for_headers: RefCell::default(),
     };
     native_prepare_analysis(rt, &mut instance, record_get(&bundle, "dat_path")?.key()?)?;
     if analysis_only {
@@ -5838,6 +5857,7 @@ fn native_line_postprocess(
                 }
             }
             let mut out: Vec<SourceLine> = vec![];
+            let mut body_normalized = false;
             for (index, line) in lines.into_iter().enumerate() {
                 let stripped = trim_source_chars(&line.text.chars);
                 if !line.text.chars.is_empty()
@@ -5880,6 +5900,16 @@ fn native_line_postprocess(
                         .last_mut()
                         .filter(|previous| previous.target == line.target)
                 {
+                    if body_normalized {
+                        if !stripped.is_empty() {
+                            let text = Arc::make_mut(&mut previous.text);
+                            text.chars.push(9);
+                            text.chars.extend_from_slice(stripped);
+                            text.has_line_feed |= stripped.contains(&10);
+                            text.hash = None;
+                        }
+                        continue;
+                    }
                     let previous_label = label_definition(&previous.text);
                     let current_label = label_definition(&line.text);
                     if !previous.text.chars.is_empty()
@@ -5892,8 +5922,9 @@ fn native_line_postprocess(
                             label.label_end,
                             body_start,
                             true,
-                            &line.text.chars,
+                            stripped,
                         ) {
+                            body_normalized = true;
                             continue;
                         }
                     }
@@ -5904,17 +5935,19 @@ fn native_line_postprocess(
                             .iter()
                             .position(|code| !is_space(*code))
                             .unwrap_or(previous.text.chars.len());
-                        merge_source_body(
-                            &mut previous.text,
-                            indent,
-                            indent,
-                            false,
-                            &line.text.chars,
-                        );
+                        merge_source_body(&mut previous.text, indent, indent, false, stripped);
+                        let text = &previous.text;
+                        body_normalized = text.chars.last().is_some_and(|code| !is_space(*code))
+                            && label_definition(text).is_none_or(|label| {
+                                label.tail.is_none_or(|start| {
+                                    text.chars.get(start).is_none_or(|code| !is_space(*code))
+                                })
+                            });
                         continue;
                     }
                 }
                 out.push(line);
+                body_normalized = false;
             }
             for line in &mut out {
                 if line.text.hash.is_none() {
@@ -5933,8 +5966,9 @@ fn append_source_text(text: &mut SourceText, suffix: &[u32]) {
         .iter()
         .rposition(|code| !is_space(*code))
         .map_or(0, |index| index + 1);
-    let has_line_feed =
-        (text.has_line_feed && text.chars[..end].contains(&10)) || suffix.contains(&10);
+    let has_line_feed = (text.has_line_feed
+        && (end == text.chars.len() || text.chars[..end].contains(&10)))
+        || suffix.contains(&10);
     let text = Arc::make_mut(text);
     text.chars.truncate(end);
     text.chars.extend_from_slice(suffix);
@@ -5957,15 +5991,6 @@ fn merge_source_body(
         .iter()
         .rposition(|code| !is_space(*code))
         .map_or(left_start, |index| left_start + index + 1);
-    let right_start = right
-        .iter()
-        .position(|code| !is_space(*code))
-        .unwrap_or(right.len());
-    let right_end = right[right_start..]
-        .iter()
-        .rposition(|code| !is_space(*code))
-        .map_or(right_start, |index| right_start + index + 1);
-    let right = &right[right_start..right_end];
     let has_left = left_start < left_end;
     let has_body = has_left || !right.is_empty();
     if label && !has_body {
@@ -5976,7 +6001,7 @@ fn merge_source_body(
         || right.contains(&10);
     let text = Arc::make_mut(text);
     let target = prefix + usize::from(label);
-    if has_left {
+    if has_left && left_start != target {
         text.chars.copy_within(left_start..left_end, target);
     }
     let end = target + left_end - left_start;
@@ -6447,7 +6472,7 @@ fn native_late_line_pass(
                         out.push(line);
                     } else if line.target != targets.get(alias).copied().flatten()
                         && !source_label_offset(scene, &definition_token(&line.text, label))
-                            .is_some_and(|offset| headers.contains(&offset))
+                            .is_some_and(|offset| headers.values.contains(&offset))
                     {
                         line.text =
                             Arc::new(Text::new(line.text.chars[..label.label_end].to_vec()));
@@ -7763,6 +7788,7 @@ impl<'a> SourceParser<'a> {
                 .instance
                 .suppressed
                 .borrow()
+                .values
                 .contains(&self.scene.events[start].offset);
             if (if suppressed {
                 labels.iter().any(|label| label.z)
@@ -8171,133 +8197,144 @@ impl<'a> SourceParser<'a> {
         if guard >= stop {
             return Ok(None);
         }
-        let offset = self.scene.events[goto].offset;
-        let exit = self.scene.events[guard]
-            .target
-            .ok_or_else(|| Failure("for target missing".into()))?;
-        let Some((out_index, body, inline)) = self
-            .guarded_body(
-                executor.clone(),
-                guard,
-                exit,
-                loop_offset,
-                context,
-                self.scene.events[start].line,
-            )
-            .await?
-        else {
+        if first != goto && self.scene.for_blockers[goto] != self.scene.for_blockers[first] {
             return Ok(None);
-        };
-        let line = self.scene.events[goto].line;
-        let mut head_event = goto;
-        let mut prefix = vec![];
-        let mut inline_prefix = vec![];
-        let mut init = vec![];
-        if first != goto {
-            if self.scene.for_blockers[goto] != self.scene.for_blockers[first] {
+        }
+        let offsets = [
+            &self.instance.suppressed,
+            &self.instance.placed,
+            &self.instance.for_headers,
+        ];
+        let counts = offsets.map(|group| group.borrow().order.len());
+        let carrier = self.instance.string_pool_carrier.get();
+        let result = async {
+            let offset = self.scene.events[goto].offset;
+            let exit = self.scene.events[guard]
+                .target
+                .ok_or_else(|| Failure("for target missing".into()))?;
+            let Some((out_index, body, inline)) = self
+                .guarded_body(
+                    executor.clone(),
+                    guard,
+                    exit,
+                    loop_offset,
+                    context,
+                    self.scene.events[start].line,
+                )
+                .await?
+            else {
                 return Ok(None);
-            }
-            let mut header = None;
-            let mut nl = self.scene.next_nl[start];
-            while nl + 1 < goto {
-                if self.scene.events[nl + 1].op == Opcode::Nl
-                    && self.scene.events[nl].line == line
-                    && self.scene.events[nl + 1].line == line
-                    && (nl == start
-                        || self.scene.events[nl - 1].op != Opcode::Nl
-                        || self.scene.events[nl - 1].line != line)
-                {
-                    header = Some(nl);
+            };
+            let line = self.scene.events[goto].line;
+            let mut head_event = goto;
+            let mut prefix = vec![];
+            let mut inline_prefix = vec![];
+            let mut init = vec![];
+            if first != goto {
+                let mut header = None;
+                let mut nl = self.scene.next_nl[start];
+                while nl + 1 < goto {
+                    if self.scene.events[nl + 1].op == Opcode::Nl
+                        && self.scene.events[nl].line == line
+                        && self.scene.events[nl + 1].line == line
+                        && (nl == start
+                            || self.scene.events[nl - 1].op != Opcode::Nl
+                            || self.scene.events[nl - 1].line != line)
+                    {
+                        header = Some(nl);
+                    }
+                    nl = self.scene.next_nl[nl + 1];
                 }
-                nl = self.scene.next_nl[nl + 1];
+                let split = if let Some(header) = header {
+                    let Some((lines, texts, _)) =
+                        self.split_region(first, self.scene.events[header].offset, context, line)?
+                    else {
+                        return Ok(None);
+                    };
+                    prefix = lines;
+                    inline_prefix = texts;
+                    head_event = header;
+                    self.split_region(header + 1, offset, context, line)?
+                } else {
+                    self.split_region(first, offset, context, line)?
+                };
+                let Some((lines, texts, inline_start)) = split else {
+                    return Ok(None);
+                };
+                prefix.extend(lines);
+                init = texts;
+                if header.is_none() {
+                    if init.len() > 1 {
+                        inline_prefix = init[..init.len() - 1].to_vec();
+                        init = init[init.len() - 1..].to_vec();
+                    }
+                    if let Some(index) = inline_start {
+                        head_event = index;
+                    }
+                }
             }
-            let split = if let Some(header) = header {
-                let Some((lines, texts, _)) =
-                    self.split_region(first, self.scene.events[header].offset, context, line)?
+            let loop_index = goto + 1;
+            let loop_lines = if self.scene.events[loop_index].offset >= condition_offset {
+                vec![]
+            } else {
+                self.suppress(loop_offset);
+                let Some(lines) = self
+                    .inline_block(executor.clone(), loop_index, condition_offset, context)
+                    .await?
                 else {
                     return Ok(None);
                 };
-                prefix = lines;
-                inline_prefix = texts;
-                head_event = header;
-                self.split_region(header + 1, offset, context, line)?
-            } else {
-                self.split_region(first, offset, context, line)?
+                lines
             };
-            let Some((lines, texts, inline_start)) = split else {
-                return Ok(None);
-            };
-            prefix.extend(lines);
-            init = texts;
-            if header.is_none() {
-                if init.len() > 1 {
-                    inline_prefix = init[..init.len() - 1].to_vec();
-                    init = init[init.len() - 1..].to_vec();
-                }
-                if let Some(index) = inline_start {
-                    head_event = index;
-                }
+            for offset in [loop_offset, condition_offset, exit] {
+                self.suppress(offset);
             }
-        }
-        let loop_index = goto + 1;
-        let loop_lines = if self.scene.events[loop_index].offset >= condition_offset {
-            vec![]
-        } else {
-            let added = !self.instance.suppressed.borrow().contains(&loop_offset);
-            if added {
-                self.suppress(loop_offset);
+            let mut head = source_concat(&[
+                &source("for(").chars,
+                &source_join(&init, "\t").chars,
+                &source(", ").chars,
+                &self.expression(guard, context, true).chars,
+                &source(", ").chars,
+                &source_join(&loop_lines, "\t").chars,
+                &[41],
+            ]);
+            if !inline_prefix.is_empty() {
+                inline_prefix.push(head);
+                head = source_join(&inline_prefix, "\t");
             }
-            let Some(lines) = self
-                .inline_block(executor.clone(), loop_index, condition_offset, context)
-                .await?
-            else {
-                if added {
-                    self.instance.suppressed.borrow_mut().remove(&loop_offset);
-                }
-                return Ok(None);
-            };
-            lines
-        };
-        for offset in [loop_offset, condition_offset, exit] {
-            self.suppress(offset);
+            let multiline = inline.is_none();
+            let mut out = wrap_source_block(head, body, inline);
+            if multiline {
+                out.splice(
+                    out.len() - 1..,
+                    self.with_event(
+                        out_index - 1,
+                        vec![SourceLine {
+                            text: source("}"),
+                            target: None,
+                        }],
+                    )?,
+                );
+            }
+            if head_event != start {
+                prefix = self.with_event(start, prefix)?;
+            }
+            prefix.extend(self.with_event(head_event, out)?);
+            let (out, next) = self.append_trampolines(prefix, out_index, end, context)?;
+            self.instance
+                .for_headers
+                .borrow_mut()
+                .insert(self.scene.events[head_event].offset);
+            Ok(Some((out, next)))
         }
-        let mut head = source_concat(&[
-            &source("for(").chars,
-            &source_join(&init, "\t").chars,
-            &source(", ").chars,
-            &self.expression(guard, context, true).chars,
-            &source(", ").chars,
-            &source_join(&loop_lines, "\t").chars,
-            &[41],
-        ]);
-        if !inline_prefix.is_empty() {
-            inline_prefix.push(head);
-            head = source_join(&inline_prefix, "\t");
+        .await;
+        if !matches!(result, Ok(Some(_))) {
+            for (group, count) in offsets.into_iter().zip(counts) {
+                group.borrow_mut().rewind(count);
+            }
+            self.instance.string_pool_carrier.set(carrier);
         }
-        let multiline = inline.is_none();
-        let mut out = wrap_source_block(head, body, inline);
-        if multiline {
-            out.splice(
-                out.len() - 1..,
-                self.with_event(
-                    out_index - 1,
-                    vec![SourceLine {
-                        text: source("}"),
-                        target: None,
-                    }],
-                )?,
-            );
-        }
-        if head_event != start {
-            prefix = self.with_event(start, prefix)?;
-        }
-        prefix.extend(self.with_event(head_event, out)?);
-        let (out, next) = self.append_trampolines(prefix, out_index, end, context)?;
-        self.instance
-            .for_headers
-            .borrow_mut()
-            .insert(self.scene.events[head_event].offset);
-        Ok(Some((out, next)))
+        result
     }
 
     async fn match_switch<'s>(

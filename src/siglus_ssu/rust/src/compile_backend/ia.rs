@@ -20,7 +20,6 @@ pub struct IncProperty {
 #[derive(Clone)]
 pub struct CommandArg {
     pub id: i32,
-    pub name: String,
     pub form: String,
     pub def_int: i32,
     pub def_exist: bool,
@@ -523,7 +522,6 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         let (form, mut i, mut line) = self.parse_form(pos, line, line, iad)?;
         let mut arg = CommandArg {
             id: 0,
-            name: String::new(),
             form,
             def_int: 0,
             def_exist: false,
@@ -1239,7 +1237,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 .iter()
                 .map(|arg| ArgInfo {
                     id: arg.id,
-                    name: arg.name.clone(),
+                    name: String::new(),
                     form: iad
                         .form_table
                         .form_code_of(&arg.form)

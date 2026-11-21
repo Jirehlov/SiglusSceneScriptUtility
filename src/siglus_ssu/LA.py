@@ -248,23 +248,24 @@ def la_analize(pcad):
             a["opt"] = to_i32(v)
         elif c == "'":
             ln = 2 if s[i + 1] == "\\" else 1
+            if s[i + ln] == "\0" or s[i + ln + 1] != "'":
+                return err(cur_line, "Unclosed single quote.")
             a["type"] = C.LA_T["VAL_INT"]
             a["opt"] = to_i32(ord(s[i + ln]))
             i += 2 + ln
         elif c == '"':
             i += 1
             r = []
-            while s[i] != '"':
-                if s[i] == "\\":
-                    if s[i + 1] == "n":
-                        r.append("\n")
-                        i += 2
-                    else:
-                        r.append(s[i + 1])
-                        i += 2
-                else:
-                    r.append(s[i])
+            while (ch := s[i]) != '"':
+                if ch == "\\":
                     i += 1
+                    ch = s[i]
+                    if ch == "n":
+                        ch = "\n"
+                if ch == "\0":
+                    return err(cur_line, "Unclosed double quote.")
+                r.append(ch)
+                i += 1
             str_list.append("".join(r))
             a["type"] = C.LA_T["VAL_STR"]
             a["opt"] = len(str_list) - 1

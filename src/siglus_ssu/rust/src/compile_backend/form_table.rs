@@ -44,7 +44,6 @@ pub struct FormTable {
     pub call_base: Option<Arc<FormInfo>>,
     pub form_code: Arc<HashMap<String, i32>>,
     pub call_form: String,
-    pub command_element_type: i32,
 }
 
 impl FormTable {
@@ -53,7 +52,6 @@ impl FormTable {
         Ok(Self {
             form_code: Arc::new(form_code),
             call_form: constants.form_name("FM_CALL")?.to_string(),
-            command_element_type: constants.element_type("ET_COMMAND")?,
             form_map_by_name: HashMap::new(),
             call_base: None,
         })
@@ -106,6 +104,7 @@ impl FormTable {
 
     pub fn from_constants(constants: &CompileConstants) -> Result<Self, String> {
         let mut table = Self::new(constants)?;
+        let command_element_type = constants.element_type("ET_COMMAND")?;
         let void_form = constants.form_id_of(constants.form_name("FM_VOID")?)?;
         for form in constants.form_ids.keys() {
             table.ensure_form(form);
@@ -137,7 +136,7 @@ impl FormTable {
             table.add(
                 &source.parent,
                 ElementInfo {
-                    kind: if source.kind == table.command_element_type {
+                    kind: if source.kind == command_element_type {
                         ElementKind::Command
                     } else {
                         ElementKind::Property

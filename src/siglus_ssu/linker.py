@@ -101,7 +101,6 @@ def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
         key=lambda row: (-row["dat_bytes"], ascii_lower(row["name"]), row["name"]),
     )
     ctx["stats"]["binary_size_stats"] = {
-        "lzss_mode": lzss_mode,
         "dat_bytes": total_dat,
         "scn_bytes": total_scn,
         "lzss_bytes": total_lzss,
@@ -246,7 +245,7 @@ def link_pack(ctx):
         if ctx.get("inc_list"):
             iad = build_ia_data(ctx)
         else:
-            iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
+            iad = build_empty_ia_data(new_replace_tree())
         ctx["ia_data"] = iad
     inc_props = iad["property_list"]
     inc_cmds = iad["commands"].values()

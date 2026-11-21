@@ -289,9 +289,9 @@ def _line_names_text(events):
 
 def _line_voice_aliases(events, voice_index):
     if events[voice_index].get("_call_name") not in (
-        "global.koe",
-        "global.koe_play_wait",
-        "global.koe_play_wait_key",
+        f"{C.FM_GLOBAL}.koe",
+        f"{C.FM_GLOBAL}.koe_play_wait",
+        f"{C.FM_GLOBAL}.koe_play_wait_key",
     ):
         return set()
     text_indices = [

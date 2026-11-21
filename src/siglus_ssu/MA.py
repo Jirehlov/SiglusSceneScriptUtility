@@ -939,7 +939,7 @@ class MA:
                         "TNMSERR_MA_SEL_CANNOT_USE_IN_ARG",
                         (n.get("name") or {}).get("atom"),
                     )
-                aid = s.check_arg_list(n, info, n.get("arg_list"))
+                aid = s.check_arg_list(info, n.get("arg_list"))
                 if aid < 0:
                     return s.error(
                         "TNMSERR_MA_ARG_TYPE_NO_MATCH",
@@ -1006,14 +1006,14 @@ class MA:
         n["node_form"] = (n.get("exp") or {}).get("node_form")
         return 1
 
-    def check_arg_list(s, element, info, real):
+    def check_arg_list(s, info, real):
         real = real if isinstance(real, dict) else {"arg": [], "named_arg_cnt": 0}
         amap = (info or {}).get("arg_map", {})
         for k in sorted(amap.keys()):
             if k == -1:
                 continue
             if s.check_no_named_arg_list(amap[k], real):
-                if not s.check_named_arg_list(element, info, real):
+                if not s.check_named_arg_list(info, real):
                     return -1
                 return k
         return -1
@@ -1068,16 +1068,13 @@ class MA:
                 ex["tmp_form"] = forms[i]
         return 1
 
-    def check_named_arg_list(s, element, info, real):
+    def check_named_arg_list(s, info, real):
         na = int((real or {}).get("named_arg_cnt", 0))
         if na == 0:
             return 1
         amap = (info or {}).get("arg_map", {})
         if -1 not in amap:
-            return s.error(
-                "TNMSERR_MA_CMD_NO_NAMED_ARG_LIST",
-                (element or {}).get("name", {}).get("atom"),
-            )
+            return 0
         tmp = amap[-1]["arg_list"]
         args = real.get("arg", [])
         named = args[len(args) - na :]
@@ -1091,10 +1088,7 @@ class MA:
                     no = j
                     break
             if no < 0:
-                return s.error(
-                    "TNMSERR_MA_CMD_ILLEGAL_NAMED_ARG",
-                    (a.get("name") or {}).get("atom"),
-                )
+                return 0
             tf = tmp[no].get("form")
             rf = forms[i]
             if rf != tf:
@@ -1104,10 +1098,7 @@ class MA:
                 elif tf == C.FM_STR and rf == C.FM_STRREF:
                     forms[i] = C.FM_STR
                 else:
-                    return s.error(
-                        "TNMSERR_MA_ARG_TYPE_NO_MATCH",
-                        (a.get("name") or {}).get("atom"),
-                    )
+                    return 0
             a["name_id"] = int(tmp[no].get("id", 0) or 0)
         for i, a in enumerate(named):
             ex = a.get("exp")

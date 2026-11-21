@@ -131,7 +131,6 @@ def _merge_int_section(dst, src, keys):
 
 def empty_source_stat_counts():
     return {
-        "scene_count": 0,
         "preprocess": {
             "ifdef": 0,
             "elseifdef": 0,
@@ -144,17 +143,12 @@ def empty_source_stat_counts():
             "blocks": 0,
             "ends": 0,
             "lines": 0,
-            "scene_properties": 0,
-            "scene_commands": 0,
         },
         "directives": {
             "global_inc_properties": 0,
             "global_inc_commands": 0,
             "scene_inc_properties": 0,
             "scene_inc_commands": 0,
-            "property_directives_total": 0,
-            "command_directives_total": 0,
-            "command_definitions": 0,
             "global_command_implementations": 0,
             "scene_command_definitions": 0,
         },
@@ -176,8 +170,6 @@ def empty_source_stat_counts():
             "generated": 0,
         },
         "expressions": {
-            "unary_ops": 0,
-            "binary_ops": 0,
             "max_depth": 0,
             "named_args": 0,
             "default_arg_fills": 0,
@@ -191,7 +183,6 @@ def empty_source_stat_counts():
 
 
 def merge_source_stat_counts(dst, src):
-    dst["scene_count"] += src["scene_count"]
     dp = dst["preprocess"]
     sp = src["preprocess"]
     _merge_int_section(
@@ -201,7 +192,7 @@ def merge_source_stat_counts(dst, src):
     _merge_int_section(
         dst["inc"],
         src["inc"],
-        ("blocks", "ends", "lines", "scene_properties", "scene_commands"),
+        ("blocks", "ends", "lines"),
     )
     _merge_int_section(
         dst["directives"],
@@ -211,9 +202,6 @@ def merge_source_stat_counts(dst, src):
             "global_inc_commands",
             "scene_inc_properties",
             "scene_inc_commands",
-            "property_directives_total",
-            "command_directives_total",
-            "command_definitions",
             "global_command_implementations",
             "scene_command_definitions",
         ),
@@ -232,9 +220,7 @@ def merge_source_stat_counts(dst, src):
     )
     de = dst["expressions"]
     se = src["expressions"]
-    _merge_int_section(
-        de, se, ("unary_ops", "binary_ops", "named_args", "default_arg_fills")
-    )
+    _merge_int_section(de, se, ("named_args", "default_arg_fills"))
     de["max_depth"] = max(de["max_depth"], se["max_depth"])
     de["assign_ops"].update(se["assign_ops"])
     de["unary_op_kinds"].update(se["unary_op_kinds"])
@@ -315,19 +301,15 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
         sen = pending.pop()
         nt = sen["node_type"]
         if nt == C.NT_S_LABEL:
-            statements["label"] += 1
             label_defs.add(sen["label"]["label"]["atom"]["opt"])
             continue
         if nt == C.NT_S_Z_LABEL:
-            statements["z_label"] += 1
             z_defs.add(sen["z_label"]["z_label"]["atom"]["opt"])
             continue
         if nt == C.NT_S_DEF_PROP:
             statements["property_def"] += 1
             continue
         if nt == C.NT_S_DEF_CMD:
-            statements["command_def"] += 1
-            directives["command_definitions"] += 1
             node = sen["def_cmd"]
             if 0 <= node["cmd_id"] < inc_command_cnt:
                 directives["global_command_implementations"] += 1
@@ -384,7 +366,6 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
                 queue_block(cs["block"])
             continue
         if nt == C.NT_S_ASSIGN:
-            statements["assign"] += 1
             op = sen["assign"]["equal"]["atom"]["opt"]
             symbol = "=" if op == C.OP_NONE else operator_tables[3][op] + "="
             expressions["assign_ops"][symbol] += 1
@@ -394,18 +375,14 @@ def _collect_statement_stats(root, plad, stats, inc_command_cnt, operator_tables
             expressions["max_depth"] = max(expressions["max_depth"], 1)
             continue
         if nt == C.NT_S_TEXT:
-            statements["text"] += 1
             strings["dialogue_text_lines"] += 1
             continue
         if nt == C.NT_S_NAME:
-            statements["name"] += 1
             name = plad["str_list"][sen["name"]["name"]["atom"]["opt"]]
             strings["speaker_names"] += 1
             if name:
                 stats["_unique_speakers"].add(name)
             continue
-        if nt == C.NT_S_EOF:
-            statements["eof"] += 1
 
     return label_defs, z_defs
 
@@ -436,12 +413,10 @@ def _collect_tree_stats(root, stats, operator_tables):
                     labels["refs"] += 1
                     label_refs.add(atom["opt"])
             if nt == C.NT_EXP_OPR1:
-                expressions["unary_ops"] += 1
                 expressions["unary_op_kinds"][
                     operator_tables[2][node["opr"]["atom"]["opt"]]
                 ] += 1
             elif nt == C.NT_EXP_OPR2:
-                expressions["binary_ops"] += 1
                 expressions["binary_op_kinds"][
                     operator_tables[3][node["opr"]["atom"]["opt"]]
                 ] += 1
@@ -464,7 +439,6 @@ def _collect_tree_stats(root, stats, operator_tables):
 
 def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     stats = empty_source_stat_counts()
-    stats["scene_count"] = 1
     pre = pcad["preprocess_stats"]
     out_pre = stats["preprocess"]
     for key in ("ifdef", "elseifdef", "else", "endif", "excluded_lines"):
@@ -474,13 +448,9 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     inc["blocks"] = pre["inc_start"]
     inc["ends"] = pre["inc_end"]
     inc["lines"] = pre["inc_lines"]
-    inc["scene_properties"] = pre["scene_inc_properties"]
-    inc["scene_commands"] = pre["scene_inc_commands"]
     directives = stats["directives"]
-    directives["scene_inc_properties"] = inc["scene_properties"]
-    directives["scene_inc_commands"] = inc["scene_commands"]
-    directives["property_directives_total"] = inc["scene_properties"]
-    directives["command_directives_total"] = inc["scene_commands"]
+    directives["scene_inc_properties"] = pre["scene_inc_properties"]
+    directives["scene_inc_commands"] = pre["scene_inc_commands"]
     strings = plad["str_list"]
     utf16_units = sum(len(x.encode("utf-16le", "surrogatepass")) // 2 for x in strings)
     stats["strings"]["entries"] = len(strings)
@@ -540,7 +510,6 @@ def build_ia_data(ctx):
         ctx["inc_list"] = inc_list
     iad = build_empty_ia_data(
         new_replace_tree(),
-        ctx.get("defined_names"),
         track_macro_usage=bool(ctx.get("stats", {}).get("full_compile_stats")),
     )
     ia2 = []
@@ -1701,8 +1670,6 @@ def compile_one_pipeline(
     ctx,
     ss_path,
     ia_data=None,
-    debug_outputs=False,
-    tmp_path=None,
     log=True,
     record_time=False,
 ):
@@ -1729,8 +1696,8 @@ def compile_one_pipeline(
         raise RuntimeError(fmt_err("UNK_ERROR", ca.get_error_line()))
     if record_time:
         record_stage_time(ctx, "CA", time.time() - t)
-    tmp = tmp_path or ctx.get("tmp_path") or "."
-    if debug_outputs and ctx.get("debug_outputs"):
+    tmp = ctx.get("tmp_path") or "."
+    if ctx.get("debug_outputs"):
         write_text(
             os.path.join(tmp, "ca", nm + ".txt"), pcad.get("scn_text", ""), enc=enc
         )
@@ -1855,7 +1822,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
         futures = {}
         lzss_started = None
         for p in ss_files:
-            res = compile_one_pipeline(ctx, p, debug_outputs=True, record_time=True)
+            res = compile_one_pipeline(ctx, p, record_time=True)
             merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
             used_global_macros.update(res["used_global_macros"])
             merge_source_stat_counts(source_stats, res["source_stats"])

@@ -397,8 +397,6 @@ def extract_one(path_s: str, out_s: str, trim: bool = False):
                             "Use a separate output directory for untrimmed extraction."
                         )
                     image.load()
-            if ci >= len(cuts_meta):
-                cuts_meta.extend([None] * (ci + 1 - len(cuts_meta)))
             cuts_meta[ci] = meta
     if cuts_meta is not None:
         try:
@@ -1152,7 +1150,6 @@ def _report_single_update(report, img_p: Path, wh: tuple[int, int], changed: boo
     report["updates"] = [
         {"image": str(img_p), "cut": None, "wh": wh, "changed": changed}
     ]
-    report["changed"] = changed
 
 
 def _build_g00_from_image(img_p: Path | None, g00_type: int, layout):
@@ -1304,7 +1301,6 @@ def _apply_updates_to_g00(base_bytes: bytes, updates: list, type_expect, report=
                 }
                 for item in planned
             ]
-            report["changed"] = changed
         if not changed:
             return base_bytes
         repl = {

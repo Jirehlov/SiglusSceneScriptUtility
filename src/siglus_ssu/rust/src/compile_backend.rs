@@ -255,10 +255,10 @@ impl DecompileFrontend {
             .map_err(|_| analyzer.error_str.clone())?;
         data.inc_property_cnt = data.property_cnt;
         data.inc_command_cnt = data.command_cnt;
-        let mut ca = ca::CharacterAnalyzer::new(false);
+        let mut ca = ca::CharacterAnalyzer::<false>::new_with_usage_tracking(false);
         let first = ca.analyze_file_1(text).map_err(|_| ca.error_str.clone())?;
         let second = ca
-            .analyze_file_2(&first, &data)
+            .analyze_file_2_with_stats::<false>(&first, &data)
             .map_err(|_| ca.error_str.clone())?;
         if !second.inc_text.is_empty() {
             let mut analyzer =

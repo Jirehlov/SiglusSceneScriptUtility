@@ -168,6 +168,20 @@ class _ExpansionBuffer:
             else [item for piece in pieces for item in piece]
         )
 
+    def last_newline_before(self, offset):
+        offset = min(offset, self.size)
+        if offset <= 0:
+            return -1
+        first = bisect_right(self.ends, self.size - offset)
+        for part in range(first, len(self.pieces)):
+            value, start, _ = self.pieces[part]
+            piece_offset = self.size - self.ends[part]
+            newline = value.rfind("\n", start, start + offset - piece_offset)
+            if newline >= 0:
+                return piece_offset + newline - start
+            offset = piece_offset
+        return -1
+
     def startswith(self, prefix, index):
         stop = index + len(prefix)
         if self.pieces:
@@ -610,14 +624,14 @@ class CharacterAnalizer:
                 c = text[p]
                 if c in "'\"":
                     p += 1
-                    while 1:
-                        if text[p] == c:
-                            p += 1
-                            break
-                        if text[p] == "\\":
-                            p += 2
-                        else:
-                            p += 1
+                    while p < len(text) and (quoted := text[p]) not in ("\0", c):
+                        p += 2 if quoted == "\\" else 1
+                    if p >= len(text) or text[p] != c:
+                        self.error(
+                            self.m_line, "Reached end of file while parsing macro."
+                        )
+                        return None
+                    p += 1
                 elif c == "(":
                     kak += 1
                     p += 1
@@ -684,19 +698,40 @@ class CharacterAnalizer:
         points = _ExpansionBuffer(points + [None] * 256) if points is not None else None
         loop = 0
         rest_min = len(text)
-        pattern = self._replacement_pattern
-        if added_rt and added_rt["c"]:
-            pattern += "|" + _replacement_prefix_pattern(added_rt)
-        stops = re.compile(pattern)
-        empty_name = any(
-            tree and tree["r"] is not None for tree in (default_rt, added_rt)
+        stops = self._replacement_stops
+        local_stops = (
+            re.compile(_replacement_prefix_pattern(added_rt))
+            if added_rt and added_rt["c"]
+            else None
         )
+        patterns = (stops, local_stops)
+        piece_stops = {}
         while text[0] != "\0":
             consumed = 0
-            if not empty_name and len(text) <= rest_min:
-                value, start, end = text.pieces[-1]
-                match = stops.search(value, start, end)
-                consumed = max(0, min(match.start() if match else end, end - 2) - start)
+            if len(text) <= rest_min:
+                piece = len(text.pieces) - 1
+                value, start, end = text.pieces[piece]
+                if local_stops is None:
+                    match = stops.search(value, start, end)
+                    stop = match.start() if match else end
+                else:
+                    entry = piece_stops.get(piece)
+                    if (
+                        entry
+                        and entry[0] is value
+                        and entry[1] <= start
+                        and entry[2] == end
+                    ):
+                        positions = entry[3]
+                    else:
+                        positions = [-1, -1]
+                    for index, pattern in enumerate(patterns):
+                        if positions[index] < start:
+                            match = pattern.search(value, start, end)
+                            positions[index] = match.start() if match else end
+                    piece_stops[piece] = (value, start, end, positions)
+                    stop = min(positions)
+                consumed = max(0, min(stop, end - 2) - start)
             if not consumed:
                 consumed = self._replace_head(text, default_rt, added_rt, points)
                 if consumed is None:
@@ -784,11 +819,8 @@ class CharacterAnalizer:
         loop = 0
         rest_min = len(t)
         tree = self.iad["replace_tree"]
-        if tree["r"] is not None:
-            self._replacement_pattern = "[" + re.escape("".join(tree["c"])) + "\0]"
-        else:
-            self._replacement_pattern = "\0|" + _replacement_prefix_pattern(tree)
-        stops = re.compile(self._replacement_pattern)
+        stops = re.compile("\0|" + _replacement_prefix_pattern(tree))
+        self._replacement_stops = stops
         while t[0] != "\0":
             consumed = 0
             if len(t) <= rest_min:

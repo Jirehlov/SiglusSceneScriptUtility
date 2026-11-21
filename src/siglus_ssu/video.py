@@ -20,11 +20,10 @@ OUTER_STRUCT = struct.Struct("<42I")
 OMVInfo = namedtuple(
     "OMVInfo",
     "path size_bytes oggs_offset header_size ogv_size stream_kinds",
-    defaults=[()],
 )
 OuterHeader = namedtuple(
     "OuterHeader",
-    "raw dword_3c dword_28 dword_2c qword_30 dword_40 dword_44 dword_48 dword_4c dword_50",
+    "dword_3c dword_28 dword_2c qword_30 dword_40 dword_44 dword_48 dword_4c dword_50",
 )
 TableAEntry = namedtuple(
     "TableAEntry", "page_no is_eos is_packet_start page_bytes x0 back_link aux0 aux1"
@@ -139,7 +138,6 @@ def _parse_outer_header(file_obj):
             "<IIIIII", raw, 60
         )
         return OuterHeader(
-            raw,
             int(dword_3c),
             int(dword_28),
             int(dword_2c),

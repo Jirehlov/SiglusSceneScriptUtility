@@ -482,9 +482,7 @@ def _compile_shuffle_chain(
 
     first_scene = compile_list[0]
     set_shuffle_seed(seed0)
-    probe = compile_one_pipeline(
-        ctx, first_scene, debug_outputs=True, record_time=True
-    )["out_scn"]
+    probe = compile_one_pipeline(ctx, first_scene, record_time=True)["out_scn"]
     probe_end_seed = get_shuffle_seed()
     header, probe_index = _scn_dat_string_index(probe, first_scene)
     probe_pool = Counter(_scn_dat_str_pool(probe, header, probe_index))
@@ -494,7 +492,9 @@ def _compile_shuffle_chain(
             ("only-in-expected", expected_pool - probe_pool),
         ):
             if difference:
-                sys.stderr.write(f"[test-shuffle] {label}: {list(difference)[:8]!r}\n")
+                sys.stderr.write(
+                    f"[test-shuffle] {label}: {list(difference)[: C.MAX_LIST_PREVIEW]!r}\n"
+                )
         raise ValueError(f"reference string pool differs for {first_scene}")
     if [length for _, length in probe_index] != [length for _, length in targets[0]]:
         raise ValueError(f"reference string lengths differ for {first_scene}")
@@ -516,9 +516,7 @@ def _compile_shuffle_chain(
             actual = probe_index
             set_shuffle_seed(probe_end_seed)
         else:
-            blob = compile_one_pipeline(
-                ctx, ss_path, debug_outputs=True, record_time=True
-            )["out_scn"]
+            blob = compile_one_pipeline(ctx, ss_path, record_time=True)["out_scn"]
             _, actual = _scn_dat_string_index(blob, ss_path)
         if actual != target:
             raise ValueError(
@@ -667,14 +665,8 @@ def _finalize_source_stats(ctx, compile_stats):
     source_stats = compile_stats["source_stats"]
     iad = ctx["ia_data"]
     directives = source_stats["directives"]
-    global_props = iad["inc_property_cnt"]
-    global_cmds = iad["inc_command_cnt"]
-    scene_props = directives["scene_inc_properties"]
-    scene_cmds = directives["scene_inc_commands"]
-    directives["global_inc_properties"] = global_props
-    directives["global_inc_commands"] = global_cmds
-    directives["property_directives_total"] = global_props + scene_props
-    directives["command_directives_total"] = global_cmds + scene_cmds
+    directives["global_inc_properties"] = iad["inc_property_cnt"]
+    directives["global_inc_commands"] = iad["inc_command_cnt"]
     strings = source_stats["strings"]
     strings["unique"] = len(source_stats["_unique_strings"])
     strings["unique_speaker_names"] = len(source_stats["_unique_speakers"])
@@ -755,25 +747,7 @@ def _print_source_stats(source_stats):
         f"z_unused={labels.get('z_unused', 0)} "
         f"generated={labels.get('generated', 0)}"
     )
-    print(
-        "statements: "
-        + _sorted_counter_text(
-            {
-                key: value
-                for key, value in statements.items()
-                if key
-                not in (
-                    "assign",
-                    "command_def",
-                    "eof",
-                    "label",
-                    "name",
-                    "text",
-                    "z_label",
-                )
-            }
-        )
-    )
+    print("statements: " + _sorted_counter_text(statements))
     print(
         "expressions: "
         f"max_depth={expressions.get('max_depth', 0)} "
@@ -1372,7 +1346,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "source_texts": source_texts,
         "original_sources": original_sources,
         "utf8": bool(use_utf8),
-        "charset": enc,
         "charset_force": charset,
         "debug_charset": "utf-8" if use_utf8 else "cp932",
         "debug_outputs": bool(a.debug),
@@ -1381,7 +1354,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "easy_angou_code": C.EASY_ANGOU_CODE,
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "source_angou": C.SOURCE_ANGOU,
-        "defined_names": set(),
         "stats": stats,
     }
     stats["angou_content"] = angou_content

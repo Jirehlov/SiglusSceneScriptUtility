@@ -207,27 +207,6 @@ _GOTO_LABEL_REF_RE = re.compile(
     r"[ \t]*(?:#(?:l|z)[0-9]+\t)?goto[ \t]+(#l[0-9]+)[ \t]*"
 )
 _SYNTH_LINE_LABEL_RE = re.compile(r"^(\s*)(#__(?:gap_l\d+|cdnl_gap_\d+))(?:\t(.*))?$")
-_SYMBOLIC_STR_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
-_SYMBOLIC_STR_KEYWORDS = frozenset(
-    {
-        "command",
-        "property",
-        "goto",
-        "gosub",
-        "gosubstr",
-        "return",
-        "if",
-        "elseif",
-        "else",
-        "for",
-        "while",
-        "continue",
-        "break",
-        "switch",
-        "case",
-        "default",
-    }
-)
 
 
 @functools.lru_cache(maxsize=8192)
@@ -280,25 +259,6 @@ def _line_label_refs(lines):
         if "#l" in text and ("goto" in text or "gosub" in text):
             refs.update(ref for _, _, ref in _label_ref_spans(text))
     return refs
-
-
-def _add_symbolic_string_blocker(out, name):
-    text = str(name or "").strip()
-    if not text:
-        return
-    out.add(text)
-    if "." in text:
-        out.add(text.rsplit(".", 1)[-1])
-
-
-@functools.lru_cache(maxsize=4)
-def _system_symbolic_string_blockers(_profile):
-    out = set(_SYMBOLIC_STR_KEYWORDS)
-    for _, parent, _, name, _, _, _, _ in C.SYSTEM_ELEMENT_DEFS:
-        _add_symbolic_string_blocker(out, name)
-        if parent:
-            _add_symbolic_string_blocker(out, f"{parent}.{name}")
-    return frozenset(out)
 
 
 def _copy_arg_layout(layout):
@@ -826,11 +786,6 @@ def build_decompile_hints(bundles, status):
             "arg_layout": _copy_arg_layout(info["arg_layout"]),
         }
     hints["global_commands"] = {**seed["global_commands"], **out}
-    blockers = set(_system_symbolic_string_blockers(C.CONST_PROFILE))
-    for declarations in (hints["global_commands"], hints["global_properties"]):
-        for info in declarations.values():
-            _add_symbolic_string_blocker(blockers, info["name"])
-    hints["global_symbolic_string_blockers"] = blockers
     hints["name_macros"] = _build_name_macros(name_texts)
     hints["inc_lines"] = _support_inc_lines_from_hints(hints)
     hints["scene_analysis"] = scene_analysis
@@ -880,9 +835,6 @@ class _Decompiler:
             for info in self.local_command_by_ofs.values()
             if info["cmd_id"] >= 0
         }
-        self.local_symbolic_string_blockers = (
-            self._build_local_symbolic_string_blockers()
-        )
         self._annotate_event_fields()
         self.event_lines = [ev["line"] for ev in self.events]
         self.event_targets = [ev.get("target_ofs") for ev in self.events]
@@ -924,9 +876,9 @@ class _Decompiler:
                 )
         self.name_macros = self.hints["name_macros"]
         self.scene_inc_lines = self._build_scene_inc_lines()
-        self.suppressed_label_offsets = set()
-        self.placed_z_label_offsets = set()
-        self.for_header_offsets = set()
+        self.suppressed_label_offsets = {}
+        self.placed_z_label_offsets = {}
+        self.for_header_offsets = {}
 
     def _prepare_command_analysis(self):
         cached = self.hints.get("scene_analysis", {}).get(self.bundle["dat_path"])
@@ -954,28 +906,6 @@ class _Decompiler:
                 next_idx = idx
             out[idx] = next_idx
         return out
-
-    def _build_local_symbolic_string_blockers(self):
-        out = set()
-        for name in self.local_command_name_by_id.values():
-            _add_symbolic_string_blocker(out, name)
-        for name in self.meta.get("scn_cmd_names") or []:
-            _add_symbolic_string_blocker(out, name)
-        for name in self.meta.get("call_prop_names") or []:
-            _add_symbolic_string_blocker(out, name)
-        for info in self.meta.get("scn_prop_defs") or []:
-            _add_symbolic_string_blocker(out, info["name"])
-        return out
-
-    def _string_literal_expr(self, text):
-        if (
-            not self.preserve_string_pool
-            and _SYMBOLIC_STR_RE.fullmatch(text)
-            and text not in self.local_symbolic_string_blockers
-            and text not in self.hints["global_symbolic_string_blockers"]
-        ):
-            return text
-        return quote_ss_text(text)
 
     def _build_for_candidate_index(self):
         out = {}
@@ -1041,7 +971,7 @@ class _Decompiler:
             element_info=element_info,
             item_expr=new_expression_item_formatter(
                 str_list=self.str_list,
-                string_literal=self._string_literal_expr,
+                string_literal=quote_ss_text,
                 format_form=_form_name,
             ),
             append_member_expr=_append_member_expr,
@@ -1052,7 +982,7 @@ class _Decompiler:
             call_scope.advance(event["ofs"])
             annotations = expr_state.apply_event(event, call_scope)
             for key, value in annotations.items():
-                if key in ("_expr", "_cond", "_size_expr", "_call_name"):
+                if key in ("_expr", "_cond", "_size_expr"):
                     event[key] = value
 
     def _build_local_command_index(self):
@@ -1704,13 +1634,11 @@ class _Decompiler:
 
     def _drop_redundant_same_target_l_before_z(self, lines):
         inherited = set()
-        raw_by_line = {}
         for ev in self.events:
             raw_labels = ev["labels"]
             line_no = ev["line"]
             if not raw_labels or line_no is None or line_no <= 0:
                 continue
-            raw_by_line.setdefault(line_no, set()).update(raw_labels)
             z_ids = {int(lab[1:]) for lab in raw_labels if lab.startswith("Z")}
             for lab in raw_labels:
                 if lab.startswith("L"):
@@ -1732,10 +1660,6 @@ class _Decompiler:
                     and tail
                     and label not in refs
                     and (int(target), str(label or "")) in inherited
-                    and (
-                        f"Z{int(str(label or '')[2:])}"
-                        in raw_by_line.get(int(target), set())
-                    )
                 ):
                     out.append(_line_item(indent + tail, target))
                     idx += 1
@@ -2621,7 +2545,9 @@ class _Decompiler:
         return fallback
 
     def _add_suppressed_offsets(self, *offsets):
-        self.suppressed_label_offsets.update(ofs for ofs in offsets if ofs is not None)
+        for offset in offsets:
+            if offset is not None:
+                self.suppressed_label_offsets[offset] = None
 
     def _tail_goto(self, idx, target_ofs=None):
         tail = self.events[idx - 1]
@@ -2761,7 +2687,7 @@ class _Decompiler:
                 end_idx > 1 and self.event_ops[end_idx - 2] == "CD_NL"
             ):
                 body_lines.extend(self._with_labels(tail_labels, [], tail.get("line")))
-        self.suppressed_label_offsets.add(int(ev.get("target_ofs", -1) or -1))
+        self._add_suppressed_offsets(int(ev.get("target_ofs", -1) or -1))
         sig = ", ".join(self._render_param(k, p, ctx) for k, p in enumerate(params))
         ret_name = _form_name(ret_form)
         if self.preserve_string_pool and not self.string_pool_carrier:
@@ -2866,7 +2792,7 @@ class _Decompiler:
                     self._with_labels(z_labels, [], self.event_lines[end_idx - 1])
                 )
                 clauses[-1]["inline"] = None
-                self.placed_z_label_offsets.add(int(end_target))
+                self.placed_z_label_offsets[int(end_target)] = None
         out = []
         inline_clause_lines = {
             int(clause.get("source_line"))
@@ -2984,107 +2910,118 @@ class _Decompiler:
             return None
         ofs = self.event_offsets[g_idx]
         out_ofs = self.event_targets[gf_idx]
-        parsed = yield (
-            self._parse_guarded_block,
-            gf_idx,
-            out_ofs,
-            loop_ofs,
-            ctx,
-            self.event_lines[start_idx],
-        )
-        if parsed is None:
+        if j != g_idx and self._range_blocks_for_init(j, ofs):
             return None
-        out_idx, body_lines, inline_body = parsed
-        header_line = self.event_lines[g_idx]
-        head_event_idx = g_idx
-        prefix_init_lines = []
-        inline_prefix_init_lines = []
-        if j == g_idx:
-            init_lines = []
-        else:
-            if self._range_blocks_for_init(j, ofs):
-                return None
-            header_idx = None
-            nl_idx = self.next_nl_index[start_idx]
-            while nl_idx + 1 < g_idx:
-                if (
-                    self.event_ops[nl_idx + 1] == "CD_NL"
-                    and self.event_lines[nl_idx] == header_line
-                    and self.event_lines[nl_idx + 1] == header_line
-                    and (
-                        nl_idx == start_idx
-                        or self.event_ops[nl_idx - 1] != "CD_NL"
-                        or self.event_lines[nl_idx - 1] != header_line
-                    )
-                ):
-                    header_idx = nl_idx
-                nl_idx = self.next_nl_index[nl_idx + 1]
-            if header_idx is not None:
-                prefix_split = self._split_inline_region_by_line(
-                    j, self.event_offsets[header_idx], ctx, inline_line=header_line
-                )
-                if prefix_split[0] is None:
-                    return None
-                prefix_init_lines, inline_prefix_init_lines, _ = prefix_split
-                init_split = self._split_inline_region_by_line(
-                    header_idx + 1, ofs, ctx, inline_line=header_line
-                )
-                head_event_idx = header_idx
-            else:
-                init_split = self._split_inline_region_by_line(
-                    j, ofs, ctx, inline_line=header_line
-                )
-            if init_split[0] is None:
-                return None
-            prefix_init_lines.extend(init_split[0])
-            init_lines = init_split[1]
-            if header_idx is None:
-                if len(init_lines) > 1:
-                    inline_prefix_init_lines = list(init_lines[:-1])
-                    init_lines = init_lines[-1:]
-                if init_split[2] is not None:
-                    head_event_idx = init_split[2]
-        loop_idx = g_idx + 1
-        added_loop_label = False
-        if self.event_offsets[loop_idx] >= cond_ofs:
-            loop_lines = []
-        else:
-            if int(loop_ofs) not in self.suppressed_label_offsets:
-                self.suppressed_label_offsets.add(int(loop_ofs))
-                added_loop_label = True
-            loop_lines = yield (
-                self._parse_inline_block,
-                loop_idx,
-                cond_ofs,
-                ctx,
-            )
-            if loop_lines is None:
-                if added_loop_label:
-                    self.suppressed_label_offsets.discard(int(loop_ofs))
-                return None
-        self._add_suppressed_offsets(loop_ofs, cond_ofs, out_ofs)
-        head = (
-            "for("
-            + _join_inline_sentences(init_lines)
-            + ", "
-            + self._cond_expr(self.event_conds[gf_idx], ctx)
-            + ", "
-            + _join_inline_sentences(loop_lines)
-            + ")"
+        offsets = (
+            self.suppressed_label_offsets,
+            self.placed_z_label_offsets,
+            self.for_header_offsets,
         )
-        if inline_prefix_init_lines:
-            head = _join_inline_sentences(inline_prefix_init_lines + [head])
-        loop_out = self._wrap_block(head, body_lines, inline_body)
-        if inline_body is None:
-            loop_out[-1:] = self._with_event(out_idx - 1, ["}"])
-        prefix_out = list(prefix_init_lines)
-        if head_event_idx != start_idx:
-            prefix_out = self._with_event(start_idx, prefix_out)
-        out = list(prefix_out)
-        out.extend(self._with_event(head_event_idx, loop_out))
-        out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
-        self.for_header_offsets.add(self.event_offsets[head_event_idx])
-        return out, tramp_idx
+        counts = tuple(map(len, offsets))
+        carrier = self.string_pool_carrier
+        accepted = False
+        try:
+            parsed = yield (
+                self._parse_guarded_block,
+                gf_idx,
+                out_ofs,
+                loop_ofs,
+                ctx,
+                self.event_lines[start_idx],
+            )
+            if parsed is None:
+                return None
+            out_idx, body_lines, inline_body = parsed
+            header_line = self.event_lines[g_idx]
+            head_event_idx = g_idx
+            prefix_init_lines = []
+            inline_prefix_init_lines = []
+            if j == g_idx:
+                init_lines = []
+            else:
+                header_idx = None
+                nl_idx = self.next_nl_index[start_idx]
+                while nl_idx + 1 < g_idx:
+                    if (
+                        self.event_ops[nl_idx + 1] == "CD_NL"
+                        and self.event_lines[nl_idx] == header_line
+                        and self.event_lines[nl_idx + 1] == header_line
+                        and (
+                            nl_idx == start_idx
+                            or self.event_ops[nl_idx - 1] != "CD_NL"
+                            or self.event_lines[nl_idx - 1] != header_line
+                        )
+                    ):
+                        header_idx = nl_idx
+                    nl_idx = self.next_nl_index[nl_idx + 1]
+                if header_idx is not None:
+                    prefix_split = self._split_inline_region_by_line(
+                        j, self.event_offsets[header_idx], ctx, inline_line=header_line
+                    )
+                    if prefix_split[0] is None:
+                        return None
+                    prefix_init_lines, inline_prefix_init_lines, _ = prefix_split
+                    init_split = self._split_inline_region_by_line(
+                        header_idx + 1, ofs, ctx, inline_line=header_line
+                    )
+                    head_event_idx = header_idx
+                else:
+                    init_split = self._split_inline_region_by_line(
+                        j, ofs, ctx, inline_line=header_line
+                    )
+                if init_split[0] is None:
+                    return None
+                prefix_init_lines.extend(init_split[0])
+                init_lines = init_split[1]
+                if header_idx is None:
+                    if len(init_lines) > 1:
+                        inline_prefix_init_lines = list(init_lines[:-1])
+                        init_lines = init_lines[-1:]
+                    if init_split[2] is not None:
+                        head_event_idx = init_split[2]
+            loop_idx = g_idx + 1
+            if self.event_offsets[loop_idx] >= cond_ofs:
+                loop_lines = []
+            else:
+                self._add_suppressed_offsets(loop_ofs)
+                loop_lines = yield (
+                    self._parse_inline_block,
+                    loop_idx,
+                    cond_ofs,
+                    ctx,
+                )
+                if loop_lines is None:
+                    return None
+            self._add_suppressed_offsets(loop_ofs, cond_ofs, out_ofs)
+            head = (
+                "for("
+                + _join_inline_sentences(init_lines)
+                + ", "
+                + self._cond_expr(self.event_conds[gf_idx], ctx)
+                + ", "
+                + _join_inline_sentences(loop_lines)
+                + ")"
+            )
+            if inline_prefix_init_lines:
+                head = _join_inline_sentences(inline_prefix_init_lines + [head])
+            loop_out = self._wrap_block(head, body_lines, inline_body)
+            if inline_body is None:
+                loop_out[-1:] = self._with_event(out_idx - 1, ["}"])
+            prefix_out = list(prefix_init_lines)
+            if head_event_idx != start_idx:
+                prefix_out = self._with_event(start_idx, prefix_out)
+            out = list(prefix_out)
+            out.extend(self._with_event(head_event_idx, loop_out))
+            out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
+            self.for_header_offsets[self.event_offsets[head_event_idx]] = None
+            accepted = True
+            return out, tramp_idx
+        finally:
+            if not accepted:
+                for group, count in zip(offsets, counts, strict=True):
+                    while len(group) > count:
+                        group.popitem()
+                self.string_pool_carrier = carrier
 
     @iterative_method
     def _match_switch(self, start_idx, end_ofs, ctx):
@@ -3291,6 +3228,7 @@ class _Decompiler:
     def _restore_string_pool(self, lines):
         if not self.preserve_string_pool or not self.string_pool_carrier:
             return lines
+        from .BS import copy_ia_data
         from .CA import CharacterAnalizer, new_replace_tree
         from .IA import IncAnalyzer
         from .LA import la_analize
@@ -3303,6 +3241,7 @@ class _Decompiler:
         ia = IncAnalyzer("\n".join(self.hints["inc_lines"]), C.FM_GLOBAL, iad, iad2)
         if not ia.step1() or not ia.step2():
             raise ValueError(f"cannot restore string pool: {ia.es}")
+        iad = copy_ia_data(iad)
         text = "\n".join(lines)
         ca = CharacterAnalizer()
         pcad = {}

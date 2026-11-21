@@ -162,7 +162,6 @@ class SA:
             err = s.last
             sen = N(
                 s._a(p).get("line", 0),
-                block=None,
                 label=None,
                 z_label=None,
                 def_cmd=None,
@@ -464,7 +463,6 @@ class SA:
             arg_list=None,
             label=None,
             z_label=None,
-            arg_state="",
         )
         n["node_type"] = nt
         if gt["atom"]["type"] in (C.LA_T["GOSUB"], C.LA_T["GOSUBSTR"]):
@@ -913,7 +911,6 @@ class SA:
                         exp_1=x,
                         exp_2=None,
                         node_type=C.NT_EXP_OPR1,
-                        pri=pri,
                     )
                 else:
                     ok, p, smp = yield (s.sa_smp_exp, p)
@@ -927,7 +924,6 @@ class SA:
                         exp_1=None,
                         exp_2=None,
                         node_type=C.NT_EXP_SIMPLE,
-                        pri=pri,
                     )
                 while 1:
                     ok, p2, op, npri = s.sa_operator_2(p, pri)
@@ -949,7 +945,6 @@ class SA:
                         exp_1=exp,
                         exp_2=rhs,
                         node_type=C.NT_EXP_OPR2,
-                        pri=npri,
                     )
                     p = p3
                 s.last = err
@@ -1094,7 +1089,6 @@ class SA:
                     a.get("line", 0),
                     name=None,
                     arg_list=None,
-                    dot=None,
                     open_b=ob,
                     close_b=None,
                     exp=None,
@@ -1128,7 +1122,6 @@ class SA:
             a.get("line", 0),
             name=nm,
             arg_list=None,
-            dot=None,
             open_b=None,
             close_b=None,
             exp=None,
@@ -1332,7 +1325,6 @@ class SA:
             return 0, None
         return 1, {
             "root": root,
-            "z_label_list": s.z_label_list,
             "call_prop_name_list": [],
             "cur_call_prop_cnt": 0,
             "total_call_prop_cnt": 0,

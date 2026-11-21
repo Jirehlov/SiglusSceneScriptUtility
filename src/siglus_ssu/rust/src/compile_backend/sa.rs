@@ -35,7 +35,7 @@ pub struct SyntaxAnalyzer<'lex, 'src> {
     string_count: usize,
     unknowns: &'src [String],
     labels: Vec<LabelState>,
-    z_labels: Vec<LabelState>,
+    z_labels: Vec<bool>,
     pub last: Option<SyntaxErrorInfo>,
     pub warnings: Vec<(Atom, &'static str)>,
     nesting: usize,
@@ -63,13 +63,7 @@ impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
                     exists: false,
                 })
                 .collect(),
-            z_labels: vec![
-                LabelState {
-                    line: 0,
-                    exists: false,
-                };
-                z_label_count
-            ],
+            z_labels: vec![false; z_label_count],
             last: None,
             warnings: Vec::new(),
             nesting: 0,
@@ -184,12 +178,11 @@ impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
             return Ok(None);
         };
         let z_index = atom.opt.max(0) as usize;
-        if let Some(label) = self.z_labels.get_mut(z_index) {
-            if label.exists {
+        if let Some(exists) = self.z_labels.get_mut(z_index) {
+            if *exists {
                 return self.fail("TNMSERR_SA_Z_LABEL_OVERLAPPED", index);
             }
-            label.line = atom.line;
-            label.exists = true;
+            *exists = true;
         }
         let label_index = atom.subopt.max(0) as usize;
         if let Some(label) = self.labels.get_mut(label_index) {
@@ -365,12 +358,7 @@ impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
             );
             return Err(());
         }
-        if !self
-            .z_labels
-            .first()
-            .map(|label| label.exists)
-            .unwrap_or(false)
-        {
+        if !self.z_labels.first().copied().unwrap_or(false) {
             return self.fail("TNMSERR_SA_Z_LABEL_00_NOT_EXIST", 0);
         }
         if iad
@@ -907,7 +895,6 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
                     .enumerate()
                     .map(|(arg_id, parameter)| CommandArg {
                         id: arg_id as i32,
-                        name: String::new(),
                         form: parameter.form.name.clone(),
                         def_int: 0,
                         def_exist: false,
@@ -920,7 +907,7 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
                             .iter()
                             .map(|arg| ArgInfo {
                                 id: arg.id,
-                                name: arg.name.clone(),
+                                name: String::new(),
                                 form: self
                                     .iad
                                     .form_table

@@ -366,7 +366,7 @@ impl<'a> BytecodeBuilder<'a> {
                     else {
                         unreachable!()
                     };
-                    if *operator != 0 {
+                    if *operator != self.codes.op.none {
                         self.push_u8(self.codes.cd.copy_elm);
                         self.push_u8(self.codes.cd.property);
                     }
@@ -385,7 +385,7 @@ impl<'a> BytecodeBuilder<'a> {
                     else {
                         unreachable!()
                     };
-                    if *operator != 0 {
+                    if *operator != self.codes.op.none {
                         self.push_u8(self.codes.cd.operate_2);
                         self.push_form(self.dereference(left.form));
                         self.push_form(self.dereference(right.form));

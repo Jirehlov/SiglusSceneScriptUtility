@@ -368,29 +368,20 @@ def _path_identity(path: str) -> str:
     return windows_filename_key(os.path.abspath(path))
 
 
-def _diagnostics_for_path(
-    diagnostics: dict[str, list[SourceDiagnostic]], path: str
-) -> list[SourceDiagnostic]:
-    path = os.path.abspath(path)
-    direct = diagnostics.get(path)
+def _index_paths_by_identity[T](values: dict[str, T]) -> dict[str, T]:
+    indexed = {}
+    for path, value in values.items():
+        indexed.setdefault(_path_identity(path), value)
+    return indexed
+
+
+def _overlay_text_for_path(
+    path: str, overlays: dict[str, str], by_identity: dict[str, str]
+) -> str | None:
+    direct = overlays.get(path)
     if direct is not None:
         return direct
-    key = _path_identity(path)
-    for diagnostic_path, items in diagnostics.items():
-        if _path_identity(diagnostic_path) == key:
-            return items
-    return []
-
-
-def _overlay_text_for_path(overlays: dict[str, str], path: str) -> str | None:
-    norm = os.path.abspath(path)
-    if norm in overlays:
-        return overlays[norm]
-    key = _path_identity(norm)
-    for overlay_path, text in overlays.items():
-        if _path_identity(overlay_path) == key:
-            return text
-    return None
+    return by_identity.get(_path_identity(path)) if by_identity else None
 
 
 def _silent_stdout_call(func: Any, *args: Any, **kwargs: Any) -> Any:
@@ -435,13 +426,11 @@ def _silence_process_stdout() -> None:
             pass
 
 
-def _read_text(path: str, overlays: dict[str, str]) -> str:
-    norm = os.path.abspath(path)
-    overlay_text = _overlay_text_for_path(overlays, norm)
+def _read_text(path: str, overlay_text: str | None = None) -> str:
     if overlay_text is not None:
         return _normalize_source_text(overlay_text)
     try:
-        return _read_disk_text(norm)
+        return _read_disk_text(os.path.abspath(path))
     except (OSError, ValueError):
         return ""
 
@@ -495,8 +484,9 @@ def _project_input_signature(
     root_dir: str, overlays: dict[str, str]
 ) -> tuple[Any, ...]:
     signature: list[tuple[Any, ...]] = []
+    by_identity = _index_paths_by_identity(overlays)
     for path in _sorted_dir_paths(root_dir, overlays, ".inc"):
-        overlay_text = _overlay_text_for_path(overlays, path)
+        overlay_text = _overlay_text_for_path(path, overlays, by_identity)
         if overlay_text is not None:
             signature.append((path, "overlay", _normalize_source_text(overlay_text)))
             continue
@@ -630,8 +620,11 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
     passes: list[tuple[str, dict[str, Any]]] = []
     inc_iad2_by_path: dict[str, dict[str, Any]] = {}
     source_files = {}
+    by_identity = _index_paths_by_identity(overlays)
     for source_id, inc_path in enumerate(inc_paths, 1):
-        text = _read_text(inc_path, overlays)
+        text = _read_text(
+            inc_path, _overlay_text_for_path(inc_path, overlays, by_identity)
+        )
         source_files[source_id] = (inc_path, text)
         iad2 = {"pt": [], "pl": [], "ct": [], "cl": []}
         ia = IncAnalyzer(
@@ -2618,6 +2611,18 @@ class DirectoryLinkDiagnosticsEntry:
         default_factory=dict
     )
     file_order: dict[str, int] = field(default_factory=dict, init=False)
+    _diagnostics_by_identity: dict[str, list[SourceDiagnostic]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def diagnostics_for_path(self, path: str) -> list[SourceDiagnostic]:
+        path = os.path.abspath(path)
+        items = self.diagnostics.get(path)
+        if items is not None:
+            return items
+        if self._diagnostics_by_identity is None:
+            self._diagnostics_by_identity = _index_paths_by_identity(self.diagnostics)
+        return self._diagnostics_by_identity.get(_path_identity(path), [])
 
     def update_indexes(
         self,
@@ -3057,6 +3062,12 @@ class SSLanguageServer:
         if detached_stdout:
             _silence_process_stdout()
         self._stdin_fd = self._stdin.fileno()
+        try:
+            os.set_blocking(self._stdin_fd, True)
+        except OSError:
+            self._stdin_can_poll = False
+        else:
+            self._stdin_can_poll = True
         self._input_buffer = bytearray()
         self.deferred_messages: deque[dict[str, Any]] = deque()
         self.documents: dict[str, DocumentState] = {}
@@ -3095,7 +3106,14 @@ class SSLanguageServer:
             pass
 
     def read_input_chunk(self, block: bool) -> bool:
-        os.set_blocking(self._stdin_fd, block)
+        if not block:
+            if not self._stdin_can_poll:
+                return False
+            try:
+                os.set_blocking(self._stdin_fd, False)
+            except OSError:
+                self._stdin_can_poll = False
+                return False
         try:
             chunk = os.read(self._stdin_fd, 65536)
         except BlockingIOError:
@@ -3205,17 +3223,11 @@ class SSLanguageServer:
             return None
         return self.request_id_key(message.get("id"))
 
-    def message_progress_token(self, message: dict[str, Any]) -> Any | None:
-        params = message.get("params")
-        return self.progress_token_from_params(
-            params if isinstance(params, dict) else {}
-        )
-
     def track_pending_request(self, message: dict[str, Any]) -> None:
         key = self.message_request_key(message)
         if key is not None:
             self.pending_request_ids.add(key)
-            token = self.message_progress_token(message)
+            token = self.progress_token_from_params(message.get("params"))
             if token is not None:
                 self.pending_request_progress_tokens[key] = token
 
@@ -3315,7 +3327,7 @@ class SSLanguageServer:
             )
         return uri
 
-    def progress_token_from_params(self, params: dict[str, Any]) -> Any | None:
+    def progress_token_from_params(self, params: Any) -> Any | None:
         token = params.get("workDoneToken") if isinstance(params, dict) else None
         if isinstance(token, bool):
             return None
@@ -3535,7 +3547,7 @@ class SSLanguageServer:
     def text_for_path(self, path: str) -> str:
         doc = self.document_for_path(path)
         if doc is None:
-            return _read_text(path, {})
+            return _read_text(path)
         if not doc.opened and not doc.overlay_active:
             doc = self.get_or_load_document(
                 doc.uri, location=(doc.path, "file:" + windows_filename_key(doc.path))
@@ -3566,13 +3578,13 @@ class SSLanguageServer:
             if doc.file_state == state:
                 doc.text = doc.disk_text
                 return doc
-            text = _read_text(path, {})
+            text = _read_text(path)
             self.clear_document_cache(doc)
             doc.text = text
             doc.disk_text = text
             doc.file_state = state
             return doc
-        text = _read_text(path, {})
+        text = _read_text(path)
         doc = DocumentState(
             uri=uri,
             path=path,
@@ -3583,14 +3595,16 @@ class SSLanguageServer:
         self.documents[key] = doc
         return doc
 
+    def opened_documents(self) -> Iterable[DocumentState]:
+        keys = dict.fromkeys(key for _, key in self.open_document_locations.values())
+        return (self.documents[key] for key in keys)
+
     def overlays_for_dir(
         self, directory: str, suffix: str | None = None
     ) -> dict[str, str]:
         out: dict[str, str] = {}
         directory = os.path.abspath(directory)
-        for doc in self.documents.values():
-            if not (doc.opened or doc.overlay_active):
-                continue
+        for doc in self.opened_documents():
             path = os.path.abspath(doc.path)
             if suffix is not None and not path.lower().endswith(suffix):
                 continue
@@ -3637,7 +3651,7 @@ class SSLanguageServer:
             doc.disk_text = ""
             doc.text = ""
         else:
-            text = _read_text(doc.path, {})
+            text = _read_text(doc.path)
             doc.file_state = state
             doc.disk_text = text
             doc.text = text
@@ -4236,7 +4250,7 @@ class SSLanguageServer:
         signature = (link_entry.project_signature, link_entry.revision)
         if doc.analysis is not None and doc.analysis_signature == signature:
             return doc.analysis
-        extras = _diagnostics_for_path(link_entry.diagnostics, doc.path)
+        extras = link_entry.diagnostics_for_path(doc.path)
         result = (
             replace(base, diagnostics=[*base.diagnostics, *extras]) if extras else base
         )
@@ -4294,9 +4308,8 @@ class SSLanguageServer:
         directory = os.path.abspath(directory or ".")
         docs = [
             doc
-            for doc in self.documents.values()
-            if doc.opened
-            and same_read_path(os.path.dirname(doc.path), directory)
+            for doc in self.opened_documents()
+            if same_read_path(os.path.dirname(doc.path), directory)
             and doc.uri != skip_uri
         ]
         docs.sort(key=lambda d: (os.path.basename(d.path).casefold(), d.uri))
@@ -4623,7 +4636,7 @@ class SSLanguageServer:
             if not isinstance(raw_text, str):
                 return
             doc.text = _normalize_source_text(raw_text)
-        doc.disk_text = _read_text(doc.path, {})
+        doc.disk_text = _read_text(doc.path)
         doc.overlay_active = doc.text != doc.disk_text
         doc.file_state = _file_state(doc.path)
         doc.open_uris[uri] = (doc.text, doc.version)
@@ -5449,31 +5462,30 @@ class SSLanguageServer:
             return
         self.report_work_done_progress("Analyzing current file for highlighting...", 10)
         result = self.analyze_symbols(doc)
-        unused_macro_symbol_ids = set()
         self.report_work_done_progress("Collecting semantic ranges...", 75)
         doc_occurrences = occurrences_for_result(result)
-        if any(item.definition and item.kind == "macro" for item in doc_occurrences):
+        macro_definitions = {
+            item.symbol_id
+            for item in doc_occurrences
+            if item.definition and item.kind == "macro"
+        }
+        unused_macro_symbol_ids = {
+            symbol for symbol in macro_definitions if symbol.startswith("macrolocal:")
+        }
+        unused_macro_symbol_ids.difference_update(
+            item.symbol_id for item in doc_occurrences if not item.definition
+        )
+        global_macros = {
+            symbol for symbol in macro_definitions if symbol.startswith("macro:")
+        }
+        if global_macros:
             directory = os.path.dirname(doc.path) or "."
             self.report_work_done_progress("Checking workspace macro usage...", 80)
             entry = self.link_diagnostics_for_directory(directory)
-            for symbol_id, occurrences in entry.occurrences.items():
-                symbol_text = str(symbol_id)
-                if not (
-                    symbol_text.startswith("macro:")
-                    or symbol_text.startswith("macrolocal:")
-                ):
-                    continue
-                has_definition = False
-                has_reference = False
-                for item in occurrences:
-                    if item.definition:
-                        has_definition = True
-                    else:
-                        has_reference = True
-                    if has_definition and has_reference:
-                        break
-                if has_definition and not has_reference:
-                    unused_macro_symbol_ids.add(symbol_id)
+            for symbol in global_macros:
+                occurrences = entry.occurrences.get(symbol)
+                if occurrences and all(item.definition for item in occurrences):
+                    unused_macro_symbol_ids.add(symbol)
         self.report_work_done_progress("Publishing semantic highlighting...", 95)
         self.respond(
             msg_id,

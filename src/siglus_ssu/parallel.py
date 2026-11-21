@@ -243,8 +243,6 @@ def _compile_one_process(
             worker_ctx,
             ss_path,
             ia_data=ia_data,
-            debug_outputs=debug_outputs,
-            tmp_path=tmp_path,
             log=False,
             record_time=False,
         )

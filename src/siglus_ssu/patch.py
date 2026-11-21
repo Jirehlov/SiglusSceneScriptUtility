@@ -413,47 +413,16 @@ def patch_loc(data: bytearray, loc_spec: str):
             before_state,
         )
     changes = []
-    if want_enabled:
-        if bytes(data[func_off : func_off + 3]) == _LOC_BYPASS_STUB:
-            for i, (old, new) in enumerate(zip(_LOC_BYPASS_STUB, _LOC_FUNC_PROLOG)):
-                off = func_off + i
-                if data[off] != old:
-                    raise RuntimeError(
-                        f"patch verification failed: offset 0x{off:X} expected 0x{old:02X} got 0x{data[off]:02X}"
-                    )
-                if old != new:
-                    data[off] = new
-                    changes.append(
-                        (
-                            off,
-                            old,
-                            new,
-                            "region detection: disabled -> enabled",
-                        )
-                    )
-    else:
-        head = bytes(data[func_off : func_off + 3])
-        if head not in (_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB):
-            raise RuntimeError(
-                f"Unsupported region-detection prologue at 0x{func_off:X}: {head.hex()}"
-            )
-        if head == _LOC_FUNC_PROLOG:
-            for i, (old, new) in enumerate(zip(_LOC_FUNC_PROLOG, _LOC_BYPASS_STUB)):
-                off = func_off + i
-                if data[off] != old:
-                    raise RuntimeError(
-                        f"patch verification failed: offset 0x{off:X} expected 0x{old:02X} got 0x{data[off]:02X}"
-                    )
-                if old != new:
-                    data[off] = new
-                    changes.append(
-                        (
-                            off,
-                            old,
-                            new,
-                            "region detection: enabled -> disabled",
-                        )
-                    )
+    if before_state != target_state:
+        if want_enabled:
+            old_code, new_code = _LOC_BYPASS_STUB, _LOC_FUNC_PROLOG
+        else:
+            old_code, new_code = _LOC_FUNC_PROLOG, _LOC_BYPASS_STUB
+        reason = f"region detection: {before_state} -> {target_state}"
+        for delta, (old, new) in enumerate(zip(old_code, new_code, strict=True)):
+            off = func_off + delta
+            data[off] = new
+            changes.append((off, old, new, reason))
     after_state, after_detail = _loc_state(
         data, func_off, _find_loc_guard_branch(data, func_off)
     )
@@ -585,7 +554,9 @@ def _utf16_length(text: str):
     return len(str(text).encode("utf-16le")) // 2
 
 
-def _find_bytes_all(data: bytes, needle: bytes, start: int = 0, end: int | None = None):
+def _find_bytes_all(
+    data: bytes | bytearray, needle: bytes, start: int = 0, end: int | None = None
+):
     hits = []
     limit = len(data) if end is None else int(end)
     pos = int(start)
@@ -933,11 +904,11 @@ def _patch_utf16_ref_length(
     if old_len <= 0x7F:
         needle = bytes((0x6A, old_len))
         candidates.extend(
-            (off, 1) for off in _find_bytes_all(bytes(data), needle, start, ref_off - 1)
+            (off, 1) for off in _find_bytes_all(data, needle, start, ref_off - 1)
         )
     needle = b"\x68" + struct.pack("<I", old_len)
     candidates.extend(
-        (off, 4) for off in _find_bytes_all(bytes(data), needle, start, ref_off - 1)
+        (off, 4) for off in _find_bytes_all(data, needle, start, ref_off - 1)
     )
     if not candidates:
         return

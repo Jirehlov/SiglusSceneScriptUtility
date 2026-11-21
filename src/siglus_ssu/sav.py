@@ -1037,7 +1037,7 @@ def sav(blob, path=None, *, metadata=None):
         else:
             print(f"screen_size_mode: {p.get('screen_size_mode')}")
             print(f"all_sound_user_volume: {p.get('all_sound_user_volume')}")
-            print(f"font_name: {dn(p.get('font_name', ''), 40)}")
+            print(f"font_name: {dn(p.get('font_name', ''))}")
             print(f"koe_mode: {p.get('koe_mode')}")
             print(f"chrkoe_cnt: {len(p.get('chrkoe') or [])}")
             print(f"object_disp_flag_cnt: {len(p.get('object_disp_flag') or [])}")
@@ -1209,7 +1209,11 @@ def compare_sav(b1, b2):
                 print(f"payload_error1: {a.get('payload_error')}")
             if b.get("payload_error"):
                 print(f"payload_error2: {b.get('payload_error')}")
-            print(f"raw_equal: {bool(a.get('raw') == b.get('raw'))}")
+            equal = (a["unpacked_size"], a["unpacked_sha256"]) == (
+                b["unpacked_size"],
+                b["unpacked_sha256"],
+            )
+            print(f"raw_equal: {equal}")
             return 1
         if k1["kind"] == "global":
             diff = []

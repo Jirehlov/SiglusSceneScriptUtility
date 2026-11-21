@@ -31,7 +31,7 @@ def _usage():
         "  -a, --analyze   Analyze/compare files\n"
         "  -d, --db        Export/apply/analyze .dbs\n"
         "  -k, --koe       Collect KOE/EXKOE voices by character\n"
-        "  -e, --exec      Execute at a #z label\n"
+        "  -e, --exec, --execute  Execute at a #z label\n"
         "  -m, --textmap   Export/apply text mapping for compiled .dat files\n"
         "  -g, --g00       Extract/analyze .g00 images\n"
         "  -s, --sound     Decode/extract/play .ovk/.owp/.nwa sounds\n"
@@ -121,7 +121,7 @@ def _usage():
         "    type2: use name_cut###.png to target a cut when multiple cuts exist\n"
         "\n"
         "Sound mode:\n"
-        f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <path_to_Gameexe.dat>] [--angou VALUE]\n"
+        f"  {p} -s --x <input_dir|input_file> <output_dir> [--trim <Gameexe.dat|Gameexe.ini>] [--angou VALUE]\n"
         f"  {p} -s --a <input_file.(nwa|ovk|owp)> [input_file_2.ovk]\n"
         f"  {p} -s --c <input_ogg|input_dir> <output_dir>\n"
         f"  {p} -s --play <input_file.(nwa|owp|ogg)|input_dir> [path_to_Gameexe.dat|Gameexe.ini] [--angou VALUE]\n"
@@ -130,7 +130,7 @@ def _usage():
         f"  {p} -d --x <input_dir|input_file> <output_dir>\n"
         f"  {p} -d --a <input_file.dbs> [input_file_2.dbs]\n"
         f"  {p} -d --c [--type N] [--set-shuffle SEED] <input_csv|input_dir> <output_dbs|output_dir>\n"
-        f"  {p} -d --c --test-shuffle [skip0] <expected.dbs> <input_csv> <output_dbs>\n"
+        f"  {p} -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expected.dbs> <input_csv> <output_dbs|output_dir>\n"
         "\n"
         "Video mode:\n"
         f"  {p} -v --x <input_dir|input_file> <output_dir>\n"
@@ -349,19 +349,21 @@ def main():
     except ValueError as exc:
         sys.stderr.write(f"{_prog()}: {exc}\n")
         return 2
-    if argv and argv[0] in ("-V", "--version", "version"):
-        _print_version()
-        return 0
     if not argv:
         _usage_short()
         return 0
-    if argv[0] in ("-h", "--help", "help"):
-        _usage()
-        return 0
     mode = argv[0]
-    mode_args = argv[1:]
+    mode_args = argv[1:] if mode != "--" else []
     if "--" in mode_args:
         mode_args = mode_args[: mode_args.index("--")]
+    if mode in ("-V", "--version", "version") or any(
+        arg in ("-V", "--version") for arg in mode_args
+    ):
+        _print_version()
+        return 0
+    if mode in ("-h", "--help", "help"):
+        _usage()
+        return 0
     if len(argv) > 1 and (
         argv[1] == "help" or any(a in ("-h", "--help") for a in mode_args)
     ):

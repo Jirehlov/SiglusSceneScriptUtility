@@ -45,13 +45,11 @@ class _TestResult:
     compile_backend: str | None
 
 
-def _usage(out=None) -> None:
-    if out is None:
-        out = sys.stderr
-    out.write(
+def _usage() -> None:
+    sys.stderr.write(
         "usage: siglus-ssu [--const-profile N] test [--decompile] [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>\n"
     )
-    out.write(
+    sys.stderr.write(
         "Explicit --const-profile runs one configuration without fallback; --allow-invalid selects UTF-8 with replacement decoding for embedded sources.\n"
     )
 
@@ -751,13 +749,7 @@ def _test_one(
     )
 
 
-def main(argv=None, *, const_profile=None):
-    if argv is None:
-        argv = sys.argv[1:]
-    argv = list(argv)
-    if argv and argv[0] in ("-h", "--help", "help"):
-        _usage(sys.stdout)
-        return 0
+def main(argv, *, const_profile=None):
     argv, positional_args = split_end_of_options(argv)
     serial = False
     decompile = False
@@ -795,12 +787,12 @@ def main(argv=None, *, const_profile=None):
     unknown_option = first_option_token(argv)
     if unknown_option is not None:
         sys.stderr.write(f"unknown option: {unknown_option}\n")
-        _usage(sys.stderr)
+        _usage()
         return 2
     if positional_args is not None:
         argv.extend(positional_args)
     if len(argv) != 1:
-        _usage(sys.stderr)
+        _usage()
         return 2
     if decompile and const_profile is None:
         sys.stderr.write("test --decompile requires explicit --const-profile N\n")
@@ -884,7 +876,3 @@ def main(argv=None, *, const_profile=None):
             sys.stderr.write(f"test: --report-json: {exc}\n")
             return 1
     return 1 if failed or exact + payload_same == 0 else 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

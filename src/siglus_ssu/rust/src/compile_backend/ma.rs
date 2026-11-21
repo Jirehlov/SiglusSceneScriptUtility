@@ -149,10 +149,6 @@ impl<'a> SemanticAnalyzer<'a> {
         form == self.codes.forms.str_.code || form == self.codes.forms.strref.code
     }
 
-    fn command_element_type(&self) -> i32 {
-        self.codes.element_type.command
-    }
-
     fn check_argument_list<'src>(
         &mut self,
         info: &ElementInfo,
@@ -1356,7 +1352,7 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                         input,
                         semantic_step!(self, executor, analyze_node(right, selection))
                     );
-                    let effective_form = if *operator == 0 {
+                    let effective_form = if *operator == self.analyzer.codes.op.none {
                         right_form
                     } else {
                         self.analyzer
@@ -1416,7 +1412,7 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                     );
                     let is_command = match &expression.payload {
                         AstPayload::ElementExpression { element_type, .. } => {
-                            *element_type == self.analyzer.command_element_type()
+                            *element_type == self.analyzer.codes.element_type.command
                         }
                         _ => false,
                     };

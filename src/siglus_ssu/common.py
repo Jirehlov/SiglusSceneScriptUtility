@@ -204,7 +204,7 @@ def normalize_atom(a):
     }
 
 
-def build_empty_ia_data(replace_tree, defined_names=None, *, track_macro_usage=False):
+def build_empty_ia_data(replace_tree, *, track_macro_usage=False):
     from .MA import FormTable
 
     form_table = FormTable()
@@ -212,7 +212,7 @@ def build_empty_ia_data(replace_tree, defined_names=None, *, track_macro_usage=F
     return {
         "form_table": form_table,
         "replace_tree": replace_tree,
-        "name_set": set(defined_names or []),
+        "name_set": set(),
         "macro_defs": {},
         "used_macros": set() if track_macro_usage else None,
         "property_list": [],
@@ -296,7 +296,7 @@ def is_trace_command_base(ev, base_name: str) -> bool:
     if not base_name:
         return False
     name = str(ev.get("_call_name") or "").casefold()
-    return name in (f"global.{base_name}", f"mwnd.{base_name}")
+    return name in (f"{C.FM_GLOBAL}.{base_name}", f"{C.FM_MWND}.{base_name}")
 
 
 def next_elseif_ifdef_state(state: int, matched: bool) -> int:
@@ -2930,7 +2930,6 @@ def dn(name, width=None):
 
 
 def fmt_ts(ts):
-    import time
 
     try:
         lt = time.localtime(float(ts))

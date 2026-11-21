@@ -1,5 +1,3 @@
-use std::convert::TryInto;
-
 const INDEX_BITS: usize = 12;
 const BREAK_EVEN: usize = 0;
 const LENGTH_BITS: usize = 16 - INDEX_BITS;
@@ -103,10 +101,6 @@ impl LzssTree {
         self.sml[next] = self.unused;
         (true, target)
     }
-
-    fn get_root_big(&self) -> usize {
-        self.big[self.root]
-    }
 }
 
 struct LzssTreeFind<'a> {
@@ -140,7 +134,7 @@ impl<'a> LzssTreeFind<'a> {
             let src_page = self.src_index / self.window_size;
             self.window_top = (self.window_top + 1) % self.window_size;
             self.tree.connect(self.window_top);
-            let mut target = self.tree.get_root_big();
+            let mut target = self.tree.big[self.tree.root];
             self.match_size = 0;
             let mut matching_loop_cnt = self.max_match_len;
             let src_left = self.src.len().saturating_sub(self.src_index);

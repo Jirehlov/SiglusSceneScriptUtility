@@ -12,7 +12,7 @@ use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes
 use super::sa::SyntaxAnalyzer;
 use super::scene_dat::{MsvcRand, SceneDatInput, ScnHeaderLayout, build_scn_dat, checked_i32};
 use super::source_angou::encrypt_source;
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
@@ -191,8 +191,8 @@ pub struct SourceStats {
     pub assign_ops: BTreeMap<String, usize>,
     pub unary_op_kinds: BTreeMap<String, usize>,
     pub binary_op_kinds: BTreeMap<String, usize>,
-    pub unique_strings: BTreeSet<String>,
-    pub unique_speakers: BTreeSet<String>,
+    pub unique_strings: HashSet<String>,
+    pub unique_speakers: HashSet<String>,
     pub top_string_scenes: Vec<TopCount>,
 }
 
@@ -209,7 +209,7 @@ struct StatementStatContext<'a> {
     strings: &'a [String],
     inc_command_cnt: i32,
     label_def_count: &'a mut usize,
-    z_defs: &'a mut BTreeSet<i32>,
+    z_defs: &'a mut HashSet<i32>,
 }
 
 struct SceneSourceInputs<'a> {
@@ -265,19 +265,19 @@ where
     Items::IntoIter: Send,
     I: Fn() -> S + Sync,
     F: Fn(&mut S, T) -> U + Sync,
-    V: FnMut(usize, U) -> Result<(), String>,
+    V: FnMut(U) -> Result<(), String>,
 {
     let items = items.into_iter();
     let workers = workers.min(items.size_hint().1.unwrap_or(workers));
     if workers <= 1 {
         let mut state = initialize();
-        for (index, item) in items.enumerate() {
-            visit(index, process(&mut state, item))?;
+        for item in items {
+            visit(process(&mut state, item))?;
         }
         return Ok(());
     }
 
-    let queue = Mutex::new(Some(items.enumerate()));
+    let queue = Mutex::new(Some(items));
     let (tx, rx) = mpsc::channel();
     let error = std::thread::scope(|scope| {
         for _ in 0..workers {
@@ -288,7 +288,7 @@ where
             scope.spawn(move || {
                 let mut state = initialize();
                 loop {
-                    let Some((index, item)) = queue
+                    let Some(item) = queue
                         .lock()
                         .expect("scene queue poisoned")
                         .as_mut()
@@ -297,16 +297,15 @@ where
                         break;
                     };
                     let result = process(&mut state, item);
-                    tx.send((index, result))
-                        .expect("scene result receiver closed");
+                    tx.send(result).expect("scene result receiver closed");
                 }
             });
         }
         drop(tx);
         let mut first_error = None;
-        for (index, result) in rx {
+        for result in rx {
             if first_error.is_none()
-                && let Err(error) = visit(index, result)
+                && let Err(error) = visit(result)
             {
                 *queue.lock().expect("scene queue poisoned") = None;
                 first_error = Some(error);
@@ -963,7 +962,7 @@ fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
         .insert("scene_inc_commands", input.scene_inc_commands);
     stats.strings.insert("entries", input.strings.len());
     let mut label_def_count = 0;
-    let mut z_defs = BTreeSet::new();
+    let mut z_defs = HashSet::new();
     let mut label_refs = Vec::new();
     let mut z_refs = Vec::new();
     let mut ctx = StatementStatContext {
@@ -980,8 +979,8 @@ fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
         &mut label_refs,
         &mut z_refs,
     );
-    let label_ref_set = label_refs.iter().copied().collect::<BTreeSet<_>>();
-    let z_ref_set = z_refs.iter().copied().collect::<BTreeSet<_>>();
+    let label_ref_set = label_refs.iter().copied().collect::<HashSet<_>>();
+    let z_ref_set = z_refs.iter().copied().collect::<HashSet<_>>();
     stats.labels.insert("defs", label_def_count);
     stats.labels.insert("refs", label_refs.len());
     stats.labels.insert(
@@ -1151,7 +1150,7 @@ fn build_original_source_chunks(
                     encrypt_source(raw, name, &config.constants.source_angou),
                 )
             },
-            |_, (index, encrypted)| {
+            |(index, encrypted)| {
                 chunks[index] = encrypted?;
                 log.push_line(format!("  OS: {}", sources[index].0))
             },
@@ -1509,7 +1508,7 @@ fn link_compiled_scenes<'a, const FULL_STATS: bool>(
                     scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
                     Ok::<_, String>((key, scene, started, Instant::now()))
                 },
-                |_, result| {
+                |result| {
                     let (key, scene, started, finished) = result?;
                     window = Some(match window {
                         Some((first, last)) => (first.min(started), last.max(finished)),
@@ -1702,7 +1701,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                         };
                         (key, status, warnings, result)
                     },
-                    |_, (key, status, warnings, result)| {
+                    |(key, status, warnings, result)| {
                         for warning in warnings {
                             stdout.push_warning(&warning)?;
                         }
@@ -1941,7 +1940,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     }
                     Ok((stem, packed))
                 },
-                |_, result| {
+                |result| {
                     let (stem, lz) = result?;
                     stdout.push_line(format!(
                         "  LZSS: {}",

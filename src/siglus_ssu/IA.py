@@ -342,7 +342,11 @@ class IncAnalyzer:
         return s, i, line
 
     def _column(self, offset):
-        last_newline = self.t[:offset].rfind("\n")
+        last_newline = (
+            self.t.rfind("\n", 0, offset)
+            if isinstance(self.t, str)
+            else self.t.last_newline_before(offset)
+        )
         if last_newline >= 0:
             return offset - last_newline - 1
         return self._column_base + offset

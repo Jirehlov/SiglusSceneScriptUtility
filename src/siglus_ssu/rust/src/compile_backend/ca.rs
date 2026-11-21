@@ -325,12 +325,6 @@ pub struct CharacterAnalyzer<const TRACK_USAGE: bool = true> {
     replace_uses: Vec<ReplaceUse>,
 }
 
-impl CharacterAnalyzer {
-    pub fn new(sidecar: bool) -> Self {
-        Self::new_with_usage_tracking(sidecar)
-    }
-}
-
 impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
     pub fn new_with_usage_tracking(sidecar: bool) -> Self {
         Self {
@@ -413,14 +407,6 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
             }),
             Err(err) => self.error(err.line, err.message),
         }
-    }
-
-    pub fn analyze_file_2(
-        &mut self,
-        input: &File1Result,
-        ia_data: &IaData,
-    ) -> Result<File2Result, ()> {
-        self.analyze_file_2_with_stats::<true>(input, ia_data)
     }
 
     pub fn analyze_file_2_with_stats<const COLLECT_STATS: bool>(
@@ -695,7 +681,8 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                         let quote = ch;
                         pos += 1;
                         loop {
-                            let Some(quoted) = text.get(pos).copied() else {
+                            let Some(quoted) = text.get(pos).copied().filter(|&ch| ch != '\0')
+                            else {
                                 return self.error(
                                     self.current_line,
                                     "Reached end of file while parsing macro.",
