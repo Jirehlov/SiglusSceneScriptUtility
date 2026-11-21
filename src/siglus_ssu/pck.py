@@ -2,17 +2,15 @@ import csv
 import struct
 import io
 import ntpath
-from contextlib import redirect_stdout
+from contextlib import nullcontext, redirect_stdout
 from heapq import nsmallest
 import itertools
 from pathlib import PureWindowsPath
 import os
 import sys
 import time
-import tempfile
 from . import const as C
-from .native_ops import lzss_unpack, smd5_digest, xor_cycle_inplace
-from . import compiler
+from .native_ops import lzss_unpack, smd5_digest, tile_copy, xor_cycle_inplace
 from .word_count import count_text_units
 from .common import (
     BinaryFormatError,
@@ -38,6 +36,7 @@ from .common import (
     open_atomic_output,
     PCK_KEY_DIR,
     ANGOU_DAT_NAME,
+    SCENE_SCRIPT_ID_PREFIX,
     read_u32_le,
     decode_angou_first_line,
     angou_first_line,
@@ -492,7 +491,7 @@ def _read_scene_script_id(raw):
         line = bytes(raw or b"")[:1024].splitlines()[0]
     except Exception:
         return None
-    prefix = compiler.SCENE_SCRIPT_ID_PREFIX
+    prefix = SCENE_SCRIPT_ID_PREFIX
     if (not line.startswith(prefix)) or len(line) < len(prefix) + 4:
         return None
     value = line[len(prefix) : len(prefix) + 4]
@@ -616,6 +615,8 @@ def _resolve_pck_scene_exe_el(
     if not hdr["scn_data_exe_angou_mod"]:
         return b""
     data_start = hdr["scn_data_list_ofs"]
+    easy_code = C.EASY_ANGOU_CODE
+    view = memoryview(blob)
     base_dir = os.path.dirname(os.path.abspath(input_pck)) if input_pck else ""
     sources = iter_exe_el_sources(
         explicit_angou=explicit_angou,
@@ -640,6 +641,14 @@ def _resolve_pck_scene_exe_el(
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
         for offset, size in data_entries:
             start = data_start + offset
+            header = bytearray(view[start : start + min(size, 8)])
+            xor_cycle_inplace(header, exe_el, 0)
+            if read_u32_le(header, 0) != C.SCN_HDR_SIZE and not looks_like_lzss(
+                header, packed_size=size
+            ):
+                xor_cycle_inplace(header, easy_code, 0)
+                if not looks_like_lzss(header, packed_size=size):
+                    continue
             out_dat = _decode_scene_blob(blob[start : start + size], hdr, exe_el)
             if out_dat and scn_structure_valid(out_dat):
                 sys.stderr.write(f"key source accepted: {format_exe_el_source(src)}\n")
@@ -904,6 +913,8 @@ def _pck_cd_word_rows(
 
 
 def _pck_ss_word_rows(blob: bytes, hdr) -> dict:
+    import tempfile
+
     from . import textmap as _textmap
 
     stats = {
@@ -946,7 +957,7 @@ def _pck_ss_word_rows(blob: bytes, hdr) -> dict:
             if not (os.path.isfile(out_path) and read_bytes(out_path) == raw):
                 directory, leaf = os.path.split(out_path)
                 written_path = _write_extracted_file(
-                    directory, leaf, raw, output_names.setdefault(directory, set())
+                    directory, leaf, raw, output_names.setdefault(directory, {})
                 )
                 if written_path != out_path:
                     rel_display = os.path.relpath(written_path, tmpdir).replace(
@@ -1694,11 +1705,11 @@ def _decode_scene_blob(blob, hdr, exe_el):
     return b
 
 
-def looks_like_lzss(blob: bytes) -> bool:
+def looks_like_lzss(blob: bytes, *, packed_size=None) -> bool:
     if not blob or len(blob) < 8:
         return False
     pack_sz, org_sz = struct.unpack_from("<II", blob, 0)
-    if pack_sz != len(blob):
+    if pack_sz != (len(blob) if packed_size is None else packed_size):
         return False
     if org_sz <= 0:
         return False
@@ -1760,24 +1771,34 @@ def _validate_archive_output_name(name):
             raise OSError(f"invalid archive output name: {name!r}")
 
 
-def _write_extracted_file(directory, name, data, used_names):
+def _reserve_extracted_path(directory, name, next_suffixes):
     _validate_archive_output_name(name)
     stem, ext = os.path.splitext(name)
-    for index in itertools.count():
+    base_key = windows_filename_key(name)
+    for index in itertools.count(next_suffixes.get(base_key, 0)):
         leaf = f"{stem}_{index}{ext}" if index else name
         key = windows_filename_key(leaf)
-        if key in used_names:
-            continue
-        path = os.path.join(directory, leaf)
+        if key not in next_suffixes:
+            next_suffixes[key] = 1
+            next_suffixes[base_key] = index + 1
+            return os.path.join(directory, leaf)
+
+
+def _write_extracted_file(
+    directory, name, data, next_suffixes, *, path=None, reserve_lock=None
+):
+    while True:
+        if path is None:
+            with reserve_lock or nullcontext():
+                path = _reserve_extracted_path(directory, name, next_suffixes)
         try:
             with open_atomic_output(path, exclusive=True) as output:
                 output.write(data)
         except FileExistsError:
             if not os.path.lexists(path):
                 raise
-            used_names.add(key)
+            path = None
         else:
-            used_names.add(key)
             return path
 
 
@@ -1842,10 +1863,10 @@ def source_angou_decrypt(enc: bytes, ctx: dict, *, only_names=()):
     lzb_mv = memoryview(lzb)
     sp1 = lzb_mv[0:mapt]
     sp2 = lzb_mv[bh : bh + mapt]
-    compiler.tile_copy(sp1, dp1, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
-    compiler.tile_copy(sp1, dp2, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
-    compiler.tile_copy(sp2, dp2, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
-    compiler.tile_copy(sp2, dp1, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
+    tile_copy(sp1, dp1, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
+    tile_copy(sp1, dp2, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
+    tile_copy(sp2, dp2, mapw, maph, mask, mw, mh, repx, repy, 0, lim)
+    tile_copy(sp2, dp1, mapw, maph, mask, mw, mh, repx, repy, 1, lim)
     packed = bytes(lzb[:lzsz])
     if smd5_digest(packed) != smd5_code[:16]:
         packed = dp1[:bh] + dp2[: lzsz - bh]
@@ -1925,7 +1946,7 @@ def extract_pck(
         names = flix_info["names"]
         entries = flix_info["entries"]
         out_dir = _create_extract_dir(output_dir)
-        output_names = set()
+        output_names = {}
         sys.stdout.write(f"Output: {out_dir}\n")
         for i in range(flix_info["cnt"]):
             nm = names[i] or f"file_{i:d}.bin"
@@ -1968,14 +1989,14 @@ def extract_pck(
         sys.stderr.write(str(exc) + "\n")
         return 1
     out_dir = _create_extract_dir(output_dir)
-    output_names = set()
-    key_output_names = set()
+    output_names = {}
+    key_output_names = {}
     angou_name = windows_filename_key(os.path.splitext(ANGOU_DAT_NAME)[0])
     separate_key = any(
         windows_filename_key(name) == angou_name for name in scene_directory[0]
     )
     if separate_key:
-        output_names.add(windows_filename_key(PCK_KEY_DIR))
+        output_names[windows_filename_key(PCK_KEY_DIR)] = 1
     sys.stdout.write(f"Output: {out_dir}\n")
     if (
         not decompile
@@ -2004,6 +2025,26 @@ def extract_pck(
 
         disam_stats = new_disam_stats()
 
+    reserve_lock = None
+    if decompile:
+        from threading import Lock
+
+        reserve_lock = Lock()
+
+    def publish_scene(item):
+        nonlocal ok_cnt
+        path = _write_extracted_file(
+            out_dir,
+            item["output_name"],
+            item["blob"],
+            output_names,
+            path=item["dat_path"],
+            reserve_lock=reserve_lock,
+        )
+        with reserve_lock:
+            ok_cnt += 1
+        return path
+
     def extract_dat_items():
         nonlocal ok_cnt, fail_cnt
         for item in iter_pck_scene_dat_items(
@@ -2025,11 +2066,18 @@ def extract_pck(
                 fail_cnt += 1
                 continue
             out_dat = bytes(blob)
-            out_path = _write_extracted_file(out_dir, out_name, out_dat, output_names)
-            ok_cnt += 1
+            if decompile:
+                with reserve_lock:
+                    out_path = _reserve_extracted_path(out_dir, out_name, output_names)
+            else:
+                out_path = _write_extracted_file(
+                    out_dir, out_name, out_dat, output_names
+                )
+                ok_cnt += 1
             if D:
                 yield {
                     "dat_path": out_path,
+                    "output_name": out_name,
                     "blob": out_dat,
                     "out_dir": out_dir,
                     "pack_context": item.get("pack_context"),
@@ -2044,6 +2092,7 @@ def extract_pck(
             stats=disam_stats,
             decompile=decompile,
             emit_text=dat_txt,
+            publish_dat=publish_scene if decompile else None,
         )
         failed_paths = result["failed_paths"]
         disam_fail_cnt = len(failed_paths)

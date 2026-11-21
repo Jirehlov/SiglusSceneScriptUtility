@@ -518,13 +518,8 @@ def main(argv):
         word = True
     if word and ("--disam" in args or "--decompile" in args):
         return 2
-    try:
-        args, gei, _disam, _decompile = parse_gei_disam_args(args)
-    except ValueError as e:
-        sys.stderr.write(str(e) + "\n")
-        return 2
-    dat_disam = bool(_disam)
-    if _decompile:
+    args, gei, dat_disam, decompile = parse_gei_disam_args(args)
+    if decompile:
         sys.stderr.write(
             "analyze: --decompile requires extract mode on a complete .pck input\n"
         )
@@ -576,7 +571,7 @@ def main(argv):
         args.extend(positional_args)
     key_paths = set()
     if read_flags:
-        if word or gei or _disam or readall or apply or compare_payload:
+        if word or gei or dat_disam or readall or apply or compare_payload:
             return 2
         if len(args) not in (1, 2) or (explicit_angou and len(args) != 2):
             return 2
@@ -600,10 +595,10 @@ def main(argv):
     if report_json:
         sys.stderr.write("analyze: --report-json requires --read-flags\n")
         return 2
-    if apply and (compare_payload or _disam):
+    if apply and (compare_payload or dat_disam):
         return 2
     if word:
-        if gei or _disam or readall or apply or compare_payload:
+        if gei or dat_disam or readall or apply or compare_payload:
             return 2
         if len(args) not in (1, 2):
             return 2
@@ -624,7 +619,7 @@ def main(argv):
             key_paths=key_paths,
         )
     if explicit_angou and not args:
-        if gei or _disam or readall or apply or compare_payload:
+        if gei or dat_disam or readall or apply or compare_payload:
             return 2
         return analyze_angou_dat(explicit_angou)
     if explicit_angou and args:
@@ -634,7 +629,7 @@ def main(argv):
             sys.stderr.write(str(e) + "\n")
             return 2
     if gei:
-        if readall or apply or compare_payload or _disam:
+        if readall or apply or compare_payload or dat_disam:
             return 2
         if len(args) == 1:
             return dat.analyze_gameexe_dat(args[0], explicit_angou=explicit_angou)

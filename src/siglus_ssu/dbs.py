@@ -8,6 +8,7 @@ from .native_ops import (
     is_native_available,
     lzss_pack,
     lzss_unpack,
+    msvcrt_advance,
     msvcrt_rand_byte,
     xor_cycle_inplace,
 )
@@ -332,11 +333,8 @@ def reset_msvcrt_rand(seed: int = 1) -> None:
 
 
 def burn_msvcrt_rand(n: int) -> None:
-    n = int(n)
-    if n <= 0:
-        return
-    for _ in range(n):
-        _msvcrt_rand_byte()
+    global _MSVCRT_RAND_STATE
+    _MSVCRT_RAND_STATE = msvcrt_advance(_MSVCRT_RAND_STATE, n)
 
 
 def _msvcrt_rand_byte() -> int:

@@ -1,3 +1,4 @@
+from functools import cache
 from hashlib import file_digest
 import siglus_ssu as _runtime
 
@@ -1030,7 +1031,7 @@ _FORM_CODE_PROFILES = {
     },
 }
 _SYSTEM_ELEMENT_DEFS_PROFILES = {
-    0: (
+    0: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -3200,8 +3201,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    1: (
+    )""",
+    1: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -5367,8 +5368,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    2: (
+    )""",
+    2: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -7503,8 +7504,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    3: (
+    )""",
+    3: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -9639,8 +9640,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    4: (
+    )""",
+    4: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -11775,8 +11776,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    5: (
+    )""",
+    5: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -13911,8 +13912,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    6: (
+    )""",
+    6: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -16047,8 +16048,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    7: (
+    )""",
+    7: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -18183,8 +18184,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    8: (
+    )""",
+    8: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -20319,8 +20320,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    9: (
+    )""",
+    9: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -22446,8 +22447,8 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (0, "excall", "script", "script", 0, 0, 13, ""),
         (1, "steam", "void", "set_achievement", 0, 0, 0, "0:str;"),
         (1, "steam", "void", "reset_all_status", 0, 0, 1, "0:;"),
-    ),
-    10: (
+    )""",
+    10: r"""(
         (1, "global", "void", "_____test", 0, 0, 104, "0:int;1:int,int;-1:0=aaa=int;"),
         (
             1,
@@ -25463,7 +25464,7 @@ _SYSTEM_ELEMENT_DEFS_PROFILES = {
         (1, "mobile_googleplay", "str", "check_item_in_hand_error_msg", 0, 0, 3, "0:;"),
         (1, "mobile_googleplay", "int", "check_item_in_hand_result", 0, 0, 1, "0:;"),
         (1, "system", "int", "get_restart_code", 1, 0, 5, "0:;"),
-    ),
+    )""",
 }
 _MESSAGE_BLOCK_NAMES_PROFILES = {
     0: (
@@ -26154,6 +26155,7 @@ def resolve_form_code(value):
     return None
 
 
+@cache
 def _sanitize_ident(s):
     s = str(s)
     out = []
@@ -26186,7 +26188,13 @@ def set_profile(profile=CONST_PROFILE_DEFAULT):
         return
     CONST_PROFILE = profile
     _FORM_CODE = dict(_FORM_CODE_PROFILES[profile])
-    SYSTEM_ELEMENT_DEFS = list(_SYSTEM_ELEMENT_DEFS_PROFILES[profile])
+    element_defs = _SYSTEM_ELEMENT_DEFS_PROFILES[profile]
+    if isinstance(element_defs, str):
+        from ast import literal_eval
+
+        element_defs = literal_eval(element_defs)
+        _SYSTEM_ELEMENT_DEFS_PROFILES[profile] = element_defs
+    SYSTEM_ELEMENT_DEFS = list(element_defs)
     FORM_SET = set(_FORM_SET_PROFILES[profile])
     NAMED_INT_REFERENCE_ARGUMENTS = frozenset(
         _NAMED_INT_REFERENCE_ARGUMENTS_PROFILES[profile]
@@ -26438,4 +26446,4 @@ MAX_LIST_PREVIEW = 8
 with open(__file__, "rb") as _source_file:
     CONST_SHA512 = file_digest(_source_file, "sha512").hexdigest()
 
-set_profile()
+set_profile(_runtime._INITIAL_CONST_PROFILE)

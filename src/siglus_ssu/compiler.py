@@ -24,6 +24,7 @@ from .BS import (
 from .GEI import write_gameexe_dat
 from .linker import link_pack
 from .native_ops import (
+    _native_compile_constants_config,
     lzss_pack,
     xor_cycle_inplace,
     smd5_digest,
@@ -54,6 +55,7 @@ from .common import (
     write_bytes,
     parse_code,
     KEY_TXT_NAME,
+    SCENE_SCRIPT_ID_PREFIX,
     MACRO_STAT_KINDS,
     has_option,
     empty_macro_stat_counts,
@@ -74,7 +76,6 @@ from .path_policy import (
 
 
 _SOURCE_DIGEST_NAME = "_source_hashes.json"
-SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 
 
 def _check_compile_cache(tmp, scenes, inputs, outputs):
@@ -863,117 +864,6 @@ def _print_summary(ctx, ok=False):
     if angou is not None:
         print("=== \u6697\u53f7.dat ===")
         print(angou)
-
-
-def _native_compile_constants_config():
-    from .MA import FormTable
-
-    form_table = FormTable()
-    form_table.create_system_form_table()
-    system_elements = []
-    selection_command_codes = []
-    for parent, form_info in form_table.form_map_by_name.items():
-        for element in (form_info.get("element_map_by_name") or {}).values():
-            arg_map = []
-            for list_id, arg_list in sorted(
-                (element.get("arg_map") or {}).items(), key=lambda item: int(item[0])
-            ):
-                args_snapshot = []
-                for index, arg in enumerate(arg_list["arg_list"]):
-                    args_snapshot.append(
-                        {
-                            "id": int(arg.get("id", index) or index),
-                            "name": str(arg.get("name", "") or ""),
-                            "form": str(arg.get("form", C.FM_INT) or C.FM_INT),
-                            "def_int": int(arg.get("def_int", 0) or 0),
-                            "def_exist": bool(arg.get("def_exist", False)),
-                            "preserve_int_reference": bool(
-                                arg.get("preserve_int_reference", False)
-                            ),
-                        }
-                    )
-                arg_map.append({"id": int(list_id), "args": args_snapshot})
-            element_code = int(element.get("code", 0) or 0)
-            system_elements.append(
-                {
-                    "parent": str(parent),
-                    "kind": int(element.get("type", C.ET_PROPERTY) or 0),
-                    "code": element_code,
-                    "name": str(element.get("name", "") or ""),
-                    "form": str(element.get("form", C.FM_INT) or C.FM_INT),
-                    "arg_map": arg_map,
-                    "origin": str(element.get("origin", "sys") or "sys"),
-                }
-            )
-            if C.is_global_sel_command(parent, element_code):
-                selection_command_codes.append(
-                    [int(C._FORM_CODE.get(parent, 0) or 0), element_code]
-                )
-    return {
-        "form_code": C._FORM_CODE,
-        "form_names": {
-            name: str(getattr(C, name))
-            for name in (
-                "FM___ARGSREF",
-                "FM___ARGS",
-                "FM_LIST",
-                "FM_VOID",
-                "FM_INT",
-                "FM_INTLIST",
-                "FM_INTLISTREF",
-                "FM_INTREF",
-                "FM_LABEL",
-                "FM_CALL",
-                "FM_SCENE",
-                "FM_GLOBAL",
-                "FM_STR",
-                "FM_STRLIST",
-                "FM_STRLISTREF",
-                "FM_STRREF",
-            )
-        },
-        "la_type": C.LA_T,
-        "op_code": {
-            name: int(getattr(C, name)) for name in dir(C) if name.startswith("OP_")
-        },
-        "cd_code": {
-            name: int(getattr(C, name)) for name in dir(C) if name.startswith("CD_")
-        },
-        "element_code": {
-            "ELM_ARRAY": C.ELM_ARRAY,
-            "ELM_GLOBAL_CUR_CALL": C.ELM_GLOBAL_CUR_CALL,
-            "ELM_GLOBAL_MSG_BLOCK": C.ELM_GLOBAL_MSG_BLOCK,
-            "ELM_OWNER_CALL_PROP": C.ELM_OWNER_CALL_PROP,
-            "ELM_OWNER_USER_CMD": C.ELM_OWNER_USER_CMD,
-            "ELM_OWNER_USER_PROP": C.ELM_OWNER_USER_PROP,
-        },
-        "element_type": {
-            "ET_COMMAND": C.ET_COMMAND,
-            "ET_PROPERTY": C.ET_PROPERTY,
-        },
-        "system_elements": system_elements,
-        "scn_header_fields": list(C.SCN_HDR_FIELDS),
-        "scn_header_size": int(C.SCN_HDR_SIZE),
-        "pack_header_fields": list(C.PACK_HDR_FIELDS),
-        "pack_header_size": int(C.PACK_HDR_SIZE),
-        "z_label_count": int(C.TNM_Z_LABEL_CNT),
-        "logical_and_precedence": C.LOGICAL_AND_PRECEDENCE,
-        "unary_precedence": C.SA_PRI_MAX,
-        "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
-        "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
-        "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
-        "exe_angou_b_idx": [int(x) for x in C.EXE_ANGOU_B_IDX],
-        "source_angou": C.SOURCE_ANGOU,
-        "message_block_command_codes": [
-            [int(parent), int(code)] for parent, code in C.MESSAGE_BLOCK_COMMAND_CODES
-        ],
-        "read_flag_command_codes": [
-            [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
-        ],
-        "selection_command_codes": selection_command_codes,
-        "allow_property_out_of_command": C.ALLOW_PROPERTY_OUT_OF_COMMAND,
-        "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
-    }
 
 
 def _native_compile_config(

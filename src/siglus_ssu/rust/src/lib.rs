@@ -122,7 +122,7 @@ fn msvcrand_shuffle_inplace(state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
         loop {
             let mut rnd: u32 = 0;
             for _ in 0..chunks {
-                x = x.wrapping_mul(214013).wrapping_add(2531011);
+                x = msvc_next(x);
                 let r = (x >> 16) & 0x7FFF;
                 rnd = (rnd << n32) | r;
             }
@@ -146,9 +146,27 @@ fn msvcrand_shuffle_inplace(state: u32, a: Bound<'_, PyList>) -> PyResult<u32> {
     Ok(x)
 }
 
+const MSVCRT_MULTIPLIER: u32 = 214013;
+const MSVCRT_INCREMENT: u32 = 2531011;
+
 #[inline]
 fn msvc_next(x: u32) -> u32 {
-    x.wrapping_mul(214013).wrapping_add(2531011)
+    x.wrapping_mul(MSVCRT_MULTIPLIER)
+        .wrapping_add(MSVCRT_INCREMENT)
+}
+
+fn msvc_advance(mut state: u32, mut steps: usize) -> u32 {
+    let mut multiplier = MSVCRT_MULTIPLIER;
+    let mut increment = MSVCRT_INCREMENT;
+    while steps != 0 {
+        if steps & 1 != 0 {
+            state = multiplier.wrapping_mul(state).wrapping_add(increment);
+        }
+        increment = multiplier.wrapping_add(1).wrapping_mul(increment);
+        multiplier = multiplier.wrapping_mul(multiplier);
+        steps >>= 1;
+    }
+    state
 }
 
 #[inline]
@@ -164,10 +182,7 @@ fn find_rand_skip(
     pattern: &[u8],
     start_skip: usize,
 ) -> PyResult<Option<usize>> {
-    if pattern.is_empty() {
-        return Ok(Some(start_skip));
-    }
-    let max_scan: usize = 16777216;
+    let max_scan: usize = 1 << 24;
     let scan_len = max_scan
         .checked_add(pattern.len() - 1)
         .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
@@ -187,10 +202,7 @@ fn find_rand_skip(
             }
             prefix[i] = matched;
         }
-        let mut state = seed;
-        for _ in 0..start_skip {
-            state = msvc_next(state);
-        }
+        let mut state = msvc_advance(seed, start_skip);
         matched = 0;
         for pos in 0..scan_len {
             state = msvc_next(state);
@@ -202,7 +214,7 @@ fn find_rand_skip(
                 matched += 1;
             }
             if matched == pattern.len() {
-                return Some(start_skip + pos + 1 - pattern.len());
+                return Some(start_skip + (pos + 1 - pattern.len()));
             }
         }
         None

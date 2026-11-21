@@ -1,6 +1,7 @@
 from . import const as C
 from .CA import (
     CharacterAnalizer,
+    _ExpansionBuffer,
     get_form_code_by_name,
     is_alpha,
     is_num,
@@ -59,6 +60,7 @@ class IncAnalyzer:
             self.err(result.get("line", 0), result.get("message", ""))
             return 0
         self.t = result.get("text", "")
+        self._column_base = 0
         if self.sidecar:
             source_map = result["source_map"]
             if self.input_source_map:
@@ -338,13 +340,14 @@ class IncAnalyzer:
             return None, i, line
         return s, i, line
 
+    def _column(self, offset):
+        last_newline = self.t[:offset].rfind("\n")
+        if last_newline >= 0:
+            return offset - last_newline - 1
+        return self._column_base + offset
+
     def _span_from_offsets(self, start, end, line):
-        if (
-            self.sidecar
-            and start >= 0
-            and end > start
-            and isinstance(self.source_map, list)
-        ):
+        if self.sidecar and start >= 0 and end > start:
             points = [
                 self.source_map[pos]
                 for pos in range(start, min(end, len(self.source_map)))
@@ -361,14 +364,8 @@ class IncAnalyzer:
                         max(chars) + 1,
                         next(iter(sources)),
                     )
-        text = self.t[: max(0, start)]
-        line_start = text.rfind("\n") + 1
-        return (
-            int(line or 1),
-            max(0, start - line_start),
-            max(0, end - line_start),
-            -1,
-        )
+        column = self._column(start)
+        return int(line or 1), column, column + end - start, -1
 
     def _record_decl(self, kind, name, line, start, end):
         if not self.sidecar:
@@ -739,14 +736,23 @@ class IncAnalyzer:
             return i2, line2, 0
         ca = self.ca
         source_map = self._last_after_source_map if self.sidecar else None
+        if source_map is not None:
+            source_map.extend([None] * (len(after) - len(source_map)))
         t = ca.analize_line(after, self.iad, source_map)
         if t is None:
             self.err(line2, ca.get_error_str())
             return i2, line2, 0
-        self.t = self.t[:i0] + t + self.t[i2:]
+        if isinstance(self.t, str):
+            self.t = _ExpansionBuffer(self.t)
+            if self.sidecar:
+                self.source_map = _ExpansionBuffer(self.source_map)
         if self.sidecar:
-            self.source_map[i0:i2] = source_map
-        return i0, line2, 1
+            self._column_base = self._column(i0)
+            self.source_map.advance(i0, emit=False)
+            self.source_map.replace(i2 - i0, source_map)
+        self.t.advance(i0, emit=False)
+        self.t.replace(i2 - i0, t)
+        return 0, line2, 1
 
     def step1(self):
         if not self.cc():

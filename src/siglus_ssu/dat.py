@@ -4,13 +4,16 @@ import os
 import struct
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from .path_policy import read_file_stat, resolve_read_path, validate_input_paths
 from . import const as C
-from . import disam
-from .decompiler import (
-    _write_support_inc_lines,
-    build_decompile_hints,
-    write_decompiled_ss,
+from .native_ops import (
+    build_decompile_hints_native,
+    decompile_source_native,
+    disassemble_scn_bytes_native,
+    is_native_available,
 )
 from .common import (
     hx,
@@ -26,7 +29,8 @@ from .common import (
     build_sections,
     parse_i32_header_checked,
     read_bytes,
-    write_unique_text,
+    write_text,
+    write_unique_bytes,
     looks_like_siglus_dat,
     new_disam_stats,
     add_elapsed_seconds,
@@ -71,6 +75,31 @@ def _build_decompile_hints(bundles):
         write_status(f"Building hints {name} ...")
 
     try:
+        if is_native_available():
+            cached_bundles = {}
+            remaining_bytes = 256 * 1024 * 1024
+
+            def native_bundles():
+                nonlocal remaining_bytes
+                bundle = next(bundles, None)
+                while bundle is not None:
+                    _hint_status(bundle)
+                    retained_bytes = bundle["trace"].retained_bytes(remaining_bytes)
+                    if retained_bytes is not None:
+                        cached_bundles[bundle["dat_path"]] = bundle
+                        remaining_bytes -= retained_bytes
+                    yield bundle
+                    try:
+                        bundle = bundles.send(remaining_bytes)
+                    except StopIteration:
+                        return
+
+            hints = build_decompile_hints_native(native_bundles())
+            if hints is not None:
+                hints["cached_bundles"] = cached_bundles
+            return hints
+        from .decompiler import build_decompile_hints
+
         return build_decompile_hints(bundles, status=_hint_status)
     except Exception as exc:
         sys.stderr.write(f"decompile: failed to build hints: {exc}\n")
@@ -255,11 +284,11 @@ def dat_disassembly_bundle(
         label_list = meta["label_list"]
         z_label_list = meta["z_label_list"]
         parse_status = {}
-        result = disam.disassemble_scn_bytes(
-            scn,
-            str_list,
-            label_list,
-            z_label_list,
+        parameters = dict(
+            scn=scn,
+            str_list=str_list,
+            label_list=label_list,
+            z_label_list=z_label_list,
             cmd_label_list=meta.get("cmd_label_list"),
             scn_prop_defs=meta.get("scn_prop_defs"),
             scn_cmd_names=meta.get("scn_cmd_names"),
@@ -272,9 +301,14 @@ def dat_disassembly_bundle(
             with_trace=with_trace,
             emit_text=emit_text,
             trace_profile=trace_profile,
-            annotation_budget=annotation_budget,
-            parse_status=parse_status,
         )
+        result = disassemble_scn_bytes_native(
+            parameters, annotation_budget, parse_status
+        )
+        if result is None:
+            from .disam import disassemble_scn_bytes
+
+            result = disassemble_scn_bytes(**parameters, parse_status=parse_status)
         dis, trace = result if with_trace else (result, None)
         if payload_trace and with_trace:
             from .native_ops import complete_payload_trace_native
@@ -309,7 +343,18 @@ def dat_disassembly_bundle(
         return None
 
 
-def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):
+def _pack_context_bytes(context):
+    if not context:
+        return b""
+    section = "\n\n---- pack_context ----" + "".join(
+        f"\n{key}: {value!r}" for key, value in context.items()
+    )
+    return section.replace("\n", "\r\n").encode("utf-8")
+
+
+def _write_dat_txt(
+    dat_path, blob, out_dir, stats, bundle, *, emit_text=True, pack_bytes=None
+):
     h = bundle.get("header") or {}
     str_list = bundle.get("str_list") or []
     label_list = bundle.get("label_list") or []
@@ -366,13 +411,10 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text
         values = (meta.get("raw_names") or {}).get(key, meta.get(key)) or []
         for idx, value in enumerate(values):
             lines.append(f"[{idx:d}] {value!r}")
-    if bundle.get("pack_context"):
-        lines.append("")
-        lines.append("---- pack_context ----")
-        for key, value in bundle["pack_context"].items():
-            lines.append(f"{key}: {value!r}")
-    lines.append("")
-    lines.append("---- str_list (xor utf16le) ----")
+    if pack_bytes is None:
+        pack_bytes = _pack_context_bytes(bundle["pack_context"])
+    header = "\n".join(lines).replace("\n", "\r\n").encode("utf-8")
+    lines = ["", "", "---- str_list (xor utf16le) ----"]
     for i, s in enumerate(str_list or []):
         lines.append(f"[{i:d}] {s!r}")
     lines.append("")
@@ -419,80 +461,144 @@ def _write_dat_txt_prepared(dat_path, blob, out_dir, stats, bundle, *, emit_text
                 )
     lines.append("")
     lines.append("---- scn_bytes disassembly ----")
-    lines.extend(dis)
+    if not isinstance(dis, bytes):
+        lines.extend(dis)
+        dis = b""
     lines.append("")
-    return write_unique_text(out_path, "\n".join(lines))
+    body = "\n".join(lines).replace("\n", "\r\n").encode("utf-8")
+    return write_unique_bytes(out_path, header, pack_bytes, body, dis)
 
 
-def _write_dat_txt(dat_path, blob, out_dir, stats, bundle, *, emit_text=True):
+def _write_support_inc_lines(root, lines):
+    out_path = os.path.join(root, "__decompiled.inc")
+    merged = []
+    seen = set()
+    for decl in lines:
+        text = decl.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        merged.append(text)
+    if merged:
+        write_text(out_path, "\n".join(merged).rstrip() + "\n", enc="utf-8")
+
+
+def _write_decompiled_ss(dat_path, bundle, out_dir, hints):
     try:
-        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
-        return _write_dat_txt_prepared(
-            dat_path, blob, out_dir, stats, bundle, emit_text=emit_text
+        out_root = os.path.join(out_dir, "decompiled")
+        stem = os.path.splitext(os.path.basename(str(dat_path)))[0]
+        out_path = os.path.join(out_root, stem + ".ss")
+        if "_native" in hints:
+            source = decompile_source_native(bundle, hints)
+        else:
+            from .decompiler import _Decompiler
+
+            source = _Decompiler(bundle, hints=hints).decompile()
+        return write_unique_bytes(
+            out_path, source.replace("\n", "\r\n").encode("utf-8")
         )
-    except Exception:
+    except Exception as exc:
+        sys.stderr.write(f"decompile: {dat_path}: {exc}\n")
         return None
 
 
-def _write_dat_decompiled(dat_path, out_dir, bundle, decompile_hints, stats):
-    try:
-        if os.path.exists(out_dir) and (not os.path.isdir(out_dir)):
-            return None
-        name = os.path.basename(str(dat_path))
-        write_status(f"Decompiling {name} ...")
-        started = time.perf_counter()
-        out_path = write_decompiled_ss(dat_path, bundle, out_dir, hints=decompile_hints)
-        add_elapsed_seconds(stats, "decompile_seconds", time.perf_counter() - started)
-        return out_path
-    except Exception:
-        return None
+def process_dat_output_items(
+    items, stats, decompile=False, *, emit_text=True, publish_dat=None
+):
+    from .parallel import get_max_workers
 
+    workers = (
+        min(get_max_workers() * 2, 8) if decompile and is_native_available() else 1
+    )
+    if workers > 1:
+        from .native_ops import _disam_native_config
 
-def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
+        _disam_native_config()
     ready_items = []
     written_paths = []
     failed_paths = []
+    annotation_budget = None
 
-    def iter_bundles():
-        annotation_budget = None
+    def ordered_results(executor, work, jobs):
+        if executor is None:
+            for _, args in jobs:
+                yield work(*args)
+            return
+        pending = deque()
+        queued_bytes = 0
+        for size, args in jobs:
+            while pending and (
+                len(pending) >= 2 * workers or queued_bytes + size > 16 * 1024 * 1024
+            ):
+                future, used = pending.popleft()
+                queued_bytes -= used
+                yield future.result()
+            pending.append((executor.submit(work, *args), size))
+            queued_bytes += size
+        while pending:
+            future, _ = pending.popleft()
+            yield future.result()
+
+    def disassembly_jobs():
+        last_context = None
+        pack_bytes = b""
         for item in items:
-            dat_path = item["dat_path"]
-            blob = item["blob"]
-            out_dir = item["out_dir"]
-            name = os.path.basename(str(dat_path or ""))
+            name = os.path.basename(item["dat_path"])
             write_status(f"Disassembling {name} ...")
-            started = time.perf_counter()
-            bundle = dat_disassembly_bundle(
-                blob,
-                dat_path,
-                pack_context=item.get("pack_context"),
-                scene_no=item.get("scene_no"),
-                scene_name=item.get("scene_name"),
-                with_trace=decompile,
-                trace_profile="decompile" if decompile else None,
-                annotation_budget=annotation_budget,
-                emit_text=emit_text,
-            )
-            add_elapsed_seconds(
-                stats, "disassembly_seconds", time.perf_counter() - started
-            )
-            if bundle is None:
-                failed_paths.append(dat_path)
-                continue
-            started = time.perf_counter()
+            context = item.get("pack_context")
+            if emit_text and context is not last_context:
+                pack_bytes = _pack_context_bytes(context)
+                last_context = context
+            yield len(item["blob"]), (item, annotation_budget, pack_bytes)
+
+    def disassemble(item, budget, pack_bytes):
+        if publish_dat is not None:
+            item["dat_path"] = publish_dat(item)
+        dat_path = item["dat_path"]
+        blob = item["blob"]
+        bundle = dat_disassembly_bundle(
+            blob,
+            dat_path,
+            pack_context=item.get("pack_context"),
+            scene_no=item.get("scene_no"),
+            scene_name=item.get("scene_name"),
+            with_trace=decompile,
+            trace_profile="decompile" if decompile else None,
+            annotation_budget=budget,
+            emit_text=emit_text,
+        )
+        if bundle is None:
+            return item, None, None, 0
+        local_stats = {"ended_unexpectedly": 0}
+        try:
             out_path = _write_dat_txt(
                 dat_path,
                 blob,
-                out_dir,
-                stats,
-                bundle=bundle,
+                item["out_dir"],
+                local_stats,
+                bundle,
                 emit_text=emit_text,
+                pack_bytes=pack_bytes,
             )
+        except Exception:
+            out_path = None
+        del bundle["dis"]
+        return item, bundle, out_path, local_stats["ended_unexpectedly"]
+
+    def iter_bundles(executor):
+        nonlocal annotation_budget
+        results = ordered_results(executor, disassemble, disassembly_jobs())
+        while True:
+            started = time.perf_counter()
+            result = next(results, None)
+            if result is None:
+                return
             add_elapsed_seconds(
                 stats, "disassembly_seconds", time.perf_counter() - started
             )
-            bundle.pop("dis")
+            item, bundle, out_path, ended = result
+            stats["ended_unexpectedly"] += ended
+            dat_path = item["dat_path"]
             if not out_path:
                 failed_paths.append(dat_path)
                 continue
@@ -505,78 +611,82 @@ def process_dat_output_items(items, stats, decompile=False, *, emit_text=True):
                 ready_items.append(
                     {
                         "dat_path": dat_path,
-                        "out_dir": out_dir,
+                        "out_dir": item["out_dir"],
                         "pack_context": item.get("pack_context"),
                         "scene_no": item.get("scene_no"),
                         "scene_name": item.get("scene_name"),
+                        "size": len(item["blob"]),
                     }
                 )
+            del item, result
             annotation_budget = yield bundle
-            del bundle
 
-    bundles = iter_bundles()
-    if decompile:
-        started = time.perf_counter()
-        disassembly_before = stats["disassembly_seconds"]
-        decompile_hints = _build_decompile_hints(bundles)
-        if decompile_hints is not None:
-            try:
-                out_root = os.path.join(ready_items[0]["out_dir"], "decompiled")
-                os.makedirs(out_root, exist_ok=True)
-                _write_support_inc_lines(out_root, decompile_hints["inc_lines"])
-            except Exception as exc:
-                sys.stderr.write(
-                    f"decompile: failed to write shared declarations: {exc}\n"
-                )
-                decompile_hints = None
-        add_elapsed_seconds(
-            stats,
-            "decompile_hints_seconds",
-            time.perf_counter()
-            - started
-            - (stats["disassembly_seconds"] - disassembly_before),
-        )
-        if decompile_hints is None:
-            failed_paths.extend(item["dat_path"] for item in ready_items)
-            return {"written": written_paths, "failed_paths": failed_paths}
+    def decompile_jobs(cached_bundles):
         for item in ready_items:
-            started = time.perf_counter()
-            bundle = decompile_hints.get("cached_bundles", {}).pop(
-                item["dat_path"], None
-            )
-            if bundle is None:
-                try:
-                    bundle = dat_disassembly_bundle(
-                        read_bytes(item["dat_path"]),
-                        item["dat_path"],
-                        pack_context=item["pack_context"],
-                        scene_no=item["scene_no"],
-                        scene_name=item["scene_name"],
-                        emit_text=False,
-                        trace_profile="decompile",
-                    )
-                except OSError:
-                    bundle = None
-            add_elapsed_seconds(
-                stats, "disassembly_seconds", time.perf_counter() - started
-            )
-            if bundle is None or not bundle["complete"]:
-                failed_paths.append(item["dat_path"])
+            dat_path = item["dat_path"]
+            write_status(f"Decompiling {os.path.basename(dat_path)} ...")
+            yield item["size"], (item, cached_bundles.pop(dat_path, None))
+
+    def render(item, bundle):
+        dat_path = item["dat_path"]
+        if bundle is None:
+            try:
+                bundle = dat_disassembly_bundle(
+                    read_bytes(dat_path),
+                    dat_path,
+                    pack_context=item["pack_context"],
+                    scene_no=item["scene_no"],
+                    scene_name=item["scene_name"],
+                    emit_text=False,
+                    trace_profile="decompile",
+                )
+            except OSError:
+                bundle = None
+        if bundle is None or not bundle["complete"]:
+            return dat_path
+        if not _write_decompiled_ss(dat_path, bundle, item["out_dir"], hints):
+            return dat_path
+        return None
+
+    with (
+        ThreadPoolExecutor(max_workers=workers) if workers > 1 else nullcontext()
+    ) as executor:
+        bundles = iter_bundles(executor)
+        if not decompile:
+            for bundle in bundles:
                 del bundle
-                continue
-            out_path = _write_dat_decompiled(
-                item["dat_path"],
-                out_dir=item["out_dir"],
-                bundle=bundle,
-                decompile_hints=decompile_hints,
-                stats=stats,
+        else:
+            started = time.perf_counter()
+            disassembly_before = stats["disassembly_seconds"]
+            hints = _build_decompile_hints(bundles)
+            if hints is not None:
+                try:
+                    out_root = os.path.join(ready_items[0]["out_dir"], "decompiled")
+                    os.makedirs(out_root, exist_ok=True)
+                    _write_support_inc_lines(out_root, hints["inc_lines"])
+                except Exception as exc:
+                    sys.stderr.write(
+                        f"decompile: failed to write shared declarations: {exc}\n"
+                    )
+                    hints = None
+            add_elapsed_seconds(
+                stats,
+                "decompile_hints_seconds",
+                time.perf_counter()
+                - started
+                - (stats["disassembly_seconds"] - disassembly_before),
             )
-            del bundle
-            if not out_path:
-                failed_paths.append(item["dat_path"])
-    else:
-        for bundle in bundles:
-            del bundle
+            if hints is None:
+                failed_paths.extend(item["dat_path"] for item in ready_items)
+            else:
+                started = time.perf_counter()
+                jobs = decompile_jobs(hints.pop("cached_bundles", {}))
+                failed_paths.extend(
+                    path for path in ordered_results(executor, render, jobs) if path
+                )
+                add_elapsed_seconds(
+                    stats, "decompile_seconds", time.perf_counter() - started
+                )
     return {"written": written_paths, "failed_paths": failed_paths}
 
 

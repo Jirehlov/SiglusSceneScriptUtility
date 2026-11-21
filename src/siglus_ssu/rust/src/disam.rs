@@ -5,11 +5,13 @@ use pyo3::types::{
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 type R = Result<V, Failure>;
-type MapRef = Rc<RefCell<OrderedMap>>;
+type MapRef = Arc<OrderedMap>;
 
 struct Failure(String);
 
@@ -42,11 +44,11 @@ impl Text {
             has_line_feed,
         }
     }
-    fn shared(chars: Vec<u32>) -> Rc<Self> {
+    fn shared(chars: Vec<u32>) -> Arc<Self> {
         if chars.len() == 1 && chars[0] < 256 {
             BYTE_CHARACTERS.with(|characters| characters[chars[0] as usize].clone())
         } else {
-            Rc::new(Self::new(chars))
+            Arc::new(Self::new(chars))
         }
     }
     fn eq_str(&self, text: &str) -> bool {
@@ -91,7 +93,7 @@ impl Hash for Text {
 enum Key {
     None,
     Int(i64),
-    Text(Rc<Text>),
+    Text(Arc<Text>),
     Tuple(Vec<Key>),
 }
 
@@ -154,14 +156,14 @@ impl Drop for ValueList {
 
 #[derive(Clone)]
 enum V {
-    Native(Rc<NativeObject>),
+    Native(Arc<NativeObject>),
     None,
     Bool(bool),
     Int(i64),
-    Str(Rc<Text>),
-    Bytes(Rc<Vec<u8>>),
-    List(Rc<ValueList>),
-    Tuple(Rc<ValueList>),
+    Str(Arc<Text>),
+    Bytes(Arc<Vec<u8>>),
+    List(Arc<ValueList>),
+    Tuple(Arc<ValueList>),
     Dict(MapRef),
     Set(MapRef),
 }
@@ -170,13 +172,12 @@ fn drop_values(mut pending: Vec<V>) {
     while let Some(value) = pending.pop() {
         match value {
             V::List(items) | V::Tuple(items) => {
-                if let Ok(mut items) = Rc::try_unwrap(items) {
+                if let Some(mut items) = Arc::into_inner(items) {
                     pending.append(&mut items.items);
                 }
             }
             V::Dict(map) | V::Set(map) => {
-                if let Ok(map) = Rc::try_unwrap(map) {
-                    let mut map = map.into_inner();
+                if let Some(mut map) = Arc::into_inner(map) {
                     for (key, value) in map.entries.drain(..) {
                         pending.push(key);
                         pending.push(value);
@@ -188,8 +189,8 @@ fn drop_values(mut pending: Vec<V>) {
     }
 }
 
-thread_local! { static BYTE_CHARACTERS:Vec<Rc<Text>>=(0..256).map(|code|Rc::new(Text::new(vec![code]))).collect(); }
-thread_local! { static EMPTY_SOURCE:Rc<Text>=Rc::new(Text::new(Vec::new())); }
+thread_local! { static BYTE_CHARACTERS:Vec<Arc<Text>>=(0..256).map(|code|Arc::new(Text::new(vec![code]))).collect(); }
+thread_local! { static EMPTY_SOURCE:Arc<Text>=Arc::new(Text::new(Vec::new())); }
 
 impl V {
     fn s(text: &str) -> Self {
@@ -201,16 +202,10 @@ impl V {
     }
 
     fn list(items: Vec<V>) -> Self {
-        Self::List(Rc::new(ValueList { items }))
+        Self::List(Arc::new(ValueList { items }))
     }
     fn tuple(items: Vec<V>) -> Self {
-        Self::Tuple(Rc::new(ValueList { items }))
-    }
-    fn dictionary() -> Self {
-        Self::Dict(Rc::new(RefCell::new(OrderedMap::new())))
-    }
-    fn set() -> Self {
-        Self::Set(Rc::new(RefCell::new(OrderedMap::new())))
+        Self::Tuple(Arc::new(ValueList { items }))
     }
 
     fn key(&self) -> Result<Key, Failure> {
@@ -232,9 +227,9 @@ impl V {
             _ => Err(Failure("native integer required".into())),
         }
     }
-    fn map(&self) -> Result<MapRef, Failure> {
+    fn map(&self) -> Result<&OrderedMap, Failure> {
         match self {
-            Self::Dict(value) | Self::Set(value) => Ok(value.clone()),
+            Self::Dict(value) | Self::Set(value) => Ok(value),
             _ => Err(Failure("native mapping required".into())),
         }
     }
@@ -243,22 +238,20 @@ impl V {
 fn values(value: &V) -> Result<Vec<V>, Failure> {
     match value {
         V::List(value) | V::Tuple(value) => Ok(value.items.clone()),
-        V::Dict(value) | V::Set(value) => Ok(value
-            .borrow()
-            .entries
-            .iter()
-            .map(|(key, _)| key.clone())
-            .collect()),
+        V::Dict(value) | V::Set(value) => {
+            Ok(value.entries.iter().map(|(key, _)| key.clone()).collect())
+        }
         _ => Err(Failure("native iterable required".into())),
     }
 }
 
 struct Runtime {
-    native_tables: Rc<NativeTables>,
-    literals: Rc<RefCell<HashMap<&'static str, V>>>,
-    frontend: Rc<crate::compile_backend::DecompileFrontend>,
-    memo: Rc<RefCell<ExpressionCache>>,
-    packs: Rc<RefCell<Vec<Rc<PackState>>>>,
+    native_tables: Arc<NativeTables>,
+    literals: RefCell<HashMap<&'static str, V>>,
+    frontend: Arc<crate::compile_backend::DecompileFrontend>,
+    memo: RefCell<ExpressionCache>,
+    packs: RefCell<Vec<Arc<PackState>>>,
+    label_cache: RefCell<LabelCache>,
 }
 
 struct Memo<T> {
@@ -402,13 +395,15 @@ struct DecompileHints {
     properties: HashMap<i64, HintProperty>,
     name_macros: HashMap<SourceText, SourceText>,
     inc_lines: Vec<SourceText>,
-    analyses: HashMap<Key, Rc<SceneAnalysis>>,
+    analyses: HashMap<Key, Arc<SceneAnalysis>>,
 }
 struct DecompilerState {
-    scene: Rc<DecompileScene>,
-    hints: Rc<DecompileHints>,
+    scene: Arc<DecompileScene>,
+    hints: Arc<DecompileHints>,
     meta: V,
-    analysis: Rc<SceneAnalysis>,
+    analysis: Arc<SceneAnalysis>,
+    annotations: Arc<Vec<Annotation>>,
+    render_cache: RefCell<HashMap<RenderKey, (bool, SourceText)>>,
     preserve_string_pool: bool,
     string_pool_carrier: std::cell::Cell<bool>,
     candidates: HashMap<usize, ForCandidate>,
@@ -426,7 +421,7 @@ struct ReadCommand {
     body_start: usize,
     trim_end: i64,
     terminal: bool,
-    parameters: std::ops::Range<usize>,
+    parameters: Vec<usize>,
     info: LocalCommand,
 }
 
@@ -434,7 +429,7 @@ fn is_space(code: u32) -> bool {
     matches!(code, 0x1c..=0x1f) || char::from_u32(code).is_some_and(char::is_whitespace)
 }
 
-#[pyclass(unsendable, module = "siglus_ssu.native_accel")]
+#[pyclass(frozen, module = "siglus_ssu.native_accel")]
 pub struct NativeValue {
     inner: V,
 }
@@ -448,9 +443,11 @@ impl NativeValue {
         let NativeObject::Scene(scene) = value.as_ref() else {
             return Some(0);
         };
-        let base = scene.annotations.borrow().len() * std::mem::size_of::<Annotation>()
-            + scene.events.len()
-                * (std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>())
+        if scene.next_nl.is_empty() {
+            return None;
+        }
+        let base = scene.annotations.len() * std::mem::size_of::<Annotation>()
+            + scene.events.len() * DECOMPILE_EVENT_CACHE_BYTES
             + scene.next_different_line_offsets.len() * std::mem::size_of::<i64>();
         if base > maximum {
             return None;
@@ -523,7 +520,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
         return Ok(V::Int(value.extract::<i64>()?));
     }
     if let Ok(value) = value.cast::<PyBytes>() {
-        return Ok(V::Bytes(Rc::new(value.as_bytes().to_vec())));
+        return Ok(V::Bytes(Arc::new(value.as_bytes().to_vec())));
     }
     if let Ok(value) = value.cast::<PyDict>() {
         if let Some(trace) = value.get_item("trace")?
@@ -531,9 +528,8 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
             && let V::Native(trace_value) = &trace.inner
             && let NativeObject::Scene(scene) = trace_value.as_ref()
         {
-            let existing = scene.meta.borrow().clone();
-            let meta = if let Some(meta) = existing {
-                meta
+            let meta = if let Some(meta) = scene.meta.get() {
+                meta.clone()
             } else {
                 let meta = value
                     .get_item("meta")?
@@ -557,8 +553,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
                 })
                 .collect::<PyResult<Vec<_>>>()?;
                 let meta = native_record(fields).map_err(|error| PyValueError::new_err(error.0))?;
-                *scene.meta.borrow_mut() = Some(meta.clone());
-                meta
+                scene.meta.get_or_init(|| meta).clone()
             };
             return native_record(vec![
                 ("meta", meta),
@@ -575,16 +570,13 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
             .map_err(|error| PyValueError::new_err(error.0));
         }
 
-        let output = V::dictionary();
+        let mut output = OrderedMap::new();
         for (key, value) in value.iter() {
             output
-                .map()
-                .unwrap()
-                .borrow_mut()
                 .insert(from_py(&key)?, from_py(&value)?)
                 .map_err(|error| PyValueError::new_err(error.0))?;
         }
-        return Ok(output);
+        return Ok(V::Dict(Arc::new(output)));
     }
     if let Ok(value) = value.cast::<PyList>() {
         return Ok(V::list(
@@ -603,28 +595,22 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
         ));
     }
     if let Ok(value) = value.cast::<PySet>() {
-        let output = V::set();
+        let mut output = OrderedMap::new();
         for value in value.iter() {
             output
-                .map()
-                .unwrap()
-                .borrow_mut()
                 .insert(from_py(&value)?, V::None)
                 .map_err(|error| PyValueError::new_err(error.0))?;
         }
-        return Ok(output);
+        return Ok(V::Set(Arc::new(output)));
     }
     if let Ok(value) = value.cast::<PyFrozenSet>() {
-        let output = V::set();
+        let mut output = OrderedMap::new();
         for value in value.iter() {
             output
-                .map()
-                .unwrap()
-                .borrow_mut()
                 .insert(from_py(&value)?, V::None)
                 .map_err(|error| PyValueError::new_err(error.0))?;
         }
-        return Ok(output);
+        return Ok(V::Set(Arc::new(output)));
     }
     if let Ok(value) = value.extract::<PyRef<'_, NativeValue>>() {
         return Ok(value.inner.clone());
@@ -640,7 +626,7 @@ fn from_py(value: &Bound<'_, PyAny>) -> PyResult<V> {
 fn to_py(py: Python<'_>, value: &V) -> PyResult<Py<PyAny>> {
     enum Frame<'py> {
         List {
-            items: Rc<ValueList>,
+            items: Arc<ValueList>,
             index: usize,
             target: Bound<'py, PyList>,
         },
@@ -692,7 +678,7 @@ fn to_py(py: Python<'_>, value: &V) -> PyResult<Py<PyAny>> {
             }
             V::Dict(items) => {
                 let target = PyDict::new(py);
-                let first = items.borrow().entries.first().map(|(key, _)| key.clone());
+                let first = items.entries.first().map(|(key, _)| key.clone());
                 if let Some(first) = first {
                     current = first;
                     pending.push(Frame::Dict {
@@ -733,18 +719,14 @@ fn to_py(py: Python<'_>, value: &V) -> PyResult<Py<PyAny>> {
                     if let Some(key) = key.take() {
                         target.set_item(key.bind(py), output.bind(py))?;
                         *index += 1;
-                        let next = items
-                            .borrow()
-                            .entries
-                            .get(*index)
-                            .map(|(key, _)| key.clone());
+                        let next = items.entries.get(*index).map(|(key, _)| key.clone());
                         if let Some(next) = next {
                             current = next;
                             continue 'values;
                         }
                     } else {
                         *key = Some(output);
-                        current = items.borrow().entries[*index].1.clone();
+                        current = items.entries[*index].1.clone();
                         continue 'values;
                     }
                 }
@@ -923,9 +905,9 @@ pub(crate) mod decompiler {
         config: PyRef<'_, DisamConfig>,
         bundles: Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
-        let rt = config.runtime();
-        let Some(hints) =
-            native_build_hints(&rt, &bundles).map_err(|error| PyValueError::new_err(error.0))?
+        let Some(hints) = config
+            .with_runtime(|rt| native_build_hints(rt, &bundles))
+            .map_err(|error| PyValueError::new_err(error.0))?
         else {
             return Ok(py.None());
         };
@@ -950,18 +932,23 @@ pub(crate) mod decompiler {
         bundle: Bound<'_, PyAny>,
         hints: PyRef<'_, NativeValue>,
     ) -> PyResult<Py<PyAny>> {
-        let rt = config.runtime();
-        let work = || -> R {
-            let V::Native(hints) = &hints.inner else {
-                return Err(Failure("native decompile hints required".into()));
-            };
-            let NativeObject::Hints(hints) = hints.as_ref() else {
-                return Err(Failure("native decompile hints required".into()));
-            };
-            let instance = new_decompiler(&rt, from_py(&bundle)?, hints.clone(), false)?;
-            Ok(V::Str(decompile_scene(&rt, &instance)?))
+        let V::Native(value) = &hints.inner else {
+            return Err(PyValueError::new_err("native decompile hints required"));
         };
-        let result = work().map_err(|error| PyValueError::new_err(error.0))?;
+        let NativeObject::Hints(hints) = value.as_ref() else {
+            return Err(PyValueError::new_err("native decompile hints required"));
+        };
+        let hints = hints.clone();
+        let bundle = from_py(&bundle)?;
+        let config = &*config;
+        let result = py
+            .detach(move || {
+                config.with_runtime(|rt| {
+                    let instance = new_decompiler(rt, bundle, hints, false)?;
+                    decompile_scene(rt, &instance).map(V::Str)
+                })
+            })
+            .map_err(|error| PyValueError::new_err(error.0))?;
         to_py(py, &result)
     }
 
@@ -1226,20 +1213,19 @@ pub(crate) mod decompiler {
 
     pub(super) fn render_param(
         rt: &Runtime,
-        scene: &DecompileScene,
+        instance: &DecompilerState,
         index: usize,
         id: i64,
         context: RenderContext,
     ) -> SourceText {
-        let event = &scene.events[index];
+        let event = &instance.scene.events[index];
         let name = trim_source(&event.name.clone().unwrap_or_else(empty_source));
         let name = if name.chars.is_empty() {
             source(&format!("arg_{id}"))
         } else {
             name
         };
-        let annotation = scene.annotations.borrow();
-        let annotation = annotation.get(index);
+        let annotation = instance.annotations.get(index);
         let size = annotation.and_then(|annotation| annotation.size);
         let size_expr = annotation
             .and_then(|annotation| annotation.size_expr.clone())
@@ -1332,8 +1318,7 @@ pub(crate) mod dat {
         pack_context: Bound<'_, PyAny>,
         str_list: Bound<'_, PyAny>,
     ) -> PyResult<NativeValue> {
-        let rt = config.runtime();
-        let work = || -> R {
+        let inner = config.with_runtime(|rt| -> R {
             let context = config.pack_context(&pack_context)?;
             let pack = rt.pack_state(&context)?;
             let commands = match record_get(&context, "payload_scene_name")? {
@@ -1345,15 +1330,15 @@ pub(crate) mod dat {
                     .clone(),
                 _ => return Err(Failure("scene name must be text".into())),
             };
-            let prefix = dat_payload_metadata_trace(&rt, &from_py(&meta)?)?;
-            let suffix = dat_payload_string_trace(&rt, &from_py(&str_list)?)?;
+            let prefix = dat_payload_metadata_trace(rt, &from_py(&meta)?)?;
+            let suffix = dat_payload_string_trace(rt, &from_py(&str_list)?)?;
             let V::Native(value) = &trace.inner else {
                 return Err(Failure("native payload trace required".into()));
             };
             let NativeObject::Payload(value) = value.as_ref() else {
                 return Err(Failure("native payload trace required".into()));
             };
-            Ok(NativeObject::Payload(Rc::new(PayloadTrace {
+            Ok(NativeObject::Payload(Arc::new(PayloadTrace {
                 pack: Some(pack),
                 commands,
                 events: value.events.clone(),
@@ -1361,9 +1346,9 @@ pub(crate) mod dat {
                 suffix,
             }))
             .value())
-        };
+        });
         Ok(NativeValue {
-            inner: work().map_err(|error| PyValueError::new_err(error.0))?,
+            inner: inner.map_err(|error| PyValueError::new_err(error.0))?,
         })
     }
 
@@ -1668,19 +1653,17 @@ struct CachedContextField {
     converted: V,
 }
 
-#[pyclass(unsendable, module = "siglus_ssu.native_accel")]
+#[pyclass(frozen, module = "siglus_ssu.native_accel")]
 pub struct DisamConfig {
-    context_fields: RefCell<HashMap<&'static str, Vec<CachedContextField>>>,
-    native_tables: Rc<NativeTables>,
-    literals: Rc<RefCell<HashMap<&'static str, V>>>,
-    frontend: Rc<crate::compile_backend::DecompileFrontend>,
-    memo: Rc<RefCell<ExpressionCache>>,
-    packs: Rc<RefCell<Vec<Rc<PackState>>>>,
+    context_fields: Mutex<HashMap<&'static str, Vec<CachedContextField>>>,
+    native_tables: Arc<NativeTables>,
+    frontend: Arc<crate::compile_backend::DecompileFrontend>,
+    workers: Mutex<Vec<Runtime>>,
 }
 
 impl DisamConfig {
     fn context_field(&self, name: &'static str, value: &Bound<'_, PyAny>) -> PyResult<V> {
-        let mut fields = self.context_fields.borrow_mut();
+        let mut fields = self.context_fields.lock().unwrap();
         let entries = fields.entry(name).or_default();
         for cached in entries.iter() {
             let original = cached.original.bind(value.py());
@@ -1722,16 +1705,25 @@ impl DisamConfig {
                 .insert(from_py(&key)?, converted)
                 .map_err(|error| PyValueError::new_err(error.0))?;
         }
-        Ok(V::Dict(Rc::new(RefCell::new(output))))
+        Ok(V::Dict(Arc::new(output)))
     }
-    fn runtime(&self) -> Runtime {
-        Runtime {
+    fn with_runtime<T>(&self, work: impl FnOnce(&Runtime) -> T) -> T {
+        let worker = self.workers.lock().unwrap().pop();
+        let worker = worker.unwrap_or_else(|| Runtime {
             native_tables: self.native_tables.clone(),
-            literals: self.literals.clone(),
+            literals: RefCell::new(HashMap::new()),
             frontend: self.frontend.clone(),
-            memo: self.memo.clone(),
-            packs: self.packs.clone(),
-        }
+            memo: RefCell::new(ExpressionCache::new()),
+            packs: RefCell::new(Vec::new()),
+            label_cache: RefCell::new(LabelCache {
+                entries: HashMap::new(),
+                order: VecDeque::new(),
+                empty: Arc::new(vec![]),
+            }),
+        });
+        let output = work(&worker);
+        self.workers.lock().unwrap().push(worker);
+        output
     }
 }
 
@@ -1749,16 +1741,14 @@ pub fn disam_config(config: Bound<'_, PyDict>) -> PyResult<DisamConfig> {
     let compiler = config
         .get_item("compiler")?
         .ok_or_else(|| PyValueError::new_err("missing compiler constants"))?;
-    let native_tables = Rc::new(
+    let native_tables = Arc::new(
         NativeTables::new(&constants, &tables).map_err(|error| PyValueError::new_err(error.0))?,
     );
     let config = DisamConfig {
-        context_fields: RefCell::new(HashMap::new()),
+        context_fields: Mutex::new(HashMap::new()),
         native_tables,
-        literals: Rc::new(RefCell::new(HashMap::new())),
-        frontend: Rc::new(crate::compile_backend::DecompileFrontend::new(compiler)?),
-        memo: Rc::new(RefCell::new(ExpressionCache::new())),
-        packs: Rc::new(RefCell::new(Vec::new())),
+        frontend: Arc::new(crate::compile_backend::DecompileFrontend::new(compiler)?),
+        workers: Mutex::new(Vec::new()),
     };
     Ok(config)
 }
@@ -1768,7 +1758,6 @@ pub fn disassemble_scn_bytes(
     config: PyRef<'_, DisamConfig>,
     parameters: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyDict>> {
-    let rt = config.runtime();
     let mut input = OrderedMap::new();
     for (key, value) in parameters.iter() {
         let converted = if key
@@ -1783,10 +1772,15 @@ pub fn disassemble_scn_bytes(
             .insert(from_py(&key)?, converted)
             .map_err(|error| PyValueError::new_err(error.0))?;
     }
-    let mapping = V::Dict(Rc::new(RefCell::new(input)));
-    let work = || -> Result<Py<PyDict>, Failure> {
-        let output = decode_scene(&rt, &mapping)?;
-        let lines = to_py(py, &V::list(output.lines.into_iter().map(V::Str).collect()))?;
+    let mapping = V::Dict(Arc::new(input));
+    let config = &*config;
+    let output = py
+        .detach(move || config.with_runtime(|rt| decode_scene(rt, &mapping)))
+        .map_err(|error| PyValueError::new_err(error.0))?;
+    {
+        let lines = PyBytes::new(py, output.lines.as_bytes())
+            .unbind()
+            .into_any();
         let result = if let Some(trace) = output.trace {
             let trace = if matches!(trace, V::Native(_)) {
                 Py::new(py, NativeValue { inner: trace })?.into_any()
@@ -1801,8 +1795,7 @@ pub fn disassemble_scn_bytes(
         dictionary.set_item("result", result)?;
         dictionary.set_item("status", to_py(py, &output.status)?)?;
         Ok(dictionary.unbind())
-    };
-    work().map_err(|error| PyValueError::new_err(error.0))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -1895,7 +1888,7 @@ impl Opcode {
     }
 }
 
-type SourceText = Rc<Text>;
+type SourceText = Arc<Text>;
 fn source_text(value: &V) -> Result<SourceText, Failure> {
     match value {
         V::Str(text) => Ok(text.clone()),
@@ -1908,7 +1901,7 @@ fn source(text: &str) -> SourceText {
 }
 
 fn empty_source() -> SourceText {
-    EMPTY_SOURCE.with(Rc::clone)
+    EMPTY_SOURCE.with(Arc::clone)
 }
 
 fn source_concat(parts: &[&[u32]]) -> SourceText {
@@ -1916,7 +1909,7 @@ fn source_concat(parts: &[&[u32]]) -> SourceText {
     for part in parts {
         chars.extend_from_slice(part);
     }
-    Rc::new(Text::new(chars))
+    Arc::new(Text::new(chars))
 }
 fn source_quote(text: &SourceText) -> SourceText {
     let mut chars = Vec::with_capacity(text.chars.len() + 2);
@@ -1936,7 +1929,7 @@ fn source_quote(text: &SourceText) -> SourceText {
         }
     }
     chars.push(34);
-    Rc::new(Text::new(chars))
+    Arc::new(Text::new(chars))
 }
 fn source_join(parts: &[SourceText], separator: &str) -> SourceText {
     let sep = source(separator);
@@ -1947,7 +1940,7 @@ fn source_join(parts: &[SourceText], separator: &str) -> SourceText {
         }
         chars.extend_from_slice(&part.chars);
     }
-    Rc::new(Text::new(chars))
+    Arc::new(Text::new(chars))
 }
 thread_local! {static RECORD_KEYS:RefCell<HashMap<String,V>>=RefCell::new(HashMap::new());}
 fn record_get(record: &V, name: &str) -> R {
@@ -1963,7 +1956,7 @@ fn record_get(record: &V, name: &str) -> R {
         V::Dict(map) => map,
         _ => return Err(Failure("native record required".into())),
     };
-    mapping.borrow().get(&key)
+    mapping.get(&key)
 }
 
 fn record_int(record: &V, name: &str) -> Option<i64> {
@@ -1975,11 +1968,11 @@ fn record_text(record: &V, name: &str) -> Result<SourceText, Failure> {
     source_text(&record_get(record, name)?)
 }
 fn native_record(fields: Vec<(&str, V)>) -> R {
-    let value = V::dictionary();
+    let mut value = OrderedMap::new();
     for (key, item) in fields {
-        value.map()?.borrow_mut().insert(V::s(key), item)?;
+        value.insert(V::s(key), item)?;
     }
-    Ok(value)
+    Ok(V::Dict(Arc::new(value)))
 }
 fn optional_int(value: Option<i64>) -> V {
     value.map(V::Int).unwrap_or(V::None)
@@ -2091,7 +2084,7 @@ impl Element {
         let mut arguments = HashMap::new();
         let mapping = record_get(value, "arg_map")?;
         if !matches!(mapping, V::None) {
-            for (id, entry) in &mapping.map()?.borrow().entries {
+            for (id, entry) in &mapping.map()?.entries {
                 let args = record_get(entry, "arg_list")?;
                 let mut specs = Vec::new();
                 if !matches!(args, V::None) {
@@ -2129,8 +2122,8 @@ impl Element {
         name: SourceText,
         qualified: SourceText,
         ret: Option<i64>,
-    ) -> Rc<Self> {
-        Rc::new(Self {
+    ) -> Arc<Self> {
+        Arc::new(Self {
             kind,
             parent_code: Some(parent_code),
             name,
@@ -2143,6 +2136,7 @@ impl Element {
 
 struct NativeTables {
     form_names: HashMap<i64, SourceText>,
+    coded_forms: HashMap<i64, (SourceText, String)>,
     int_name: SourceText,
     int_list_name: SourceText,
     string_list_name: SourceText,
@@ -2174,17 +2168,15 @@ struct NativeTables {
     property_owner: i64,
     command_owner: i64,
     call_owner: i64,
-    elements: HashMap<(i64, i64), Vec<Rc<Element>>>,
+    elements: HashMap<(i64, i64), Vec<Arc<Element>>>,
     read_flag_commands: std::collections::HashSet<(i64, i64)>,
     opcodes: [Opcode; 256],
-    label_cache: RefCell<LabelCache>,
 }
 impl NativeTables {
     fn new(constants: &V, tables: &V) -> Result<Self, Failure> {
         let raw_forms = record_get(constants, "_FORM_CODE")?;
         let forms: HashMap<_, _> = raw_forms
             .map()?
-            .borrow()
             .entries
             .iter()
             .map(|(key, value)| Ok((source_text(key)?, value.int()?)))
@@ -2212,7 +2204,6 @@ impl NativeTables {
         let text_map = |name: &str| -> Result<HashMap<i64, SourceText>, Failure> {
             record_get(tables, name)?
                 .map()?
-                .borrow()
                 .entries
                 .iter()
                 .map(|(key, value)| Ok((key.int()?, source_text(value)?)))
@@ -2234,7 +2225,7 @@ impl NativeTables {
             }
         }
         let mut elements = HashMap::new();
-        for (key, value) in &record_get(tables, "elements")?.map()?.borrow().entries {
+        for (key, value) in &record_get(tables, "elements")?.map()?.entries {
             let pair = values(key)?;
             let alts = record_get(value, "alts")?;
             let mut alternatives = native_optional_values(&alts)?;
@@ -2246,7 +2237,7 @@ impl NativeTables {
                 alternatives
                     .iter()
                     .map(|value| {
-                        Element::parse(value, &forms, &variadic, &reference_names).map(Rc::new)
+                        Element::parse(value, &forms, &variadic, &reference_names).map(Arc::new)
                     })
                     .collect::<Result<_, _>>()?,
             );
@@ -2262,11 +2253,18 @@ impl NativeTables {
         }
         let array_returns = record_get(tables, "array_return_forms")?
             .map()?
-            .borrow()
             .entries
             .iter()
             .map(|(key, value)| Ok((key.int()?, value.int()?)))
             .collect::<Result<_, Failure>>()?;
+        let form_names = text_map("form_names")?;
+        let coded_forms = form_names
+            .iter()
+            .map(|(code, name)| {
+                let text = format!("{}({code})", display_source(name)?);
+                Ok((*code, (source(&text), text)))
+            })
+            .collect::<Result<HashMap<_, _>, Failure>>()?;
         Ok(Self {
             int_name: record_text(constants, "FM_INT")?,
             int_list_name: record_text(constants, "FM_INTLIST")?,
@@ -2308,30 +2306,22 @@ impl NativeTables {
             call_owner: code("ELM_OWNER_CALL_PROP")?,
             elements,
             read_flag_commands,
-            form_names: text_map("form_names")?,
+            form_names,
+            coded_forms,
             opcodes,
-            label_cache: RefCell::new(LabelCache {
-                entries: HashMap::new(),
-                order: VecDeque::new(),
-                empty: Rc::new(vec![]),
-            }),
         })
     }
     fn format_form(&self, form: Option<i64>, with_code: bool) -> SourceText {
         let Some(form) = form else {
             return source("<?>");
         };
-        let name = self.form_names.get(&form).cloned().unwrap_or_else(|| {
-            if with_code {
-                source("form")
-            } else {
-                self.int_name.clone()
-            }
-        });
         if with_code {
-            source_concat(&[&name.chars, &source(&format!("({form})")).chars])
+            self.coded_forms
+                .get(&form)
+                .map(|(text, _)| text.clone())
+                .unwrap_or_else(|| source(&format!("form({form})")))
         } else {
-            name
+            self.form_names.get(&form).unwrap_or(&self.int_name).clone()
         }
     }
     fn receiver_value(&self, form: Option<i64>) -> Option<i64> {
@@ -2346,13 +2336,13 @@ impl NativeTables {
 
 struct ScopeFrame {
     end: i64,
-    slots: Vec<Rc<Element>>,
+    slots: Vec<Arc<Element>>,
     declarations: Vec<Argument>,
 }
 struct CallScope {
     ranges: Vec<(i64, i64)>,
     range_cursor: usize,
-    slots: Vec<Rc<Element>>,
+    slots: Vec<Arc<Element>>,
     declarations: Vec<Argument>,
     frames: Vec<ScopeFrame>,
     version: u64,
@@ -2428,7 +2418,7 @@ fn resolver_properties(
 fn property_elements(
     tables: &NativeTables,
     definitions: Vec<ResolverProperty>,
-) -> HashMap<i64, Rc<Element>> {
+) -> HashMap<i64, Arc<Element>> {
     definitions
         .into_iter()
         .map(|info| {
@@ -2453,15 +2443,15 @@ fn property_elements(
 struct PackState {
     keys: [V; 3],
     counts: (i64, i64),
-    properties: Rc<HashMap<i64, Rc<Element>>>,
-    commands: Rc<HashMap<i64, SourceText>>,
+    properties: Arc<HashMap<i64, Arc<Element>>>,
+    commands: Arc<HashMap<i64, SourceText>>,
     metadata: Vec<V>,
-    empty_commands: Rc<Vec<V>>,
-    scene_commands: HashMap<SourceText, Rc<Vec<V>>>,
-    matches: RefCell<Option<(Weak<PackState>, bool)>>,
+    empty_commands: Arc<Vec<V>>,
+    scene_commands: HashMap<SourceText, Arc<Vec<V>>>,
+    matches: Mutex<Option<(Weak<PackState>, bool)>>,
 }
 impl Runtime {
-    fn pack_state(&self, context: &V) -> Result<Rc<PackState>, Failure> {
+    fn pack_state(&self, context: &V) -> Result<Arc<PackState>, Failure> {
         let keys = [
             record_get(context, "inc_property_defs")?,
             record_get(context, "inc_command_defs")?,
@@ -2474,7 +2464,7 @@ impl Runtime {
         for pack in self.packs.borrow().iter() {
             if pack.counts == counts
                 && pack.keys.iter().zip(&keys).all(|(a, b)| match (a, b) {
-                    (V::List(a), V::List(b)) => Rc::ptr_eq(a, b),
+                    (V::List(a), V::List(b)) => Arc::ptr_eq(a, b),
                     (V::None, V::None) => true,
                     _ => false,
                 })
@@ -2543,19 +2533,19 @@ impl Runtime {
         }
         let scene_commands = grouped
             .into_iter()
-            .map(|(name, rows)| (name, Rc::new(rows)))
+            .map(|(name, rows)| (name, Arc::new(rows)))
             .collect();
         let properties =
             property_elements(&self.native_tables, resolver_properties(&keys[0], "id", 0)?);
-        let pack = Rc::new(PackState {
+        let pack = Arc::new(PackState {
             keys,
             counts,
-            properties: Rc::new(properties),
-            commands: Rc::new(commands),
+            properties: Arc::new(properties),
+            commands: Arc::new(commands),
             metadata,
-            empty_commands: Rc::new(vec![]),
+            empty_commands: Arc::new(vec![]),
             scene_commands,
-            matches: RefCell::new(None),
+            matches: Mutex::new(None),
         });
         let mut packs = self.packs.borrow_mut();
         if packs.len() == 2 {
@@ -2568,16 +2558,16 @@ impl Runtime {
 struct ResolverInput {
     properties: Vec<ResolverProperty>,
     commands: HashMap<i64, SourceText>,
-    global_properties: Option<Rc<HashMap<i64, Rc<Element>>>>,
-    global_commands: Option<Rc<HashMap<i64, SourceText>>>,
+    global_properties: Option<Arc<HashMap<i64, Arc<Element>>>>,
+    global_commands: Option<Arc<HashMap<i64, SourceText>>>,
 }
 struct ElementResolver {
-    tables: Rc<NativeTables>,
+    tables: Arc<NativeTables>,
     scope: ScopeRef,
-    properties: HashMap<i64, Rc<Element>>,
+    properties: HashMap<i64, Arc<Element>>,
     commands: HashMap<i64, SourceText>,
-    global_properties: Option<Rc<HashMap<i64, Rc<Element>>>>,
-    global_commands: Option<Rc<HashMap<i64, SourceText>>>,
+    global_properties: Option<Arc<HashMap<i64, Arc<Element>>>>,
+    global_commands: Option<Arc<HashMap<i64, SourceText>>>,
 }
 impl ElementResolver {
     fn new(rt: &Runtime, scope: ScopeRef, input: ResolverInput) -> Self {
@@ -2592,7 +2582,7 @@ impl ElementResolver {
             global_commands: input.global_commands,
         }
     }
-    fn variants(&self, parent: i64, code: i64) -> Vec<Rc<Element>> {
+    fn variants(&self, parent: i64, code: i64) -> Vec<Arc<Element>> {
         if let Some(info) = self.tables.elements.get(&(parent, code)) {
             return info.clone();
         }
@@ -2651,7 +2641,7 @@ impl ElementResolver {
 }
 
 struct ItemFormatter {
-    tables: Rc<NativeTables>,
+    tables: Arc<NativeTables>,
     strings: Vec<SourceText>,
     with_code: bool,
 }
@@ -2704,7 +2694,7 @@ impl ItemFormatter {
 #[derive(Clone)]
 enum ExpressionText {
     Flat(SourceText),
-    Joined(Rc<ExpressionParts>),
+    Joined(Arc<ExpressionParts>),
 }
 struct ExpressionParts {
     parts: Vec<ExpressionText>,
@@ -2715,7 +2705,7 @@ impl Drop for ExpressionParts {
         let mut pending = std::mem::take(&mut self.parts);
         while let Some(part) = pending.pop() {
             if let ExpressionText::Joined(part) = part
-                && let Ok(mut part) = Rc::try_unwrap(part)
+                && let Some(mut part) = Arc::into_inner(part)
             {
                 pending.append(&mut part.parts);
             }
@@ -2757,7 +2747,7 @@ impl ExpressionText {
             }
             Self::Flat(Text::shared(chars))
         } else {
-            Self::Joined(Rc::new(ExpressionParts { parts, length }))
+            Self::Joined(Arc::new(ExpressionParts { parts, length }))
         }
     }
 }
@@ -2772,15 +2762,15 @@ struct StackValue {
 struct ResolvedPath {
     ret: Option<i64>,
     code: Option<i64>,
-    info: Option<Rc<Element>>,
-    path: Vec<Option<Rc<Element>>>,
+    info: Option<Arc<Element>>,
+    path: Vec<Option<Arc<Element>>>,
     start: usize,
     end: usize,
 }
 struct CommandPlan {
     resolved: Option<Rc<ResolvedPath>>,
     start: Option<usize>,
-    info: Option<Rc<Element>>,
+    info: Option<Arc<Element>>,
 }
 #[derive(PartialEq, Eq, Hash)]
 struct CommandKey {
@@ -2847,9 +2837,9 @@ struct StackCursor {
     points: usize,
 }
 struct ExpressionState {
-    tables: Rc<NativeTables>,
-    resolver: Rc<ElementResolver>,
-    formatter: Rc<ItemFormatter>,
+    tables: Arc<NativeTables>,
+    resolver: ElementResolver,
+    formatter: ItemFormatter,
     stack: Vec<StackValue>,
     points: Vec<usize>,
     render: bool,
@@ -3001,7 +2991,7 @@ impl ExpressionState {
     ) -> Option<ResolvedPath> {
         enum Step {
             Scan(usize, i64),
-            Choose(usize, i64, Rc<Element>),
+            Choose(usize, i64, Arc<Element>),
         }
         let mut pending = vec![Step::Scan(index, parent)];
         let mut path = vec![None; items.len()];
@@ -3219,7 +3209,7 @@ impl ExpressionState {
                         .rposition(|code| *code == 46)
                         .map(|index| index + 1)
                         .unwrap_or(0);
-                    Rc::new(Text::new(name.chars[start..].to_vec()))
+                    Arc::new(Text::new(name.chars[start..].to_vec()))
                 } else {
                     name
                 };
@@ -3802,7 +3792,7 @@ fn trim_source_slice(text: &SourceText, start: usize, end: usize) -> SourceText 
     if chars.len() == text.chars.len() {
         text.clone()
     } else {
-        Rc::new(Text::new(chars.to_vec()))
+        Arc::new(Text::new(chars.to_vec()))
     }
 }
 fn trim_source(text: &SourceText) -> SourceText {
@@ -3810,14 +3800,14 @@ fn trim_source(text: &SourceText) -> SourceText {
 }
 
 enum NativeObject {
-    Payload(Rc<PayloadTrace>),
-    Scene(Rc<DecompileScene>),
-    Hints(Rc<DecompileHints>),
+    Payload(Arc<PayloadTrace>),
+    Scene(Arc<DecompileScene>),
+    Hints(Arc<DecompileHints>),
 }
 
 impl NativeObject {
     fn value(self) -> V {
-        V::Native(Rc::new(self))
+        V::Native(Arc::new(self))
     }
 }
 
@@ -3889,7 +3879,7 @@ fn fast_record(rt: &Runtime, fields: Vec<(&'static str, V)>) -> R {
     for (key, value) in fields {
         mapping.insert(rt.literal(key), value)?;
     }
-    Ok(V::Dict(Rc::new(RefCell::new(mapping))))
+    Ok(V::Dict(Arc::new(mapping)))
 }
 fn argument_values(tables: &NativeTables, args: &[Argument]) -> Result<V, Failure> {
     let mut frames = vec![(args, 0, Vec::new())];
@@ -3913,34 +3903,6 @@ fn argument_values(tables: &NativeTables, args: &[Argument]) -> Result<V, Failur
                 frames.push((&arg.sub, 0, Vec::new()));
             } else {
                 values.push(native_record(vec![("form", V::Int(arg.form))])?);
-            }
-        }
-    }
-}
-fn argument_source(tables: &NativeTables, args: &[Argument]) -> SourceText {
-    let mut frames = vec![(args, 0, Vec::new())];
-    loop {
-        let (args, index, parts) = frames.last_mut().unwrap();
-        if *index == args.len() {
-            let value = source_join(parts, ", ");
-            frames.pop();
-            if let Some((_, _, parts)) = frames.last_mut() {
-                parts.push(source_concat(&[
-                    &tables.list_name.chars,
-                    &[91],
-                    &value.chars,
-                    &[93],
-                ]));
-            } else {
-                return value;
-            }
-        } else {
-            let arg = &args[*index];
-            *index += 1;
-            if arg.form == tables.list {
-                frames.push((&arg.sub, 0, Vec::new()));
-            } else {
-                parts.push(tables.format_form(Some(arg.form), true));
             }
         }
     }
@@ -4130,7 +4092,7 @@ fn trace_instruction(
         }
         fields.extend([
             ("_arg_values", V::list(values)),
-            ("_named_values", V::Dict(Rc::new(RefCell::new(named)))),
+            ("_named_values", V::Dict(Arc::new(named))),
         ]);
     }
     fast_record(rt, fields)
@@ -4146,42 +4108,102 @@ fn display_source(value: &SourceText) -> Result<String, Failure> {
         .collect()
 }
 
-fn preview_source(value: &SourceText) -> Result<String, Failure> {
-    Ok(display_source(value)?
-        .replace('\\', "\\\\")
-        .replace('\r', "\\r")
-        .replace('\n', "\\n")
-        .replace('\t', "\\t"))
+fn append_dump_text<const ESCAPE: bool>(out: &mut String, text: &Text) -> Result<(), Failure> {
+    for &code in &text.chars {
+        let ch = char::from_u32(code)
+            .ok_or_else(|| Failure("surrogate cannot be used as UTF-8 source".into()))?;
+        if ESCAPE {
+            match ch {
+                '\\' => out.push_str("\\\\"),
+                '\r' => out.push_str("\\r"),
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                _ => out.push(ch),
+            }
+        } else if ch == '\n' {
+            out.push_str("\r\n");
+        } else {
+            out.push(ch);
+        }
+    }
+    Ok(())
+}
+
+fn append_dump_form(out: &mut String, tables: &NativeTables, form: Option<i64>) {
+    if let Some(form) = form {
+        if let Some((_, text)) = tables.coded_forms.get(&form) {
+            out.push_str(text);
+        } else {
+            write!(out, "form({form})").unwrap();
+        }
+    } else {
+        out.push_str("<?>");
+    }
+}
+
+fn append_dump_arguments(
+    out: &mut String,
+    tables: &NativeTables,
+    args: &[Argument],
+) -> Result<(), Failure> {
+    let mut iter = args.iter();
+    let mut parents = Vec::new();
+    let mut separate = false;
+    loop {
+        if let Some(arg) = iter.next() {
+            if separate {
+                out.push_str(", ");
+            }
+            if arg.form == tables.list {
+                append_dump_text::<false>(out, &tables.list_name)?;
+                out.push('[');
+                parents.push(iter);
+                iter = arg.sub.iter();
+                separate = false;
+            } else {
+                append_dump_form(out, tables, Some(arg.form));
+                separate = true;
+            }
+        } else if let Some(parent) = parents.pop() {
+            out.push(']');
+            iter = parent;
+            separate = true;
+        } else {
+            return Ok(());
+        }
+    }
+}
+
+fn append_dump_annotation(
+    out: &mut String,
+    name: &str,
+    value: Option<&Text>,
+) -> Result<(), Failure> {
+    if let Some(value) = value.filter(|text| !text.chars.is_empty()) {
+        write!(out, " ; {name}=").unwrap();
+        append_dump_text::<false>(out, value)?;
+    }
+    Ok(())
 }
 fn dump_instruction(
+    out: &mut String,
     tables: &NativeTables,
     event: &Instruction,
     strings: &[SourceText],
     annotation: &Annotation,
     command: Option<&CommandPlan>,
-) -> Result<SourceText, Failure> {
-    let name = match event.op {
-        Opcode::Unknown(code) => format!("OP_{code:02X}"),
-        op => op.name().to_owned(),
-    };
-    let mut line = format!("{:08X}: {name}", event.offset);
-    let form = |form| display_source(&tables.format_form(form, true));
-    let expr = |name: &str, value: &Option<SourceText>| -> Result<String, Failure> {
-        Ok(value
-            .as_ref()
-            .filter(|value| !value.chars.is_empty())
-            .map(|value| display_source(value).map(|value| format!(" ; {name}={value}")))
-            .transpose()?
-            .unwrap_or_default())
-    };
+) -> Result<(), Failure> {
+    write!(out, "{:08X}: ", event.offset).unwrap();
     match event.op {
-        Opcode::Nl => line.push_str(&format!(" {}", event.value.unwrap_or(0))),
+        Opcode::Unknown(code) => write!(out, "OP_{code:02X}").unwrap(),
+        op => out.push_str(op.name()),
+    }
+    match event.op {
+        Opcode::Nl => write!(out, " {}", event.value.unwrap_or(0)).unwrap(),
         Opcode::Push => {
-            line.push_str(&format!(
-                " {}, {}",
-                form(event.form)?,
-                event.value.unwrap_or(0)
-            ));
+            out.push(' ');
+            append_dump_form(out, tables, event.form);
+            write!(out, ", {}", event.value.unwrap_or(0)).unwrap();
             if event.form == Some(tables.string)
                 && let Some(value) = event.value.and_then(|value| {
                     usize::try_from(value)
@@ -4189,96 +4211,112 @@ fn dump_instruction(
                         .and_then(|index| strings.get(index))
                 })
             {
-                line.push_str(&format!(" ; \"{}\"", preview_source(value)?));
+                out.push_str(" ; \"");
+                append_dump_text::<true>(out, value)?;
+                out.push('"');
             }
         }
-        Opcode::Pop | Opcode::Copy => line.push_str(&format!(" {}", form(event.form)?)),
+        Opcode::Pop | Opcode::Copy => {
+            out.push(' ');
+            append_dump_form(out, tables, event.form);
+        }
         Opcode::Property
         | Opcode::CopyElm
         | Opcode::ElmPoint
         | Opcode::Arg
         | Opcode::SelStart
-        | Opcode::SelEnd => line.push_str(&expr(
+        | Opcode::SelEnd => append_dump_annotation(
+            out,
             "expr",
-            &annotation.expr.as_ref().map(ExpressionText::source),
-        )?),
+            annotation
+                .expr
+                .as_ref()
+                .map(ExpressionText::source)
+                .as_deref(),
+        )?,
         Opcode::DecProp => {
-            line.push_str(&format!(
-                " {}, {}",
-                form(event.form)?,
-                event.value.unwrap_or(0)
-            ));
+            out.push(' ');
+            append_dump_form(out, tables, event.form);
+            write!(out, ", {}", event.value.unwrap_or(0)).unwrap();
             if let Some(size) = annotation.size {
-                line.push_str(&format!(" size={size}"));
+                write!(out, " size={size}").unwrap();
             }
             if let Some(name) = event.name.as_ref().filter(|name| !name.chars.is_empty()) {
-                line.push_str(&format!(" name={}", display_source(name)?));
+                out.push_str(" name=");
+                append_dump_text::<false>(out, name)?;
             }
-            line.push_str(&expr("expr", &annotation.size_expr)?);
+            append_dump_annotation(out, "expr", annotation.size_expr.as_deref())?;
         }
         Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
-            line.push_str(&format!(" L{}", event.label.unwrap_or(0)));
+            write!(out, " L{}", event.label.unwrap_or(0)).unwrap();
             if let Some(target) = event.target {
-                line.push_str(&format!(" -> {target:08X}"));
+                write!(out, " -> {target:08X}").unwrap();
             }
-            line.push_str(&expr("cond", &annotation.condition)?);
+            append_dump_annotation(out, "cond", annotation.condition.as_deref())?;
         }
         Opcode::Gosub | Opcode::GosubStr => {
             let id = event.label.unwrap_or(0);
-            line.push_str(&format!(
-                " L{id} argc={} forms=[{}]",
-                event.args.len(),
-                display_source(&argument_source(tables, &event.args))?
-            ));
+            write!(out, " L{id} argc={} forms=[", event.args.len()).unwrap();
+            append_dump_arguments(out, tables, &event.args)?;
+            out.push(']');
             if let Some(target) = event.target {
-                line.push_str(&format!(" -> {target:08X}"));
+                write!(out, " -> {target:08X}").unwrap();
             }
             let keyword = if event.op == Opcode::Gosub {
                 "gosub"
             } else {
                 "gosubstr"
             };
-            line.push_str(&format!(" ; expr={keyword} L{id}"));
+            write!(out, " ; expr={keyword} L{id}").unwrap();
             if !annotation.arguments.is_empty() {
-                line.push_str(&format!(
-                    "({})",
-                    display_source(&source_join(&annotation.arguments, ", "))?
-                ));
+                out.push('(');
+                for (index, value) in annotation.arguments.iter().enumerate() {
+                    if index != 0 {
+                        out.push_str(", ");
+                    }
+                    append_dump_text::<false>(out, value)?;
+                }
+                out.push(')');
             }
         }
         Opcode::Return => {
-            line.push_str(&format!(
-                " argc={} forms=[{}] ; expr=return",
-                event.args.len(),
-                display_source(&argument_source(tables, &event.args))?
-            ));
+            write!(out, " argc={} forms=[", event.args.len()).unwrap();
+            append_dump_arguments(out, tables, &event.args)?;
+            out.push_str("] ; expr=return");
             if let Some(value) = annotation.arguments.first() {
-                line.push_str(&format!(" ({})", display_source(value)?));
+                out.push_str(" (");
+                append_dump_text::<false>(out, value)?;
+                out.push(')');
             }
         }
         Opcode::Assign => {
-            line.push_str(&format!(
-                " l={} r={} al_id={}",
-                form(event.form)?,
-                form(event.right_form)?,
-                event.arg_id
-            ));
-            line.push_str(&expr(
+            out.push_str(" l=");
+            append_dump_form(out, tables, event.form);
+            out.push_str(" r=");
+            append_dump_form(out, tables, event.right_form);
+            write!(out, " al_id={}", event.arg_id).unwrap();
+            append_dump_annotation(
+                out,
                 "expr",
-                &annotation.expr.as_ref().map(ExpressionText::source),
-            )?);
+                annotation
+                    .expr
+                    .as_ref()
+                    .map(ExpressionText::source)
+                    .as_deref(),
+            )?;
         }
-        Opcode::Operate1 => line.push_str(&format!(
-            " {} op={}",
-            form(event.form)?,
-            event.operator.unwrap_or(0)
-        )),
-        Opcode::Operate2 => line.push_str(&format!(
-            " {}, {} op={}",
-            form(event.form)?,
-            form(event.right_form)?,
-            event.operator.unwrap_or(0)
-        )),
+        Opcode::Operate1 => {
+            out.push(' ');
+            append_dump_form(out, tables, event.form);
+            write!(out, " op={}", event.operator.unwrap_or(0)).unwrap();
+        }
+        Opcode::Operate2 => {
+            out.push(' ');
+            append_dump_form(out, tables, event.form);
+            out.push_str(", ");
+            append_dump_form(out, tables, event.right_form);
+            write!(out, " op={}", event.operator.unwrap_or(0)).unwrap();
+        }
         Opcode::Text | Opcode::Name => {
             let text = event.value.and_then(|value| {
                 usize::try_from(value)
@@ -4286,53 +4324,71 @@ fn dump_instruction(
                     .and_then(|index| strings.get(index))
             });
             if event.op == Opcode::Text {
-                line.push_str(&format!(" read_flag={}", event.read_flag.unwrap_or(0)));
+                write!(out, " read_flag={}", event.read_flag.unwrap_or(0)).unwrap();
                 if let Some(text) = text {
-                    line.push_str(&format!(" ; \"{}\"", preview_source(text)?));
+                    out.push_str(" ; \"");
+                    append_dump_text::<true>(out, text)?;
+                    out.push('"');
                 }
             } else if let Some(text) = text {
-                line.push_str(&format!(" \"{}\"", preview_source(text)?));
+                out.push_str(" \"");
+                append_dump_text::<true>(out, text)?;
+                out.push('"');
             }
         }
         Opcode::Command => {
-            line.push_str(&format!(
-                " arg_list={} argc={} args=[{}] named={} named_ids={:?} ret={}",
+            write!(
+                out,
+                " arg_list={} argc={} args=[",
                 event.arg_id,
-                event.args.len(),
-                display_source(&argument_source(tables, &event.args))?,
+                event.args.len()
+            )
+            .unwrap();
+            append_dump_arguments(out, tables, &event.args)?;
+            write!(
+                out,
+                "] named={} named_ids={:?} ret=",
                 event.named.len(),
                 event.named,
-                form(Some(event.ret))?
-            ));
+            )
+            .unwrap();
+            append_dump_form(out, tables, Some(event.ret));
             if let Some(flag) = event.read_flag {
-                line.push_str(&format!(" read_flag={flag}"));
+                write!(out, " read_flag={flag}").unwrap();
             }
             if let Some(code) = event.element_code {
-                line.push_str(&if code < 0 {
-                    " ec=-".into()
+                if code < 0 {
+                    out.push_str(" ec=-");
                 } else {
-                    format!(" ec=0x{code:08X}")
-                });
+                    write!(out, " ec=0x{code:08X}").unwrap();
+                }
             }
             if let Some(name) = command
                 .and_then(|command| command.info.as_ref())
                 .map(|info| &info.qualified)
                 .filter(|name| !name.chars.is_empty())
             {
-                line.push_str(&format!(" {}", display_source(name)?));
+                out.push(' ');
+                append_dump_text::<false>(out, name)?;
             }
-            line.push_str(&expr(
+            append_dump_annotation(
+                out,
                 "expr",
-                &annotation.expr.as_ref().map(ExpressionText::source),
-            )?);
+                annotation
+                    .expr
+                    .as_ref()
+                    .map(ExpressionText::source)
+                    .as_deref(),
+            )?;
         }
         _ => (),
     }
-    Ok(source(&line))
+    out.push_str("\r\n");
+    Ok(())
 }
 
 struct DisassembledScene {
-    lines: Vec<SourceText>,
+    lines: String,
     trace: Option<V>,
     status: V,
 }
@@ -4371,7 +4427,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         .collect::<Result<Vec<_>, _>>()?;
     let context = record_get(parameters, "pack_context")?;
     let context = if matches!(context, V::None) {
-        V::dictionary()
+        V::Dict(Arc::new(OrderedMap::new()))
     } else {
         context
     };
@@ -4391,8 +4447,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         command_values: with_trace
             && (profile.is_none() || profile.as_ref().is_some_and(|value| value.eq_str("koe"))),
     };
-    let status = record_get(parameters, "parse_status")?;
-    let ranges = Rc::new(RefCell::new(OrderedMap::new()));
+    let mut ranges = OrderedMap::new();
     let scope = Rc::new(RefCell::new(CallScope {
         ranges: vec![],
         range_cursor: 0,
@@ -4416,7 +4471,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             resolver_commands.insert(id, source_text(name)?);
         }
     }
-    let resolver = Rc::new(ElementResolver::new(
+    let resolver = ElementResolver::new(
         rt,
         scope.clone(),
         ResolverInput {
@@ -4425,15 +4480,16 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             global_properties: Some(pack.properties.clone()),
             global_commands: Some(pack.commands.clone()),
         },
-    ));
+    );
     let decompile = with_trace
         && profile
             .as_ref()
             .is_some_and(|value| value.eq_str("decompile"));
     let decompile_style = decompile && !emit_text;
-    let annotate = decompile_style
-        && record_int(parameters, "annotation_budget")
-            .is_none_or(|budget| scn.len() <= budget.max(0) as usize / 2);
+    let annotation_budget =
+        record_int(parameters, "annotation_budget").map(|budget| budget.max(0) as usize);
+    let annotate =
+        decompile_style && annotation_budget.is_none_or(|budget| scn.len() <= budget / 2);
     let mut annotation_commands = HashMap::new();
     if annotate {
         annotation_commands = (*pack.commands).clone();
@@ -4444,7 +4500,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 .map(|(id, name)| (*id, name.clone())),
         );
     }
-    let formatter = Rc::new(ItemFormatter {
+    let formatter = ItemFormatter {
         tables: rt.native_tables.clone(),
         strings: if emit_text || annotate || mode.command_values {
             strings.clone()
@@ -4452,7 +4508,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             Vec::new()
         },
         with_code: !decompile_style,
-    });
+    };
     let mut state = ExpressionState {
         tables: rt.native_tables.clone(),
         resolver,
@@ -4497,17 +4553,20 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     let mut scene_events = vec![];
     let mut trace = vec![];
     let mut payload_events = vec![];
-    let mut rendered = vec![];
+    let mut rendered = String::with_capacity(if emit_text { scn.len() } else { 0 });
     while reader.position < scn.len() {
         let offset = reader.position;
         instruction_starts[offset] = true;
         scope.borrow_mut().advance(offset as i64);
         if emit_text && let Some(labels) = labels_at.get(&(offset as i64)) {
-            let labels = source_join(labels, ",");
-            rendered.push(source(&format!(
-                "{offset:08X}: <{}>",
-                display_source(&labels)?
-            )));
+            write!(rendered, "{offset:08X}: <").unwrap();
+            for (index, label) in labels.iter().enumerate() {
+                if index != 0 {
+                    rendered.push(',');
+                }
+                append_dump_text::<false>(&mut rendered, label)?;
+            }
+            rendered.push_str(">\r\n");
         }
         let byte = reader.byte().unwrap();
         let op = rt.native_tables.opcodes[byte as usize];
@@ -4579,7 +4638,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         })();
         if read.is_none() {
             if emit_text {
-                rendered.push(source(&format!("{offset:08X}: {} <truncated>", op.name())));
+                write!(rendered, "{offset:08X}: {} <truncated>\r\n", op.name()).unwrap();
             }
             break;
         }
@@ -4592,12 +4651,14 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             })
         {
             if emit_text {
-                rendered.push(source(&format!(
-                    "{offset:08X}: {} {}, {} <invalid string index>",
-                    op.name(),
-                    display_source(&rt.native_tables.format_form(event.form, true))?,
+                write!(rendered, "{offset:08X}: {} ", op.name()).unwrap();
+                append_dump_form(&mut rendered, &rt.native_tables, event.form);
+                write!(
+                    rendered,
+                    ", {} <invalid string index>\r\n",
                     event.value.unwrap_or(0)
-                )));
+                )
+                .unwrap();
             }
             break;
         }
@@ -4613,9 +4674,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                     (reader.position as i64) < *target && *target <= scn.len() as i64
                 })
             {
-                ranges
-                    .borrow_mut()
-                    .insert(V::Int(reader.position as i64), V::Int(target))?;
+                ranges.insert(V::Int(reader.position as i64), V::Int(target))?;
                 scope
                     .borrow_mut()
                     .ranges
@@ -4650,7 +4709,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 let flag = reader.integer();
                 if flag.is_none() {
                     if emit_text {
-                        rendered.push(source(&format!("{offset:08X}: {} <truncated>", op.name())));
+                        write!(rendered, "{offset:08X}: {} <truncated>\r\n", op.name()).unwrap();
                     }
                     break;
                 }
@@ -4664,13 +4723,14 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         };
         let annotation = state.step(&event, command.as_ref())?;
         if emit_text {
-            rendered.push(dump_instruction(
+            dump_instruction(
+                &mut rendered,
                 &rt.native_tables,
                 &event,
                 &strings,
                 &annotation,
                 command.as_ref(),
-            )?);
+            )?;
         }
         if with_trace {
             if mode.payload {
@@ -4725,42 +4785,46 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                     let target = target
                         .map(|target| target.to_string())
                         .unwrap_or_else(|| "None".into());
-                    rendered.push(source(&format!("L{id}: <invalid jump target {target}>")));
+                    write!(rendered, "L{id}: <invalid jump target {target}>\r\n").unwrap();
                 }
                 complete = false;
             }
         }
     }
-    status
-        .map()?
-        .borrow_mut()
-        .insert(rt.literal("complete"), V::Bool(complete))?;
-    status
-        .map()?
-        .borrow_mut()
-        .insert(rt.literal("command_ranges"), V::Dict(ranges.clone()))?;
+    let ranges = V::Dict(Arc::new(ranges));
+    let status = fast_record(
+        rt,
+        vec![
+            ("complete", V::Bool(complete)),
+            ("command_ranges", ranges.clone()),
+        ],
+    )?;
     let trace = if !with_trace {
         None
     } else {
         Some(if mode.payload {
-            NativeObject::Payload(Rc::new(PayloadTrace {
+            NativeObject::Payload(Arc::new(PayloadTrace {
                 pack: None,
-                commands: Rc::new(vec![]),
-                events: Rc::new(payload_events),
+                commands: Arc::new(vec![]),
+                events: Arc::new(payload_events),
                 prefix: vec![],
                 suffix: vec![],
             }))
             .value()
         } else if decompile {
-            NativeObject::Scene(Rc::new(DecompileScene::from_events(DecodedScene {
-                prepare_output: emit_text || annotate,
+            NativeObject::Scene(Arc::new(DecompileScene::from_events(DecodedScene {
+                prepare_output: annotate
+                    || (emit_text
+                        && annotation_budget.is_none_or(|budget| {
+                            scene_events.len() <= budget / DECOMPILE_EVENT_CACHE_BYTES
+                        })),
                 has_commands: !command_starts.is_empty() || !commands.is_empty(),
                 tables: rt.native_tables.clone(),
                 scene_annotations,
                 annotation_commands,
                 strings,
                 context,
-                command_ranges: V::Dict(ranges),
+                command_ranges: ranges,
                 events: scene_events,
                 label_offsets: labels,
                 z_labels,
@@ -4791,10 +4855,13 @@ impl SceneLabel {
         })
     }
 }
+const DECOMPILE_EVENT_CACHE_BYTES: usize =
+    std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>();
+
 struct DecodedScene {
     prepare_output: bool,
     has_commands: bool,
-    tables: Rc<NativeTables>,
+    tables: Arc<NativeTables>,
     scene_annotations: Vec<Annotation>,
     annotation_commands: HashMap<i64, SourceText>,
     strings: Vec<SourceText>,
@@ -4806,14 +4873,14 @@ struct DecodedScene {
 }
 struct DecompileScene {
     for_blockers: Vec<usize>,
-    tables: Rc<NativeTables>,
+    tables: Arc<NativeTables>,
     annotation_commands: HashMap<i64, SourceText>,
     strings: Vec<SourceText>,
     context: V,
     command_ranges: V,
-    meta: RefCell<Option<V>>,
-    events: Rc<Vec<Instruction>>,
-    labels: Rc<Vec<Vec<SceneLabel>>>,
+    meta: OnceLock<V>,
+    events: Arc<Vec<Instruction>>,
+    labels: Arc<Vec<Vec<SceneLabel>>>,
     offsets: Vec<i64>,
     index: HashMap<i64, usize>,
     next_nl: Vec<usize>,
@@ -4824,8 +4891,7 @@ struct DecompileScene {
     label_offsets: Vec<i64>,
     z_labels: Vec<i64>,
     active_z: usize,
-    annotations: Rc<RefCell<Vec<Annotation>>>,
-    render_cache: RefCell<HashMap<RenderKey, (bool, SourceText)>>,
+    annotations: Arc<Vec<Annotation>>,
 }
 impl DecompileScene {
     fn from_events(input: DecodedScene) -> Self {
@@ -4853,8 +4919,8 @@ impl DecompileScene {
                 }
             }
         }
-        let events = Rc::new(events);
-        let labels = Rc::new(if prepare_output {
+        let events = Arc::new(events);
+        let labels = Arc::new(if prepare_output {
             events
                 .iter()
                 .map(|event| labels_at.get(&event.offset).cloned().unwrap_or_default())
@@ -4862,7 +4928,7 @@ impl DecompileScene {
         } else {
             Vec::new()
         });
-        let annotations = Rc::new(RefCell::new(scene_annotations));
+        let annotations = Arc::new(scene_annotations);
         let offsets = events.iter().map(|event| event.offset).collect::<Vec<_>>();
         let index = if prepare_output || has_commands {
             offsets
@@ -4943,7 +5009,7 @@ impl DecompileScene {
             strings,
             context,
             command_ranges,
-            meta: RefCell::new(None),
+            meta: OnceLock::new(),
             events,
             labels,
             offsets,
@@ -4957,7 +5023,6 @@ impl DecompileScene {
             z_labels,
             active_z,
             annotations,
-            render_cache: RefCell::new(HashMap::new()),
         }
     }
     fn end(&self, offset: i64) -> usize {
@@ -5039,7 +5104,7 @@ impl DecompileScene {
 fn new_decompiler(
     rt: &Runtime,
     bundle: V,
-    hints: Rc<DecompileHints>,
+    hints: Arc<DecompileHints>,
     analysis_only: bool,
 ) -> Result<DecompilerState, Failure> {
     let V::Native(trace) = record_get(&bundle, "trace")? else {
@@ -5061,7 +5126,9 @@ fn new_decompiler(
         scene: scene.clone(),
         meta: record_get(&bundle, "meta")?,
         hints,
-        analysis: Rc::new(SceneAnalysis::default()),
+        analysis: Arc::new(SceneAnalysis::default()),
+        annotations: scene.annotations.clone(),
+        render_cache: RefCell::new(HashMap::new()),
         preserve_string_pool: false,
         string_pool_carrier: std::cell::Cell::new(false),
         candidates: HashMap::new(),
@@ -5097,7 +5164,7 @@ fn new_decompiler(
             local_names.insert(info.id, info.name.clone());
         }
     }
-    let annotation_ready = scene.annotations.borrow().len() == scene.events.len()
+    let annotation_ready = scene.annotations.len() == scene.events.len()
         && local_names.iter().all(|(id, name)| {
             scene
                 .annotation_commands
@@ -5105,7 +5172,7 @@ fn new_decompiler(
                 .is_some_and(|expected| name == expected)
         });
     if !annotation_ready {
-        native_annotate_scene(rt, &instance, &local_names)?;
+        instance.annotations = Arc::new(native_annotate_scene(rt, &instance, &local_names)?);
     }
     for (index, event) in scene.events.iter().enumerate() {
         if event.op != Opcode::Goto {
@@ -5157,14 +5224,13 @@ fn native_annotate_scene(
     rt: &Runtime,
     instance: &DecompilerState,
     local_names: &HashMap<i64, SourceText>,
-) -> Result<(), Failure> {
+) -> Result<Vec<Annotation>, Failure> {
     let scene = instance.scene.clone();
     let scope = Rc::new(RefCell::new(CallScope {
         ranges: {
             let ranges = scene.command_ranges.clone();
             let mut ranges = ranges
                 .map()?
-                .borrow()
                 .entries
                 .iter()
                 .map(|(start, end)| Ok((start.int()?, end.int()?)))
@@ -5205,7 +5271,7 @@ fn native_annotate_scene(
             commands.insert(*id, name.clone());
         }
     }
-    let resolver = Rc::new(ElementResolver::new(
+    let resolver = ElementResolver::new(
         rt,
         scope.clone(),
         ResolverInput {
@@ -5214,12 +5280,12 @@ fn native_annotate_scene(
             global_properties: None,
             global_commands: None,
         },
-    ));
-    let formatter = Rc::new(ItemFormatter {
+    );
+    let formatter = ItemFormatter {
         tables: rt.native_tables.clone(),
         strings: scene.strings.clone(),
         with_code: false,
-    });
+    };
     let mut state = ExpressionState {
         tables: rt.native_tables.clone(),
         resolver,
@@ -5239,8 +5305,7 @@ fn native_annotate_scene(
         scope.borrow_mut().advance(event.offset);
         annotations.push(state.step(event, None)?);
     }
-    *scene.annotations.borrow_mut() = annotations;
-    Ok(())
+    Ok(annotations)
 }
 
 type RestoredLines = (Vec<SourceLine>, std::collections::HashSet<SourceText>);
@@ -5284,7 +5349,7 @@ fn trim_source_left(text: &SourceText) -> SourceText {
     if start == 0 {
         text.clone()
     } else {
-        Rc::new(Text::new(text.chars[start..].to_vec()))
+        Arc::new(Text::new(text.chars[start..].to_vec()))
     }
 }
 fn trim_source_right(text: &SourceText) -> SourceText {
@@ -5297,7 +5362,7 @@ fn trim_source_right(text: &SourceText) -> SourceText {
     if end == text.chars.len() {
         text.clone()
     } else {
-        Rc::new(Text::new(text.chars[..end].to_vec()))
+        Arc::new(Text::new(text.chars[..end].to_vec()))
     }
 }
 
@@ -5392,10 +5457,24 @@ fn native_read_command(
         return Ok(None);
     }
     let mut index = body;
-    while index < end && scene.events[index].op == Opcode::DecProp {
+    let mut parameters = Vec::new();
+    while index < end {
+        match scene.events[index].op {
+            Opcode::Arg => break,
+            Opcode::DecProp => parameters.push(index),
+            Opcode::Push
+            | Opcode::ElmPoint
+            | Opcode::Property
+            | Opcode::Operate1
+            | Opcode::Operate2
+            | Opcode::Command
+            | Opcode::Gosub
+            | Opcode::GosubStr => {}
+            _ => return Ok(None),
+        }
         index += 1;
     }
-    if index >= end || scene.events[index].op != Opcode::Arg {
+    if index >= end {
         return Ok(None);
     }
     let body_start = index + 1;
@@ -5413,7 +5492,7 @@ fn native_read_command(
             scene.events[end].offset
         },
         terminal,
-        parameters: body..index,
+        parameters,
         info,
     }))
 }
@@ -5476,24 +5555,24 @@ struct LabelReference {
     label: SourceText,
 }
 struct LabelCache {
-    entries: HashMap<SourceText, Rc<Vec<LabelReference>>>,
+    entries: HashMap<SourceText, Arc<Vec<LabelReference>>>,
     order: VecDeque<SourceText>,
-    empty: Rc<Vec<LabelReference>>,
+    empty: Arc<Vec<LabelReference>>,
 }
 fn text_contains(text: &SourceText, needle: &[u32]) -> bool {
     text.chars.windows(needle.len()).any(|part| part == needle)
 }
-fn label_references(rt: &Runtime, text: &SourceText) -> Result<Rc<Vec<LabelReference>>, Failure> {
+fn label_references(rt: &Runtime, text: &SourceText) -> Result<Arc<Vec<LabelReference>>, Failure> {
     if !text_contains(text, &[35, 108])
         || (!text_contains(text, &[103, 111, 116, 111])
             && !text_contains(text, &[103, 111, 115, 117, 98]))
     {
-        return Ok(rt.native_tables.label_cache.borrow().empty.clone());
+        return Ok(rt.label_cache.borrow().empty.clone());
     }
-    if let Some(found) = rt.native_tables.label_cache.borrow().entries.get(text) {
+    if let Some(found) = rt.label_cache.borrow().entries.get(text) {
         return Ok(found.clone());
     }
-    let refs = Rc::new(
+    let refs = Arc::new(
         rt.frontend
             .label_refs(&display_source(text)?)
             .into_iter()
@@ -5504,7 +5583,7 @@ fn label_references(rt: &Runtime, text: &SourceText) -> Result<Rc<Vec<LabelRefer
             })
             .collect::<Vec<_>>(),
     );
-    let mut cache = rt.native_tables.label_cache.borrow_mut();
+    let mut cache = rt.label_cache.borrow_mut();
     if cache.entries.len() >= 8192
         && let Some(old) = cache.order.pop_front()
     {
@@ -5582,12 +5661,12 @@ fn label_definition_chars(chars: &[u32], has_line_feed: bool) -> Option<LabelDef
     })
 }
 fn definition_token(text: &SourceText, label: LabelDefinition) -> SourceText {
-    Rc::new(Text::new(
+    Arc::new(Text::new(
         text.chars[label.indent..label.label_end].to_vec(),
     ))
 }
 fn definition_tail(text: &SourceText, label: LabelDefinition) -> SourceText {
-    Rc::new(Text::new(
+    Arc::new(Text::new(
         label
             .tail
             .map(|start| text.chars[start..].to_vec())
@@ -5988,7 +6067,7 @@ fn native_line_postprocess(
             }
             for line in &mut out {
                 if line.text.hash.is_none() {
-                    Rc::make_mut(&mut line.text).complete_hash();
+                    Arc::make_mut(&mut line.text).complete_hash();
                 }
             }
             lines = out;
@@ -6005,7 +6084,7 @@ fn append_source_text(text: &mut SourceText, suffix: &[u32]) {
         .map_or(0, |index| index + 1);
     let has_line_feed =
         (text.has_line_feed && text.chars[..end].contains(&10)) || suffix.contains(&10);
-    let text = Rc::make_mut(text);
+    let text = Arc::make_mut(text);
     text.chars.truncate(end);
     text.chars.extend_from_slice(suffix);
     text.hash = None;
@@ -6044,7 +6123,7 @@ fn merge_source_body(
     let has_line_feed = (text.has_line_feed
         && (text.chars[..prefix].contains(&10) || text.chars[left_start..left_end].contains(&10)))
         || right.contains(&10);
-    let text = Rc::make_mut(text);
+    let text = Arc::make_mut(text);
     let target = prefix + usize::from(label);
     if has_left {
         text.chars.copy_within(left_start..left_end, target);
@@ -6090,7 +6169,7 @@ fn rewrite_source_references(
         return Ok(text.clone());
     }
     chars.extend_from_slice(&text.chars[end..]);
-    Ok(Rc::new(Text::new(chars)))
+    Ok(Arc::new(Text::new(chars)))
 }
 fn next_source_statement(lines: &[SourceLine], index: usize) -> Option<usize> {
     (index..lines.len()).find(|index| lines[*index].text.chars.iter().any(|code| !is_space(*code)))
@@ -6177,7 +6256,7 @@ fn plain_goto_label(chars: &[u32]) -> Option<SourceText> {
     if index == digits || index != chars.len() {
         return None;
     }
-    Some(Rc::new(Text::new(chars[start..index].to_vec())))
+    Some(Arc::new(Text::new(chars[start..index].to_vec())))
 }
 fn split_standalone_labels(
     rt: &Runtime,
@@ -6208,7 +6287,7 @@ fn split_standalone_labels(
             }) {
                 if emitted.insert(token.clone()) {
                     out.push(SourceLine {
-                        text: Rc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
+                        text: Arc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
                         target: Some(target),
                     });
                     keep.insert(token);
@@ -6519,7 +6598,8 @@ fn native_late_line_pass(
                         && !source_label_offset(scene, &definition_token(&line.text, label))
                             .is_some_and(|offset| headers.contains(&offset))
                     {
-                        line.text = Rc::new(Text::new(line.text.chars[..label.label_end].to_vec()));
+                        line.text =
+                            Arc::new(Text::new(line.text.chars[..label.label_end].to_vec()));
                         out.push(line);
                     }
                     continue;
@@ -6537,7 +6617,7 @@ fn native_late_line_pass(
                     .map(|label| definition_token(&line.text, label))
                     .or_else(|| {
                         synthetic_definition(&line.text).map(|(start, end, _)| {
-                            Rc::new(Text::new(line.text.chars[start..end].to_vec()))
+                            Arc::new(Text::new(line.text.chars[start..end].to_vec()))
                         })
                     });
                 if let Some(token) = token
@@ -6711,9 +6791,9 @@ struct PayloadEvent {
     data: PayloadData,
 }
 struct PayloadTrace {
-    pack: Option<Rc<PackState>>,
-    commands: Rc<Vec<V>>,
-    events: Rc<Vec<PayloadEvent>>,
+    pack: Option<Arc<PackState>>,
+    commands: Arc<Vec<V>>,
+    events: Arc<Vec<PayloadEvent>>,
     prefix: Vec<V>,
     suffix: Vec<V>,
 }
@@ -6819,15 +6899,13 @@ fn payload_metadata_equal<'a>(
     for (left, right) in pairs {
         let left = left.map()?;
         let right = right.map()?;
-        let left = left.borrow();
-        let right = right.borrow();
         let count = |map: &OrderedMap| {
             map.entries
                 .iter()
                 .filter(|(key, _)| !omit_text || !matches!(key, V::Str(key) if key.eq_str("text")))
                 .count()
         };
-        if count(&left) != count(&right) {
+        if count(left) != count(right) {
             return Ok(false);
         }
         for (key, value) in &left.entries {
@@ -6874,15 +6952,16 @@ impl PayloadTrace {
             return Ok(false);
         }
         match (&self.pack, &other.pack) {
-            (Some(left), Some(right)) if !Rc::ptr_eq(left, right) => {
+            (Some(left), Some(right)) if !Arc::ptr_eq(left, right) => {
                 let cached = left
                     .matches
-                    .borrow()
+                    .lock()
+                    .unwrap()
                     .as_ref()
                     .and_then(|(previous, equal)| {
                         previous
                             .upgrade()
-                            .filter(|previous| Rc::ptr_eq(previous, right))
+                            .filter(|previous| Arc::ptr_eq(previous, right))
                             .map(|_| *equal)
                     });
                 let equal = if let Some(equal) = cached {
@@ -6893,7 +6972,7 @@ impl PayloadTrace {
                             left.metadata.iter().zip(&right.metadata),
                             false,
                         )?;
-                    *left.matches.borrow_mut() = Some((Rc::downgrade(right), equal));
+                    *left.matches.lock().unwrap() = Some((Arc::downgrade(right), equal));
                     equal
                 };
                 if !equal {
@@ -6994,7 +7073,7 @@ fn native_render_line(
     end: usize,
     context: RenderContext,
 ) -> Result<SourceText, Failure> {
-    let annotations = scene.annotations.borrow();
+    let annotations = &instance.annotations;
     let expression = |index: usize, compound: bool, condition: bool| {
         let expr = if condition {
             annotations[index].condition.clone()
@@ -7058,7 +7137,7 @@ fn native_render_line(
                     .unwrap_or(&name);
                 source_concat(&[&[0x3010], &text.chars, &[0x3011]])
             }
-            Opcode::DecProp => decompiler::render_param(rt, scene, index, -1, context),
+            Opcode::DecProp => decompiler::render_param(rt, instance, index, -1, context),
             Opcode::Assign => expression(index, assign_compound, false),
             Opcode::Return => {
                 let expr = expression(index, context.compound, false);
@@ -7390,7 +7469,7 @@ fn native_prepare_analysis(
             analysis.return_forms.push(arg.form);
         }
     }
-    instance.analysis = Rc::new(analysis);
+    instance.analysis = Arc::new(analysis);
     let mut definitions = HashMap::new();
     let mut index = 0;
     while index < instance.scene.events.len() {
@@ -7413,8 +7492,8 @@ fn native_prepare_analysis(
             let returns = analysis.return_forms[left..right].iter().copied().collect();
             let layout = parsed
                 .parameters
-                .clone()
-                .map(|index| Argument {
+                .iter()
+                .map(|&index| Argument {
                     form: instance.scene.events[index].form.unwrap_or(0),
                     sub: vec![],
                 })
@@ -7449,7 +7528,7 @@ fn native_prepare_analysis(
         }
         info.returns.insert(event.ret);
     }
-    let analysis = Rc::get_mut(&mut instance.analysis)
+    let analysis = Arc::get_mut(&mut instance.analysis)
         .ok_or_else(|| Failure("shared scene analysis during construction".into()))?;
     analysis.definitions = definitions;
     analysis.calls = calls;
@@ -7502,7 +7581,7 @@ fn native_preferred_form(
 fn native_build_hints(
     rt: &Runtime,
     bundles: &Bound<'_, PyAny>,
-) -> Result<Option<Rc<DecompileHints>>, Failure> {
+) -> Result<Option<Arc<DecompileHints>>, Failure> {
     let mut seed = None;
     let mut slots: std::collections::BTreeMap<i64, CommandHints> =
         std::collections::BTreeMap::new();
@@ -7543,7 +7622,7 @@ fn native_build_hints(
             {
                 return Err(Failure("incomplete PCK declaration metadata".into()));
             }
-            seed = Some(Rc::new(DecompileHints {
+            seed = Some(Arc::new(DecompileHints {
                 command_count: commands,
                 commands: command_defs,
                 property_count: properties,
@@ -7596,7 +7675,7 @@ fn native_build_hints(
     let Some(mut hints) = seed else {
         return Ok(None);
     };
-    let state = Rc::get_mut(&mut hints)
+    let state = Arc::get_mut(&mut hints)
         .ok_or_else(|| Failure("shared decompile hints during construction".into()))?;
     for (id, slot) in slots {
         let info = state
@@ -7629,7 +7708,7 @@ struct ParserContext {
 struct SourceParser<'a> {
     rt: &'a Runtime,
     instance: &'a DecompilerState,
-    scene: Rc<DecompileScene>,
+    scene: Arc<DecompileScene>,
 }
 
 type GuardedBody = (usize, Vec<SourceLine>, Option<Vec<SourceText>>);
@@ -7713,7 +7792,7 @@ impl<'a> SourceParser<'a> {
         Ok(lines)
     }
     fn expression(&self, index: usize, context: ParserContext, condition: bool) -> SourceText {
-        let annotations = self.scene.annotations.borrow();
+        let annotations = &self.instance.annotations;
         let expression = if condition {
             annotations[index].condition.clone()
         } else {
@@ -7757,7 +7836,7 @@ impl<'a> SourceParser<'a> {
                 }
             }
             Opcode::DecProp => {
-                decompiler::render_param(self.rt, &self.scene, index, -1, context.render)
+                decompiler::render_param(self.rt, self.instance, index, -1, context.render)
             }
             _ => empty_source(),
         };
@@ -7785,7 +7864,7 @@ impl<'a> SourceParser<'a> {
             end,
             context: context.render,
         };
-        if let Some(value) = self.scene.render_cache.borrow().get(&key) {
+        if let Some(value) = self.instance.render_cache.borrow().get(&key) {
             return Ok(value.clone());
         }
         let (start, end) = self.scene.trim(start, end);
@@ -7804,7 +7883,7 @@ impl<'a> SourceParser<'a> {
                 empty_source()
             },
         );
-        self.scene
+        self.instance
             .render_cache
             .borrow_mut()
             .insert(key, value.clone());
@@ -8131,9 +8210,10 @@ impl<'a> SourceParser<'a> {
         );
         let params = parsed
             .parameters
+            .into_iter()
             .enumerate()
             .map(|(id, index)| {
-                decompiler::render_param(self.rt, &self.scene, index, id as i64, context.render)
+                decompiler::render_param(self.rt, self.instance, index, id as i64, context.render)
             })
             .collect::<Vec<_>>();
         let mut form = declaration_form_source(self.rt, ret, None);
@@ -8964,7 +9044,7 @@ impl<'a> SourceParser<'a> {
                 text.push(125);
             }
             out.push(SourceLine {
-                text: Rc::new(Text::new(text)),
+                text: Arc::new(Text::new(text)),
                 target: None,
             });
         } else {
@@ -9044,7 +9124,7 @@ fn source_slice(text: &SourceText, start: usize, end: usize) -> SourceText {
     if start == 0 && end == text.chars.len() {
         text.clone()
     } else {
-        Rc::new(Text::new(text.chars[start..end].to_vec()))
+        Arc::new(Text::new(text.chars[start..end].to_vec()))
     }
 }
 fn source_top_positions(chars: &[u32]) -> impl Iterator<Item = usize> + '_ {
@@ -9091,7 +9171,7 @@ fn source_strip_parens(text: &SourceText) -> SourceText {
     if chars.len() == text.chars.len() {
         text.clone()
     } else {
-        Rc::new(Text::new(chars.to_vec()))
+        Arc::new(Text::new(chars.to_vec()))
     }
 }
 fn source_split_assign(text: &SourceText) -> Option<(SourceText, SourceText)> {
@@ -9191,7 +9271,7 @@ fn source_normalize_quoted(text: &SourceText) -> SourceText {
     if out == text.chars[..] {
         text.clone()
     } else {
-        Rc::new(Text::new(out))
+        Arc::new(Text::new(out))
     }
 }
 fn source_expression(text: &SourceText) -> SourceText {
@@ -9238,6 +9318,6 @@ fn source_expression(text: &SourceText) -> SourceText {
     if out == chars[..] {
         text.clone()
     } else {
-        Rc::new(Text::new(out))
+        Arc::new(Text::new(out))
     }
 }

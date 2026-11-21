@@ -1,6 +1,5 @@
 import codecs
 import errno
-import shutil
 import time
 import os
 import sys
@@ -28,6 +27,7 @@ from .path_policy import (
 
 ANGOU_DAT_NAME = "\u6697\u53f7.dat"
 KEY_TXT_NAME = "key.txt"
+SCENE_SCRIPT_ID_PREFIX = b"// #SCENE_SCRIPT_ID = "
 PCK_KEY_DIR = ".siglus-ssu-keys"
 MACRO_STAT_KINDS = ("replace", "define", "define_s", "macro")
 
@@ -2074,10 +2074,14 @@ class StagedOutputs:
 
     def close(self):
         if not self.keep:
+            import shutil
+
             for staging in self.staging_dirs.values():
                 shutil.rmtree(staging, ignore_errors=True)
 
     def publish(self, inputs, *, final_output=None):
+        import shutil
+
         if not self.names:
             return
         targets = [
@@ -2144,10 +2148,10 @@ class StagedOutputs:
 def _publish_exclusive_output(staged, target, opener):
     if os.name == "nt":
         os.rename(staged, target)
-        return
+        return True
     try:
         os.link(staged, target)
-        return
+        return False
     except OSError as exc:
         if exc.errno not in (
             errno.EPERM,
@@ -2156,6 +2160,8 @@ def _publish_exclusive_output(staged, target, opener):
             errno.EOPNOTSUPP,
         ):
             raise
+    import shutil
+
     with open_read(staged) as source:
         created = None
         try:
@@ -2170,6 +2176,7 @@ def _publish_exclusive_output(staged, target, opener):
                     if os.path.samestat(created, os.lstat(target)):
                         os.unlink(target)
             raise
+    return False
 
 
 @contextmanager
@@ -2192,7 +2199,8 @@ def open_atomic_output(
             stream.flush()
             os.fsync(stream.fileno())
         if exclusive:
-            _publish_exclusive_output(staged, target, opener)
+            if _publish_exclusive_output(staged, target, opener):
+                staged = None
         else:
             if existing_mode is not None:
                 os.chmod(staged, existing_mode)
@@ -2210,9 +2218,11 @@ def open_atomic_output(
                         if current.read(len(expected) + 1) != expected:
                             raise OSError(f"file changed since it was read: {target}")
                 os.replace(staged, target)
+                staged = None
     finally:
-        with suppress(FileNotFoundError):
-            os.unlink(staged)
+        if staged is not None:
+            with suppress(FileNotFoundError):
+                os.unlink(staged)
 
 
 def write_text(path: str, text: str, enc: str = "utf-8") -> None:
@@ -2221,7 +2231,7 @@ def write_text(path: str, text: str, enc: str = "utf-8") -> None:
         f.write(text)
 
 
-def write_unique_text(path: str, text: str) -> str:
+def write_unique_bytes(path: str, *chunks: bytes) -> str:
     root, ext = os.path.splitext(path)
     index = 0
     while True:
@@ -2230,10 +2240,9 @@ def write_unique_text(path: str, text: str) -> str:
         if os.path.lexists(candidate):
             continue
         try:
-            with open_atomic_output(
-                candidate, "w", exclusive=True, encoding="utf-8", newline="\r\n"
-            ) as output:
-                output.write(text)
+            with open_atomic_output(candidate, exclusive=True) as output:
+                for chunk in chunks:
+                    output.write(chunk)
         except FileExistsError:
             if not os.path.lexists(candidate):
                 raise
@@ -2280,7 +2289,9 @@ def write_disam_totals(out, stats) -> None:
 
 
 def ensure_parent_dir(path: str) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    parent = os.path.dirname(path) or "."
+    if not os.path.isdir(parent):
+        os.makedirs(parent, exist_ok=True)
 
 
 def parse_i32_header(dat: bytes, fields, size: int) -> dict:
@@ -2907,12 +2918,9 @@ def parse_gei_disam_args(argv, *, allow_gei_disam: bool = True):
         args = [arg for arg in args if arg != "--disam"]
         disam = True
     if "--decompile" in args:
-        if disam:
-            raise ValueError("--disam and --decompile are mutually exclusive")
         args = [arg for arg in args if arg != "--decompile"]
-        disam = True
         decompile = True
-    if gei and disam and (not allow_gei_disam):
+    if gei and (disam or decompile) and not allow_gei_disam:
         if decompile:
             raise ValueError("--decompile is not supported with --gei")
         raise ValueError("--disam is not supported with --gei")

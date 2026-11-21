@@ -15,7 +15,7 @@ impl MsvcRand {
     }
 
     fn rand15(&mut self) -> u32 {
-        self.state = self.state.wrapping_mul(214013).wrapping_add(2531011);
+        self.state = crate::msvc_next(self.state);
         (self.state >> 16) & 0x7fff
     }
 

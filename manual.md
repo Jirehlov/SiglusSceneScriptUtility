@@ -281,7 +281,7 @@ Extracts decoded scene `.dat` files and any embedded original sources from a `.p
 #### Syntax
 
 ```bash
-siglus-ssu -x [--disam|--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
+siglus-ssu -x [--disam] [--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
 siglus-ssu -x --disam <input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 ```
@@ -294,7 +294,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | With `--disam`, scan immediate `.dat` files, skipping non-scene files. |
 | `[output_dir]` | Base output directory. Defaults to the input file's directory, or the input directory itself. PCK extraction creates a timestamped subdirectory. |
 | `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
-| `--decompile` | Write disassembly and reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
+| `--decompile` | Write reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Add `--disam` to also write disassembly listings. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
 | `--angou VALUE` | Specify a [decryption key source](#decryption-keys). |
 | `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. If the output already exists, use `Gameexe_1.ini` and so on. |
 

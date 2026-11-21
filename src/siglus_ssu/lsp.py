@@ -3,7 +3,7 @@ from bisect import bisect_left, bisect_right
 from collections import deque
 from itertools import chain, groupby
 from contextlib import redirect_stdout
-from functools import lru_cache, partial
+from functools import cache, lru_cache, partial
 import io
 import json
 import os
@@ -12,7 +12,7 @@ import sys
 import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from . import const as C, package_version
 from . import sav
 from .BS import BS, copy_ia_data
@@ -1408,7 +1408,7 @@ def _native_lsp_project_config(project: ProjectContext) -> dict[str, Any] | None
     if not is_native_available() or project.build_error is not None:
         return None
     try:
-        from .compiler import _native_compile_constants_config
+        from .native_ops import _native_compile_constants_config
 
         return {
             "constants": _native_compile_constants_config(),
@@ -4107,21 +4107,31 @@ class SSLanguageServer:
         return entry
 
     def analyze(
-        self, doc: DocumentState, *, refresh_link: bool = True
+        self,
+        doc: DocumentState,
+        *,
+        refresh_link: bool = True,
+        project_entry: ProjectCacheEntry | None = None,
+        get_link_entry: Callable[[], DirectoryLinkDiagnosticsEntry] | None = None,
     ) -> AnalysisResult:
-        base = self.analyze_base(doc)
+        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
+        if project_entry is None:
+            project_entry = self.project_for_directory(directory)
+        base = self.analyze_base(doc, project_entry=project_entry)
         if (
             not doc.path.lower().endswith(".ss")
             or not _project_link_command_names(base.project)
             or any(item.severity == SEVERITY_ERROR for item in base.diagnostics)
         ):
             return base
-        directory = os.path.abspath(os.path.dirname(doc.path) or ".")
-        link_entry = (
-            self.link_diagnostics_for_directory(directory)
-            if refresh_link
-            else self.link_diagnostics_cache.get(directory)
-        )
+        if not refresh_link:
+            link_entry = self.link_diagnostics_cache.get(directory)
+        elif get_link_entry is not None:
+            link_entry = get_link_entry()
+        else:
+            link_entry = self.link_diagnostics_for_directory(
+                directory, project_entry=project_entry
+            )
         if link_entry is None:
             return base
         signature = (link_entry.project_signature, link_entry.revision)
@@ -4144,28 +4154,33 @@ class SSLanguageServer:
             for d in result.diagnostics
         ]
 
-    def document_diagnostic_report(
-        self, doc: DocumentState, *, refresh_link: bool = True
-    ) -> dict[str, Any]:
-        result = self.analyze(doc, refresh_link=refresh_link)
+    def document_diagnostic_report(self, doc: DocumentState) -> dict[str, Any]:
+        result = self.analyze(doc)
         return {"kind": "full", "items": self.lsp_diagnostics_for_result(result)}
 
     def publish_diagnostics(
-        self, doc: DocumentState, *, refresh_link: bool = True
+        self,
+        doc: DocumentState,
+        *,
+        refresh_link: bool = True,
+        project_entry: ProjectCacheEntry | None = None,
+        get_link_entry: Callable[[], DirectoryLinkDiagnosticsEntry] | None = None,
     ) -> None:
-        if self.pull_diagnostics_enabled:
+        if self.pull_diagnostics_enabled or not doc.opened:
             return
-        if not doc.opened:
-            return
+        result = self.analyze(
+            doc,
+            refresh_link=refresh_link,
+            project_entry=project_entry,
+            get_link_entry=get_link_entry,
+        )
         self.write_message(
             {
                 "jsonrpc": "2.0",
                 "method": "textDocument/publishDiagnostics",
                 "params": {
                     "uri": doc.uri,
-                    "diagnostics": self.document_diagnostic_report(
-                        doc, refresh_link=refresh_link
-                    )["items"],
+                    "diagnostics": self.lsp_diagnostics_for_result(result),
                 },
             }
         )
@@ -4192,7 +4207,23 @@ class SSLanguageServer:
             else:
                 doc.analysis = None
                 doc.analysis_signature = None
-            self.publish_diagnostics(doc, refresh_link=refresh_link)
+        if self.pull_diagnostics_enabled or not docs:
+            return
+        project_entry = self.project_for_directory(directory)
+        get_link_entry = cache(
+            partial(
+                self.link_diagnostics_for_directory,
+                directory,
+                project_entry=project_entry,
+            )
+        )
+        for doc in docs:
+            self.publish_diagnostics(
+                doc,
+                refresh_link=refresh_link,
+                project_entry=project_entry,
+                get_link_entry=get_link_entry,
+            )
 
     def command_implementation_locations(
         self, directory: str, symbol_id: str

@@ -13,7 +13,6 @@ from .common import (
     split_end_of_options,
     first_option_token,
 )
-from . import GEI
 from . import pck
 from .path_policy import resolve_read_path
 
@@ -116,6 +115,8 @@ def main(argv):
             sys.stderr.write(str(e) + "\n")
             return 2
     if gei:
+        from . import GEI
+
         if len(args) == 1:
             in_path = args[0]
             out_dir = _default_output_dir(in_path)
@@ -154,26 +155,24 @@ def main(argv):
         in_path = resolve_read_path(in_path)
     except (FileNotFoundError, NotADirectoryError):
         return 2
+    is_dir = os.path.isdir(in_path)
+    if decompile and (
+        is_dir or (in_path.lower().endswith(".dat") and os.path.isfile(in_path))
+    ):
+        sys.stderr.write("--decompile requires extract mode on a complete .pck input\n")
+        return 2
     if out_dir is None:
-        if (dat_txt and os.path.isdir(in_path)) or os.path.isfile(in_path):
+        if (dat_txt and is_dir) or os.path.isfile(in_path):
             out_dir = _default_output_dir(in_path)
         else:
             return 2
-    if dat_txt and os.path.isdir(in_path):
-        if decompile:
-            sys.stderr.write(
-                "--decompile requires extract mode on a complete .pck input\n"
+    if is_dir:
+        if dat_txt:
+            return _disassemble_dat_dir(
+                in_path,
+                out_dir,
+                explicit_angou=explicit_angou,
             )
-            return 2
-        return _disassemble_dat_dir(
-            in_path,
-            out_dir,
-            explicit_angou=explicit_angou,
-        )
-    if decompile and os.path.isfile(in_path) and in_path.lower().endswith(".dat"):
-        sys.stderr.write("--decompile requires extract mode on a complete .pck input\n")
-        return 2
-    if os.path.isdir(in_path):
         sys.stderr.write("Directory input requires --disam or --gei\n")
         return 2
     return pck.extract_pck(

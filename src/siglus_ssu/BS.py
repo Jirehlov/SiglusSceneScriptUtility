@@ -664,13 +664,7 @@ def build_scn_dat(plad, out_scn):
 
     sl = (plad or {}).get("str_list") or []
     n = len(sl)
-    order_src = out_scn.get("str_sort_index")
-    if isinstance(order_src, (list, tuple)) and len(order_src) == n:
-        order = order_src
-    else:
-        order = list(range(n))
-        if n:
-            _MSR.shuffle(order)
+    order = out_scn["str_sort_index"]
     idx_src = out_scn.get("str_index_list")
     use_idx = isinstance(idx_src, (list, tuple)) and len(idx_src) == n
     u16_map = {}

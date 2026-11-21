@@ -97,16 +97,13 @@ def _replacement_prefix_pattern(tree):
     return pattern
 
 
-def search_replace_tree(rt, text, pos):
+def search_replace_tree(rt, text):
     n = rt
     best = None
-    i = pos
+    i = 0
     length = len(text)
-    if isinstance(text, _ExpansionBuffer) and text.pieces:
-        value, start, end = text.pieces[-1]
-        limit = end - start
-    else:
-        value, start, limit = text, 0, length
+    value, start, end = text.pieces[-1]
+    limit = end - start
     while True:
         replacement = n["r"]
         if replacement is not None:
@@ -169,6 +166,14 @@ class _ExpansionBuffer:
             if self.text
             else [item for piece in pieces for item in piece]
         )
+
+    def startswith(self, prefix, index):
+        stop = index + len(prefix)
+        if self.pieces:
+            value, start, end = self.pieces[-1]
+            if stop <= end - start:
+                return value.startswith(prefix, start + index, end)
+        return self[index:stop] == prefix
 
     def advance(self, count, *, emit=True):
         while count:
@@ -500,9 +505,9 @@ class CharacterAnalizer:
         return "".join(out), "".join(inc), stats
 
     def _replace_head(self, text, default_rt, added_rt, source_map=None):
-        r1 = search_replace_tree(default_rt, text, 0) if default_rt else None
+        r1 = search_replace_tree(default_rt, text) if default_rt else None
         r2 = (
-            search_replace_tree(added_rt, text, 0)
+            search_replace_tree(added_rt, text)
             if added_rt and added_rt.get("c")
             else None
         )
@@ -876,7 +881,7 @@ class CharacterAnalizer:
                 return None
         return self.replace_uses
 
-    def analize_file(self, in_text, piad, pcad, *, expand=True):
+    def analize_file(self, in_text, piad, pcad):
         in_text = in_text.replace("\r", "")
         self.iad = piad
         if self.sidecar:
@@ -926,8 +931,6 @@ class CharacterAnalizer:
                 "condition_names", []
             )
             pcad["inc_iad2"] = iad2
-        if not expand:
-            return 1
         if self.sidecar:
             self.replace_uses = list(iad2.get("replace_uses", []))
         text = self.analize_line(scn, piad, scn_source_map if self.sidecar else None)

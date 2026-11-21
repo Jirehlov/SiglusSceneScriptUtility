@@ -9,7 +9,7 @@ use super::frontend_common::{
     CaseMode, SingleQuoteMode, SourcePoint, TextCommentOptions, next_else_ifdef_state,
     next_elseif_ifdef_state, scan_text_comments,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct IncProperty {
     pub form: String,
@@ -93,7 +93,8 @@ pub struct IncSidecar {
 }
 
 pub struct IncAnalyzer<const TRACK_USAGE: bool = true> {
-    text: Vec<char>,
+    text: VecDeque<char>,
+    column_base: usize,
     pub parent_form: String,
     pub error_line: usize,
     pub error_str: String,
@@ -102,7 +103,7 @@ pub struct IncAnalyzer<const TRACK_USAGE: bool = true> {
     pub source_id: usize,
     default_maps: Vec<Vec<Option<SourcePoint>>>,
     input_source_map: Vec<Option<SourcePoint>>,
-    source_map: Vec<Option<SourcePoint>>,
+    source_map: VecDeque<Option<SourcePoint>>,
     pub sidecar_data: IncSidecar,
     last_after_source_map: Vec<Option<SourcePoint>>,
 }
@@ -206,6 +207,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
     pub fn new_with_usage_tracking(text: &str, parent_form: impl Into<String>) -> Self {
         Self {
             text: text.chars().collect(),
+            column_base: 0,
             parent_form: parent_form.into(),
             error_line: 0,
             error_str: String::new(),
@@ -214,7 +216,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             source_id: 0,
             default_maps: Vec::new(),
             input_source_map: Vec::new(),
-            source_map: Vec::new(),
+            source_map: VecDeque::new(),
             sidecar_data: IncSidecar::default(),
             last_after_source_map: Vec::new(),
         }
@@ -247,6 +249,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         match scan_text_comments(&raw, &options) {
             Ok(result) => {
                 self.text = result.text.chars().collect();
+                self.column_base = 0;
                 if self.sidecar {
                     let mut source_map = result.source_map.unwrap_or_default();
                     if !self.input_source_map.is_empty() {
@@ -264,7 +267,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                             point.source_id = self.source_id;
                         }
                     }
-                    self.source_map = source_map;
+                    self.source_map = source_map.into();
                 } else {
                     self.source_map.clear();
                 }
@@ -311,7 +314,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 break;
             }
         }
-        Some((i, self.text[start..i].iter().collect()))
+        Some((i, self.text.range(start..i).collect()))
     }
 
     fn word(&self, pos: usize) -> Option<(usize, String)> {
@@ -328,7 +331,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 break;
             }
         }
-        Some((i, self.text[start..i].iter().collect()))
+        Some((i, self.text.range(start..i).collect()))
     }
 
     fn number(&self, mut pos: usize) -> Option<(usize, i32)> {
@@ -409,7 +412,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         if i == start {
             return self.err(line, "Property name is missing.");
         }
-        Ok((self.text[start..i].iter().collect(), i, line))
+        Ok((self.text.range(start..i).collect(), i, line))
     }
 
     fn command_name(&mut self, pos: usize, line: usize) -> Result<(String, usize, usize), ()> {
@@ -424,7 +427,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         if i == start {
             return self.err(line, "Command name is missing.");
         }
-        Ok((self.text[start..i].iter().collect(), i, line))
+        Ok((self.text.range(start..i).collect(), i, line))
     }
 
     fn property_form(
@@ -598,7 +601,15 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         if i == start {
             return self.err(line, "name missing");
         }
-        Ok((self.text[start..i].iter().collect(), i, line, start, i))
+        Ok((self.text.range(start..i).collect(), i, line, start, i))
+    }
+
+    fn column(&self, offset: usize) -> usize {
+        self.text
+            .range(..offset)
+            .rev()
+            .position(|ch| *ch == '\n')
+            .unwrap_or(self.column_base + offset)
     }
 
     fn span_from_offsets(&self, start: usize, end: usize, line: usize) -> NameSpan {
@@ -631,15 +642,12 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 }
             }
         }
-        let line_start = self.text[..start.min(self.text.len())]
-            .iter()
-            .rposition(|ch| *ch == '\n')
-            .map_or(0, |index| index + 1);
+        let column = self.column(start);
         NameSpan {
             source_id: -1,
             line,
-            start_char: start.saturating_sub(line_start),
-            end_char: end.saturating_sub(line_start),
+            start_char: column,
+            end_char: column + end - start,
         }
     }
 
@@ -711,8 +719,9 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         let mut out_source_map = Vec::new();
         let mut ifs = [0i32; 16];
         let mut depth = 0usize;
-        let source_at =
-            |source_map: &[Option<SourcePoint>], pos: usize| source_map.get(pos).copied().flatten();
+        let source_at = |source_map: &VecDeque<Option<SourcePoint>>, pos: usize| {
+            source_map.get(pos).copied().flatten()
+        };
         while pos < self.text.len() {
             if self.starts_with(pos, "##") {
                 out.push('#');
@@ -839,12 +848,12 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             while name_end < self.text.len() && !stopset.contains(&self.text[name_end]) {
                 name_end += 1;
             }
-            self.last_after_source_map = self.source_map[i..j].to_vec();
+            self.last_after_source_map = self.source_map.range(i..j).copied().collect();
             self.span_from_offsets(i, name_end, name_line)
         } else {
             NameSpan::default()
         };
-        (self.text[i..j].iter().collect(), j, line2, name_line, span)
+        (self.text.range(i..j).collect(), j, line2, name_line, span)
     }
 
     fn macro_arg_list(
@@ -878,8 +887,9 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             if pos == start {
                 return self.err(line, "Could not find argument name in list.");
             }
-            let reversed_name = self.text[start..pos]
-                .iter()
+            let reversed_name = self
+                .text
+                .range(start..pos)
                 .rev()
                 .copied()
                 .collect::<Vec<_>>();
@@ -902,9 +912,10 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                         );
                     }
                     if self.text[pos] == ')' {
-                        default_value = Some(self.text[default_start..pos].iter().collect());
+                        default_value = Some(self.text.range(default_start..pos).collect());
                         if self.sidecar {
-                            default_map = self.source_map[default_start..pos].to_vec();
+                            default_map =
+                                self.source_map.range(default_start..pos).copied().collect();
                         }
                         pos += 1;
                         break;
@@ -1035,13 +1046,18 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
         let (after, next, line2) = self.after(i, line, iad)?;
         let source_map = std::mem::take(&mut self.last_after_source_map);
         let expanded = self.expand(&after, iad, &source_map, line2)?;
-        self.text
-            .splice(declaration_start..next, expanded.text.chars());
         if self.sidecar {
-            self.source_map
-                .splice(declaration_start..next, expanded.source_map);
+            self.column_base = self.column(declaration_start);
+            drop(self.source_map.drain(..next));
+            for point in expanded.source_map.into_iter().rev() {
+                self.source_map.push_front(point);
+            }
         }
-        Ok((declaration_start, line2))
+        drop(self.text.drain(..next));
+        for ch in expanded.text.chars().rev() {
+            self.text.push_front(ch);
+        }
+        Ok((0, line2))
     }
 
     fn expand(

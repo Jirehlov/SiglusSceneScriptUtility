@@ -50,38 +50,123 @@ def scan_lsp_document_native(
     )
 
 
+def _native_compile_constants_config():
+    from .MA import FormTable
+
+    form_table = FormTable()
+    form_table.create_system_form_table()
+    system_elements = []
+    selection_command_codes = []
+    for parent, form_info in form_table.form_map_by_name.items():
+        for element in (form_info.get("element_map_by_name") or {}).values():
+            arg_map = []
+            for list_id, arg_list in sorted(
+                (element.get("arg_map") or {}).items(), key=lambda item: int(item[0])
+            ):
+                args_snapshot = []
+                for index, arg in enumerate(arg_list["arg_list"]):
+                    args_snapshot.append(
+                        {
+                            "id": int(arg.get("id", index) or index),
+                            "name": str(arg.get("name", "") or ""),
+                            "form": str(arg.get("form", C.FM_INT) or C.FM_INT),
+                            "def_int": int(arg.get("def_int", 0) or 0),
+                            "def_exist": bool(arg.get("def_exist", False)),
+                            "preserve_int_reference": bool(
+                                arg.get("preserve_int_reference", False)
+                            ),
+                        }
+                    )
+                arg_map.append({"id": int(list_id), "args": args_snapshot})
+            element_code = int(element.get("code", 0) or 0)
+            system_elements.append(
+                {
+                    "parent": str(parent),
+                    "kind": int(element.get("type", C.ET_PROPERTY) or 0),
+                    "code": element_code,
+                    "name": str(element.get("name", "") or ""),
+                    "form": str(element.get("form", C.FM_INT) or C.FM_INT),
+                    "arg_map": arg_map,
+                    "origin": str(element.get("origin", "sys") or "sys"),
+                }
+            )
+            if C.is_global_sel_command(parent, element_code):
+                selection_command_codes.append(
+                    [int(C._FORM_CODE.get(parent, 0) or 0), element_code]
+                )
+    return {
+        "form_code": C._FORM_CODE,
+        "form_names": {
+            name: str(getattr(C, name))
+            for name in (
+                "FM___ARGSREF",
+                "FM___ARGS",
+                "FM_LIST",
+                "FM_VOID",
+                "FM_INT",
+                "FM_INTLIST",
+                "FM_INTLISTREF",
+                "FM_INTREF",
+                "FM_LABEL",
+                "FM_CALL",
+                "FM_SCENE",
+                "FM_GLOBAL",
+                "FM_STR",
+                "FM_STRLIST",
+                "FM_STRLISTREF",
+                "FM_STRREF",
+            )
+        },
+        "la_type": C.LA_T,
+        "op_code": {
+            name: int(getattr(C, name)) for name in dir(C) if name.startswith("OP_")
+        },
+        "cd_code": {
+            name: int(getattr(C, name)) for name in dir(C) if name.startswith("CD_")
+        },
+        "element_code": {
+            "ELM_ARRAY": C.ELM_ARRAY,
+            "ELM_GLOBAL_CUR_CALL": C.ELM_GLOBAL_CUR_CALL,
+            "ELM_GLOBAL_MSG_BLOCK": C.ELM_GLOBAL_MSG_BLOCK,
+            "ELM_OWNER_CALL_PROP": C.ELM_OWNER_CALL_PROP,
+            "ELM_OWNER_USER_CMD": C.ELM_OWNER_USER_CMD,
+            "ELM_OWNER_USER_PROP": C.ELM_OWNER_USER_PROP,
+        },
+        "element_type": {
+            "ET_COMMAND": C.ET_COMMAND,
+            "ET_PROPERTY": C.ET_PROPERTY,
+        },
+        "system_elements": system_elements,
+        "scn_header_fields": list(C.SCN_HDR_FIELDS),
+        "scn_header_size": int(C.SCN_HDR_SIZE),
+        "pack_header_fields": list(C.PACK_HDR_FIELDS),
+        "pack_header_size": int(C.PACK_HDR_SIZE),
+        "z_label_count": int(C.TNM_Z_LABEL_CNT),
+        "logical_and_precedence": C.LOGICAL_AND_PRECEDENCE,
+        "unary_precedence": C.SA_PRI_MAX,
+        "easy_angou_code": bytes(C.EASY_ANGOU_CODE),
+        "gameexe_dat_angou_code": bytes(C.GAMEEXE_DAT_ANGOU_CODE),
+        "exe_angou_a_idx": [int(x) for x in C.EXE_ANGOU_A_IDX],
+        "exe_angou_b_idx": [int(x) for x in C.EXE_ANGOU_B_IDX],
+        "source_angou": C.SOURCE_ANGOU,
+        "message_block_command_codes": [
+            [int(parent), int(code)] for parent, code in C.MESSAGE_BLOCK_COMMAND_CODES
+        ],
+        "read_flag_command_codes": [
+            [int(parent), int(code)] for parent, code in C.READ_FLAG_COMMAND_CODES
+        ],
+        "selection_command_codes": selection_command_codes,
+        "allow_property_out_of_command": C.ALLOW_PROPERTY_OUT_OF_COMMAND,
+        "scene_string_xor_multiplier": _runtime._SCENE_STRING_XOR_MULTIPLIER,
+    }
+
+
 @lru_cache(maxsize=4)
 def _disam_native_config_cached(_profile, scene_string_xor_multiplier):
     from .common import scn_expression_tables
-    from .compiler import _native_compile_constants_config
 
     names = (
-        "CD_ARG",
-        "CD_ASSIGN",
-        "CD_COMMAND",
-        "CD_COPY",
-        "CD_COPY_ELM",
-        "CD_DEC_PROP",
-        "CD_ELM_POINT",
-        "CD_EOF",
-        "CD_GOSUB",
-        "CD_GOSUBSTR",
-        "CD_GOTO",
-        "CD_GOTO_FALSE",
-        "CD_GOTO_TRUE",
-        "CD_NAME",
-        "CD_NL",
-        "CD_NONE",
-        "CD_OPERATE_1",
-        "CD_OPERATE_2",
-        "CD_POP",
-        "CD_PROPERTY",
-        "CD_PUSH",
-        "CD_RETURN",
-        "CD_SEL_BLOCK_END",
-        "CD_SEL_BLOCK_START",
-        "CD_TEXT",
-        "CONST_PROFILE",
+        *C.SCN_OP_NAMES,
         "ELM_ARRAY",
         "ELM_GLOBAL_MSG_BLOCK",
         "ELM_OWNER_CALL_PROP",
@@ -104,16 +189,13 @@ def _disam_native_config_cached(_profile, scene_string_xor_multiplier):
         "FM_VOID",
         "FM___ARGS",
         "FM___ARGSREF",
-        "LA_T",
         "NAMED_INT_REFERENCE_ARGUMENTS",
         "OP_MULTIPLE",
         "OP_PLUS",
         "READ_FLAG_COMMAND_CODES",
-        "SCN_OP_NAMES",
         "_FORM_CODE",
     )
     constants = {name: getattr(C, name) for name in names}
-    constants.update({name: getattr(C, name) for name in C.SCN_OP_NAMES})
     return native_accel.disam_config(
         {
             "constants": constants,
@@ -129,11 +211,13 @@ def _disam_native_config():
     )
 
 
-def disassemble_scn_bytes_native(parameters):
+def disassemble_scn_bytes_native(parameters, annotation_budget, parse_status):
     if not is_native_available():
         return None
-    result = native_accel.disassemble_scn_bytes(_disam_native_config(), parameters)
-    parameters["parse_status"].update(result["status"])
+    result = native_accel.disassemble_scn_bytes(
+        _disam_native_config(), {**parameters, "annotation_budget": annotation_budget}
+    )
+    parse_status.update(result["status"])
     return result["result"]
 
 
@@ -609,9 +693,25 @@ def tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim):
         _py_tile_copy(d, s, bx, by, t, tx, ty, repx, repy, rev, lim)
 
 
+_MSVCRT_MULTIPLIER = 214013
+_MSVCRT_INCREMENT = 2531011
+
+
 def msvcrt_rand15(state: int):
-    s = (int(state) * 214013 + 2531011) & 0xFFFFFFFF
+    s = (int(state) * _MSVCRT_MULTIPLIER + _MSVCRT_INCREMENT) & 0xFFFFFFFF
     return s, (s >> 16) & 0x7FFF
+
+
+def msvcrt_advance(state: int, steps: int) -> int:
+    multiplier = _MSVCRT_MULTIPLIER
+    increment = _MSVCRT_INCREMENT
+    while steps > 0:
+        if steps & 1:
+            state = (multiplier * state + increment) & 0xFFFFFFFF
+        increment = ((multiplier + 1) * increment) & 0xFFFFFFFF
+        multiplier = (multiplier * multiplier) & 0xFFFFFFFF
+        steps >>= 1
+    return state
 
 
 def msvcrt_rand_byte(state: int):
@@ -621,21 +721,24 @@ def msvcrt_rand_byte(state: int):
 
 def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int):
     pat_len = len(pattern)
-    state = seed
-    buf = bytearray()
-    pos = -1
-    target_end = start_skip + 16777216 + pat_len - 1
-    while pos + 1 < target_end:
+    prefix = [0] * pat_len
+    matched = 0
+    for i in range(1, pat_len):
+        while matched and pattern[i] != pattern[matched]:
+            matched = prefix[matched - 1]
+        if pattern[i] == pattern[matched]:
+            matched += 1
+        prefix[i] = matched
+    state = msvcrt_advance(seed, start_skip)
+    matched = 0
+    for pos in range((1 << 24) + pat_len - 1):
         state, value = msvcrt_rand_byte(state)
-        pos += 1
-        buf.append(value)
-        if len(buf) > pat_len:
-            del buf[0]
-        if len(buf) != pat_len:
-            continue
-        start_pos = pos - (pat_len - 1)
-        if start_pos >= start_skip and bytes(buf) == pattern:
-            return start_pos
+        while matched and value != pattern[matched]:
+            matched = prefix[matched - 1]
+        if value == pattern[matched]:
+            matched += 1
+        if matched == pat_len:
+            return start_skip + (pos + 1 - pat_len)
     return None
 
 

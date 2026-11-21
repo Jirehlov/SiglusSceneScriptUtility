@@ -65,11 +65,11 @@ def _usage():
         "\n"
         "Extract mode:\n"
         f"  {p} -x <input_pck> [output_dir] [--angou VALUE]\n"
-        f"  {p} -x [--disam|--decompile] <input_pck> [output_dir] [--angou VALUE]\n"
+        f"  {p} -x [--disam] [--decompile] <input_pck> [output_dir] [--angou VALUE]\n"
         f"  {p} -x --disam <input_dir> [output_dir] [--angou VALUE]\n"
         f"  {p} -x --gei <Gameexe.dat|input_dir> [output_dir] [--angou VALUE]\n"
         "    --disam        Dump .dat disassembly when extracting .pck or scanning a .dat directory\n"
-        "    --decompile    With complete .pck input, dump .dat disassembly and reconstructed decompiled/*.ss scripts\n"
+        "    --decompile    With complete .pck input, reconstruct .ss and .inc in decompiled/. Add --disam for .dat.txt.\n"
         "    --gei          Restore Gameexe.ini from Gameexe.dat\n"
         "    output_dir     Defaults to the input file directory or the input directory itself\n"
         "\n"
@@ -375,6 +375,7 @@ def main():
         sys.stderr.write(
             f"{_prog()}: warning: --string-xor-multiplier has no effect for this operation\n"
         )
+    _runtime._INITIAL_CONST_PROFILE = const_profile
     try:
         from . import const as C
 
@@ -385,6 +386,8 @@ def main():
     except Exception as exc:
         sys.stderr.write(f"{_prog()}: failed to load const.py: {exc}\n")
         return 1
+    finally:
+        _runtime._INITIAL_CONST_PROFILE = None
     if mode in ("-c", "--compile") and const_profile is not None:
         from .common import has_option
 

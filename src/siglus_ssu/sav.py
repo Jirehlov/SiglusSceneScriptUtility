@@ -853,7 +853,7 @@ def _parse_global_for_patch(blob):
 
 
 def _decode_global_txt(blob):
-    for enc in ("utf-8-sig", "utf-8", "cp932"):
+    for enc in ("utf-8-sig", "cp932"):
         try:
             return bytes(blob).decode(enc)
         except UnicodeDecodeError:

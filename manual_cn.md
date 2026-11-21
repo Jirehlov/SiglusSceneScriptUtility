@@ -281,7 +281,7 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 #### 语法
 
 ```bash
-siglus-ssu -x [--disam|--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
+siglus-ssu -x [--disam] [--decompile] <input_pck> [output_dir] [--angou <path|angou=text|key=bytes>]
 siglus-ssu -x --disam <input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=text|key=bytes>]
 ```
@@ -294,7 +294,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | 与 `--disam` 同用时，扫描当前层的 `.dat`，跳过非场景文件。 |
 | `[output_dir]` | 输出基目录，默认为输入文件所在目录或输入目录本身。PCK 提取会创建带时间戳的子目录。 |
 | `--disam` | 额外写出 `<scene>.dat.txt` 反汇编，不能与 `--gei` 同用。 |
-| `--decompile` | 写出反汇编及重建的 `decompiled/<scene>.ss`，并按需生成 `decompiled/__decompiled.inc`。需要包含包级元数据的完整场景 PCK，不接受单个 `.dat` 或目录。不能与 `--gei` 同用。 |
+| `--decompile` | 写出重建的 `decompiled/<scene>.ss`，并按需生成 `decompiled/__decompiled.inc`。同时传入 `--disam` 可生成反汇编文本。需要包含包级元数据的完整场景 PCK，不接受单个 `.dat` 或目录。不能与 `--gei` 同用。 |
 | `--angou VALUE` | 指定[解密密钥来源](#解密密钥)。 |
 | `--gei` | 从 `Gameexe.dat` 或所在目录还原 `Gameexe.ini`。给定目录时，程序按固定的 Windows 文件名大小写映射查找，并对大小写冲突发出警告。已有同名文件时，依次尝试 `Gameexe_1.ini` 等文件名。 |
 

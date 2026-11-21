@@ -1,8 +1,6 @@
 import bisect
 import functools
-import os
 import re
-import sys
 from collections import Counter
 from .CA import is_zen
 from . import const as C
@@ -18,8 +16,6 @@ from .common import (
     quote_ss_text,
     scn_expression_tables,
     split_element_code as _element_owner,
-    write_text,
-    write_unique_text,
 )
 
 _OPEN_NAME = "\u3010"
@@ -303,20 +299,6 @@ def _system_symbolic_string_blockers(_profile):
         if parent:
             _add_symbolic_string_blocker(out, f"{parent}.{name}")
     return frozenset(out)
-
-
-def _write_support_inc_lines(root, lines):
-    out_path = os.path.join(root, "__decompiled.inc")
-    merged = []
-    seen = set()
-    for decl in lines:
-        text = decl.strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        merged.append(text)
-    if merged:
-        write_text(out_path, "\n".join(merged).rstrip() + "\n", enc="utf-8")
 
 
 def _copy_arg_layout(layout):
@@ -754,31 +736,6 @@ def _support_inc_lines_from_hints(hints):
 
 
 def build_decompile_hints(bundles, status):
-    from .native_ops import build_decompile_hints_native, is_native_available
-
-    if is_native_available():
-        cached_bundles = {}
-        remaining_bytes = 256 * 1024 * 1024
-
-        def native_bundles():
-            nonlocal remaining_bytes
-            bundle = next(bundles, None)
-            while bundle is not None:
-                status(bundle)
-                retained_bytes = bundle["trace"].retained_bytes(remaining_bytes)
-                if retained_bytes is not None:
-                    cached_bundles[bundle["dat_path"]] = bundle
-                    remaining_bytes -= retained_bytes
-                yield bundle
-                try:
-                    bundle = bundles.send(remaining_bytes)
-                except StopIteration:
-                    return
-
-        hints = build_decompile_hints_native(native_bundles())
-        if hints is not None:
-            hints["cached_bundles"] = cached_bundles
-        return hints
     seed = None
     slots = {}
     name_texts = set()
@@ -2279,10 +2236,25 @@ class _Decompiler:
             return None
         i = body_idx
         params = []
-        while i < end_idx and self.event_ops[i] == "CD_DEC_PROP":
-            params.append(self.events[i])
+        while i < end_idx:
+            op = self.event_ops[i]
+            if op == "CD_ARG":
+                break
+            if op == "CD_DEC_PROP":
+                params.append(self.events[i])
+            elif op not in {
+                "CD_PUSH",
+                "CD_ELM_POINT",
+                "CD_PROPERTY",
+                "CD_OPERATE_1",
+                "CD_OPERATE_2",
+                "CD_COMMAND",
+                "CD_GOSUB",
+                "CD_GOSUBSTR",
+            }:
+                return None
             i += 1
-        if i >= end_idx or self.event_ops[i] != "CD_ARG":
+        if i >= end_idx:
             return None
         body_start_idx = i + 1
         body_end_ofs = self.event_offsets[end_idx]
@@ -3389,20 +3361,3 @@ class _Decompiler:
         if eof_line == len(materialized) + 1:
             return text + "\n"
         return text
-
-
-def write_decompiled_ss(dat_path, bundle, out_dir, hints):
-    try:
-        out_root = os.path.join(out_dir, "decompiled")
-        stem = os.path.splitext(os.path.basename(str(dat_path)))[0]
-        out_path = os.path.join(out_root, stem + ".ss")
-        if "_native" in hints:
-            from .native_ops import decompile_source_native
-
-            source = decompile_source_native(bundle, hints)
-        else:
-            source = _Decompiler(bundle, hints=hints).decompile()
-        return write_unique_text(out_path, source)
-    except Exception as exc:
-        sys.stderr.write(f"decompile: {dat_path}: {exc}\n")
-        return None
