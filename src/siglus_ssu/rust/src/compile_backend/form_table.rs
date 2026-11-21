@@ -76,7 +76,7 @@ impl FormTable {
 
     pub fn add(&mut self, form: &str, element: ElementInfo) {
         let is_call_origin = form == self.call_form
-            && element.origin == "call"
+            && element.origin == self.call_form
             && element.kind == ElementKind::Property;
         let Some(info) = self.ensure_form(form) else {
             return;

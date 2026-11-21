@@ -218,16 +218,16 @@ def _parse_local_payload(raw):
     return out, {"sel_save_cnt_size": int(sel_cnt_size)}
 
 
-def _peek_lzss_header(enc):
-    if (not enc) or len(enc) < 8:
+def _peek_lzss_header(blob, start, data_size):
+    if data_size < 8:
         return None
-    h = bytearray(enc[:8])
+    h = bytearray(blob[start : start + 8])
     xor_cycle_inplace(h, C.TPC, 0)
     pack_sz, org_sz = struct.unpack_from("<II", h, 0)
     if org_sz == 0 or org_sz > 512 * 1024 * 1024:
         return None
     if pack_sz == 0:
-        pack_sz = len(enc)
+        pack_sz = data_size
     return int(pack_sz), int(org_sz)
 
 
@@ -261,6 +261,7 @@ def parse_read_sav(blob):
     q = 0
     rows = []
     scene_flags = {}
+    read_counts = {}
     tr = 0
     tc = 0
     for _ in range(int(scn_cnt)):
@@ -285,8 +286,10 @@ def parse_read_sav(blob):
             raise ValueError("read.sav: truncated (flags)")
         flags = mv[q : q + int(cnt)]
         q += int(cnt)
-        scene_flags[ascii_lower(name)] = flags
-        r = int(sum(1 for x in flags if x)) if cnt else 0
+        scene = ascii_lower(name)
+        scene_flags[scene] = flags
+        r = sum(1 for x in flags if x)
+        read_counts[scene] = r
         tr += r
         tc += int(cnt)
         rows.append((name, int(cnt), r))
@@ -301,6 +304,7 @@ def parse_read_sav(blob):
         "unpacked_sha256": content_digest(unpacked),
         "rows": rows,
         "flags": scene_flags,
+        "read_counts": read_counts,
         "total_read": tr,
         "total_cnt": tc,
     }
@@ -315,37 +319,28 @@ def match_read_flags(info, scene, flag_count):
     return "matched", flags
 
 
-def _try_parse_read_meta(blob):
-    if (not blob) or len(blob) < 24:
-        return None
+def _looks_like_read_sav(blob):
+    if not blob or len(blob) < 24:
+        return False
     major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
-    if major != 1:
-        return None
-    if minor < 0 or minor > 32:
-        return None
-    if data_size <= 0 or data_size > (len(blob) - 16):
-        return None
-    if scn_cnt < 0 or scn_cnt > 2000000:
-        return None
-    enc = blob[16 : 16 + data_size]
-    lz = _peek_lzss_header(enc)
-    return {
-        "kind": "read",
-        "major": int(major),
-        "minor": int(minor),
-        "data_size": int(data_size),
-        "scn_cnt": int(scn_cnt),
-        "pack_size": int(lz[0]) if lz else None,
-        "org_size": int(lz[1]) if lz else None,
-    }
+    return (
+        major == 1
+        and 0 <= minor <= 32
+        and 0 < data_size <= len(blob) - 16
+        and 0 <= scn_cnt <= 2000000
+    )
 
 
-def _unpack_tnm_data(enc):
-    if not enc:
+def _unpack_global_or_config(blob, metadata):
+    raw = metadata.get("raw")
+    if raw is not None:
+        return raw
+    data_size = metadata["data_size"]
+    if not data_size:
         return b""
-    b = bytearray(enc)
-    xor_cycle_inplace(b, C.TPC, 0)
-    return bytes(lzss_unpack(bytes(b)))
+    enc = bytearray(memoryview(blob)[12 : 12 + data_size])
+    xor_cycle_inplace(enc, C.TPC, 0)
+    return bytes(lzss_unpack(bytes(enc)))
 
 
 def _pack_tnm_data(raw):
@@ -370,13 +365,13 @@ class _SaveStreamReader:
     def seek(self, p):
         self.pos = int(p)
 
-    def _read(self, n):
+    def _read(self, n, *, skip=False):
         p = self.pos
         q = p + n
         if q > len(self.buf):
             raise ValueError("eof")
         self.pos = q
-        return self.buf[p:q]
+        return None if skip else self.buf[p:q]
 
     def u8(self):
         return self._read(1)[0]
@@ -398,17 +393,18 @@ class _SaveStreamReader:
             return int(self.u32())
         return int(struct.unpack_from("<Q", self._read(8), 0)[0])
 
-    def str_u16(self):
+    def str_u16(self, *, skip=False):
         ln = self.i32()
         if ln <= 0:
             return ""
-        return self._read(ln * 2).decode("utf-16le", "replace")
+        data = self._read(ln * 2, skip=skip)
+        return None if skip else data.decode("utf-16le", "replace")
 
     def c_size(self):
         return (int(self.i32()), int(self.i32()))
 
 
-def _read_fixed_array_header(r, item_size=None, meta=None):
+def _read_fixed_array_header(r, item_size=None):
     start = r.tell()
     if start + 8 > len(r.buf):
         raise ValueError("eof")
@@ -420,26 +416,29 @@ def _read_fixed_array_header(r, item_size=None, meta=None):
         need = start + 8 + cnt * int(item_size)
         if need > jump:
             raise ValueError("bad fixed array")
-    if meta is not None:
-        meta["data_offset"] = int(start + 8)
-        meta["count"] = int(cnt)
     r.seek(start + 8)
     return jump, cnt
 
 
-def _read_fixed_int_list(r, meta=None):
-    jump, cnt = _read_fixed_array_header(r, item_size=4, meta=meta)
-    data = r._read(cnt * 4)
-    out = list(struct.unpack_from(f"<{cnt:d}i", data, 0)) if cnt else []
+def _read_fixed_int_list(r, *, with_layout=False):
+    jump, cnt = _read_fixed_array_header(r, item_size=4)
+    offset = r.tell()
+    if with_layout:
+        out = {"data_offset": offset, "count": cnt}
+    else:
+        out = list(struct.unpack_from(f"<{cnt:d}i", r.buf, offset)) if cnt else []
     r.seek(jump)
     return out
 
 
-def _read_fixed_str_list(r):
+def _read_fixed_str_list(r, *, skip=False):
     jump, cnt = _read_fixed_array_header(r)
-    out = []
-    for _ in range(cnt):
-        out.append(r.str_u16())
+    if skip:
+        for _ in range(cnt):
+            r.str_u16(skip=True)
+        out = None
+    else:
+        out = [r.str_u16() for _ in range(cnt)]
     r.seek(jump)
     return out
 
@@ -447,21 +446,18 @@ def _read_fixed_str_list(r):
 def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False):
     r = _SaveStreamReader(raw, size_t_size=size_t_size)
     out = {}
-    layout = {} if with_layout else None
-    out["global_real_time"] = (
-        int(r.i64()) if (major > 1 or (major == 1 and minor >= 2)) else 0
-    )
-    meta = {} if with_layout else None
-    out["G"] = _read_fixed_int_list(r, meta=meta)
-    if layout is not None:
-        layout["G"] = meta
-    meta = {} if with_layout else None
-    out["Z"] = _read_fixed_int_list(r, meta=meta)
-    if layout is not None:
-        layout["Z"] = meta
-    out["M"] = _read_fixed_str_list(r)
-    out["global_namae"] = _read_fixed_str_list(r)
-    out["dummy_check_id"] = int(r.u32())
+    real_time = r.i64() if major > 1 or (major == 1 and minor >= 2) else 0
+    if not with_layout:
+        out["global_real_time"] = real_time
+    out["G"] = _read_fixed_int_list(r, with_layout=with_layout)
+    out["Z"] = _read_fixed_int_list(r, with_layout=with_layout)
+    messages = _read_fixed_str_list(r, skip=with_layout)
+    names = _read_fixed_str_list(r, skip=with_layout)
+    check_id = r.u32()
+    if not with_layout:
+        out["M"] = messages
+        out["global_namae"] = names
+        out["dummy_check_id"] = check_id
     p = r.tell()
     if p + 12 <= len(raw):
         a = struct.unpack_from("<i", raw, p)[0]
@@ -469,10 +465,7 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
         c = struct.unpack_from("<i", raw, p + 8)[0]
         if a == 0 and (p + 12) <= b <= len(raw) and 0 <= c <= 200000:
             r.seek(p + 4)
-    meta = {} if with_layout else None
-    out["cg_table"] = _read_fixed_int_list(r, meta=meta)
-    if layout is not None:
-        layout["cg_table"] = meta
+    out["cg_table"] = _read_fixed_int_list(r, with_layout=with_layout)
     p = r.tell()
     has_bgm = False
     if p + 8 <= len(raw):
@@ -481,30 +474,25 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
         if (p + 8) <= j <= len(raw) and n >= 0 and (p + 8 + n * 4) <= j:
             has_bgm = True
     if has_bgm:
-        meta = {} if with_layout else None
-        out["bgm_table"] = _read_fixed_int_list(r, meta=meta)
-        if layout is not None:
-            layout["bgm_table"] = meta
+        out["bgm_table"] = _read_fixed_int_list(r, with_layout=with_layout)
     else:
-        out["bgm_table"] = []
-        if layout is not None:
-            layout["bgm_table"] = None
-    cnt = int(r.sizet())
-    if layout is not None:
-        layout["chrkoe_look_flag_offsets"] = []
-    chrkoe = []
-    for _ in range(cnt):
-        name = r.str_u16()
-        look_pos = r.tell()
-        look = bool(r.bool1())
-        chrkoe.append({"name_str": name, "look_flag": look})
-        if layout is not None:
-            layout["chrkoe_look_flag_offsets"].append(int(look_pos))
-    out["chrkoe"] = chrkoe
+        out["bgm_table"] = None if with_layout else []
+    cnt = r.sizet()
+    if with_layout:
+        offsets = []
+        for _ in range(cnt):
+            r.str_u16(skip=True)
+            offsets.append(r.tell())
+            r.u8()
+        out["chrkoe_look_flag_offsets"] = offsets
+        return out
+    out["chrkoe"] = [
+        {"name_str": r.str_u16(), "look_flag": r.bool1()} for _ in range(cnt)
+    ]
     tail = raw[r.tell() :]
     if tail and any(x != 0 for x in tail):
         out["_tail_hex"] = tail.hex()
-    return layout if with_layout else out
+    return out
 
 
 def _parse_config_payload(raw, major, minor, *, size_t_size=4):
@@ -586,48 +574,35 @@ def _parse_config_payload(raw, major, minor, *, size_t_size=4):
     return out
 
 
-def _try_parse_payload(parser, raw, major, minor):
+def _try_parse_payload(parser, raw, major, minor, **options):
     last_err = None
     for sz in (4, 8):
         try:
-            d = parser(raw, major, minor, size_t_size=sz)
+            d = parser(raw, major, minor, size_t_size=sz, **options)
             return d, {"size_t_size": sz}, None
         except Exception as e:
             last_err = str(e)
     return None, None, last_err or "eof"
 
 
-def _try_parse_global_payload_with_layout(raw, major, minor):
-    last_err = None
-    for sz in (4, 8):
-        try:
-            layout = _parse_global_payload(
-                raw, major, minor, size_t_size=sz, with_layout=True
-            )
-            return layout, None
-        except Exception as e:
-            last_err = str(e)
-    return None, last_err or "eof"
-
-
-def _parse_global_or_config(blob):
-    k = _try_parse_global_or_config(blob)
-    if k is None:
-        raise ValueError("not global/config sav")
-    enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
-    raw = _unpack_tnm_data(enc)
-    sha256_hex = content_digest(raw)
-    parser = _parse_global_payload if k["kind"] == "global" else _parse_config_payload
-    payload, variant, err = _try_parse_payload(parser, raw, k["major"], k["minor"])
-    return {
-        **k,
-        "unpacked_size": len(raw),
-        "unpacked_sha256": sha256_hex,
-        "payload": payload,
-        "payload_variant": variant,
-        "payload_error": err,
-        "raw": raw,
-    }
+def _parse_global_or_config(blob, metadata):
+    raw = _unpack_global_or_config(blob, metadata)
+    parser = (
+        _parse_global_payload if metadata["kind"] == "global" else _parse_config_payload
+    )
+    payload, variant, err = _try_parse_payload(
+        parser, raw, metadata["major"], metadata["minor"]
+    )
+    info = dict(metadata)
+    info.pop("raw", None)
+    info.update(
+        unpacked_size=len(raw),
+        unpacked_sha256=content_digest(raw),
+        payload=payload,
+        payload_variant=variant,
+        payload_error=err,
+    )
+    return info
 
 
 def _diff_indices(a, b):
@@ -676,37 +651,41 @@ def _print_chrkoe_diff(ca, cb, fields, first_formatter=None):
         print(f"chrkoe_more: {different - shown}")
 
 
-def _try_parse_global_or_config(blob):
-    if (not blob) or len(blob) < 12:
+def _global_or_config_header(blob):
+    if not blob or len(blob) < 12:
         return None
     major, minor, data_size = struct.unpack_from("<3i", blob, 0)
-    if major < 0 or major > 32:
+    if 0 <= major <= 32 and 0 <= minor <= 32 and 0 <= data_size <= len(blob) - 12:
+        return major, minor, data_size
+    return None
+
+
+def _try_parse_global_or_config(blob):
+    header = _global_or_config_header(blob)
+    if header is None:
         return None
-    if minor < 0 or minor > 32:
-        return None
-    if data_size < 0 or data_size > (len(blob) - 12):
-        return None
-    enc = blob[12 : 12 + int(data_size)]
-    lz = _peek_lzss_header(enc) if data_size >= 8 else None
-    kind = "global" if major >= 2 else "config"
+    major, minor, data_size = header
+    lz = _peek_lzss_header(blob, 12, data_size)
+    metadata = {
+        "kind": "global" if major >= 2 else "config",
+        "major": major,
+        "minor": minor,
+        "data_size": data_size,
+        "pack_size": lz[0] if lz else None,
+        "org_size": lz[1] if lz else None,
+    }
     if major == 1:
         try:
-            reader = _SaveStreamReader(_unpack_tnm_data(enc))
+            raw = metadata["raw"] = _unpack_global_or_config(blob, metadata)
+            reader = _SaveStreamReader(raw)
             if minor >= 2:
                 reader.seek(8)
             _read_fixed_array_header(reader, item_size=4)
         except (ValueError, RuntimeError, struct.error):
             pass
         else:
-            kind = "global"
-    return {
-        "kind": kind,
-        "major": int(major),
-        "minor": int(minor),
-        "data_size": int(data_size),
-        "pack_size": int(lz[0]) if lz else None,
-        "org_size": int(lz[1]) if lz else None,
-    }
+            metadata["kind"] = "global"
+    return metadata
 
 
 def _try_parse_local(blob):
@@ -765,8 +744,7 @@ def _try_parse_local(blob):
         p += 4
         if data_size < 0 or data_size > (len(blob) - p):
             continue
-        enc = blob[p : p + int(data_size)] if data_size else b""
-        lz = _peek_lzss_header(enc) if data_size >= 8 else None
+        lz = _peek_lzss_header(blob, p, data_size)
         return {
             "kind": "local",
             "major": int(major),
@@ -796,20 +774,20 @@ def _try_parse_local(blob):
 
 
 def _detect_kind(blob):
-    a = _try_parse_local(blob)
-    if a is not None:
-        return a
-    a = _try_parse_read_meta(blob)
-    if a is not None:
-        return a
-    a = _try_parse_global_or_config(blob)
-    if a is not None:
-        return a
-    return None
+    local = _try_parse_local(blob)
+    if local is not None:
+        return local
+    if _looks_like_read_sav(blob):
+        return {"kind": "read"}
+    return _try_parse_global_or_config(blob)
 
 
 def looks_like_sav(blob):
-    return _detect_kind(blob) is not None
+    return (
+        _global_or_config_header(blob) is not None
+        or _looks_like_read_sav(blob)
+        or _try_parse_local(blob) is not None
+    )
 
 
 def _set_fixed_int_list_all(buf, meta):
@@ -836,17 +814,25 @@ def _set_fixed_int_list_items(buf, meta, values, name):
     return len(values)
 
 
-def _parse_global_for_patch(blob):
-    k = _try_parse_global_or_config(blob)
-    if k is None or k["kind"] != "global":
+def _parse_global_for_patch(blob, metadata=None):
+    if metadata is None:
+        metadata = _try_parse_global_or_config(blob)
+    if metadata is None or metadata["kind"] != "global":
         raise ValueError("not global.sav")
-    enc = blob[12 : 12 + k["data_size"]] if k["data_size"] else b""
-    raw = _unpack_tnm_data(enc)
-    layout, err = _try_parse_global_payload_with_layout(raw, k["major"], k["minor"])
+    raw = _unpack_global_or_config(blob, metadata)
+    layout, _, err = _try_parse_payload(
+        _parse_global_payload,
+        raw,
+        metadata["major"],
+        metadata["minor"],
+        with_layout=True,
+    )
     if layout is None:
         raise ValueError(f"global.sav: {err or 'parse failed'}")
     return {
-        **k,
+        "major": metadata["major"],
+        "minor": metadata["minor"],
+        "data_size": metadata["data_size"],
         "raw": raw,
         "payload_layout": layout,
     }
@@ -921,8 +907,8 @@ def apply_global_txt(blob, txt_blob):
     return bytes(out), stats
 
 
-def _readall_global(blob):
-    info = _parse_global_for_patch(blob)
+def _readall_global(blob, metadata):
+    info = _parse_global_for_patch(blob, metadata)
     raw = bytearray(info["raw"])
     layout = info["payload_layout"]
     _set_fixed_int_list_all(raw, layout.get("cg_table"))
@@ -946,7 +932,7 @@ def readall(blob):
     if kind is None:
         raise ValueError("not a supported .sav")
     if kind["kind"] == "global":
-        return _readall_global(blob)
+        return _readall_global(blob, kind)
     if kind["kind"] != "read":
         raise ValueError("--readall supports read.sav and global.sav only")
     major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
@@ -990,8 +976,8 @@ def readall(blob):
     return bytes(out)
 
 
-def sav(blob, path=None):
-    k = _detect_kind(blob)
+def sav(blob, path=None, *, metadata=None):
+    k = _detect_kind(blob) if metadata is None else metadata
     if k is None:
         raise ValueError("not a .sav")
     if k["kind"] == "read":
@@ -1017,7 +1003,7 @@ def sav(blob, path=None):
         print(f"{tr:6d}/{tc:6d}   {pct2 // 100:3d}.{pct2 % 100:02d}%  (ALL)")
         return 0
     if k["kind"] in ("config", "global"):
-        info = _parse_global_or_config(blob)
+        info = _parse_global_or_config(blob, k)
         title = "config.sav" if info["kind"] == "config" else "global.sav"
         size_name = (
             "config_data_size" if info["kind"] == "config" else "global_data_size"
@@ -1123,10 +1109,10 @@ def compare_sav(b1, b2):
         print(f"kind2: {k2['kind']}")
         print()
         print("--- Analyze file1 ---")
-        rc1 = sav(b1)
+        rc1 = sav(b1, metadata=k1)
         print()
         print("--- Analyze file2 ---")
-        rc2 = sav(b2)
+        rc2 = sav(b2, metadata=k2)
         return rc1 or rc2
     if k1["kind"] == "read":
         a = parse_read_sav(b1)
@@ -1202,8 +1188,8 @@ def compare_sav(b1, b2):
         print(f"changed: {changed}")
         return 0
     if k1["kind"] in ("config", "global"):
-        a = _parse_global_or_config(b1)
-        b = _parse_global_or_config(b2)
+        a = _parse_global_or_config(b1, k1)
+        b = _parse_global_or_config(b2, k2)
         title = "config.sav" if k1["kind"] == "config" else "global.sav"
         size_name = "config_data_size" if k1["kind"] == "config" else "global_data_size"
         print(f"==== Compare {title} ====")

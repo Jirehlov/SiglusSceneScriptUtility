@@ -3,6 +3,7 @@ from bisect import bisect_right
 import re
 from . import const as C
 from .common import (
+    has_declared_name,
     mark_named_usage,
     next_else_ifdef_state,
     next_elseif_ifdef_state,
@@ -406,7 +407,7 @@ class CharacterAnalizer:
                             mark_named_usage(self.iad, w)
                             if self.sidecar:
                                 self.condition_names.append(w)
-                            ifs[d] = 1 if w in self.iad["name_set"] else 2
+                            ifs[d] = 1 if has_declared_name(self.iad, w) else 2
                             continue
                         return self.error(self.m_line, "Missing word after #ifdef.")
                     j, ok = self._check_str(t, i, "#elseifdef")
@@ -416,7 +417,7 @@ class CharacterAnalizer:
                             if ok2:
                                 stats["elseifdef"] += 1
                                 ifs[d] = next_elseif_ifdef_state(
-                                    ifs[d], w in self.iad["name_set"]
+                                    ifs[d], has_declared_name(self.iad, w)
                                 )
                                 mark_named_usage(self.iad, w)
                                 if self.sidecar:
@@ -514,9 +515,9 @@ class CharacterAnalizer:
         if not r1 and not r2:
             return 1
         rep = (r1 if r1["name"] > r2["name"] else r2) if (r1 and r2) else (r1 or r2)
-        if "used_count" in rep:
-            rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
         tp, nm, after = rep["type"], rep["name"], rep.get("after", "")
+        if "decl_type" in rep:
+            mark_named_usage(self.iad, nm)
         nl = len(nm)
         source = rep.get("source") or {}
         read_origin = 0
@@ -881,7 +882,7 @@ class CharacterAnalizer:
                 return None
         return self.replace_uses
 
-    def analize_file(self, in_text, piad, pcad):
+    def analize_file(self, in_text, piad, pcad, *, expand=True):
         in_text = in_text.replace("\r", "")
         self.iad = piad
         if self.sidecar:
@@ -896,8 +897,6 @@ class CharacterAnalizer:
         scn, inc, preprocess_stats = r[:3]
         scn_source_map = r[3] if self.sidecar else []
         inc_source_map = r[4] if self.sidecar else []
-        if self.sidecar:
-            pcad["sidecar"] = True
         if inc:
             preprocess_stats["inc_lines"] = inc.count("\n") + (
                 0 if inc.endswith("\n") else 1
@@ -931,6 +930,8 @@ class CharacterAnalizer:
                 "condition_names", []
             )
             pcad["inc_iad2"] = iad2
+        if not expand:
+            return 1
         if self.sidecar:
             self.replace_uses = list(iad2.get("replace_uses", []))
         text = self.analize_line(scn, piad, scn_source_map if self.sidecar else None)
@@ -942,5 +943,4 @@ class CharacterAnalizer:
             pcad["replace_uses"] = self.replace_uses
         if self.read_flag_origins is not None:
             pcad["read_flag_origins"] = self.read_flag_origins
-        pcad.setdefault("property_list", [])
         return 1

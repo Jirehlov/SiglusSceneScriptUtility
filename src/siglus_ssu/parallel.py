@@ -5,6 +5,7 @@ import sys
 from contextlib import contextmanager, nullcontext, suppress
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from itertools import islice
+from queue import SimpleQueue
 import siglus_ssu as _runtime
 from . import const as C
 from .native_ops import (
@@ -204,7 +205,7 @@ def _init_compile_worker(
     global _COMPILE_WORKER_STATE
     from .CA import build_replace_tree
 
-    ia_data["replace_tree"] = build_replace_tree(ia_data["macro_defs"])
+    ia_data["replace_tree"] = build_replace_tree(ia_data["macro_defs"].values())
     _COMPILE_WORKER_STATE = (
         tmp_path,
         ia_data,
@@ -251,12 +252,12 @@ def _compile_one_process(
             display_name,
             None,
             res["scene_macro_counts"],
-            res["global_macro_usage_delta"],
+            res["used_global_macros"],
             res["source_stats"],
             warnings,
         )
     except Exception as e:
-        return (display_name, str(e), {}, {}, {}, warnings)
+        return (display_name, str(e), {}, set(), {}, warnings)
 
 
 def parallel_compile(
@@ -283,7 +284,7 @@ def parallel_compile(
     completed = 0
     total = len(ss_files)
     scene_macro_counts = empty_macro_stat_counts()
-    global_macro_usage_delta = {}
+    used_global_macros = set()
     source_stats = empty_source_stat_counts()
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
     with process_pool(
@@ -314,7 +315,7 @@ def parallel_compile(
                     display_name,
                     error,
                     macro_counts,
-                    usage_delta,
+                    scene_used_global_macros,
                     scene_source_stats,
                     warnings,
                 ) = future.result()
@@ -329,17 +330,13 @@ def parallel_compile(
                     raise RuntimeError(str(error))
                 merge_macro_stat_counts(scene_macro_counts, macro_counts)
                 merge_source_stat_counts(source_stats, scene_source_stats)
-                for key, value in usage_delta.items():
-                    global_macro_usage_delta[key] = (
-                        global_macro_usage_delta.get(key, 0) + value
-                    )
+                used_global_macros.update(scene_used_global_macros)
                 print(f"  [{completed}/{total}] OK: {display_name}")
             futures.update(islice(tasks, len(done)))
     print(f"[PARALLEL] Compilation complete: {total} files")
     return {
-        "parallel": True,
         "scene_macro_counts": scene_macro_counts,
-        "global_macro_usage_delta": global_macro_usage_delta,
+        "used_global_macros": used_global_macros,
         "source_stats": source_stats,
     }
 
@@ -459,50 +456,43 @@ def parallel_source_encrypt(ctx, sources):
     return chunks
 
 
-def _g00_extract_task(args):
-    path_s, out_s, trim = args
+def parallel_g00_extract(g00_files, out_dir, trim=False):
     from .g00 import extract_one
 
-    return extract_one(path_s, out_s, trim=trim)
-
-
-def parallel_g00_extract(g00_files, out_dir, trim=False):
-    fs = list(g00_files)
     workers = get_max_workers(None)
     ok = sk = bad = 0
-    it = iter(fs)
-    futures = set()
-    with process_pool(workers) as ex:
-        for _ in range(workers):
-            try:
-                f = next(it)
-            except StopIteration:
-                break
-            print(f"[*] {f}")
-            futures.add(
-                ex.submit(_g00_extract_task, (str(f), str(out_dir), bool(trim)))
+    files = iter(g00_files)
+    destination = str(out_dir)
+    completed = SimpleQueue()
+    with process_pool(workers) as executor:
+
+        def submit(path):
+            print(f"[*] {path}")
+            future = executor.submit(
+                extract_one, str(path), destination, trim=bool(trim)
             )
-        while futures:
-            for fu in as_completed(futures):
-                futures.remove(fu)
-                try:
-                    st, _, _ = fu.result()
-                    if st == "skip":
-                        sk += 1
-                    else:
-                        ok += 1
-                except Exception as e:
-                    bad += 1
-                    print(f"[!] {e}", file=sys.stderr)
-                try:
-                    f = next(it)
-                    print(f"[*] {f}")
-                    futures.add(
-                        ex.submit(_g00_extract_task, (str(f), str(out_dir), bool(trim)))
-                    )
-                except StopIteration:
-                    pass
-                break
+            future.add_done_callback(completed.put)
+
+        pending = 0
+        for path in islice(files, workers):
+            submit(path)
+            pending += 1
+        while pending:
+            future = completed.get()
+            try:
+                status, _, _ = future.result()
+                if status == "skip":
+                    sk += 1
+                else:
+                    ok += 1
+            except Exception as exc:
+                bad += 1
+                print(f"[!] {exc}", file=sys.stderr)
+            path = next(files, None)
+            if path is None:
+                pending -= 1
+            else:
+                submit(path)
     return ok, sk, bad
 
 

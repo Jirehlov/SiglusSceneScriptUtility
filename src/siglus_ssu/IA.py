@@ -9,6 +9,7 @@ from .CA import (
     add_replace_tree,
 )
 from .common import (
+    has_declared_name,
     mark_named_usage,
     next_else_ifdef_state,
     next_elseif_ifdef_state,
@@ -496,7 +497,7 @@ class IncAnalyzer:
                 mark_named_usage(self.iad, w)
                 if self.sidecar:
                     self.iad2.setdefault("condition_names", []).append(w)
-                ifs[d] = 1 if w in self.iad["name_set"] else 2
+                ifs[d] = 1 if has_declared_name(self.iad, w) else 2
                 continue
             if t.startswith("#elseifdef", i):
                 self.ca.record_directive(t, i, i + 10, self.source_map)
@@ -513,7 +514,9 @@ class IncAnalyzer:
                     mark_named_usage(self.iad, w)
                     if self.sidecar:
                         self.iad2.setdefault("condition_names", []).append(w)
-                    ifs[d] = next_elseif_ifdef_state(ifs[d], w in self.iad["name_set"])
+                    ifs[d] = next_elseif_ifdef_state(
+                        ifs[d], has_declared_name(self.iad, w)
+                    )
                     continue
                 self.err(line, "#elseifdef does not have a matching #if.")
                 return None, i, line, 0
@@ -647,7 +650,7 @@ class IncAnalyzer:
             after, i, line, ok = self._after(i, line)
             if not ok:
                 return i, line, 0
-            if nm in self.iad["name_set"]:
+            if has_declared_name(self.iad, nm):
                 self.err(line, nm + " is declared twice.")
                 return i, line, 0
             self.iad["name_set"].add(nm)
@@ -657,15 +660,13 @@ class IncAnalyzer:
                 "name": nm,
                 "after": after,
                 "args": [],
-                "used_count": 0,
             }
             self._replacement_source(
                 rep,
                 "replace" if tp == "replace" else "define",
             )
             add_replace_tree(self.iad["replace_tree"], nm, rep)
-            self.iad["macro_defs"].append(rep)
-            self.iad["macro_map"][nm] = rep
+            self.iad["macro_defs"][nm] = rep
             self._record_decl(
                 "replace" if tp == "replace" else "define",
                 nm,
@@ -688,7 +689,7 @@ class IncAnalyzer:
             if not nm.startswith("@"):
                 self.err(line, "#macro name must start with '@'.")
                 return i, line, 0
-            if nm in self.iad["name_set"]:
+            if has_declared_name(self.iad, nm):
                 self.err(line, nm + " is declared twice.")
                 return i, line, 0
             self.iad["name_set"].add(nm)
@@ -698,15 +699,13 @@ class IncAnalyzer:
                 "name": nm,
                 "after": after,
                 "args": args,
-                "used_count": 0,
             }
             self._replacement_source(
                 rep,
                 "macro",
             )
             add_replace_tree(self.iad["replace_tree"], nm, rep)
-            self.iad["macro_defs"].append(rep)
-            self.iad["macro_map"][nm] = rep
+            self.iad["macro_defs"][nm] = rep
             self._record_decl(
                 "macro",
                 nm,
@@ -801,7 +800,7 @@ class IncAnalyzer:
             form, size, i, line, ok = self._ia_declare_property_form(i, line)
             if not ok:
                 return 0
-            if name in self.iad["name_set"]:
+            if has_declared_name(self.iad, name):
                 self.err(line, name + " is declared twice.")
                 return 0
             self.iad["name_set"].add(name)
@@ -864,21 +863,19 @@ class IncAnalyzer:
             form, i, line, ok = self._ia_declare_form(i, line)
             if not ok:
                 return 0
-            if name in self.iad["name_set"]:
+            if has_declared_name(self.iad, name):
                 self.err(org_line, name + " is declared twice.")
                 return 0
             self.iad["name_set"].add(name)
             cid = self.iad["command_cnt"]
             self.iad["command_cnt"] = cid + 1
-            self.iad["command_list"].append(
-                {
-                    "id": cid,
-                    "form": form,
-                    "name": name,
-                    "arg_list": arg_list,
-                    "is_defined": False,
-                }
-            )
+            self.iad["commands"][name] = {
+                "id": cid,
+                "form": form,
+                "name": name,
+                "arg_list": arg_list,
+                "is_defined": False,
+            }
             ft = self.iad["form_table"]
             arg_defs = [
                 {"id": index, "name": "", **arg}

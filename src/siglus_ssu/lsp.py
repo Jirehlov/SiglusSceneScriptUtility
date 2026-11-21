@@ -152,6 +152,7 @@ class ProjectContext:
     build_error: SourceDiagnostic | None = None
     inc_iad2_by_path: dict[str, dict[str, Any]] = field(default_factory=dict)
     source_files: dict[int, tuple[str, str]] = field(default_factory=dict)
+    link_command_names: dict[str, str] = field(default_factory=dict)
     _symbols: dict[str, list[DefinitionRecord]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -184,7 +185,9 @@ class ProjectContext:
 
     def definitions_for_symbol(self, symbol_id: str) -> list[DefinitionRecord]:
         if self._symbols is None:
-            self._symbols = _index_definition_symbols(self.definitions)
+            self._symbols = _index_definition_symbols(
+                chain.from_iterable(self.definitions.values())
+            )
         return self._symbols.get(symbol_id, [])
 
 
@@ -212,6 +215,47 @@ class AnalysisResult:
     directive_tokens: list[dict[str, Any]] = field(default_factory=list)
     unmapped_bindings: list[str] = field(default_factory=list)
     read_flag_ranges: list[list[tuple[int, int, int]]] | None = None
+    _occurrences_by_line: dict[int, list[SymbolOccurrence]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _source_tokens_by_line: dict[int, list[SourceToken]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _replacement_tokens_by_line: dict[int, list[SourceToken]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _read_flags_by_line: dict[int, list[tuple[int, int, int]]] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _definition_indexes: (
+        tuple[dict[str, list[DefinitionRecord]], dict[str, list[DefinitionRecord]]]
+        | None
+    ) = field(default=None, init=False, repr=False, compare=False)
+
+    def document_definitions_for_symbol(
+        self, symbol_id: str
+    ) -> tuple[list[DefinitionRecord], list[DefinitionRecord]]:
+        if self._definition_indexes is None:
+            local = _index_definition_symbols(
+                chain.from_iterable(self.local_definitions.values())
+            )
+            labels = _index_definition_symbols(
+                chain(
+                    self.label_definitions.values(), self.z_label_definitions.values()
+                )
+            )
+            self._definition_indexes = local, labels
+        local, labels = self._definition_indexes
+        return local.get(symbol_id, []), labels.get(symbol_id, [])
+
+    def read_flags_on_line(self, line: int) -> Iterable[tuple[int, int, int]]:
+        if self._read_flags_by_line is None:
+            by_line: dict[int, list[tuple[int, int, int]]] = {}
+            for index, ranges in enumerate(self.read_flag_ranges or ()):
+                for flag_line, left, right in ranges:
+                    by_line.setdefault(flag_line, []).append((index, left, right))
+            self._read_flags_by_line = by_line
+        return self._read_flags_by_line.get(line, ())
 
 
 @dataclass(slots=True)
@@ -470,20 +514,6 @@ def _append_definition(
     defs.setdefault(ascii_lower(record.name), []).append(record)
 
 
-def _project_link_command_names(project: ProjectContext) -> dict[str, str]:
-    iad = project.iad if isinstance(project.iad, dict) else None
-    if not isinstance(iad, dict):
-        return {}
-    inc_command_cnt = int(iad.get("inc_command_cnt", 0) or 0)
-    if inc_command_cnt <= 0:
-        return {}
-    return {
-        ascii_lower(cmd.get("name")): str(cmd.get("name", "") or "")
-        for cmd in (iad.get("command_list") or [])[:inc_command_cnt]
-        if str(cmd.get("name", "") or "")
-    }
-
-
 def _format_form(form: Any) -> str:
     if isinstance(form, str):
         return form
@@ -564,7 +594,7 @@ def _enrich_project_definitions(
     iad: dict[str, Any],
 ) -> None:
     prop_map = {str(x.get("name", "") or ""): x for x in iad.get("property_list", [])}
-    cmd_map = {str(x.get("name", "") or ""): x for x in iad.get("command_list", [])}
+    cmd_map = iad["commands"]
     for records in defs.values():
         for record in records:
             if record.kind == "property":
@@ -644,12 +674,18 @@ def _build_project_context(root_dir: str, overlays: dict[str, str]) -> ProjectCo
             _append_definition(defs, record)
         inc_iad2_by_path[os.path.abspath(inc_path)] = iad2
     _enrich_project_definitions(defs, iad)
+    link_command_names = {}
+    if iad["inc_command_cnt"] > 0:
+        link_command_names = {
+            "cmd:" + ascii_lower(name): name for name in iad["commands"] if name
+        }
     return ProjectContext(
         iad=iad,
         definitions=defs,
         build_error=None,
         inc_iad2_by_path=inc_iad2_by_path,
         source_files=source_files,
+        link_command_names=link_command_names,
     )
 
 
@@ -900,8 +936,12 @@ def _unexpanded_tokens(text: str, inc: bool) -> dict[str, Any] | None:
     return _silent_stdout_call(source_tokens, _analysis_source_text(text), inc)
 
 
-def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
-    out: list[SourceToken] = []
+def _compiler_source_tokens_by_line(
+    result: AnalysisResult,
+) -> dict[int, list[SourceToken]]:
+    if result._source_tokens_by_line is not None:
+        return result._source_tokens_by_line
+    out: dict[int, list[SourceToken]] = {}
     for item in result.directive_tokens:
         token = _source_token_from_replace_use(item)
         source = _source_file(result, token.source_id) if token is not None else None
@@ -911,15 +951,14 @@ def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
             and _source_token_matches_text(result.text, token)
         ):
             token.kind = "directive"
-            out.append(token)
+            out.setdefault(token.line, []).append(token)
     lad = result.lad or _unexpanded_tokens(
         result.text, result.path.lower().endswith(".inc")
     )
-    if not isinstance(lad, dict):
-        return out
-    spans = lad.get("atom_span_list")
-    atoms = lad.get("atom_list")
+    spans = lad.get("atom_span_list") if isinstance(lad, dict) else None
+    atoms = lad.get("atom_list") if isinstance(lad, dict) else None
     if not isinstance(spans, list) or not isinstance(atoms, list):
+        result._source_tokens_by_line = out
         return out
     keyword_types = {C.LA_T[name] for name in COMPILER_KEYWORDS.values()}
     label_types = {C.LA_T[name] for name in ("LABEL", "Z_LABEL") if name in C.LA_T}
@@ -962,7 +1001,8 @@ def _compiler_source_tokens(result: AnalysisResult) -> list[SourceToken]:
         else:
             continue
         token.kind = kind
-        out.append(token)
+        out.setdefault(token.line, []).append(token)
+    result._source_tokens_by_line = out
     return out
 
 
@@ -975,18 +1015,22 @@ def _compiler_token_at_position(
     character = _lsp_character_to_char(
         _line_text_at(result.text, line), character, position_encoding
     )
-    for item in result.replace_uses:
-        token = _source_token_from_replace_use(item)
-        if token is None or token.source_id != 0:
-            continue
-        if not _source_token_matches_text(result.text, token):
-            continue
-        if token.line == line and token.start_char <= character <= token.end_char:
+    if result._replacement_tokens_by_line is None:
+        by_line: dict[int, list[SourceToken]] = {}
+        for item in result.replace_uses:
+            token = _source_token_from_replace_use(item)
+            if (
+                token is not None
+                and token.source_id == 0
+                and _source_token_matches_text(result.text, token)
+            ):
+                by_line.setdefault(token.line, []).append(token)
+        result._replacement_tokens_by_line = by_line
+    for token in result._replacement_tokens_by_line.get(line, ()):
+        if token.start_char <= character <= token.end_char:
             return None
     boundary = None
-    for token in _compiler_source_tokens(result):
-        if token.line != line:
-            continue
+    for token in _compiler_source_tokens_by_line(result).get(line, ()):
         if token.start_char <= character < token.end_char:
             return token
         if character == token.end_char:
@@ -1371,7 +1415,9 @@ def _init_scan_worker(
 ) -> None:
     global _SCAN_WORKER_PROJECT, _SCAN_WORKER_NATIVE_PROJECT
     if project.iad is not None:
-        project.iad["replace_tree"] = build_replace_tree(project.iad["macro_defs"])
+        project.iad["replace_tree"] = build_replace_tree(
+            project.iad["macro_defs"].values()
+        )
     _SCAN_WORKER_PROJECT = project
     _SCAN_WORKER_NATIVE_PROJECT = _build_native_lsp_project(native_config)
 
@@ -1538,10 +1584,8 @@ def _native_scene_analysis_result(
         return None
 
 
-def _link_scan_worker(
-    path: str,
-    text: str,
-) -> LinkScanResult:
+def _link_scan_worker(job: tuple[str, str]) -> LinkScanResult:
+    path, text = job
     native_result = _native_link_scan_result(_SCAN_WORKER_NATIVE_PROJECT, path, text)
     if native_result is not None:
         return native_result
@@ -1550,13 +1594,6 @@ def _link_scan_worker(
             analyze_document, path, text, project=_scan_worker_project(), run_bs=False
         )
     )
-
-
-def _link_scan_worker_job(
-    job: tuple[str, str],
-) -> LinkScanResult:
-    path, text = job
-    return _link_scan_worker(path, text)
 
 
 def _range(
@@ -1959,14 +1996,16 @@ def occurrence_at_position(
     character = _lsp_character_to_char(
         _line_text_at(result.text, line), character, position_encoding
     )
+    if result._occurrences_by_line is None:
+        by_line: dict[int, list[SymbolOccurrence]] = {}
+        path = result.path
+        path_key = _path_identity(path)
+        for occurrence in occurrences_for_result(result):
+            if occurrence.path == path or _path_identity(occurrence.path) == path_key:
+                by_line.setdefault(occurrence.line, []).append(occurrence)
+        result._occurrences_by_line = by_line
     boundary = None
-    path = result.path
-    path_key = _path_identity(path)
-    for occurrence in occurrences_for_result(result):
-        if occurrence.line != line:
-            continue
-        if occurrence.path != path and _path_identity(occurrence.path) != path_key:
-            continue
+    for occurrence in result._occurrences_by_line.get(line, ()):
         if occurrence.start_char <= character < occurrence.end_char:
             return occurrence
         if (
@@ -2040,7 +2079,7 @@ def semantic_tokens_for_result(
             0,
             100,
         )
-    for token in _compiler_source_tokens(result):
+    for token in chain.from_iterable(_compiler_source_tokens_by_line(result).values()):
         if token.kind == "keyword":
             add_token(token.line, token.start_char, token.end_char, "keyword", 0, 10)
         elif token.kind == "type":
@@ -2282,12 +2321,11 @@ def _builtin_records() -> dict[str, list[DefinitionRecord]]:
 
 
 def _index_definition_symbols(
-    definitions: dict[str, list[DefinitionRecord]],
+    records: Iterable[DefinitionRecord],
 ) -> dict[str, list[DefinitionRecord]]:
     symbols: dict[str, list[DefinitionRecord]] = {}
-    for records in definitions.values():
-        for record in records:
-            symbols.setdefault(_definition_symbol_id(record), []).append(record)
+    for record in records:
+        symbols.setdefault(_definition_symbol_id(record), []).append(record)
     return symbols
 
 
@@ -2318,7 +2356,9 @@ def _matching_definitions(
 
 
 BUILTIN_RECORDS = _builtin_records()
-BUILTIN_SYMBOLS = _index_definition_symbols(BUILTIN_RECORDS)
+BUILTIN_SYMBOLS = _index_definition_symbols(
+    chain.from_iterable(BUILTIN_RECORDS.values())
+)
 BUILTIN_COMPLETION_KEYS = _completion_key_index(BUILTIN_RECORDS)
 FORM_NAMES = sorted({str(k) for k in C._FORM_CODE.keys()})
 KEYWORDS = sorted(COMPILER_KEYWORDS)
@@ -2478,22 +2518,14 @@ def hover_for_position(
         }
     if occurrence is None:
         return None
+    symbol_id = occurrence.symbol_id
+    local, labels = result.document_definitions_for_symbol(symbol_id)
     candidates = [
-        record
-        for records in result.local_definitions.values()
-        for record in records
-        if _definition_symbol_id(record) == occurrence.symbol_id
+        *local,
+        *result.project.definitions_for_symbol(symbol_id),
+        *BUILTIN_SYMBOLS.get(symbol_id, ()),
+        *labels,
     ]
-    candidates.extend(result.project.definitions_for_symbol(occurrence.symbol_id))
-    candidates.extend(BUILTIN_SYMBOLS.get(occurrence.symbol_id, ()))
-    candidates.extend(
-        record
-        for record in (
-            *result.label_definitions.values(),
-            *result.z_label_definitions.values(),
-        )
-        if _definition_symbol_id(record) == occurrence.symbol_id
-    )
     if candidates:
         lines: list[str] = []
         for rec in candidates[:8]:
@@ -2522,15 +2554,11 @@ def definition_locations_for_occurrence(
 ) -> list[dict[str, Any]]:
     locations = []
     seen = set()
-    records = [
-        record for bucket in result.local_definitions.values() for record in bucket
-    ]
-    records.extend(result.project.definitions_for_symbol(occurrence.symbol_id))
-    records.extend(result.label_definitions.values())
-    records.extend(result.z_label_definitions.values())
-    for record in records:
-        if _definition_symbol_id(record) != occurrence.symbol_id:
-            continue
+    symbol_id = occurrence.symbol_id
+    local, labels = result.document_definitions_for_symbol(symbol_id)
+    for record in chain(
+        local, result.project.definitions_for_symbol(symbol_id), labels
+    ):
         _append_definition_location(
             locations,
             seen,
@@ -2562,6 +2590,7 @@ class DocumentState:
     file_state: tuple[int, ...] | None = None
     base_analysis: AnalysisResult | None = None
     base_analysis_signature: tuple[Any, ...] | None = None
+    symbol_analysis: AnalysisResult | None = None
     analysis: AnalysisResult | None = None
     analysis_signature: tuple[Any, ...] | None = None
     open_uris: dict[str, tuple[str, int | None]] = field(default_factory=dict)
@@ -2579,9 +2608,64 @@ class DirectoryLinkDiagnosticsEntry:
     occurrences: dict[str, list[SymbolOccurrence]]
     diagnostics: dict[str, list[SourceDiagnostic]]
     revision: int = 0
+    occurrence_sources: dict[str, dict[str, list[SymbolOccurrence]]] = field(
+        default_factory=dict
+    )
     occurrences_by_path: dict[str, list[SymbolOccurrence]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    command_sources: dict[str, dict[str, list[tuple[int, DefinitionRecord]]]] = field(
+        default_factory=dict
+    )
+    file_order: dict[str, int] = field(default_factory=dict, init=False)
+
+    def update_indexes(
+        self,
+        previous_occurrences: dict[str, list[SymbolOccurrence]],
+        previous_commands: dict[str, list[DefinitionRecord]],
+        changed_paths: Iterable[str],
+    ) -> None:
+        self.file_order = {path: index for index, path in enumerate(self.file_commands)}
+        changed_symbols = set()
+        for path in changed_paths:
+            for symbol in {
+                _definition_symbol_id(rec) for rec in previous_commands.get(path, ())
+            }:
+                sources = self.command_sources.get(symbol)
+                if sources is not None:
+                    del sources[path]
+                    if not sources:
+                        del self.command_sources[symbol]
+            for index, record in enumerate(self.file_commands.get(path, ())):
+                symbol = _definition_symbol_id(record)
+                if symbol.startswith("cmd:"):
+                    self.command_sources.setdefault(symbol, {}).setdefault(
+                        path, []
+                    ).append((index, record))
+            old_symbols = {
+                item.symbol_id for item in previous_occurrences.get(path, ())
+            }
+            for symbol in old_symbols:
+                del self.occurrence_sources[symbol][path]
+            changed_symbols.update(old_symbols)
+            for item in self.file_occurrences.get(path, ()):
+                self.occurrence_sources.setdefault(item.symbol_id, {}).setdefault(
+                    path, []
+                ).append(item)
+                changed_symbols.add(item.symbol_id)
+        if not changed_symbols:
+            return
+        for symbol in changed_symbols:
+            sources = self.occurrence_sources[symbol]
+            if not sources:
+                del self.occurrence_sources[symbol]
+                del self.occurrences[symbol]
+                continue
+            ordered_paths = sorted(sources, key=self.file_order.__getitem__)
+            self.occurrences[symbol] = _index_occurrences(
+                sources[path] for path in ordered_paths
+            )[symbol]
+        self.occurrences_by_path = None
 
 
 def _definition_record_to_cache(record: DefinitionRecord) -> dict[str, Any]:
@@ -3519,6 +3603,7 @@ class SSLanguageServer:
     def clear_document_cache(self, doc: DocumentState) -> None:
         doc.base_analysis = None
         doc.base_analysis_signature = None
+        doc.symbol_analysis = None
         doc.analysis = None
         doc.analysis_signature = None
 
@@ -3706,7 +3791,6 @@ class SSLanguageServer:
                 file_signatures[path] = signature
                 group = os.path.splitext(name)[1].lower()[1:]
                 file_digests[path] = inputs[group][name]
-            occurrences = _index_occurrences(file_occurrences.values())
             for name, items in raw_diagnostics.items():
                 name = _cache_file_name(name)
                 path = current_path_by_name.get(name)
@@ -3721,7 +3805,7 @@ class SSLanguageServer:
             if isinstance(revision, bool) or not isinstance(revision, int):
                 return None
             self.report_work_done_progress("Loaded cached workspace symbols.", 95)
-            return DirectoryLinkDiagnosticsEntry(
+            entry = DirectoryLinkDiagnosticsEntry(
                 project_signature=project_entry.signature,
                 file_signatures=file_signatures,
                 file_digests=file_digests,
@@ -3729,10 +3813,12 @@ class SSLanguageServer:
                 file_has_diagnostics=file_has_diagnostics,
                 file_occurrences=file_occurrences,
                 file_unmapped_bindings=file_unmapped_bindings,
-                occurrences=occurrences,
+                occurrences={},
                 diagnostics=diagnostics,
                 revision=revision,
             )
+            entry.update_indexes({}, {}, file_occurrences)
+            return entry
         except (TypeError, ValueError):
             return None
 
@@ -3847,6 +3933,7 @@ class SSLanguageServer:
             read_flags=bool(self.read_sav),
         )
         doc.base_analysis_signature = signature
+        doc.symbol_analysis = None
         doc.analysis = None
         doc.analysis_signature = None
         self.report_work_done_progress("Current-file analysis ready.", 70)
@@ -3875,16 +3962,23 @@ class SSLanguageServer:
         )
         if entry.occurrences_by_path is None:
             by_path: dict[str, list[SymbolOccurrence]] = {}
-            for occurrences in entry.occurrences.values():
-                for item in occurrences:
-                    by_path.setdefault(_path_identity(item.path), []).append(item)
+            seen = set()
+            for group in entry.file_occurrences.values():
+                for occurrence in group:
+                    symbol = occurrence.symbol_id
+                    if symbol in seen:
+                        continue
+                    seen.add(symbol)
+                    for item in entry.occurrences[symbol]:
+                        by_path.setdefault(_path_identity(item.path), []).append(item)
             entry.occurrences_by_path = by_path
-        return replace(
-            result,
-            occurrences=entry.occurrences_by_path.get(
-                _path_identity(doc.path), []
-            ).copy(),
-        )
+        occurrences = entry.occurrences_by_path.setdefault(_path_identity(doc.path), [])
+        if (
+            doc.symbol_analysis is None
+            or doc.symbol_analysis.occurrences is not occurrences
+        ):
+            doc.symbol_analysis = replace(result, occurrences=occurrences)
+        return doc.symbol_analysis
 
     def scan_one_document(
         self,
@@ -3929,7 +4023,7 @@ class SSLanguageServer:
             jobs = [(doc.path, doc.text) for _, doc in docs]
             try:
                 results = parallel_process_completed_map(
-                    _link_scan_worker_job,
+                    _link_scan_worker,
                     jobs,
                     max_workers=worker_count,
                     initializer=_init_scan_worker,
@@ -4001,6 +4095,8 @@ class SSLanguageServer:
             ]
         if not rebuild_all and not removed_paths and not dirty_paths:
             return entry
+        previous_occurrences = {} if rebuild_all else entry.file_occurrences
+        previous_commands = {} if rebuild_all else entry.file_commands
         if not rebuild_all:
             entry = replace(
                 entry,
@@ -4063,28 +4159,30 @@ class SSLanguageServer:
                 entry.file_unmapped_bindings[path] = result_unmapped_bindings
         finally:
             self.end_scan_progress(progress)
-        entry.occurrences = _index_occurrences(entry.file_occurrences.values())
+        entry.update_indexes(
+            previous_occurrences, previous_commands, chain(removed_paths, dirty_paths)
+        )
         diagnostics: dict[str, list[SourceDiagnostic]] = {}
-        names = list(_project_link_command_names(project_entry.project).values())
-        if names and not any(entry.file_has_diagnostics.values()):
-            by_id = {"cmd:" + ascii_lower(name): i for i, name in enumerate(names)}
-            implementations: dict[int, list[tuple[str, DefinitionRecord]]] = {}
-            for path, commands in entry.file_commands.items():
-                for record in commands:
-                    command_id = by_id.get(_definition_symbol_id(record))
-                    if command_id is not None:
-                        implementations.setdefault(command_id, []).append(
-                            (path, record)
-                        )
+        command_names = project_entry.project.link_command_names
+        if command_names and not any(entry.file_has_diagnostics.values()):
+            symbols = list(command_names)
+            defined_ids = []
+            duplicates = []
+            for command_id, symbol in enumerate(symbols):
+                sources = entry.command_sources.get(symbol)
+                if not sources:
+                    continue
+                defined_ids.append(command_id)
+                if len(sources) > 1 or len(next(iter(sources.values()))) > 1:
+                    path = min(sources, key=entry.file_order.__getitem__)
+                    duplicates.append(
+                        (entry.file_order[path], sources[path][0][0], command_id)
+                    )
+            duplicate_ids = (command_id for _, _, command_id in sorted(duplicates))
             for command_id, message in command_link_errors(
-                names,
-                [
-                    command_id
-                    for command_id, records in implementations.items()
-                    for _ in records
-                ],
+                list(command_names.values()), chain(defined_ids, duplicate_ids)
             ):
-                records = implementations.get(command_id, [])
+                sources = entry.command_sources.get(symbols[command_id], {})
                 locations = [
                     (
                         path,
@@ -4092,7 +4190,8 @@ class SSLanguageServer:
                         if _path_identity(record.path) == _path_identity(path)
                         else 1,
                     )
-                    for path, record in records
+                    for path in sorted(sources, key=entry.file_order.__getitem__)
+                    for _, record in sources[path]
                 ] or [(path, 1) for path in scene_paths]
                 for path, line in locations:
                     diagnostics.setdefault(path, []).append(
@@ -4120,7 +4219,7 @@ class SSLanguageServer:
         base = self.analyze_base(doc, project_entry=project_entry)
         if (
             not doc.path.lower().endswith(".ss")
-            or not _project_link_command_names(base.project)
+            or not base.project.link_command_names
             or any(item.severity == SEVERITY_ERROR for item in base.diagnostics)
         ):
             return base
@@ -4231,10 +4330,9 @@ class SSLanguageServer:
         entry = self.link_diagnostics_for_directory(directory)
         locations: list[dict[str, Any]] = []
         seen: set[tuple[str, int, int, int]] = set()
-        for records in entry.file_commands.values():
-            for rec in records:
-                if _definition_symbol_id(rec) != symbol_id:
-                    continue
+        sources = entry.command_sources.get(symbol_id, {})
+        for path in sorted(sources, key=entry.file_order.__getitem__):
+            for _, rec in sources[path]:
                 _append_definition_location(
                     locations,
                     seen,
@@ -4660,18 +4758,17 @@ class SSLanguageServer:
             )
             anchor_start = 0
             anchor_end = len(line_text)
-            for index, ranges in enumerate(result.read_flag_ranges):
-                matched = False
-                for flag_line, left, right in ranges:
-                    if flag_line != line or not 0 <= left < right <= len(line_text):
-                        continue
-                    for boundary in (left, right):
-                        if boundary <= offset:
-                            anchor_start = max(anchor_start, boundary)
-                        else:
-                            anchor_end = min(anchor_end, boundary)
-                    matched |= left <= offset < right
-                if matched:
+            for index, left, right in result.read_flags_on_line(line):
+                if not 0 <= left < right <= len(line_text):
+                    continue
+                for boundary in (left, right):
+                    if boundary <= offset:
+                        anchor_start = max(anchor_start, boundary)
+                    else:
+                        anchor_end = min(anchor_end, boundary)
+                if left <= offset < right and (
+                    not flag_indices or flag_indices[-1] != index
+                ):
                     flag_indices.append(index)
             if flag_indices:
                 anchor = _range(
@@ -4745,30 +4842,44 @@ class SSLanguageServer:
             report["savedFlagCount"] = len(flags)
         if status != "matched":
             return report
-        read_count = sum(1 for value in flags if value)
+        read_count = info["read_counts"][scene]
         report["readCount"] = read_count
         report["unreadCount"] = len(flags) - read_count
         source_lines = _split_lines_cached(doc.text)
         indices = range(len(flags)) if flag_indices is None else flag_indices
+        columns_by_line: dict[int, list[int]] = {}
+        selected = []
         for index in indices:
             if index % 256 == 0:
                 self.raise_if_request_cancelled()
             ranges = []
-            for line, left, right in flag_ranges[index]:
+            for flag_range in flag_ranges[index]:
+                line, left, right = flag_range
                 if 0 <= line < len(source_lines) and 0 <= left < right <= len(
                     source_lines[line]
                 ):
-                    ranges.append(
-                        _range(
-                            line,
-                            left,
-                            right,
-                            source_lines[line],
-                            self.position_encoding,
-                        )
-                    )
+                    ranges.append(flag_range)
+                    columns_by_line.setdefault(line, []).extend((left, right))
+            selected.append((index, ranges))
+        positions = {}
+        for number, (line, columns) in enumerate(columns_by_line.items()):
+            if number % 256 == 0:
+                self.raise_if_request_cancelled()
+            positions[line] = _line_lsp_positions(
+                source_lines[line], columns, self.position_encoding
+            )
+        for index, ranges in selected:
+            if index % 256 == 0:
+                self.raise_if_request_cancelled()
             report["items"].append(
-                {"index": index, "read": bool(flags[index]), "ranges": ranges}
+                {
+                    "index": index,
+                    "read": bool(flags[index]),
+                    "ranges": [
+                        _range(line, positions[line][left], positions[line][right])
+                        for line, left, right in ranges
+                    ],
+                }
             )
         return report
 
@@ -5193,9 +5304,17 @@ class SSLanguageServer:
         if project_after.build_error:
             return "The replacement name is rejected by the compiler."
         if inc_changed:
-            for key, kind in (
-                ("property_list", "property"),
-                ("command_list", "command"),
+            for kind, old_declarations, new_declarations in (
+                (
+                    "property",
+                    project.iad["property_list"],
+                    project_after.iad["property_list"],
+                ),
+                (
+                    "command",
+                    project.iad["commands"].values(),
+                    project_after.iad["commands"].values(),
+                ),
             ):
                 expected_declarations = [
                     {
@@ -5205,9 +5324,9 @@ class SSLanguageServer:
                         == occurrence.symbol_id
                         else item["name"],
                     }
-                    for item in project.iad[key]
+                    for item in old_declarations
                 ]
-                if expected_declarations != project_after.iad[key]:
+                if expected_declarations != list(new_declarations):
                     return "The replacement name changes compiled declarations."
         project_entry = ProjectCacheEntry(entry.project_signature, project_after)
         native_config = _native_lsp_project_config(project_after)

@@ -10,9 +10,6 @@ def N(ln, **k):
 class SA:
     def __init__(s, piad, plad):
         s.piad = piad
-        s.command_by_name = {}
-        for command in piad.get("command_list", []):
-            s.command_by_name.setdefault(command.get("name"), command)
         s.plad = plad
         s.atom_list = s.plad["atom_list"]
         s.label_list = [
@@ -345,9 +342,11 @@ class SA:
             if nm["atom"].get("opt", 0) < len(s.plad.get("unknown_list", []))
             else ""
         )
-        cmd = s.command_by_name.get(name)
+        cmd = s.piad["commands"].get(name)
         if cmd is None:
-            cid = s.piad.get("command_cnt", len(s.piad.get("command_list", [])))
+            cmd = s.piad["global_commands"].get(name)
+        if cmd is None:
+            cid = s.piad["command_cnt"]
             s.piad["command_cnt"] = cid + 1
             n["cmd_id"] = cid
             al = {
@@ -361,16 +360,13 @@ class SA:
                     for x in n["prop_list"]
                 ]
             }
-            s.piad["command_list"].append(
-                {
-                    "id": cid,
-                    "form": n["form_code"],
-                    "name": name,
-                    "arg_list": al,
-                    "is_defined": True,
-                }
-            )
-            s.command_by_name[name] = s.piad["command_list"][-1]
+            s.piad["commands"][name] = {
+                "id": cid,
+                "form": n["form_code"],
+                "name": name,
+                "arg_list": al,
+                "is_defined": True,
+            }
             s.piad["name_set"].add(name)
             ft = s.piad["form_table"]
             al0 = []
@@ -1331,12 +1327,9 @@ class SA:
         if not s.z_label_list[0].get("exist"):
             s.error("TNMSERR_SA_Z_LABEL_00_NOT_EXIST")
             return 0, None
-        cl = s.piad.get("command_list", [])
-        cc = s.piad.get("command_cnt", len(cl))
-        for i in range(s.piad.get("inc_command_cnt", 0), cc):
-            if i >= len(cl) or not cl[i].get("is_defined"):
-                s.error("TNMSERR_SA_DEF_CMD_NOT_EXIST")
-                return 0, None
+        if any(not cmd["is_defined"] for cmd in s.piad["commands"].values()):
+            s.error("TNMSERR_SA_DEF_CMD_NOT_EXIST")
+            return 0, None
         return 1, {
             "root": root,
             "z_label_list": s.z_label_list,

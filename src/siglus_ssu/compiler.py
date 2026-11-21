@@ -634,17 +634,11 @@ def _load_project_sources(
 def _collect_macro_stats(ctx, compile_stats):
     iad = ctx["ia_data"]
     macro_counts = empty_macro_stat_counts()
-    is_parallel = compile_stats["parallel"]
-    usage_delta = compile_stats["global_macro_usage_delta"]
-    for rep in iad["macro_defs"]:
-        kind = rep["decl_type"]
-        name = rep["name"]
-        bucket = macro_counts[kind]
+    used_global_macros = compile_stats["used_global_macros"]
+    for name, rep in iad["macro_defs"].items():
+        bucket = macro_counts[rep["decl_type"]]
         bucket["total"] += 1
-        used = rep["used_count"]
-        if is_parallel:
-            used += usage_delta.get((kind, name), 0)
-        if used <= 0:
+        if name not in iad["used_macros"] and name not in used_global_macros:
             bucket["unused"] += 1
     merge_macro_stat_counts(macro_counts, compile_stats["scene_macro_counts"])
     return macro_counts
@@ -1366,7 +1360,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         }
     )
     ctx = {
-        "project": {},
         "scn_path": inp,
         "tmp_path": tmp,
         "out_path": outputs.staging,
@@ -1434,9 +1427,8 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
     ok = False
     seed_report = None
     compile_stats = {
-        "parallel": False,
         "scene_macro_counts": empty_macro_stat_counts(),
-        "global_macro_usage_delta": {},
+        "used_global_macros": set(),
         "source_stats": empty_source_stat_counts(),
     }
     stage = "GEI"

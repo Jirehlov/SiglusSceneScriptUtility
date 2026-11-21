@@ -204,7 +204,7 @@ def normalize_atom(a):
     }
 
 
-def build_empty_ia_data(replace_tree, defined_names=None):
+def build_empty_ia_data(replace_tree, defined_names=None, *, track_macro_usage=False):
     from .MA import FormTable
 
     form_table = FormTable()
@@ -213,10 +213,10 @@ def build_empty_ia_data(replace_tree, defined_names=None):
         "form_table": form_table,
         "replace_tree": replace_tree,
         "name_set": set(defined_names or []),
-        "macro_defs": [],
-        "macro_map": {},
+        "macro_defs": {},
+        "used_macros": set() if track_macro_usage else None,
         "property_list": [],
-        "command_list": [],
+        "commands": {},
         "property_cnt": 0,
         "command_cnt": 0,
         "inc_property_cnt": 0,
@@ -278,12 +278,15 @@ def to_i32(value):
 
 
 def mark_named_usage(iad, name):
-    macro_map = (iad or {}).get("macro_map")
-    if not isinstance(macro_map, dict):
-        return
-    rep = macro_map.get(str(name or ""))
-    if isinstance(rep, dict) and "used_count" in rep:
-        rep["used_count"] = int(rep.get("used_count", 0) or 0) + 1
+    used_macros = (iad or {}).get("used_macros")
+    if used_macros is not None and (
+        name in iad["macro_defs"] or name in iad.get("global_macro_defs", ())
+    ):
+        used_macros.add(name)
+
+
+def has_declared_name(iad, name):
+    return name in iad["name_set"] or name in iad.get("global_name_set", ())
 
 
 def is_trace_command_base(ev, base_name: str) -> bool:
@@ -878,9 +881,8 @@ def new_expression_state(
             return []
         return info.get("alts") or [info]
 
-    state = SimpleNamespace(stack=[], elm_points=[], scalar_forms=scalar_forms)
-    stack = state.stack
-    elm_points = state.elm_points
+    stack = []
+    elm_points = []
     command_cache = {}
     command_not_cached = object()
     command_cache_version = None
@@ -963,22 +965,48 @@ def new_expression_state(
             return
         _drop_stack_tail(stack_start)
 
-    def _consume_arg_value(arg_info):
-        pending = [arg_info]
+    def _clip_cursor(cursor):
+        while (
+            cursor.point_count
+            and elm_points[cursor.point_count - 1]["stack_len"] >= cursor.end
+        ):
+            cursor.point_count -= 1
+
+    def _cursor_scalar(cursor):
+        if cursor.end:
+            cursor.end -= 1
+            _clip_cursor(cursor)
+            return stack[cursor.end]
+        return None
+
+    def _cursor_element(cursor):
+        end = cursor.end
+        if cursor.point_count:
+            cursor.end = elm_points[cursor.point_count - 1]["stack_len"]
+            _clip_cursor(cursor)
+        elif end:
+            cursor.end -= 1
+            _clip_cursor(cursor)
+        return end
+
+    def _argument_cursor(arg_forms):
+        cursor = SimpleNamespace(end=len(stack), point_count=len(elm_points))
+        pending = list(arg_forms)
         while pending:
             item = pending.pop()
             form = item["form"]
             if form == fm_list:
                 pending.extend(item.get("sub") or [])
             elif form in scalar_forms:
-                _pop_stack_top()
+                _cursor_scalar(cursor)
             else:
-                _consume_element()
+                _cursor_element(cursor)
+        return cursor
 
-    def _pop_scalar_expr(expect_form=None):
-        if not stack:
-            return "<?>"
-        return item_expr(_pop_stack_top(), expect_form)
+    def _consume_arg_values(arg_forms):
+        cursor = _argument_cursor(arg_forms)
+        del stack[cursor.end :]
+        del elm_points[cursor.point_count :]
 
     def _format_unary_expr(opr, rhs):
         op_txt = unary_text.get(opr)
@@ -1018,41 +1046,38 @@ def new_expression_state(
             return {"info": resolved["info"], "call_name": base or "<?command>"}
         return {"expr": base or "<?property>"}
 
-    def _render_property_expr_items(items):
-        return _render_element_path(items, _scan_element_path(items))
+    def _cursor_element_expr(cursor):
+        end = _cursor_element(cursor)
+        items = stack[cursor.end : end]
+        rendered = _render_element_path(items, _scan_element_path(items))
+        if rendered is not None and rendered["expr"]:
+            return rendered["expr"]
+        return item_expr(items[-1]) if items else "<?>"
 
-    def _pop_element_expr():
-        stack_start = latest_stack_start(elm_points)
-        if stack_start is None:
-            if stack:
-                rendered = _render_property_expr_items([stack[-1]])
-                expr = rendered["expr"] if rendered is not None else None
-                if expr:
-                    _pop_stack_top()
-                    return expr
-            return _pop_scalar_expr()
-        items = stack[stack_start:]
-        rendered = _render_property_expr_items(items)
-        expr = rendered["expr"] if rendered is not None else None
-        if not expr:
-            expr = item_expr(items[-1]) if items else "<?>"
-        _drop_stack_tail(stack_start)
-        return expr
+    def _cursor_arg(cursor, form, scalar_value=None):
+        if form not in scalar_forms:
+            if scalar_value is None:
+                return _cursor_element_expr(cursor)
+            _cursor_element(cursor)
+            return None
+        item = _cursor_scalar(cursor)
+        if scalar_value is not None:
+            return scalar_value(item, form)
+        return item_expr(item, form) if item is not None else "<?>"
 
-    def _pop_arg_expr(arg_info):
-        form = arg_info["form"]
-        if form == fm_list:
-            return "[]"
-        if form == fm_label:
-            return _pop_scalar_expr(fm_label)
-        if form in scalar_forms:
-            return _pop_scalar_expr(form)
-        return _pop_element_expr()
-
-    def _pop_arg_list(arg_forms, pop_arg):
+    def _peek_arg_list(arg_forms, scalar_value=None):
+        expressions = scalar_value is None
+        if expressions and all(arg["form"] in scalar_forms for arg in arg_forms):
+            start = len(stack) - len(arg_forms)
+            return [
+                item_expr(stack[start + idx], arg["form"])
+                if start + idx >= 0
+                else "<?>"
+                for idx, arg in enumerate(arg_forms)
+            ]
+        cursor = SimpleNamespace(end=len(stack), point_count=len(elm_points))
         vals = []
         pending = [(iter(reversed(arg_forms)), vals)]
-        expressions = pop_arg is _pop_arg_expr
         while pending:
             args, target = pending[-1]
             try:
@@ -1068,38 +1093,13 @@ def new_expression_state(
                 target.append(sub)
                 pending.append((iter(reversed(arg_info.get("sub") or [])), sub))
             else:
-                target.append(pop_arg(arg_info))
+                target.append(_cursor_arg(cursor, arg_info["form"], scalar_value))
         return vals
-
-    def _snapshot_state():
-        return stack.copy(), elm_points.copy()
-
-    def _restore_state(saved):
-        saved_stack, saved_points = saved
-        stack[:] = saved_stack
-        elm_points[:] = saved_points
-
-    def _peek_arg_list(arg_forms, pop_arg):
-        if pop_arg is _pop_arg_expr and all(
-            arg["form"] in scalar_forms for arg in arg_forms
-        ):
-            start = len(stack) - len(arg_forms)
-            return [
-                item_expr(stack[start + idx], arg["form"])
-                if start + idx >= 0
-                else "<?>"
-                for idx, arg in enumerate(arg_forms)
-            ]
-        saved = _snapshot_state()
-        try:
-            return _pop_arg_list(arg_forms, pop_arg)
-        finally:
-            _restore_state(saved)
 
     def _peek_arg_expr(form):
         if form in scalar_forms:
             return item_expr(stack[-1], form) if stack else "<?>"
-        return _peek_arg_list([{"form": form}], _pop_arg_expr)[0]
+        return _peek_arg_list([{"form": form}])[0]
 
     def _peek_branch_expr():
         if not stack:
@@ -1179,12 +1179,14 @@ def new_expression_state(
         return None
 
     def _resolve_element_path(
-        *, command_matches=None, expected_ret=None, stack_end=None
+        *, command_matches=None, expected_ret=None, stack_end=None, point_count=None
     ):
         if stack_end is None:
             stack_end = len(stack)
-        for ep in reversed(elm_points):
-            stack_start = ep["stack_len"]
+        if point_count is None:
+            point_count = len(elm_points)
+        for point_index in range(point_count - 1, -1, -1):
+            stack_start = elm_points[point_index]["stack_len"]
             if stack_start >= stack_end:
                 continue
             res = _scan_element_path(
@@ -1256,13 +1258,19 @@ def new_expression_state(
         return True
 
     def _resolve_command_path(
-        expected_ret, arg_layout, arg_list_id, named_ids, call_scope, stack_end
+        expected_ret,
+        arg_layout,
+        arg_list_id,
+        named_ids,
+        call_scope,
+        stack_end,
+        point_count,
     ):
         nonlocal command_cache_version
         cache_key = None
         if (
             stack_end <= 16
-            and len(elm_points) <= 16
+            and point_count <= 16
             and len(arg_layout) <= 16
             and len(named_ids) <= 16
         ):
@@ -1280,7 +1288,7 @@ def new_expression_state(
                 ),
                 tuple(
                     point["stack_len"]
-                    for point in elm_points
+                    for point in elm_points[:point_count]
                     if point["stack_len"] < stack_end
                 ),
             )
@@ -1296,6 +1304,7 @@ def new_expression_state(
             ),
             expected_ret=expected_ret,
             stack_end=stack_end,
+            point_count=point_count,
         )
         if cache_key is not None:
             if len(command_cache) >= 256:
@@ -1303,49 +1312,32 @@ def new_expression_state(
             command_cache[cache_key] = resolved
         return resolved
 
-    def _resolve_command_expr(
-        expected_ret, *, arg_layout, arg_list_id, named_ids, call_scope
-    ):
-        if all(arg["form"] in scalar_forms for arg in arg_layout):
-            return _resolve_command_path(
-                expected_ret,
-                arg_layout,
-                arg_list_id,
-                named_ids,
-                call_scope,
-                max(0, len(stack) - len(arg_layout)),
-            )
-        saved = _snapshot_state()
-        try:
-            for arg_info in reversed(arg_layout):
-                _consume_arg_value(arg_info)
-            return _resolve_command_path(
-                expected_ret, arg_layout, arg_list_id, named_ids, call_scope, len(stack)
-            )
-        finally:
-            _restore_state(saved)
-
     def _clear():
         stack[:] = []
         elm_points[:] = []
 
     def _peek_assign_expr(right_form):
-        saved = _snapshot_state()
-        try:
-            right = _pop_arg_expr({"form": right_form})
-            left = _pop_element_expr()
-            return f"{left} = {right}"
-        finally:
-            _restore_state(saved)
+        cursor = SimpleNamespace(end=len(stack), point_count=len(elm_points))
+        right = "[]" if right_form == fm_list else _cursor_arg(cursor, right_form)
+        left = _cursor_element_expr(cursor)
+        return f"{left} = {right}"
 
     def _prepare_command(event, call_scope):
         arg_layout = event["arg_layout"]
-        resolved = _resolve_command_expr(
+        if all(arg["form"] in scalar_forms for arg in arg_layout):
+            stack_end = max(0, len(stack) - len(arg_layout))
+            point_count = len(elm_points)
+        else:
+            cursor = _argument_cursor(arg_layout)
+            stack_end, point_count = cursor.end, cursor.point_count
+        resolved = _resolve_command_path(
             event["ret_form"],
-            arg_layout=arg_layout,
-            arg_list_id=event["arg_list_id"],
-            named_ids=event["named_ids"],
-            call_scope=call_scope,
+            arg_layout,
+            event["arg_list_id"],
+            event["named_ids"],
+            call_scope,
+            stack_end,
+            point_count,
         )
         stack_start = latest_stack_start(elm_points)
         info = {}
@@ -1397,8 +1389,7 @@ def new_expression_state(
         elif op == "CD_COPY_ELM":
             _copy_element()
         elif op == "CD_ARG":
-            for form in reversed(call_scope.decl_forms):
-                _consume_arg_value(form)
+            _consume_arg_values(call_scope.decl_forms)
         elif op == "CD_ELM_POINT":
             elm_points.append({"stack_len": len(stack)})
         elif op == "CD_DEC_PROP":
@@ -1417,9 +1408,7 @@ def new_expression_state(
             _pop_stack_top()
         elif op in ("CD_GOSUB", "CD_GOSUBSTR", "CD_RETURN"):
             arg_layout = event["arg_layout"]
-            args = (
-                _peek_arg_list(arg_layout, _pop_arg_expr) if render_expressions else []
-            )
+            args = _peek_arg_list(arg_layout) if render_expressions else []
             result["_arg_exprs"] = args
             expression = None
             if op == "CD_RETURN":
@@ -1433,8 +1422,7 @@ def new_expression_state(
                 )
                 if expression:
                     result["_expr"] = expression
-            for arg in reversed(arg_layout):
-                _consume_arg_value(arg)
+            _consume_arg_values(arg_layout)
             if op == "CD_RETURN":
                 _clear()
             else:
@@ -1472,9 +1460,7 @@ def new_expression_state(
             left_form = event["left_form"]
             right_form = event["right_form"]
             if render_expressions:
-                lhs, rhs = _peek_arg_list(
-                    [{"form": left_form}, {"form": right_form}], _pop_arg_expr
-                )
+                lhs, rhs = _peek_arg_list([{"form": left_form}, {"form": right_form}])
             else:
                 lhs = rhs = None
             expression = (
@@ -1507,7 +1493,7 @@ def new_expression_state(
             arg_layout = event["arg_layout"]
             expression = None
             if render_expressions:
-                args = _peek_arg_list(arg_layout, _pop_arg_expr)
+                args = _peek_arg_list(arg_layout)
                 resolved = command["resolved"]
                 rendered = (
                     _render_element_path(
@@ -1530,20 +1516,19 @@ def new_expression_state(
             if stack_start is not None:
                 _collapse_value_expr(stack_start, event["ret_form"], expr=expression)
             else:
-                for arg in reversed(arg_layout):
-                    _consume_arg_value(arg)
+                _consume_arg_values(arg_layout)
                 _consume_element()
                 ret_form = event["ret_form"]
                 if ret_form != fm_void:
                     _push_stack_value(ret_form, expr=expression)
         return result
 
-    state.pop_stack_top = _pop_stack_top
-    state.consume_element = _consume_element
-    state.peek_arg_list = _peek_arg_list
-    state.prepare_command = _prepare_command
-    state.apply_event = _apply_event
-    return state
+    return SimpleNamespace(
+        stack=stack,
+        peek_arg_list=_peek_arg_list,
+        prepare_command=_prepare_command,
+        apply_event=_apply_event,
+    )
 
 
 def find_siglus_engine_exe(base_dir: str) -> str:

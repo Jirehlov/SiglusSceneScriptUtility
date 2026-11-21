@@ -2,6 +2,7 @@ import json
 import struct
 import sys
 import re
+from collections import Counter
 from io import BytesIO
 from pathlib import Path
 from . import const as C
@@ -223,31 +224,32 @@ def _simple_to_pil(t: int, pay: bytes, w: int, h: int):
     )
 
 
-def _select_type2_cut(cuts, cut_index):
+def _decode_g00_main_layer(path, cut_index, type2_archives, reuse):
+    if path in type2_archives:
+        unp, cut_index_map = type2_archives[path] if reuse else type2_archives.pop(path)
+    else:
+        data = read_bytes(path)
+        if not data:
+            raise ValueError("empty")
+        type_id = data[0]
+        if type_id in _SIMPLE_G00_TYPES:
+            _, w, h, payload = _parse_simple_g00(data)
+            return _simple_to_pil(type_id, payload, w, h), (0, 0)
+        if type_id != 2:
+            raise ValueError(f"unsupported type for merge: {type_id}")
+        _, _, _, _, unp, cuts = _type2_unp_and_cuts(data)
+        if not cuts:
+            raise ValueError("type2 no cuts")
+        cut_index_map = {index: (offset, size) for index, offset, size in cuts}
+        if reuse:
+            type2_archives[path] = unp, cut_index_map
     if cut_index is None:
-        return cuts[0][1:]
-    cut_index = int(cut_index)
-    for ci, o, s in cuts:
-        if ci == cut_index:
-            return o, s
-    raise ValueError(f"type2 cut not found: cut{cut_index:03d}")
-
-
-def _decode_g00_main_layer(p: Path, cut_index=None):
-    need_pil()
-    d = read_bytes(p)
-    if not d:
-        raise ValueError("empty")
-    t = d[0]
-    if t in _SIMPLE_G00_TYPES:
-        _t, w, h, pay = _parse_simple_g00(d)
-        return _simple_to_pil(t, pay, w, h), (0, 0)
-    if t != 2:
-        raise ValueError(f"unsupported type for merge: {t}")
-    _w, _h, _cut_cnt, _comp_off, unp, cuts = _type2_unp_and_cuts(d)
-    if not cuts:
-        raise ValueError("type2 no cuts")
-    o, s = _select_type2_cut(cuts, cut_index)
+        o, s = next(iter(cut_index_map.values()))
+    else:
+        entry = cut_index_map.get(cut_index)
+        if entry is None:
+            raise ValueError(f"type2 cut not found: cut{cut_index:03d}")
+        o, s = entry
     block = unp[o : o + s]
     canvas, cw, ch = _render_cut_canvas(block)
     return Image.frombytes("RGBA", (cw, ch), canvas, "raw", "BGRA"), _type2_cut_header(
@@ -259,18 +261,25 @@ def merge_g00_files(g00_paths, output_dir=None, trim: bool = False):
     if len(g00_paths) < 2:
         raise ValueError("need >=2 input g00")
     specs = [_parse_g00_spec(x) for x in g00_paths]
-    ps = [p for (p, _cut, _lab) in specs]
-    validate_input_paths(dict.fromkeys(str(path) for path in ps), allow_same_file=True)
-    for p in ps:
-        if not p.is_file():
-            raise ValueError(f"missing file: {p}")
-    base_path, base_cut, _base_lab = specs[0]
-    base_img, base_xy = _decode_g00_main_layer(base_path, base_cut)
-    for p, cut, _lab in specs[1:]:
-        src_img, xy = _decode_g00_main_layer(p, cut)
-        dx = int(base_xy[0]) - int(xy[0])
-        dy = int(base_xy[1]) - int(xy[1])
-        base_img.alpha_composite(src_img, dest=(dx, dy))
+    ps = [str(path) for path, _, _ in specs]
+    remaining = Counter(ps)
+    validate_input_paths(remaining, allow_same_file=True)
+    for path in remaining:
+        if not Path(path).is_file():
+            raise ValueError(f"missing file: {path}")
+    need_pil()
+    type2_archives = {}
+    for index, (path, (_, cut, _)) in enumerate(zip(ps, specs, strict=True)):
+        remaining[path] -= 1
+        image, xy = _decode_g00_main_layer(
+            path, cut, type2_archives, reuse=remaining[path] > 0
+        )
+        if index == 0:
+            base_img, base_xy = image, xy
+        else:
+            dx = int(base_xy[0]) - int(xy[0])
+            dy = int(base_xy[1]) - int(xy[1])
+            base_img.alpha_composite(image, dest=(dx, dy))
     if output_dir:
         out_dir = Path(output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)

@@ -685,7 +685,7 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let file2 = match ca.analyze_file_2(&file1, &ia_data.name_set) {
+    let file2 = match ca.analyze_file_2(&file1, &ia_data) {
         Ok(value) => value,
         Err(()) => {
             return diagnostic_result(py);

@@ -850,9 +850,9 @@ pub fn compile_root(
         scn_prop_name_list.push(property.name.clone());
     }
     let scn_cmd_name_list = ia_data
-        .command_list
+        .commands
+        .entries
         .iter()
-        .skip(ia_data.inc_command_cnt.max(0) as usize)
         .map(|command| command.name.clone())
         .collect();
     let scene = SceneDatInput {

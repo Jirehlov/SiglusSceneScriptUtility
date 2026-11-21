@@ -1,6 +1,5 @@
 import os
 import struct
-import copy
 import sys
 import time
 from collections import Counter
@@ -107,27 +106,17 @@ def _to_int(v):
 
 
 def copy_ia_data(base):
-    form_table = copy.copy(base["form_table"])
-    form_table.form_map_by_name = {
-        name: {
-            **info,
-            "element_map_by_name": dict(info["element_map_by_name"]),
-            "element_map_by_code": dict(info["element_map_by_code"]),
-        }
-        for name, info in form_table.form_map_by_name.items()
-    }
-    form_table.form_map_by_code = {
-        code: form_table.form_map_by_name[info["name"]]
-        for code, info in form_table.form_map_by_code.items()
-    }
     return {
-        "form_table": form_table,
+        "form_table": base["form_table"].for_scene(),
         "replace_tree": copy_replace_tree(base["replace_tree"]),
-        "name_set": set(base["name_set"]),
-        "macro_defs": list(base["macro_defs"]),
-        "macro_map": dict(base["macro_map"]),
-        "property_list": list(base["property_list"]),
-        "command_list": [dict(c) for c in base["command_list"]],
+        "name_set": set(),
+        "global_name_set": base["name_set"],
+        "macro_defs": {},
+        "global_macro_defs": base["macro_defs"],
+        "used_macros": set() if base["used_macros"] is not None else None,
+        "property_list": [],
+        "commands": {},
+        "global_commands": base["commands"],
         "property_cnt": base["property_cnt"],
         "command_cnt": base["command_cnt"],
         "inc_property_cnt": base["inc_property_cnt"],
@@ -518,25 +507,17 @@ def collect_scene_source_stats(nm, pcad, plad, psad, pbsd, dat_bytes):
     return stats
 
 
-def summarize_scene_macro_stats(iad, base, baseline_usage):
+def summarize_scene_macro_stats(iad):
     counts = empty_macro_stat_counts()
-    usage_delta = {}
-    macro_defs = iad["macro_defs"]
-    base_defs = base["macro_defs"]
-    base_count = len(base_defs)
-    for rep in macro_defs[base_count:]:
-        kind = rep["decl_type"]
-        bucket = counts[kind]
+    used_macros = iad["used_macros"]
+    for name, rep in iad["macro_defs"].items():
+        bucket = counts[rep["decl_type"]]
         bucket["total"] += 1
-        if rep["used_count"] <= 0:
+        if name in used_macros:
+            used_macros.remove(name)
+        else:
             bucket["unused"] += 1
-    for rep, used_before in zip(base_defs, baseline_usage):
-        kind = rep["decl_type"]
-        name = rep["name"]
-        used_after = rep["used_count"]
-        if used_after > used_before:
-            usage_delta[(kind, name)] = used_after - used_before
-    return counts, usage_delta
+    return counts, used_macros
 
 
 def build_ia_data(ctx):
@@ -557,7 +538,11 @@ def build_ia_data(ctx):
             key=ascii_lower,
         )
         ctx["inc_list"] = inc_list
-    iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
+    iad = build_empty_ia_data(
+        new_replace_tree(),
+        ctx.get("defined_names"),
+        track_macro_usage=bool(ctx.get("stats", {}).get("full_compile_stats")),
+    )
     ia2 = []
     start = time.time()
     for inc in inc_list:
@@ -1650,12 +1635,8 @@ class BS:
             out_scn["str_index_list"] = str_index_list
             out_scn["label_list"] = [0] * len(plad.get("label_list") or [])
             out_scn["z_label_list"] = [0] * C.TNM_Z_LABEL_CNT
-            inc_prop_cnt = int(piad.get("inc_property_cnt", 0) or 0)
-            inc_cmd_cnt = int(piad.get("inc_command_cnt", 0) or 0)
-            props = piad.get("property_list") or []
-            cmds = piad.get("command_list") or []
-            user_props = props[inc_prop_cnt:]
-            user_cmds = cmds[inc_cmd_cnt:]
+            user_props = piad["property_list"]
+            user_cmds = piad["commands"].values()
             out_scn["scn_prop_list"] = [
                 {"form": p.get("form", C.FM_INT), "size": int(p.get("size", 0) or 0)}
                 for p in user_props
@@ -1738,9 +1719,6 @@ def compile_one_pipeline(
         base = build_ia_data(ctx)
         ctx["ia_data"] = base
     full_compile_stats = ctx["stats"]["full_compile_stats"]
-    baseline_usage = (
-        [rep["used_count"] for rep in base["macro_defs"]] if full_compile_stats else []
-    )
     iad = copy_ia_data(base)
     pcad = {"global_inc_command_cnt": base["inc_command_cnt"]}
     ca = CharacterAnalizer()
@@ -1823,9 +1801,7 @@ def compile_one_pipeline(
     if record_time:
         record_stage_time(ctx, "BS", time.time() - t)
     if full_compile_stats:
-        scene_macro_counts, global_macro_usage_delta = summarize_scene_macro_stats(
-            iad, base, baseline_usage
-        )
+        scene_macro_counts, used_global_macros = summarize_scene_macro_stats(iad)
         source_stats = collect_scene_source_stats(
             nm,
             pcad,
@@ -1836,12 +1812,12 @@ def compile_one_pipeline(
         )
     else:
         scene_macro_counts = empty_macro_stat_counts()
-        global_macro_usage_delta = {}
+        used_global_macros = set()
         source_stats = empty_source_stat_counts()
     write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
     return {
         "scene_macro_counts": scene_macro_counts,
-        "global_macro_usage_delta": global_macro_usage_delta,
+        "used_global_macros": used_global_macros,
         "source_stats": source_stats,
         "out_scn": bsd["out_scn"],
     }
@@ -1872,6 +1848,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
         and (gil_enabled is None or gil_enabled())
     )
     scene_macro_counts = empty_macro_stat_counts()
+    used_global_macros = set()
     source_stats = empty_source_stat_counts()
     executor_context = process_pool(pack_workers) if pipeline else nullcontext()
     with executor_context as executor:
@@ -1880,6 +1857,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
         for p in ss_files:
             res = compile_one_pipeline(ctx, p, debug_outputs=True, record_time=True)
             merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
+            used_global_macros.update(res["used_global_macros"])
             merge_source_stat_counts(source_stats, res["source_stats"])
             if executor is not None:
                 nm = os.path.splitext(os.path.basename(p))[0]
@@ -1901,9 +1879,8 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
             ctx["compressed_scenes"] = compressed
             set_stage_time(ctx, "LZSS", time.time() - lzss_started)
     return {
-        "parallel": False,
         "scene_macro_counts": scene_macro_counts,
-        "global_macro_usage_delta": {},
+        "used_global_macros": used_global_macros,
         "source_stats": source_stats,
     }
 

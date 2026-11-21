@@ -221,11 +221,8 @@ def _collect_compiled_string_kinds(root, atom_type_map, unknown_list):
     return out
 
 
-def collect_dialogue_texts(text: str, ctx: dict, iad_base=None):
-    if iad_base is None:
-        iad = BS.build_ia_data(ctx)
-    else:
-        iad = BS.copy_ia_data(iad_base)
+def collect_dialogue_texts(text: str, iad_base):
+    iad = BS.copy_ia_data(iad_base)
     pcad = {}
     ca = CA.CharacterAnalizer()
     if not ca.analize_file(text, iad, pcad):
@@ -318,7 +315,18 @@ def collect_dialogue_texts(text: str, ctx: dict, iad_base=None):
     return texts
 
 
-def iter_dat_string_uses(bundle):
+def _string_use_fragments(value):
+    pending = [value]
+    while pending:
+        part = pending.pop()
+        if isinstance(part, tuple):
+            left, right = part
+            pending.extend((right, left))
+        elif part is not None:
+            yield part
+
+
+def iter_dat_string_uses(bundle, *, with_text=False, global_elements=None):
     meta = bundle.get("meta") or {}
     context = bundle.get("pack_context") or {}
     scope = new_call_scope(bundle.get("command_ranges") or {})
@@ -331,6 +339,7 @@ def iter_dat_string_uses(bundle):
             global_command_defs=context.get("inc_command_defs"),
             global_command_count=context.get("inc_command_cnt", 0),
             scene_command_names=meta.get("scn_cmd_names"),
+            global_elements=global_elements,
         ),
         item_expr=None,
         render_expressions=False,
@@ -339,55 +348,57 @@ def iter_dat_string_uses(bundle):
     fm_str = C.resolve_form_code(C.FM_STR)
     fm_int = C.resolve_form_code(C.FM_INT)
 
-    def _pop_string(arg):
-        if arg["form"] in state.scalar_forms:
-            item = state.pop_stack_top() or {}
-            if item.get("form") == fm_int and item.get("val") is not None:
-                return str(item["val"]), ()
-            return item.get("string_value"), item.get("string_ids", ())
-        state.consume_element()
-        return None, ()
+    strings = bundle["str_list"]
+
+    def _string_argument(item, _form):
+        if item is None:
+            return None
+        if with_text and item["form"] == fm_int and item["val"] is not None:
+            return str(item["val"])
+        return item.get("string_use")
 
     for event in bundle.get("trace") or []:
         scope.advance(event["ofs"])
         op = event["op"]
         value = None
-        ids = ()
+        kind = None
+        used_value = None
         if op == "CD_PUSH" and event.get("form") == fm_str:
-            value = event.get("text")
-            ids = (event["value"],)
+            sid = event["value"]
+            value = strings[sid] if with_text else sid
         elif op == "CD_OPERATE_2" and event.get("left_form") == fm_str:
             left, right = state.stack[-2:]
-            ids = left.get("string_ids", ())
+            lhs = left.get("string_use")
             if event.get("right_form") == fm_str and event["opr"] == C.OP_PLUS:
-                ids += right.get("string_ids", ())
-                lhs = left.get("string_value")
-                rhs = right.get("string_value")
+                rhs = right.get("string_use")
                 if lhs is not None and rhs is not None:
-                    value = lhs + rhs
-        if op in ("CD_TEXT", "CD_NAME"):
-            item = state.stack[-1] if state.stack else {}
-            yield (
-                TEXTMAP_KIND_DIALOGUE if op == "CD_TEXT" else TEXTMAP_KIND_NAME,
-                item.get("string_ids", ()),
-                item.get("string_value"),
-            )
-        elif op == "CD_COMMAND" and (
-            _is_trace_command_base(event, "print")
-            or _is_trace_command_base(event, "set_namae")
-        ):
-            args = state.peek_arg_list(event["arg_layout"], _pop_string)
-            text, string_ids = args[0] if args else (None, ())
-            yield (
-                TEXTMAP_KIND_DIALOGUE
-                if _is_trace_command_base(event, "print")
-                else TEXTMAP_KIND_NAME,
-                string_ids,
-                text,
-            )
+                    value = (lhs, rhs)
+                elif not with_text:
+                    value = lhs if lhs is not None else rhs
+            elif not with_text:
+                value = lhs
+        elif op == "CD_TEXT" or (op == "CD_NAME" and not with_text):
+            kind = TEXTMAP_KIND_DIALOGUE if op == "CD_TEXT" else TEXTMAP_KIND_NAME
+            if state.stack:
+                used_value = state.stack[-1].get("string_use")
+        elif op == "CD_COMMAND":
+            if _is_trace_command_base(event, "print"):
+                kind = TEXTMAP_KIND_DIALOGUE
+            elif not with_text and _is_trace_command_base(event, "set_namae"):
+                kind = TEXTMAP_KIND_NAME
+            if kind is not None:
+                args = state.peek_arg_list(event["arg_layout"], _string_argument)
+                if args:
+                    used_value = args[0]
+        if kind is not None:
+            parts = _string_use_fragments(used_value)
+            if with_text:
+                yield kind, "".join(parts) if used_value is not None else None
+            else:
+                yield kind, parts
         state.apply_event(event, scope)
-        if ids and state.stack and state.stack[-1]["form"] == fm_str:
-            state.stack[-1].update(string_value=value, string_ids=ids)
+        if value is not None and state.stack and state.stack[-1]["form"] == fm_str:
+            state.stack[-1]["string_use"] = value
 
 
 def _collect_dat_string_kinds(bundle, source_name: str = ""):
@@ -418,7 +429,7 @@ def _collect_dat_string_kinds(bundle, source_name: str = ""):
             continue
         out[sid] = _merge_textmap_kind(out.get(sid), TEXTMAP_KIND_OTHER)
     if not skipped_trace:
-        for kind, ids, _text in iter_dat_string_uses(bundle):
+        for kind, ids in iter_dat_string_uses(bundle):
             for sid in ids:
                 out[sid] = _merge_textmap_kind(out.get(sid), kind)
     if skipped_trace:
@@ -452,7 +463,7 @@ def _parse_scn_dat(blob: bytes):
     if not DAT.scn_structure_valid(blob):
         return None
     try:
-        _, meta = DAT.dat_sections(blob)
+        _, meta = DAT.dat_sections(blob, with_raw_names=False)
         h = meta.get("header") or {}
     except Exception:
         return None
@@ -682,7 +693,7 @@ def _process_dat(
         return 1
     str_list, out_scn = parsed
     if not apply_mode:
-        bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path)
+        bundle = DAT.dat_disassembly_bundle(_plain_blob, dat_path, emit_text=False)
         kind_map = _collect_dat_string_kinds(bundle, fname)
         try:
             _write_dat_map(csv_path, str_list, kind_map)

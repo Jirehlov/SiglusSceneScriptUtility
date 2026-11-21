@@ -35,24 +35,26 @@ pub struct IncCommand {
     pub is_defined: bool,
 }
 
-#[derive(Clone, Copy)]
-pub struct MacroUsage {
-    pub decl_type: &'static str,
-    pub used_count: usize,
+#[derive(Clone, Default)]
+pub struct CommandTable {
+    pub entries: Vec<IncCommand>,
+    indices: HashMap<String, usize>,
 }
 
 pub struct IaData {
     pub replace_tree: ReplaceTree,
-    pub name_set: Arc<HashSet<String>>,
-    pub macro_usage: Vec<MacroUsage>,
-    macro_map: Arc<HashMap<String, usize>>,
+    name_set: Arc<HashSet<String>>,
+    global_name_set: Option<Arc<HashSet<String>>>,
+    pub macro_defs: Arc<HashMap<String, &'static str>>,
+    pub used_macros: HashSet<String>,
+    global_macro_defs: Option<Arc<HashMap<String, &'static str>>>,
     pub property_cnt: i32,
     pub command_cnt: i32,
     pub inc_property_cnt: i32,
     pub inc_command_cnt: i32,
     pub property_list: Vec<Arc<IncProperty>>,
-    pub command_list: Vec<Arc<IncCommand>>,
-    pub command_indices: Arc<HashMap<String, usize>>,
+    pub commands: Arc<CommandTable>,
+    global_commands: Option<Arc<CommandTable>>,
     pub form_table: FormTable,
     pub codes: Arc<RuntimeCodes>,
 }
@@ -117,15 +119,17 @@ impl IaData {
         Self {
             replace_tree: ReplaceTree::default(),
             name_set: Arc::new(defined_names.into_iter().collect()),
-            macro_usage: Vec::new(),
-            macro_map: Arc::default(),
+            global_name_set: None,
+            macro_defs: Arc::default(),
+            used_macros: HashSet::new(),
+            global_macro_defs: None,
             property_cnt: 0,
             command_cnt: 0,
             inc_property_cnt: 0,
             inc_command_cnt: 0,
             property_list: Vec::new(),
-            command_list: Vec::new(),
-            command_indices: Arc::default(),
+            commands: Arc::default(),
+            global_commands: None,
             form_table,
             codes,
         }
@@ -134,48 +138,72 @@ impl IaData {
     pub fn for_scene(&self) -> Self {
         Self {
             replace_tree: self.replace_tree.clone(),
-            name_set: self.name_set.clone(),
-            macro_usage: self.macro_usage.clone(),
-            macro_map: self.macro_map.clone(),
+            name_set: Arc::default(),
+            global_name_set: Some(self.name_set.clone()),
+            macro_defs: Arc::default(),
+            used_macros: HashSet::new(),
+            global_macro_defs: Some(self.macro_defs.clone()),
             property_cnt: self.property_cnt,
             command_cnt: self.command_cnt,
             inc_property_cnt: self.inc_property_cnt,
             inc_command_cnt: self.inc_command_cnt,
             property_list: Vec::new(),
-            command_list: self.command_list.clone(),
-            command_indices: self.command_indices.clone(),
+            commands: Arc::default(),
+            global_commands: Some(self.commands.clone()),
             form_table: self.form_table.clone(),
             codes: self.codes.clone(),
         }
     }
 
     pub fn add_command(&mut self, command: IncCommand) {
-        Arc::make_mut(&mut self.command_indices)
+        let commands = Arc::make_mut(&mut self.commands);
+        commands
+            .indices
             .entry(command.name.clone())
-            .or_insert(self.command_list.len());
-        self.command_list.push(Arc::new(command));
+            .or_insert(commands.entries.len());
+        commands.entries.push(command);
+    }
+
+    pub fn find_command(&self, name: &str) -> Option<&IncCommand> {
+        std::iter::once(self.commands.as_ref())
+            .chain(self.global_commands.as_deref())
+            .find_map(|table| table.indices.get(name).map(|&index| &table.entries[index]))
+    }
+
+    pub fn define_local_command(&mut self, id: i32) {
+        let index = (id - self.inc_command_cnt) as usize;
+        Arc::make_mut(&mut self.commands).entries[index].is_defined = true;
+    }
+
+    pub fn has_declared_name(&self, name: &str) -> bool {
+        self.name_set.contains(name)
+            || self
+                .global_name_set
+                .as_ref()
+                .is_some_and(|names| names.contains(name))
+    }
+
+    pub fn add_declared_name(&mut self, name: String) {
+        Arc::make_mut(&mut self.name_set).insert(name);
     }
 
     fn add_replacement<const TRACK_USAGE: bool>(&mut self, replacement: Replacement) {
         if TRACK_USAGE {
-            let usage = MacroUsage {
-                decl_type: replacement.decl_type,
-                used_count: 0,
-            };
-            let name = replacement.name.clone();
-            self.replace_tree.add(replacement);
-            Arc::make_mut(&mut self.macro_map).insert(name, self.macro_usage.len());
-            self.macro_usage.push(usage);
-        } else {
-            self.replace_tree.add(replacement);
+            Arc::make_mut(&mut self.macro_defs)
+                .insert(replacement.name.clone(), replacement.decl_type);
         }
+        self.replace_tree.add(replacement);
     }
 
     pub fn record_named_usage(&mut self, name: &str) {
-        if let Some(index) = self.macro_map.get(name).copied()
-            && let Some(usage) = self.macro_usage.get_mut(index)
+        if !self.used_macros.contains(name)
+            && (self.macro_defs.contains_key(name)
+                || self
+                    .global_macro_defs
+                    .as_ref()
+                    .is_some_and(|defs| defs.contains_key(name)))
         {
-            usage.used_count += 1;
+            self.used_macros.insert(name.to_owned());
         }
     }
 
@@ -744,7 +772,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 if depth >= ifs.len() {
                     return self.err(line2, "if depth overflow");
                 }
-                let matched = iad.name_set.contains(&word);
+                let matched = iad.has_declared_name(&word);
                 if TRACK_USAGE {
                     iad.record_named_usage(&word);
                 }
@@ -765,7 +793,7 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
                 let Some((after_word, word)) = self.word_ex(next) else {
                     return self.err(line2, "Missing word after #elseifdef.");
                 };
-                let matched = iad.name_set.contains(&word);
+                let matched = iad.has_declared_name(&word);
                 if TRACK_USAGE {
                     iad.record_named_usage(&word);
                 }
@@ -966,10 +994,10 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             i = next;
             line = line2;
             let (after, next, line2) = self.after(i, line, iad)?;
-            if iad.name_set.contains(&name) {
+            if iad.has_declared_name(&name) {
                 return self.err(line2, format!("{name} is declared twice."));
             }
-            Arc::make_mut(&mut iad.name_set).insert(name.clone());
+            iad.add_declared_name(name.clone());
             let record_kind = if kind == "replace" {
                 "replace"
             } else {
@@ -1002,10 +1030,10 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             if !name.starts_with('@') {
                 return self.err(line2, "#macro name must start with '@'.");
             }
-            if iad.name_set.contains(&name) {
+            if iad.has_declared_name(&name) {
                 return self.err(line2, format!("{name} is declared twice."));
             }
-            Arc::make_mut(&mut iad.name_set).insert(name.clone());
+            iad.add_declared_name(name.clone());
             self.record_decl("macro", &name, line, name_start, name_end);
             iad.add_replacement::<TRACK_USAGE>(Replacement {
                 kind: ReplaceKind::Macro,
@@ -1141,13 +1169,13 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             self.text = expanded.text.chars().collect();
             let (name, pos, line) = self.property_name(0, source_line)?;
             let (form, size, _pos, line) = self.property_form(pos, line, iad)?;
-            if iad.name_set.contains(&name) {
+            if iad.has_declared_name(&name) {
                 return self.err(line, format!("{name} is declared twice."));
             }
             if form == iad.codes.forms.void.name.as_str() {
                 return self.err(line, "Property of type void cannot be declared.");
             }
-            Arc::make_mut(&mut iad.name_set).insert(name.clone());
+            iad.add_declared_name(name.clone());
             let id = iad.property_cnt;
             iad.property_cnt += 1;
             iad.property_list.push(Arc::new(IncProperty {
@@ -1201,10 +1229,10 @@ impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
             let (name, pos, line) = self.command_name(0, source_line)?;
             let (args, pos, line) = self.command_arg_list(pos, line, iad)?;
             let (form, _pos, _line) = self.declaration_form(pos, line, iad)?;
-            if iad.name_set.contains(&name) {
+            if iad.has_declared_name(&name) {
                 return self.err(source_line, format!("{name} is declared twice."));
             }
-            Arc::make_mut(&mut iad.name_set).insert(name.clone());
+            iad.add_declared_name(name.clone());
             let id = iad.command_cnt;
             iad.command_cnt += 1;
             let arg_info: Vec<ArgInfo> = args

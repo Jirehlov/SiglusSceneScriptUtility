@@ -959,7 +959,7 @@ impl<'a, 'data: 'a> SemanticSession<'a, 'data> {
                     form: form.name.clone(),
                     arg_lists: Vec::new(),
                     named_args: None,
-                    origin: "call".to_string(),
+                    origin: self.analyzer.codes.forms.call.name.clone(),
                 },
             );
             *property_id = self.analyzer.total_call_property_count;

@@ -7,7 +7,6 @@ use super::codes::{LexCodes, OperatorCodes, RuntimeCodes};
 use super::form_table::{ArgInfo, ArgList, ElementInfo, ElementKind, create_elm_code};
 use super::ia::{CommandArg, IaData, IncCommand};
 use super::la::{Atom, LexResult};
-use std::sync::Arc;
 
 type ParseResult<T> = Result<Option<(usize, T)>, ()>;
 
@@ -374,13 +373,13 @@ impl<'lex, 'src> SyntaxAnalyzer<'lex, 'src> {
         {
             return self.fail("TNMSERR_SA_Z_LABEL_00_NOT_EXIST", 0);
         }
-        for command_id in iad.inc_command_cnt.max(0)..iad.command_cnt.max(0) {
-            let Some(command) = iad.command_list.get(command_id as usize) else {
-                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", 0);
-            };
-            if !command.is_defined {
-                return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", 0);
-            }
+        if iad
+            .commands
+            .entries
+            .iter()
+            .any(|command| !command.is_defined)
+        {
+            return self.fail("TNMSERR_SA_DEF_CMD_NOT_EXIST", 0);
         }
         Ok(())
     }
@@ -866,9 +865,7 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
             };
             pos = after_body;
 
-            let existing = self.iad.command_indices.get(name).copied();
-            let command_id = if let Some(command_index) = existing {
-                let command = &self.iad.command_list[command_index];
+            let command_id = if let Some(command) = self.iad.find_command(name) {
                 let id = command.id;
                 if command.is_defined {
                     return (
@@ -899,7 +896,7 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
                         );
                     }
                 } else {
-                    Arc::make_mut(&mut self.iad.command_list[command_index]).is_defined = true;
+                    self.iad.define_local_command(id);
                 }
                 id
             } else {
@@ -943,7 +940,7 @@ impl<'a, 'lex, 'src> SyntaxSession<'a, 'lex, 'src> {
                     arg_list: command_args,
                     is_defined: true,
                 });
-                Arc::make_mut(&mut self.iad.name_set).insert(name.to_owned());
+                self.iad.add_declared_name(name.to_owned());
                 self.iad.form_table.add(
                     self.iad.codes.forms.scene.name.as_str(),
                     ElementInfo {

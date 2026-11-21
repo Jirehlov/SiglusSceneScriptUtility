@@ -2,9 +2,10 @@ use super::frontend_common::{
     CaseMode, SingleQuoteMode, SourcePoint, TextCommentOptions, next_else_ifdef_state,
     next_elseif_ifdef_state, scan_text_comments,
 };
+use super::ia::IaData;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, PartialEq)]
@@ -417,15 +418,15 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
     pub fn analyze_file_2(
         &mut self,
         input: &File1Result,
-        name_set: &HashSet<String>,
+        ia_data: &IaData,
     ) -> Result<File2Result, ()> {
-        self.analyze_file_2_with_stats::<true>(input, name_set)
+        self.analyze_file_2_with_stats::<true>(input, ia_data)
     }
 
     pub fn analyze_file_2_with_stats<const COLLECT_STATS: bool>(
         &mut self,
         input: &File1Result,
-        name_set: &HashSet<String>,
+        ia_data: &IaData,
     ) -> Result<File2Result, ()> {
         let chars: Vec<char> = input.text.chars().chain(std::iter::once('\0')).collect();
         let mut out = String::new();
@@ -526,7 +527,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                     if COLLECT_STATS {
                         stats.max_ifdef_depth = stats.max_ifdef_depth.max(depth);
                     }
-                    let matched = name_set.contains(&word);
+                    let matched = ia_data.has_declared_name(&word);
                     if TRACK_USAGE {
                         self.used_replacements.push(word);
                     }
@@ -547,7 +548,7 @@ impl<const TRACK_USAGE: bool> CharacterAnalyzer<TRACK_USAGE> {
                     if COLLECT_STATS {
                         stats.elseifdef += 1;
                     }
-                    let matched = name_set.contains(&word);
+                    let matched = ia_data.has_declared_name(&word);
                     if TRACK_USAGE {
                         self.used_replacements.push(word);
                     }

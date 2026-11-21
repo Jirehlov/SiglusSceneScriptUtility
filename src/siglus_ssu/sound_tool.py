@@ -472,30 +472,46 @@ def _ffmpeg_trim_ogg_bytes(
 
 
 def _trim_nwa_to_wav_bytes(
-    nwa_bytes: bytes,
+    src_path: str,
     start_sample: int,
     end_sample: int,
 ) -> bytes:
     if start_sample < 0:
         raise RuntimeError("invalid repeat position (start_sample < 0)")
-    pcm, header = sound.decode_nwa_to_pcm_bytes(nwa_bytes)
-    bytes_per_frame = header.channels * (header.bits_per_sample // 8)
-    if header.samples_per_sec <= 0:
-        raise RuntimeError("invalid NWA sample rate")
-    total_sample_cnt = len(pcm) // bytes_per_frame
-    if total_sample_cnt <= 0:
-        raise RuntimeError("failed to determine audio sample count")
-    if end_sample == -1 or end_sample > total_sample_cnt:
-        end_sample = total_sample_cnt
-    if end_sample <= start_sample:
-        raise RuntimeError("invalid trim range (end_sample <= start_sample)")
-    start_byte = start_sample * bytes_per_frame
-    end_byte = end_sample * bytes_per_frame
+    data_start = sound.NWA_HEADER_STRUCT.size
+    with open_read(src_path) as source:
+        header = sound.parse_nwa_header(source.read(data_start))
+        pcm = None
+        if header.pack_mod == -1:
+            sound._validate_nwa_pcm_format(header)
+            pcm_size = header.original_size
+            if source.seek(0, os.SEEK_END) < data_start + pcm_size:
+                raise EOFError("NWA raw PCM truncated")
+        else:
+            source.seek(0)
+            pcm, header = sound.decode_nwa_to_pcm_bytes(source.read())
+            pcm_size = len(pcm)
+        bytes_per_frame = header.channels * (header.bits_per_sample // 8)
+        if header.samples_per_sec <= 0:
+            raise RuntimeError("invalid NWA sample rate")
+        total_sample_cnt = pcm_size // bytes_per_frame
+        if total_sample_cnt <= 0:
+            raise RuntimeError("failed to determine audio sample count")
+        if end_sample == -1 or end_sample > total_sample_cnt:
+            end_sample = total_sample_cnt
+        if end_sample <= start_sample:
+            raise RuntimeError("invalid trim range (end_sample <= start_sample)")
+        start_byte = start_sample * bytes_per_frame
+        end_byte = end_sample * bytes_per_frame
+        if pcm is None:
+            source.seek(data_start + start_byte)
+            data = source.read(end_byte - start_byte)
+            if len(data) != end_byte - start_byte:
+                raise EOFError("NWA raw PCM truncated")
+        else:
+            data = memoryview(pcm)[start_byte:end_byte]
     return sound._build_wav(
-        memoryview(pcm)[start_byte:end_byte],
-        header.channels,
-        header.bits_per_sample,
-        header.samples_per_sec,
+        data, header.channels, header.bits_per_sample, header.samples_per_sec
     )
 
 
@@ -1498,9 +1514,7 @@ def _extract_one(src_path, outputs, entries, trim_table, ffmpeg_path, tmp_dir):
                 tmp_dir=tmp_dir,
             )
     elif trim_table is not None:
-        data = _trim_nwa_to_wav_bytes(
-            read_bytes(src_path), start_sample=repeat, end_sample=end
-        )
+        data = _trim_nwa_to_wav_bytes(src_path, start_sample=repeat, end_sample=end)
     else:
         data = sound.decode_nwa_to_wav_bytes(src_path)
     with open_atomic_output(outputs[0]) as output:

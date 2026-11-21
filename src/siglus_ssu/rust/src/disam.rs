@@ -1331,7 +1331,12 @@ pub(crate) mod dat {
                 _ => return Err(Failure("scene name must be text".into())),
             };
             let prefix = dat_payload_metadata_trace(rt, &from_py(&meta)?)?;
-            let suffix = dat_payload_string_trace(rt, &from_py(&str_list)?)?;
+            let strings = from_py(&str_list)?;
+            let strings = values(&strings)?;
+            let mut string_pool = HashMap::new();
+            for value in &strings {
+                *string_pool.entry(source_text(value)?).or_default() += 1;
+            }
             let V::Native(value) = &trace.inner else {
                 return Err(Failure("native payload trace required".into()));
             };
@@ -1343,7 +1348,8 @@ pub(crate) mod dat {
                 commands,
                 events: value.events.clone(),
                 prefix,
-                suffix,
+                string_count: strings.len(),
+                string_pool,
             }))
             .value())
         });
@@ -1550,41 +1556,6 @@ pub(crate) mod dat {
             )?;
         }
         Ok(out)
-    }
-
-    pub(super) fn dat_payload_string_trace(rt: &Runtime, str_list: &V) -> Result<Vec<V>, Failure> {
-        let strings = native_optional_values(str_list)?;
-        let mut strings = strings
-            .iter()
-            .map(|value| {
-                let text = source_text(value)?;
-                let mut units = vec![];
-                for code in text.chars.iter() {
-                    if *code < 0x10000 {
-                        units.push(*code as u16);
-                    } else {
-                        let code = *code - 0x10000;
-                        units.push((0xd800 + (code >> 10)) as u16);
-                        units.push((0xdc00 + (code & 0x3ff)) as u16);
-                    }
-                }
-                Ok((units, text))
-            })
-            .collect::<Result<Vec<_>, Failure>>()?;
-        strings.sort_by(|left, right| left.0.cmp(&right.0));
-        let mut encoded = vec![];
-        for (units, text) in &strings {
-            encoded.extend(source(&format!("S{}:", units.len())).chars.iter().copied());
-            encoded.extend_from_slice(&text.chars);
-        }
-        Ok(vec![fast_record(
-            rt,
-            vec![
-                ("op", V::s("meta_string_pool")),
-                ("size", V::Int(strings.len() as i64)),
-                ("text", V::text(encoded)),
-            ],
-        )?])
     }
 }
 
@@ -3869,7 +3840,6 @@ impl Bytecode<'_> {
 struct TraceMode {
     payload: bool,
     koe: bool,
-    command_values: bool,
 }
 fn fast_record(rt: &Runtime, fields: Vec<(&'static str, V)>) -> R {
     let mut mapping = OrderedMap {
@@ -3907,104 +3877,46 @@ fn argument_values(tables: &NativeTables, args: &[Argument]) -> Result<V, Failur
         }
     }
 }
-struct TraceContext<'a> {
-    mode: &'a TraceMode,
-    labels: &'a HashMap<i64, Vec<SourceText>>,
-    strings: &'a [SourceText],
-}
 fn trace_instruction(
     rt: &Runtime,
     event: &Instruction,
-    context: &TraceContext<'_>,
-    annotation: &Annotation,
+    koe: bool,
     command: Option<&CommandPlan>,
     arg_values: Option<Vec<V>>,
 ) -> R {
-    let mode = context.mode;
-    let labels = context.labels;
-    let strings = context.strings;
     let opcode = match event.op {
         Opcode::Unknown(code) => source(&format!("OP_{code:02X}")),
         op => source(op.name()),
     };
-    let mut fields = vec![
-        ("op", V::Str(opcode)),
-        ("line", optional_int(event.line)),
-        ("ofs", V::Int(event.offset)),
-    ];
-    if !mode.koe {
-        fields.push((
-            "labels",
-            V::list(
-                labels
-                    .get(&event.offset)
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-                    .map(V::Str)
-                    .collect(),
-            ),
-        ));
-    }
-    if !mode.koe {
+    let mut fields = vec![("op", V::Str(opcode)), ("ofs", V::Int(event.offset))];
+    if koe {
+        fields.push(("line", optional_int(event.line)));
         match event.op {
-            Opcode::Nl => fields.push(("value", optional_int(event.value))),
-            Opcode::Push => {
-                fields.push(("form", optional_int(event.form)));
-                fields.push(("value", optional_int(event.value)));
-                fields.push((
-                    "text",
-                    if event.form == Some(rt.native_tables.string) {
-                        optional_text(
-                            event
-                                .value
-                                .and_then(|value| {
-                                    usize::try_from(value)
-                                        .ok()
-                                        .and_then(|index| strings.get(index))
-                                })
-                                .cloned(),
-                        )
-                    } else {
-                        V::None
-                    },
-                ));
-            }
-            Opcode::Pop | Opcode::Copy => fields.push(("form", optional_int(event.form))),
-            Opcode::DecProp => {
-                fields.extend([
-                    ("form", optional_int(event.form)),
-                    ("prop_id", optional_int(event.value)),
-                    ("size", optional_int(annotation.size)),
-                    (
-                        "name",
-                        V::Str(event.name.clone().unwrap_or_else(empty_source)),
-                    ),
-                ]);
-            }
+            Opcode::Text | Opcode::Name => fields.push(("text", optional_text(event.name.clone()))),
             Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
-                fields.push(("label_id", optional_int(event.label)));
                 fields.push(("target_ofs", optional_int(event.target)));
             }
-            Opcode::Gosub | Opcode::GosubStr => {
-                fields.extend([
-                    ("label_id", optional_int(event.label)),
-                    (
-                        "arg_layout",
-                        argument_values(&rt.native_tables, &event.args)?,
-                    ),
-                ]);
-                fields.push(("target_ofs", optional_int(event.target)));
-            }
-            Opcode::Return => fields.push((
+            _ => (),
+        }
+    } else {
+        match event.op {
+            Opcode::Push => fields.extend([
+                ("form", optional_int(event.form)),
+                ("value", optional_int(event.value)),
+            ]),
+            Opcode::Pop | Opcode::Copy => fields.push(("form", optional_int(event.form))),
+            Opcode::DecProp => fields.extend([
+                ("form", optional_int(event.form)),
+                (
+                    "name",
+                    V::Str(event.name.clone().unwrap_or_else(empty_source)),
+                ),
+            ]),
+            Opcode::Gosub | Opcode::GosubStr | Opcode::Return => fields.push((
                 "arg_layout",
                 argument_values(&rt.native_tables, &event.args)?,
             )),
-            Opcode::Assign => fields.extend([
-                ("left_form", optional_int(event.form)),
-                ("right_form", optional_int(event.right_form)),
-                ("arg_list_id", V::Int(event.arg_id)),
-            ]),
+            Opcode::Assign => fields.push(("right_form", optional_int(event.right_form))),
             Opcode::Operate1 => fields.extend([
                 ("form", optional_int(event.form)),
                 ("opr", optional_int(event.operator)),
@@ -4024,41 +3936,12 @@ fn trace_instruction(
                     V::list(event.named.iter().copied().map(V::Int).collect()),
                 ),
                 ("ret_form", V::Int(event.ret)),
-                ("read_flag", optional_int(event.read_flag)),
-                ("element_code", optional_int(event.element_code)),
                 ("arg_list_id", V::Int(event.arg_id)),
             ]),
-            Opcode::Text => fields.push(("read_flag", optional_int(event.read_flag))),
             _ => (),
         }
     }
-    if matches!(event.op, Opcode::Text | Opcode::Name) {
-        fields.push((
-            "text",
-            optional_text(
-                event
-                    .value
-                    .and_then(|value| {
-                        usize::try_from(value)
-                            .ok()
-                            .and_then(|index| strings.get(index))
-                    })
-                    .cloned(),
-            ),
-        ));
-        if event.value.is_some() && !mode.koe {
-            fields.push(("str_id", optional_int(event.value)));
-        }
-    }
-    if mode.koe
-        && matches!(
-            event.op,
-            Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse
-        )
-    {
-        fields.push(("target_ofs", optional_int(event.target)));
-    }
-    if event.op == Opcode::Command && mode.command_values {
+    if event.op == Opcode::Command {
         let info = command.and_then(|command| command.info.as_ref());
         fields.push((
             "_call_name",
@@ -4067,33 +3950,27 @@ fn trace_instruction(
                     .filter(|name| !name.chars.is_empty()),
             ),
         ));
-        fields.push((
-            "_call_base_name",
-            optional_text(
-                info.map(|info| info.name.clone())
-                    .filter(|name| !name.chars.is_empty()),
-            ),
-        ));
-        let values = arg_values.unwrap_or_default();
-        let mut named = OrderedMap::new();
-        if let Some(start) = values.len().checked_sub(event.named.len())
-            && let Some(specs) = info.and_then(|info| info.arguments.get(&-1))
-        {
-            for (index, id) in event.named.iter().rev().enumerate() {
-                if let Some(spec) = specs
-                    .iter()
-                    .rev()
-                    .find(|spec| spec.id == *id)
-                    .filter(|spec| !spec.name.chars.is_empty())
-                {
-                    named.insert(V::Str(spec.name.clone()), values[start + index].clone())?;
+        if let Some(values) = arg_values {
+            let mut named = OrderedMap::new();
+            if let Some(start) = values.len().checked_sub(event.named.len())
+                && let Some(specs) = info.and_then(|info| info.arguments.get(&-1))
+            {
+                for (index, id) in event.named.iter().rev().enumerate() {
+                    if let Some(spec) = specs
+                        .iter()
+                        .rev()
+                        .find(|spec| spec.id == *id)
+                        .filter(|spec| !spec.name.chars.is_empty())
+                    {
+                        named.insert(V::Str(spec.name.clone()), values[start + index].clone())?;
+                    }
                 }
             }
+            fields.extend([
+                ("_arg_values", V::list(values)),
+                ("_named_values", V::Dict(Arc::new(named))),
+            ]);
         }
-        fields.extend([
-            ("_arg_values", V::list(values)),
-            ("_named_values", V::Dict(Arc::new(named))),
-        ]);
     }
     fast_record(rt, fields)
 }
@@ -4444,8 +4321,6 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             .as_ref()
             .is_some_and(|value| value.eq_str("payload")),
         koe: profile.as_ref().is_some_and(|value| value.eq_str("koe")),
-        command_values: with_trace
-            && (profile.is_none() || profile.as_ref().is_some_and(|value| value.eq_str("koe"))),
     };
     let mut ranges = OrderedMap::new();
     let scope = Rc::new(RefCell::new(CallScope {
@@ -4490,19 +4365,14 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         record_int(parameters, "annotation_budget").map(|budget| budget.max(0) as usize);
     let annotate =
         decompile_style && annotation_budget.is_none_or(|budget| scn.len() <= budget / 2);
-    let mut annotation_commands = HashMap::new();
-    if annotate {
-        annotation_commands = (*pack.commands).clone();
-        annotation_commands.extend(
-            resolver
-                .commands
-                .iter()
-                .map(|(id, name)| (*id, name.clone())),
-        );
-    }
+    let annotation_commands = if annotate {
+        resolver.commands.clone()
+    } else {
+        HashMap::new()
+    };
     let formatter = ItemFormatter {
         tables: rt.native_tables.clone(),
-        strings: if emit_text || annotate || mode.command_values {
+        strings: if emit_text || annotate || (with_trace && mode.koe) {
             strings.clone()
         } else {
             Vec::new()
@@ -4524,14 +4394,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         cache_version: u64::MAX,
     };
     let mut labels_at: HashMap<i64, Vec<SourceText>> = HashMap::new();
-    if emit_text
-        || (with_trace
-            && !mode.payload
-            && !mode.koe
-            && !profile
-                .as_ref()
-                .is_some_and(|value| value.eq_str("decompile")))
-    {
+    if emit_text {
         for (prefix, offsets) in [("L", &labels), ("Z", &z_labels)] {
             for (index, offset) in offsets.iter().enumerate() {
                 labels_at
@@ -4554,6 +4417,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     let mut trace = vec![];
     let mut payload_events = vec![];
     let mut rendered = String::with_capacity(if emit_text { scn.len() } else { 0 });
+    let capture_text = emit_text || with_trace && (decompile || mode.payload || mode.koe);
     while reader.position < scn.len() {
         let offset = reader.position;
         instruction_starts[offset] = true;
@@ -4681,7 +4545,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                     .push((reader.position as i64, target));
             }
         }
-        if matches!(op, Opcode::Text | Opcode::Name) {
+        if capture_text && matches!(op, Opcode::Text | Opcode::Name) {
             event.value = state
                 .stack
                 .last()
@@ -4716,7 +4580,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 event.read_flag = flag;
             }
         }
-        let values = if op == Opcode::Command && mode.command_values {
+        let values = if op == Opcode::Command && with_trace && mode.koe {
             Some(state.peek_values(&event.args))
         } else {
             None
@@ -4749,12 +4613,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 trace.push(trace_instruction(
                     rt,
                     &event,
-                    &TraceContext {
-                        mode: &mode,
-                        labels: &labels_at,
-                        strings: &strings,
-                    },
-                    &annotation,
+                    mode.koe,
                     command.as_ref(),
                     values,
                 )?);
@@ -4808,7 +4667,8 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 commands: Arc::new(vec![]),
                 events: Arc::new(payload_events),
                 prefix: vec![],
-                suffix: vec![],
+                string_count: 0,
+                string_pool: HashMap::new(),
             }))
             .value()
         } else if decompile {
@@ -4822,6 +4682,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 tables: rt.native_tables.clone(),
                 scene_annotations,
                 annotation_commands,
+                pack,
                 strings,
                 context,
                 command_ranges: ranges,
@@ -4864,6 +4725,7 @@ struct DecodedScene {
     tables: Arc<NativeTables>,
     scene_annotations: Vec<Annotation>,
     annotation_commands: HashMap<i64, SourceText>,
+    pack: Arc<PackState>,
     strings: Vec<SourceText>,
     context: V,
     command_ranges: V,
@@ -4875,6 +4737,7 @@ struct DecompileScene {
     for_blockers: Vec<usize>,
     tables: Arc<NativeTables>,
     annotation_commands: HashMap<i64, SourceText>,
+    pack: Arc<PackState>,
     strings: Vec<SourceText>,
     context: V,
     command_ranges: V,
@@ -4901,6 +4764,7 @@ impl DecompileScene {
             tables,
             scene_annotations,
             annotation_commands,
+            pack,
             strings,
             context,
             command_ranges,
@@ -5006,6 +4870,7 @@ impl DecompileScene {
             for_blockers,
             tables,
             annotation_commands,
+            pack,
             strings,
             context,
             command_ranges,
@@ -5169,10 +5034,11 @@ fn new_decompiler(
             scene
                 .annotation_commands
                 .get(id)
+                .or_else(|| scene.pack.commands.get(id))
                 .is_some_and(|expected| name == expected)
         });
     if !annotation_ready {
-        instance.annotations = Arc::new(native_annotate_scene(rt, &instance, &local_names)?);
+        instance.annotations = Arc::new(native_annotate_scene(rt, &instance, local_names)?);
     }
     for (index, event) in scene.events.iter().enumerate() {
         if event.op != Opcode::Goto {
@@ -5223,7 +5089,7 @@ fn new_decompiler(
 fn native_annotate_scene(
     rt: &Runtime,
     instance: &DecompilerState,
-    local_names: &HashMap<i64, SourceText>,
+    mut commands: HashMap<i64, SourceText>,
 ) -> Result<Vec<Annotation>, Failure> {
     let scene = instance.scene.clone();
     let scope = Rc::new(RefCell::new(CallScope {
@@ -5245,40 +5111,25 @@ fn native_annotate_scene(
         version: 0,
     }));
     let meta = &instance.meta;
-    let mut properties = instance
-        .hints
-        .properties
-        .iter()
-        .map(|(id, info)| ResolverProperty {
-            code: *id,
-            form: Some(info.form),
-            name: info.name.clone(),
-        })
-        .collect::<Vec<_>>();
-    properties.extend(resolver_properties(
+    let pack = &scene.pack;
+    let properties = resolver_properties(
         &record_get(meta, "scn_prop_defs")?,
         "code",
         instance.hints.property_count,
-    )?);
-    let mut commands = instance
-        .hints
-        .commands
-        .iter()
-        .map(|(id, info)| (*id, info.name.clone()))
-        .collect::<HashMap<_, _>>();
-    for (id, name) in local_names {
-        if commands.get(id).is_none_or(|name| name.chars.is_empty()) {
-            commands.insert(*id, name.clone());
-        }
-    }
+    )?;
+    commands.retain(|id, _| {
+        pack.commands
+            .get(id)
+            .is_none_or(|name| name.chars.is_empty())
+    });
     let resolver = ElementResolver::new(
         rt,
         scope.clone(),
         ResolverInput {
             properties,
             commands,
-            global_properties: None,
-            global_commands: None,
+            global_properties: Some(pack.properties.clone()),
+            global_commands: Some(pack.commands.clone()),
         },
     );
     let formatter = ItemFormatter {
@@ -6795,7 +6646,8 @@ struct PayloadTrace {
     commands: Arc<Vec<V>>,
     events: Arc<Vec<PayloadEvent>>,
     prefix: Vec<V>,
-    suffix: Vec<V>,
+    string_count: usize,
+    string_pool: HashMap<SourceText, usize>,
 }
 impl PayloadEvent {
     fn from_instruction(
@@ -6936,8 +6788,9 @@ impl PayloadTrace {
     fn equivalent(&self, other: &Self, omit_text: bool) -> Result<bool, Failure> {
         if self.prefix.len() != other.prefix.len()
             || self.events.len() != other.events.len()
-            || self.suffix.len() != other.suffix.len()
             || self.commands.len() != other.commands.len()
+            || self.string_count != other.string_count
+            || (!omit_text && self.string_pool != other.string_pool)
         {
             return Ok(false);
         }
@@ -6945,7 +6798,6 @@ impl PayloadTrace {
             self.prefix
                 .iter()
                 .zip(&other.prefix)
-                .chain(self.suffix.iter().zip(&other.suffix))
                 .chain(self.commands.iter().zip(other.commands.iter())),
             omit_text,
         )? {

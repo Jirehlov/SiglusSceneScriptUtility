@@ -85,11 +85,12 @@ def disassemble_scn_bytes(
     cd_sel_block_end = C.CD_SEL_BLOCK_END
     payload_trace = trace_profile == "payload"
     koe_trace = trace_profile == "koe"
-    command_values = bool(with_trace) and trace_profile in (None, "koe")
-    need_trace_labels = bool(with_trace) and not (payload_trace or koe_trace)
+    decompile_trace = with_trace and trace_profile == "decompile"
+    detailed_trace = with_trace and (payload_trace or decompile_trace)
+    stack_trace = with_trace and not koe_trace
     render_text = bool(emit_text)
     labels_at = {}
-    if render_text or need_trace_labels:
+    if render_text or decompile_trace:
         for prefix, offsets in (("L", label_list), ("Z", z_label_list)):
             for idx, ofs in enumerate(offsets):
                 labels_at.setdefault(ofs, []).append(f"{prefix}{idx:d}")
@@ -112,7 +113,7 @@ def disassemble_scn_bytes(
             global_command_defs=inc_command_defs,
             global_command_count=inc_command_cnt,
             scene_command_names=scn_cmd_names,
-            global_elements=(pack_context or {}).get("_payload_global_elements"),
+            global_elements=pack_context.get("_global_elements"),
         ),
         item_expr=new_expression_item_formatter(
             str_list=str_list or [],
@@ -123,26 +124,18 @@ def disassemble_scn_bytes(
         result_receivers=False,
     )
     stack = expr_state.stack
-    _pop_stack_top = expr_state.pop_stack_top
-    _consume_element = expr_state.consume_element
     _peek_arg_list = expr_state.peek_arg_list
 
     def _apply(opname, **fields):
         return expr_state.apply_event({"op": opname, **fields}, call_scope)
 
-    def _pop_arg_value(arg_info):
-        form = arg_info["form"]
-        if form in expr_state.scalar_forms:
-            if not stack:
-                return None
-            value = _pop_stack_top()["val"]
-            if value is None:
-                return None
-            if form == fm_str:
-                return str_list[value] if 0 <= value < len(str_list) else None
-            return value
-        _consume_element()
-        return None
+    def _arg_value(item, form):
+        if item is None or item["val"] is None:
+            return None
+        value = item["val"]
+        if form == fm_str:
+            return str_list[value] if 0 <= value < len(str_list) else None
+        return value
 
     scn_len = len(scn)
     unpack_i32 = I32_STRUCT.unpack_from
@@ -211,10 +204,13 @@ def disassemble_scn_bytes(
     def _trace(opname, ofs, **fields):
         if trace is None:
             return
-        one = {"op": opname, "line": cur_line, **fields}
+        one = {"op": opname}
+        if detailed_trace or koe_trace:
+            one["line"] = cur_line
+        one.update(fields)
         if not payload_trace:
             one["ofs"] = ofs
-        if not (koe_trace or payload_trace):
+        if decompile_trace:
             one["labels"] = labels_at.get(ofs, [])
         trace.append(one)
 
@@ -227,9 +223,8 @@ def disassemble_scn_bytes(
         ofs = i
         instruction_starts[ofs] = 1
         call_scope.advance(ofs)
-        if ofs in labels_at:
-            if render_text:
-                out.append(f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
+        if render_text and ofs in labels_at:
+            out.append(f"{ofs:08X}: <{','.join(labels_at[ofs])}>")
         op = scn[i]
         i += 1
         opname = op_names.get(op)
@@ -250,10 +245,7 @@ def disassemble_scn_bytes(
             cur_line = ln
             if render_text:
                 out.append(f"{ofs:08X}: {opname} {cur_line:d}")
-            nl_fields = {}
-            if not koe_trace:
-                nl_fields["value"] = cur_line
-            _trace(opname, ofs, **nl_fields)
+            _trace(opname, ofs, **({"value": cur_line} if detailed_trace else {}))
             continue
         if op == cd_push:
             if i + 8 > scn_len:
@@ -273,13 +265,9 @@ def disassemble_scn_bytes(
                 if form == fm_str:
                     s = f' ; "{_escape_preview(str_list[val])}"'
                 out.append(f"{ofs:08X}: {opname} {fmt_form(form)}, {val:d}{s}")
-            push_fields = {}
-            if not koe_trace:
-                push_fields = {
-                    "form": form,
-                    "value": val,
-                    "text": str(str_list[val]) if form == fm_str else None,
-                }
+            push_fields = {"form": form, "value": val} if stack_trace else {}
+            if detailed_trace:
+                push_fields["text"] = str(str_list[val]) if form == fm_str else None
             _trace(opname, ofs, **push_fields)
             _apply(opname, form=form, value=val)
             continue
@@ -340,20 +328,10 @@ def disassemble_scn_bytes(
                 out.append(
                     f"{ofs:08X}: {opname} {fmt_form(a)}, {b:d}{size_s}{name_s}{size_expr_s}"
                 )
-            _trace(
-                opname,
-                ofs,
-                **(
-                    {}
-                    if koe_trace
-                    else {
-                        "form": a,
-                        "prop_id": b,
-                        "size": (size_val if size_val is not None else None),
-                        "name": (name or ""),
-                    }
-                ),
-            )
+            prop_fields = {"form": a, "name": name or ""} if stack_trace else {}
+            if detailed_trace:
+                prop_fields.update(prop_id=b, size=size_val)
+            _trace(opname, ofs, **prop_fields)
             continue
         if op in (
             cd_goto,
@@ -382,9 +360,9 @@ def disassemble_scn_bytes(
                 cond_s = f" ; cond={cond_expr}" if cond_expr else ""
                 out.append(f"{ofs:08X}: {opname} L{lid:d}{dest}{cond_s}")
             goto_fields = {}
-            if not koe_trace:
+            if detailed_trace:
                 goto_fields["label_id"] = lid
-            if not payload_trace:
+            if decompile_trace or koe_trace:
                 goto_fields["target_ofs"] = target
             _trace(opname, ofs, **goto_fields)
             continue
@@ -415,14 +393,11 @@ def disassemble_scn_bytes(
                 out.append(
                     f"{ofs:08X}: {opname} L{lid:d} argc={len(arg_forms or []):d} forms=[{', '.join(format_arg_layout(arg_forms, fmt_form))}]{dest}{gosub_ss}"
                 )
-            gosub_fields = {}
-            if not koe_trace:
-                gosub_fields = {
-                    "label_id": lid,
-                    "arg_layout": arg_forms,
-                }
-                if not payload_trace:
-                    gosub_fields["target_ofs"] = target
+            gosub_fields = {"arg_layout": arg_forms} if stack_trace else {}
+            if detailed_trace:
+                gosub_fields["label_id"] = lid
+            if decompile_trace:
+                gosub_fields["target_ofs"] = target
             _trace(opname, ofs, **gosub_fields)
             continue
         if op == cd_return:
@@ -462,13 +437,9 @@ def disassemble_scn_bytes(
                 out.append(
                     f"{ofs:08X}: {opname} l={fmt_form(a)} r={fmt_form(b)} al_id={c:d}{assign_s}"
                 )
-            assign_fields = {}
-            if not koe_trace:
-                assign_fields = {
-                    "left_form": a,
-                    "right_form": b,
-                }
-                assign_fields["arg_list_id"] = c
+            assign_fields = {"right_form": b} if stack_trace else {}
+            if detailed_trace:
+                assign_fields.update(left_form=a, arg_list_id=c)
             _trace(opname, ofs, **assign_fields)
             continue
         if op == cd_operate_1:
@@ -523,15 +494,20 @@ def disassemble_scn_bytes(
                         out.append(f"{ofs:08X}: {opname} <truncated>")
                     break
                 i += 4
-            sid = stack[-1]["val"] if stack and stack[-1]["form"] == fm_str else None
-            text = (
-                str_list[sid] if sid is not None and 0 <= sid < len(str_list) else None
-            )
-            fields = {"text": text}
-            if op == cd_text and not koe_trace:
+            fields = {}
+            if render_text or detailed_trace or koe_trace:
+                sid = (
+                    stack[-1]["val"] if stack and stack[-1]["form"] == fm_str else None
+                )
+                text = (
+                    str_list[sid]
+                    if sid is not None and 0 <= sid < len(str_list)
+                    else None
+                )
+                if detailed_trace or koe_trace:
+                    fields["text"] = text
+            if op == cd_text and detailed_trace:
                 fields["read_flag"] = rf
-            if sid is not None and not (koe_trace or payload_trace):
-                fields["str_id"] = sid
             if render_text:
                 preview = f' "{_escape_preview(text)}"' if text is not None else ""
                 if op == cd_text:
@@ -597,11 +573,13 @@ def disassemble_scn_bytes(
                         out.append(f"{ofs:08X}: {opname} <truncated>")
                     break
                 i += 4
-            arg_values = []
-            named_values = {}
-            if command_values:
-                arg_values = _peek_arg_list(arg_forms, _pop_arg_value)
-                named_values = {
+            cmd_fields = {}
+            if with_trace and (trace_profile is None or koe_trace):
+                cmd_fields["_call_name"] = qname or None
+            if with_trace and koe_trace:
+                arg_values = _peek_arg_list(arg_forms, _arg_value)
+                cmd_fields["_arg_values"] = arg_values
+                cmd_fields["_named_values"] = {
                     name: value
                     for name, value in iter_named_command_args(
                         info, arg_values, named_ids
@@ -618,27 +596,20 @@ def disassemble_scn_bytes(
                 out.append(
                     f"{ofs:08X}: {opname} arg_list={arg_list_id:d} argc={len(arg_forms or []):d} args=[{', '.join(format_arg_layout(arg_forms, fmt_form))}] named={named_cnt:d} named_ids={named_ids} ret={fmt_form(ret_form)}{rf_s}{ec_s}{ename}{expr_s}"
                 )
-            cmd_fields = {}
-            if command_values:
-                cmd_fields = {
-                    "_call_name": (qname or None),
-                    "_call_base_name": (str(info.get("name") or "") or None),
-                    "_arg_values": list(arg_values or []),
-                    "_named_values": named_values,
-                }
-            if with_trace and not koe_trace:
+            if stack_trace:
                 cmd_fields.update(
-                    {
-                        "arg_layout": arg_forms,
-                        "named_ids": named_ids,
-                        "ret_form": ret_form,
-                        "read_flag": (read_flag if read_flag is not None else None),
-                        "element_code": (
-                            int(element_code) if element_code is not None else None
-                        ),
-                    }
+                    arg_layout=arg_forms,
+                    named_ids=named_ids,
+                    ret_form=ret_form,
+                    arg_list_id=arg_list_id,
                 )
-                cmd_fields["arg_list_id"] = arg_list_id
+            if detailed_trace:
+                cmd_fields.update(
+                    read_flag=read_flag,
+                    element_code=int(element_code)
+                    if element_code is not None
+                    else None,
+                )
             _trace(opname, ofs, **cmd_fields)
             continue
         if op == cd_eof:

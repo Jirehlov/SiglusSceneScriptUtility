@@ -84,6 +84,14 @@ class FormTable:
     def __init__(s):
         s.form_map_by_name = {}
         s.form_map_by_code = {}
+        s._shared_forms = {}
+
+    def for_scene(s):
+        table = copy.copy(s)
+        table.form_map_by_name = s.form_map_by_name.copy()
+        table.form_map_by_code = s.form_map_by_code.copy()
+        table._shared_forms = s.form_map_by_name
+        return table
 
     @staticmethod
     def _new_form(fc):
@@ -103,6 +111,13 @@ class FormTable:
         info = s.form_map_by_name.get(name)
         if not isinstance(info, dict):
             info = s._new_form(name)
+            s.form_map_by_name[name] = info
+        elif info is s._shared_forms.get(name):
+            info = {
+                **info,
+                "element_map_by_name": info["element_map_by_name"].copy(),
+                "element_map_by_code": info["element_map_by_code"].copy(),
+            }
             s.form_map_by_name[name] = info
         code = _form_code(fc)
         if isinstance(code, int):

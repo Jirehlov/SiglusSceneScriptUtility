@@ -4,7 +4,7 @@ import os
 import struct
 import sys
 import time
-from collections import deque
+from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from .path_policy import read_file_stat, resolve_read_path, validate_input_paths
@@ -213,8 +213,6 @@ def _payload_pack_trace(pack_context):
 
 
 def prepare_payload_context(context):
-    from .common import scene_global_elements
-
     common = []
     commands = {}
     for event in _payload_pack_trace(context):
@@ -223,22 +221,8 @@ def prepare_payload_context(context):
         else:
             common.append(event)
     prepared = dict(context or {})
-    prepared["_payload_global_elements"] = scene_global_elements(
-        prepared.get("inc_property_defs"), prepared.get("inc_command_defs")
-    )
     prepared["_payload_prepared"] = (_payload_trace_hash_bundles(common), commands)
     return prepared
-
-
-def _payload_string_trace(str_list):
-    strings = sorted(
-        str_list, key=lambda value: value.encode("utf-16-be", "surrogatepass")
-    )
-    encoded = []
-    for value in strings:
-        size = len(value.encode("utf-16-le", "surrogatepass")) // 2
-        encoded.extend((f"S{size:d}:", value))
-    return [{"op": "meta_string_pool", "size": len(strings), "text": "".join(encoded)}]
 
 
 def dat_disassembly_bundle(
@@ -258,7 +242,7 @@ def dat_disassembly_bundle(
         bounds = _scn_payload_bounds(blob)
         if bounds is None:
             return None
-        sections, meta = dat_sections(blob)
+        sections, meta = dat_sections(blob, with_raw_names=emit_text or payload_trace)
         h = meta.get("header") or {}
         so, ss = bounds
         scn = blob[so : so + ss]
@@ -317,12 +301,7 @@ def dat_disassembly_bundle(
             if native is not None:
                 trace = native
             else:
-                runtime_trace = list(trace or [])
-                trace = (
-                    _payload_metadata_trace(meta, pack_context)
-                    + runtime_trace
-                    + _payload_string_trace(str_list)
-                )
+                trace = _payload_metadata_trace(meta, pack_context) + list(trace or [])
         return {
             "header": h,
             "sections": sections,
@@ -347,7 +326,9 @@ def _pack_context_bytes(context):
     if not context:
         return b""
     section = "\n\n---- pack_context ----" + "".join(
-        f"\n{key}: {value!r}" for key, value in context.items()
+        f"\n{key}: {value!r}"
+        for key, value in context.items()
+        if key != "_global_elements"
     )
     return section.replace("\n", "\r\n").encode("utf-8")
 
@@ -518,6 +499,7 @@ def process_dat_output_items(
     written_paths = []
     failed_paths = []
     annotation_budget = None
+    disassembly_finished = False
 
     def ordered_results(executor, work, jobs):
         if executor is None:
@@ -553,7 +535,11 @@ def process_dat_output_items(
 
     def disassemble(item, budget, pack_bytes):
         if publish_dat is not None:
-            item["dat_path"] = publish_dat(item)
+            try:
+                item["dat_path"] = publish_dat(item)
+            except OSError as exc:
+                sys.stderr.write(f"Failed to write {item['dat_path']}: {exc}\n")
+                return item, None, None, 0
         dat_path = item["dat_path"]
         blob = item["blob"]
         bundle = dat_disassembly_bundle(
@@ -586,12 +572,13 @@ def process_dat_output_items(
         return item, bundle, out_path, local_stats["ended_unexpectedly"]
 
     def iter_bundles(executor):
-        nonlocal annotation_budget
+        nonlocal annotation_budget, disassembly_finished
         results = ordered_results(executor, disassemble, disassembly_jobs())
         while True:
             started = time.perf_counter()
             result = next(results, None)
             if result is None:
+                disassembly_finished = True
                 return
             add_elapsed_seconds(
                 stats, "disassembly_seconds", time.perf_counter() - started
@@ -687,7 +674,11 @@ def process_dat_output_items(
                 add_elapsed_seconds(
                     stats, "decompile_seconds", time.perf_counter() - started
                 )
-    return {"written": written_paths, "failed_paths": failed_paths}
+    return {
+        "written": written_paths,
+        "failed_paths": failed_paths,
+        "failed": bool(failed_paths) or not disassembly_finished,
+    }
 
 
 def _write_dat_disassembly(dat_path, blob, out_dir, stats):
@@ -898,7 +889,11 @@ def _scn_payload_bundle(blob, pack_context, scene_name, with_trace):
     if not bundle["complete"]:
         return {"status": "INCOMPLETE"}
     prepared = payload_context.get("_payload_prepared")
-    return {"trace": bundle["trace"], "common": prepared[0] if prepared else None}
+    return {
+        "trace": bundle["trace"],
+        "common": prepared[0] if prepared else None,
+        "strings": bundle["str_list"],
+    }
 
 
 def compare_scn_payload(
@@ -932,18 +927,19 @@ def compare_scn_payload(
     native = compare_payload_traces_native(bundle1["trace"], bundle2["trace"])
     if native is not None:
         return native
-    if bundle1["common"] != bundle2["common"]:
+    strings1, strings2 = bundle1["strings"], bundle2["strings"]
+    if bundle1["common"] != bundle2["common"] or len(strings1) != len(strings2):
         return "real_diff"
     hashes1 = _payload_trace_hash_bundles(bundle1["trace"])
     hashes2 = _payload_trace_hash_bundles(bundle2["trace"])
-    if hashes1["full"] == hashes2["full"]:
+    if hashes1["full"] == hashes2["full"] and Counter(strings1) == Counter(strings2):
         return "same"
     if hashes1["no_text"] == hashes2["no_text"]:
         return "text_only"
     return "real_diff"
 
 
-def dat_sections(blob):
+def dat_sections(blob, *, with_raw_names=True):
     n = len(blob)
 
     def _validate_header_size(hs, n, default):
@@ -1096,7 +1092,9 @@ def dat_sections(blob):
         "call_prop_name_index_list": cpn_idx,
         "namae_list": namae_list,
         "read_flag_list": read_flag_list,
-        "raw_names": {
+    }
+    if with_raw_names:
+        meta["raw_names"] = {
             f"{name}s": decode_utf16le_strings(
                 blob,
                 indices,
@@ -1112,8 +1110,7 @@ def dat_sections(blob):
                 ("scn_cmd_name", scn_idx),
                 ("call_prop_name", cpn_idx),
             )
-        },
-    }
+        }
     return secs, meta
 
 
@@ -1319,8 +1316,8 @@ def compare_dat(
     compare_payload=False,
     disam_to_input_dir=False,
 ) -> int:
-    m1 = dat_sections(b1)[1]
-    m2 = dat_sections(b2)[1]
+    m1 = dat_sections(b1, with_raw_names=False)[1]
+    m2 = dat_sections(b2, with_raw_names=False)[1]
     h1 = m1.get("header") or {}
     h2 = m2.get("header") or {}
     diffs = [

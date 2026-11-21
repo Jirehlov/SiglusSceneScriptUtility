@@ -395,16 +395,17 @@ def _add_entry_ref(entry, name, text, callsite):
 
 
 def _multi_text_koe_nos(call_refs):
-    texts_by_koe = {}
+    first_texts = {}
+    conflicts = set()
     for koe_no, _names, text, _callsite in call_refs:
         koe_no_i = _try_int(koe_no)
-        if koe_no_i is None:
+        if koe_no_i is None or koe_no_i in conflicts:
             continue
         text = str(text or "")
-        if not text:
-            continue
-        texts_by_koe.setdefault(koe_no_i, set()).add(text)
-    return [koe_no for koe_no in sorted(texts_by_koe) if len(texts_by_koe[koe_no]) > 1]
+        if text and first_texts.setdefault(koe_no_i, text) != text:
+            conflicts.add(koe_no_i)
+            del first_texts[koe_no_i]
+    return sorted(conflicts)
 
 
 def _format_koe_nos(koe_nos):
@@ -775,13 +776,6 @@ def main(argv):
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
         multi_text_koe_nos = _multi_text_koe_nos(call_refs)
-    else:
-        call_refs = []
-        scene_files = 0
-        missing_rows = []
-        referenced = 0
-        unreferenced = 0
-        multi_text_koe_nos = []
     current_ovk_path = ""
     current_ovk_file = None
 
@@ -827,7 +821,6 @@ def main(argv):
                 role = _safe_role_dir_name(e["name"])
                 dest_dir = os.path.join(out_dir, "unreferenced" if is_unref else role)
                 out_path = os.path.join(dest_dir, f"KOE({koe_no:09d}).ogg")
-                should_extract = not stats_only
                 duration_done = False
                 ogg = b""
                 read_error = None
@@ -864,22 +857,20 @@ def main(argv):
                         duration_failed,
                         duration_by_koe.get(koe_no),
                     )
-                    duration_done = True
-                if should_extract and os.path.isfile(out_path):
-                    skipped += 1
+                if stats_only:
                     continue
-                if not should_extract and (is_unref or duration_done):
+                if os.path.isfile(out_path):
+                    skipped += 1
                     continue
                 processed_koe += 1
                 _progress_koe(processed_koe, koe_no)
                 try:
                     if read_error is not None:
                         raise read_error
-                    if should_extract:
-                        if _extract_voice(out_path, ogg):
-                            extracted += 1
-                        else:
-                            skipped += 1
+                    if _extract_voice(out_path, ogg):
+                        extracted += 1
+                    else:
+                        skipped += 1
                     if not is_unref and not duration_done:
                         total_duration_sec, duration_counted, duration_failed = (
                             _maybe_add_duration(
@@ -890,13 +881,10 @@ def main(argv):
                             )
                         )
                 except Exception as ex:
-                    if should_extract:
-                        failed += 1
-                        if not is_unref and not duration_done:
-                            duration_failed += 1
-                        eprint(f"Failed to extract koe_no={koe_no}: {ex}")
-                    elif not is_unref and not duration_done:
+                    failed += 1
+                    if not is_unref and not duration_done:
                         duration_failed += 1
+                    eprint(f"Failed to extract koe_no={koe_no}: {ex}")
         else:
             if single_found:
                 koe_no = int(single_koe_no)

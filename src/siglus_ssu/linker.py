@@ -249,7 +249,7 @@ def link_pack(ctx):
             iad = build_empty_ia_data(new_replace_tree(), ctx.get("defined_names"))
         ctx["ia_data"] = iad
     inc_props = iad["property_list"]
-    inc_cmds = iad["command_list"]
+    inc_cmds = iad["commands"].values()
     inc_command_cnt = iad["inc_command_cnt"]
     scn_names = [
         os.path.splitext(os.path.basename(scene))[0] for scene in ctx["scn_list"]

@@ -63,7 +63,7 @@ struct PreparedScene {
     scene: SceneDatInput,
     source_stats: SourceStats,
     scene_macro_counts: MacroStats,
-    global_macro_usage_delta: BTreeMap<usize, usize>,
+    used_global_macros: HashSet<String>,
 }
 
 enum SceneBytes {
@@ -100,7 +100,7 @@ struct FinalizedScene {
     read_flag_count: usize,
     source_stats: SourceStats,
     scene_macro_counts: MacroStats,
-    global_macro_usage_delta: BTreeMap<usize, usize>,
+    used_global_macros: HashSet<String>,
 }
 
 struct SceneData {
@@ -540,48 +540,35 @@ fn merge_macro_stats(dst: &mut MacroStats, src: &MacroStats) {
     }
 }
 
-fn scene_macro_stats(ia_data: &IaData, base_ia: &IaData) -> (MacroStats, BTreeMap<usize, usize>) {
+fn scene_macro_stats(ia_data: &mut IaData) -> (MacroStats, HashSet<String>) {
     let mut counts = empty_macro_stats();
-    let base_count = base_ia.macro_usage.len();
-    for usage in ia_data.macro_usage.iter().skip(base_count) {
+    let mut used_macros = std::mem::take(&mut ia_data.used_macros);
+    for (name, kind) in ia_data.macro_defs.iter() {
         let bucket = counts
             .buckets
-            .get_mut(usage.decl_type)
+            .get_mut(kind)
             .expect("initialized macro bucket");
         bucket.total += 1;
-        if usage.used_count == 0 {
+        if !used_macros.remove(name) {
             bucket.unused += 1;
         }
     }
-    let mut usage_delta = BTreeMap::new();
-    for (index, usage) in base_ia.macro_usage.iter().enumerate() {
-        let before = usage.used_count;
-        let after = ia_data
-            .macro_usage
-            .get(index)
-            .map(|value| value.used_count)
-            .unwrap_or_default();
-        if after > before {
-            usage_delta.insert(index, after - before);
-        }
-    }
-    (counts, usage_delta)
+    (counts, used_macros)
 }
 
 fn collect_macro_stats(
     base_ia: &IaData,
     scene_counts: &MacroStats,
-    global_usage_delta: &BTreeMap<usize, usize>,
+    used_global_macros: &HashSet<String>,
 ) -> MacroStats {
     let mut counts = empty_macro_stats();
-    for (index, usage) in base_ia.macro_usage.iter().enumerate() {
+    for (name, kind) in base_ia.macro_defs.iter() {
         let bucket = counts
             .buckets
-            .get_mut(usage.decl_type)
+            .get_mut(kind)
             .expect("initialized macro bucket");
         bucket.total += 1;
-        let extra = global_usage_delta.get(&index).copied().unwrap_or_default();
-        if usage.used_count + extra == 0 {
+        if !base_ia.used_macros.contains(name) && !used_global_macros.contains(name) {
             bucket.unused += 1;
         }
     }
@@ -1267,7 +1254,7 @@ fn prepare_scene<const FULL_STATS: bool>(
         .analyze_file_1(source)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
     let file2 = ca
-        .analyze_file_2_with_stats::<FULL_STATS>(&file1, &ia_data.name_set)
+        .analyze_file_2_with_stats::<FULL_STATS>(&file1, &ia_data)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
     if FULL_STATS {
         ia_data.record_replacement_usage(&ca.used_replacements);
@@ -1393,8 +1380,8 @@ fn prepare_scene<const FULL_STATS: bool>(
         None,
     )
     .map_err(|error| scene_error(error.code, display_name, error.line))?;
-    let (scene_macro_counts, global_macro_usage_delta, source_stats) = if FULL_STATS {
-        let (scene_macro_counts, global_macro_usage_delta) = scene_macro_stats(&ia_data, base_ia);
+    let (scene_macro_counts, used_global_macros, source_stats) = if FULL_STATS {
+        let (scene_macro_counts, used_global_macros) = scene_macro_stats(&mut ia_data);
         let source_stats = collect_scene_source_stats(SceneSourceInputs {
             preprocess: &file2.stats,
             root: &root,
@@ -1406,11 +1393,11 @@ fn prepare_scene<const FULL_STATS: bool>(
             default_arg_fills: bs_output.default_arg_fills,
             ia_data: &ia_data,
         });
-        (scene_macro_counts, global_macro_usage_delta, source_stats)
+        (scene_macro_counts, used_global_macros, source_stats)
     } else {
         (
             MacroStats::default(),
-            BTreeMap::new(),
+            HashSet::new(),
             SourceStats::default(),
         )
     };
@@ -1427,7 +1414,7 @@ fn prepare_scene<const FULL_STATS: bool>(
         scene: bs_output.scene,
         source_stats,
         scene_macro_counts,
-        global_macro_usage_delta,
+        used_global_macros,
     })
 }
 
@@ -1484,7 +1471,7 @@ fn finalize_scene<const FULL_STATS: bool>(
         read_flag_count: prepared.scene.read_flag_list.len(),
         source_stats: prepared.source_stats,
         scene_macro_counts: prepared.scene_macro_counts,
-        global_macro_usage_delta: prepared.global_macro_usage_delta,
+        used_global_macros: prepared.used_global_macros,
     })
 }
 
@@ -1609,8 +1596,8 @@ fn compile_project_inner<const FULL_STATS: bool>(
         .collect::<HashSet<_>>();
     let compile_workers = worker_count(config, compile_targets.len());
     let link_workers = default_parallel_worker_count(config.context.scn_list.len());
-    let mut inc_command_locations = vec![(0i32, 0i32); base_ia.command_list.len()];
-    let mut inc_command_defined = vec![false; base_ia.command_list.len()];
+    let mut inc_command_locations = vec![(0i32, 0i32); base_ia.commands.entries.len()];
+    let mut inc_command_defined = vec![false; base_ia.commands.entries.len()];
     let use_lzss = config.context.lzss_mode && !config.context.easy_link;
     let bs_dir = Path::new(&config.tmp_dir).join("bs");
     if !config.tmp_dir.is_empty() {
@@ -1795,15 +1782,13 @@ fn compile_project_inner<const FULL_STATS: bool>(
     } else {
         MacroStats::default()
     };
-    let mut aggregate_global_usage_delta = BTreeMap::<usize, usize>::new();
+    let mut used_global_macros = HashSet::new();
     for task in &tasks {
         let record = if let Some(scene) = compiled_map.remove(task.key.as_str()) {
             if FULL_STATS {
                 merge_source_stats(&mut aggregate_source_stats, scene.source_stats);
                 merge_macro_stats(&mut aggregate_scene_macro_counts, &scene.scene_macro_counts);
-                for (key, value) in scene.global_macro_usage_delta {
-                    *aggregate_global_usage_delta.entry(key).or_default() += value;
-                }
+                used_global_macros.extend(scene.used_global_macros);
             }
             if !config.tmp_dir.is_empty()
                 && let SceneBytes::Dat(dat) = &scene.bytes
@@ -1871,7 +1856,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 if inc_command_defined[index] {
                     return Err(format!(
                         "command {} defined more than once",
-                        base_ia.command_list[index].name
+                        base_ia.commands.entries[index].name
                     ));
                 }
                 inc_command_defined[index] = true;
@@ -1888,7 +1873,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         if !defined {
             return Err(format!(
                 "command {} is not defined",
-                base_ia.command_list[index].name
+                base_ia.commands.entries[index].name
             ));
         }
     }
@@ -2044,7 +2029,8 @@ fn compile_project_inner<const FULL_STATS: bool>(
             })
             .collect(),
         inc_cmd_name_list: base_ia
-            .command_list
+            .commands
+            .entries
             .iter()
             .map(|command| command.name.as_str())
             .collect(),
@@ -2076,7 +2062,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             Some(collect_macro_stats(
                 &base_ia,
                 &aggregate_scene_macro_counts,
-                &aggregate_global_usage_delta,
+                &used_global_macros,
             )),
             Some(aggregate_source_stats),
         )

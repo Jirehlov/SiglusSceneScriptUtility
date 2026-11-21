@@ -676,12 +676,16 @@ def parse_nwa_header(data: bytes) -> NWAHeader:
     )
 
 
+def _validate_nwa_pcm_format(header: NWAHeader):
+    if header.bits_per_sample != 16:
+        raise ValueError(f"Unsupported NWA bits_per_sample: {header.bits_per_sample}")
+    if header.channels not in (1, 2):
+        raise ValueError(f"Unsupported NWA channels: {header.channels}")
+
+
 def decode_nwa_to_pcm_bytes(data: bytes) -> Tuple[bytes, NWAHeader]:
     h = parse_nwa_header(data)
-    if h.bits_per_sample != 16:
-        raise ValueError(f"Unsupported NWA bits_per_sample: {h.bits_per_sample}")
-    if h.channels not in (1, 2):
-        raise ValueError(f"Unsupported NWA channels: {h.channels}")
+    _validate_nwa_pcm_format(h)
     if h.pack_mod == -1:
         pcm = data[NWA_HEADER_STRUCT.size : NWA_HEADER_STRUCT.size + h.original_size]
         if len(pcm) != h.original_size:

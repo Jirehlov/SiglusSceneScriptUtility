@@ -258,7 +258,7 @@ impl DecompileFrontend {
         let mut ca = ca::CharacterAnalyzer::new(false);
         let first = ca.analyze_file_1(text).map_err(|_| ca.error_str.clone())?;
         let second = ca
-            .analyze_file_2(&first, &data.name_set)
+            .analyze_file_2(&first, &data)
             .map_err(|_| ca.error_str.clone())?;
         if !second.inc_text.is_empty() {
             let mut analyzer =

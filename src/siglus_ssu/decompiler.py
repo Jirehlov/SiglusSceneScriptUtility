@@ -394,64 +394,83 @@ def _merge_same_target_lines(lines):
         target = _line_target(lines[idx])
         if target is not None:
             next_target = int(target)
+    parts = []
+    previous_target = None
+    base_label = None
+    is_label = has_label_tail = label_has_brace = False
+    trimmed = has_body = False
+
+    def set_label(text):
+        nonlocal base_label, is_label, has_label_tail, label_has_brace
+        base_label = _LINE_LABEL_RE.match(text)
+        is_label = base_label is not None
+        tail = base_label.group(3) if is_label else None
+        has_label_tail = bool(tail)
+        label_has_brace = has_label_tail and "{" in tail
+
     for idx, line in enumerate(lines):
         text = _line_text(line)
         target = _line_target(line)
         stripped = text.strip()
-        if (
-            out
+        next_target = next_targets[idx]
+        attached = (
+            parts
+            and parts[0]
+            and previous_target is not None
+            and (
+                (target is None and stripped.startswith(("}elseif(", "}else{")))
+                or (
+                    stripped == "}"
+                    and next_target is not None
+                    and next_target >= previous_target
+                    and (target is None or int(target) == previous_target)
+                    and (not is_label or label_has_brace)
+                )
+            )
+        )
+        same_target = (
+            parts
+            and parts[0]
             and text
-            and target is None
-            and stripped.startswith(("}elseif(", "}else{"))
-        ):
-            prev_text = _line_text(out[-1])
-            prev_target = _line_target(out[-1])
-            if prev_text and prev_target is not None:
-                out[-1] = _line_item(prev_text.rstrip() + stripped, prev_target)
-                continue
-        if stripped == "}" and out:
-            prev_text = _line_text(out[-1])
-            prev_target = _line_target(out[-1])
-            prev_label = _LINE_LABEL_RE.match(prev_text)
-            next_target = next_targets[idx]
-            if (
-                prev_text
-                and prev_target is not None
-                and next_target is not None
-                and int(next_target) >= int(prev_target)
-                and (target is None or int(target) == int(prev_target))
-            ):
-                if prev_label:
-                    indent, label, tail = prev_label.groups()
-                    if tail and "{" in tail:
-                        out[-1] = _line_item(
-                            indent + label + "\t" + str(tail).rstrip() + "}",
-                            prev_target,
-                        )
-                        continue
-                else:
-                    out[-1] = _line_item(prev_text.rstrip() + "}", prev_target)
-                    continue
-        if out and text and target is not None and target == _line_target(out[-1]):
-            prev_text = _line_text(out[-1])
-            prev_label = _LINE_LABEL_RE.match(prev_text)
-            cur_label = _LINE_LABEL_RE.match(text)
-            if prev_text and prev_label and (not cur_label):
-                indent, label, tail = prev_label.groups()
-                merged_tail = _join_inline_sentences(
-                    [tail, text.lstrip()] if tail else [text.lstrip()]
-                )
-                if merged_tail:
-                    out[-1] = _line_item(indent + label + "\t" + merged_tail, target)
-                    continue
-            if prev_text:
-                prev_indent = re.match(r"^\s*", prev_text).group(0)
-                merged = prev_indent + _join_inline_sentences(
-                    [prev_text[len(prev_indent) :], text.lstrip()]
-                )
-                out[-1] = _line_item(merged, target)
-                continue
-        out.append(_line_item(text, target))
+            and target is not None
+            and target == previous_target
+        )
+        if not (attached or same_target):
+            if parts:
+                out.append(_line_item("".join(parts), previous_target))
+            parts = [text]
+            previous_target = int(target) if target is not None else None
+            set_label(text)
+            trimmed = False
+            has_body = bool(stripped)
+            continue
+        was_label = is_label
+        if not trimmed:
+            if has_body or attached:
+                parts[0] = parts[0].rstrip()
+                set_label(parts[0])
+            trimmed = True
+        elif attached and not has_body:
+            parts[0] = ""
+        if was_label and not attached and base_label and not _LINE_LABEL_RE.match(text):
+            tail = base_label.group(3)
+            if tail:
+                parts[0] = parts[0][: base_label.start(3)] + tail.lstrip()
+            base_label = None
+        if not stripped:
+            continue
+        if not has_body:
+            parts[0] += stripped
+            has_body = True
+            set_label(parts[0])
+        else:
+            parts.append(stripped if attached else "\t" + stripped)
+            if is_label:
+                is_label = (has_label_tail or not attached) and "\n" not in stripped
+                has_label_tail = True
+                label_has_brace |= "{" in stripped
+    if parts:
+        out.append(_line_item("".join(parts), previous_target))
     return out
 
 
@@ -807,6 +826,11 @@ def build_decompile_hints(bundles, status):
             "arg_layout": _copy_arg_layout(info["arg_layout"]),
         }
     hints["global_commands"] = {**seed["global_commands"], **out}
+    blockers = set(_system_symbolic_string_blockers(C.CONST_PROFILE))
+    for declarations in (hints["global_commands"], hints["global_properties"]):
+        for info in declarations.values():
+            _add_symbolic_string_blocker(blockers, info["name"])
+    hints["global_symbolic_string_blockers"] = blockers
     hints["name_macros"] = _build_name_macros(name_texts)
     hints["inc_lines"] = _support_inc_lines_from_hints(hints)
     hints["scene_analysis"] = scene_analysis
@@ -856,7 +880,9 @@ class _Decompiler:
             for info in self.local_command_by_ofs.values()
             if info["cmd_id"] >= 0
         }
-        self.symbolic_string_blockers = self._build_symbolic_string_blockers()
+        self.local_symbolic_string_blockers = (
+            self._build_local_symbolic_string_blockers()
+        )
         self._annotate_event_fields()
         self.event_lines = [ev["line"] for ev in self.events]
         self.event_targets = [ev.get("target_ofs") for ev in self.events]
@@ -929,8 +955,8 @@ class _Decompiler:
             out[idx] = next_idx
         return out
 
-    def _build_symbolic_string_blockers(self):
-        out = set(_system_symbolic_string_blockers(C.CONST_PROFILE))
+    def _build_local_symbolic_string_blockers(self):
+        out = set()
         for name in self.local_command_name_by_id.values():
             _add_symbolic_string_blocker(out, name)
         for name in self.meta.get("scn_cmd_names") or []:
@@ -939,16 +965,14 @@ class _Decompiler:
             _add_symbolic_string_blocker(out, name)
         for info in self.meta.get("scn_prop_defs") or []:
             _add_symbolic_string_blocker(out, info["name"])
-        for declarations in (self.global_command_hints, self.global_property_hints):
-            for info in declarations.values():
-                _add_symbolic_string_blocker(out, info["name"])
         return out
 
     def _string_literal_expr(self, text):
         if (
             not self.preserve_string_pool
             and _SYMBOLIC_STR_RE.fullmatch(text)
-            and text not in self.symbolic_string_blockers
+            and text not in self.local_symbolic_string_blockers
+            and text not in self.hints["global_symbolic_string_blockers"]
         ):
             return text
         return quote_ss_text(text)
@@ -984,6 +1008,7 @@ class _Decompiler:
             global_command_defs=self.global_command_hints,
             global_command_count=self.global_command_count,
             scene_command_names=self.local_command_name_by_id,
+            global_elements=self.bundle["pack_context"].get("_global_elements"),
         )
 
         def _append_member_expr(base, parent_form, info, idx, items):
