@@ -2637,17 +2637,18 @@ struct ItemFormatter {
     with_code: bool,
 }
 impl ItemFormatter {
-    fn item(&self, item: &StackValue, expect: Option<i64>) -> SourceText {
+    fn item(&self, item: &StackValue, expect: Option<i64>) -> ExpressionText {
         if let Some(expr) = &item.expr
             && expr.len() != 0
         {
-            return expr.source();
+            return expr.clone();
         }
         if expect == Some(self.tables.label) {
             return item
                 .value
                 .map(|value| source(&format!("L{value}")))
-                .unwrap_or_else(|| source("label(?)"));
+                .unwrap_or_else(|| source("label(?)"))
+                .into();
         }
         if item.form == Some(self.tables.string) {
             return item
@@ -2662,7 +2663,8 @@ impl ItemFormatter {
                     item.value
                         .map(|value| source(&format!("$str[{value}]")))
                         .unwrap_or_else(|| source("\"\""))
-                });
+                })
+                .into();
         }
         if item.form == Some(self.tables.int) || item.form == Some(self.tables.label) {
             return source(
@@ -2676,9 +2678,10 @@ impl ItemFormatter {
                         }
                     })
                     .unwrap_or_else(|| "0".into()),
-            );
+            )
+            .into();
         }
-        self.tables.format_form(item.form, self.with_code)
+        self.tables.format_form(item.form, self.with_code).into()
     }
 }
 
@@ -2730,6 +2733,9 @@ impl ExpressionText {
         Text::shared(chars)
     }
     fn join(parts: Vec<Self>) -> Self {
+        if let [part] = parts.as_slice() {
+            return part.clone();
+        }
         let length = parts.iter().map(Self::len).sum();
         if length <= 128 {
             let mut chars = Vec::with_capacity(length);
@@ -2740,6 +2746,20 @@ impl ExpressionText {
         } else {
             Self::Joined(Arc::new(ExpressionParts { parts, length }))
         }
+    }
+    fn delimited(
+        mut parts: Vec<Self>,
+        values: impl IntoIterator<Item = Self>,
+        suffix: &str,
+    ) -> Self {
+        for (index, value) in values.into_iter().enumerate() {
+            if index != 0 {
+                parts.push(source(", ").into());
+            }
+            parts.push(value);
+        }
+        parts.push(source(suffix).into());
+        Self::join(parts)
     }
 }
 
@@ -2818,7 +2838,7 @@ struct Annotation {
     expr: Option<ExpressionText>,
     condition: Option<SourceText>,
     size_expr: Option<SourceText>,
-    arguments: Vec<SourceText>,
+    arguments: Vec<ExpressionText>,
     size: Option<i64>,
 }
 
@@ -2844,12 +2864,7 @@ impl ExpressionState {
     fn scalar_expression(&self, index: usize, form: i64) -> ExpressionText {
         self.stack
             .get(index)
-            .map(|item| {
-                item.expr
-                    .clone()
-                    .filter(|expr| expr.len() != 0)
-                    .unwrap_or_else(|| self.formatter.item(item, Some(form)).into())
-            })
+            .map(|item| self.formatter.item(item, Some(form)))
             .unwrap_or_else(|| source("<?>").into())
     }
     fn push(
@@ -2909,12 +2924,12 @@ impl ExpressionState {
             self.consume_element();
         }
     }
-    fn collapse(&mut self, start: usize, form: Option<i64>, expr: Option<SourceText>) {
+    fn collapse(&mut self, start: usize, form: Option<i64>, expr: Option<ExpressionText>) {
         self.drop_tail(start);
         if form.is_none() {
-            self.push(None, None, Some(false), expr.map(ExpressionText::from));
+            self.push(None, None, Some(false), expr);
         } else if form != Some(self.tables.void) {
-            self.push(form, None, None, expr.map(ExpressionText::from));
+            self.push(form, None, None, expr);
         }
     }
     fn int_value(&self, item: &StackValue) -> Option<i64> {
@@ -3168,25 +3183,25 @@ impl ExpressionState {
         }
     }
 
-    fn render_path(&self, items: &[StackValue], path: &ResolvedPath) -> Option<SourceText> {
+    fn render_path(&self, items: &[StackValue], path: &ResolvedPath) -> Option<ExpressionText> {
         let mut parent = self.tables.global;
         let mut index = 0;
-        let mut base = empty_source();
-        let mut suffix = Vec::new();
+        let mut parts = Vec::new();
         while index < items.len() {
             let item = &items[index];
             let code = self.int_value(item);
             if code.is_none() {
                 parent = item.form?;
-                base = self.formatter.item(item, None);
-                suffix.clear();
+                let base = self.formatter.item(item, None);
+                parts.clear();
+                if base.len() != 0 {
+                    parts.push(base);
+                }
                 index += 1;
             } else if code == Some(self.tables.array) {
                 parent = *self.tables.array_returns.get(&parent)?;
                 let arg = self.formatter.item(items.get(index + 1)?, None);
-                suffix.push(91);
-                suffix.extend_from_slice(&arg.chars);
-                suffix.push(93);
+                parts.extend([source("[").into(), arg, source("]").into()]);
                 index += 2;
             } else {
                 let info = path.path.get(index)?.as_ref()?;
@@ -3203,43 +3218,41 @@ impl ExpressionState {
                 } else {
                     name
                 };
-                if !base.chars.is_empty() || !suffix.is_empty() {
-                    if !name.chars.is_empty() {
-                        suffix.push(46);
-                        suffix.extend_from_slice(&name.chars);
-                    }
-                } else if !self.qualified_root
+                let skip_root = !self.qualified_root
                     && index == 0
                     && items.len() > 1
                     && parent == self.tables.global
-                    && info.ret == Some(self.tables.call)
-                {
-                    base = empty_source();
-                } else if !name.chars.is_empty() && !self.qualified_root {
-                    base = name;
-                } else {
-                    base = info.qualified.clone();
+                    && info.ret == Some(self.tables.call);
+                if !parts.is_empty() {
+                    if !name.chars.is_empty() {
+                        parts.extend([source(".").into(), name.into()]);
+                    }
+                } else if !skip_root {
+                    let base = if !name.chars.is_empty() && !self.qualified_root {
+                        name
+                    } else {
+                        info.qualified.clone()
+                    };
+                    if !base.chars.is_empty() {
+                        parts.push(base.into());
+                    }
                 }
                 parent = info.ret.unwrap_or(self.tables.global);
                 index += 1;
             }
         }
-        let base = if suffix.is_empty() {
-            base
-        } else {
-            source_concat(&[&base.chars, &suffix])
-        };
-        Some(if base.chars.is_empty() {
+        Some(if parts.is_empty() {
             source(if path.info.is_some() {
                 "<?command>"
             } else {
                 "<?property>"
             })
+            .into()
         } else {
-            base
+            ExpressionText::join(parts)
         })
     }
-    fn peek_expressions(&self, args: &[Argument]) -> Vec<SourceText> {
+    fn peek_expressions(&self, args: &[Argument]) -> Vec<ExpressionText> {
         let mut cursor = StackCursor {
             end: self.stack.len(),
             points: self.points.len(),
@@ -3252,12 +3265,9 @@ impl ExpressionState {
         values
     }
 
-    fn peek_expression(&mut self, form: i64) -> SourceText {
+    fn peek_expression(&self, form: i64) -> ExpressionText {
         if self.tables.scalar.contains(&form) {
-            self.stack
-                .last()
-                .map(|item| self.formatter.item(item, Some(form)))
-                .unwrap_or_else(|| source("<?>"))
+            self.scalar_expression(self.stack.len().wrapping_sub(1), form)
         } else {
             self.peek_expressions(&[Argument { form, sub: vec![] }])
                 .remove(0)
@@ -3322,12 +3332,12 @@ impl ExpressionState {
             }
         }
     }
-    fn expression_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> SourceText {
+    fn expression_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> ExpressionText {
         if arg.form != self.tables.list {
             return if self.tables.scalar.contains(&arg.form) {
                 self.scalar_cursor(cursor)
                     .map(|item| self.formatter.item(item, Some(arg.form)))
-                    .unwrap_or_else(|| source("<?>"))
+                    .unwrap_or_else(|| source("<?>").into())
             } else {
                 self.element_expression_cursor(cursor)
             };
@@ -3339,11 +3349,11 @@ impl ExpressionState {
                 if visited {
                     let mut parts = values.split_off(values.len() - arg.sub.len());
                     parts.reverse();
-                    values.push(source_concat(&[
-                        &[91],
-                        &source_join(&parts, ", ").chars,
-                        &[93],
-                    ]));
+                    values.push(ExpressionText::delimited(
+                        vec![source("[").into()],
+                        parts,
+                        "]",
+                    ));
                 } else {
                     pending.push((arg, true));
                     pending.extend(arg.sub.iter().map(|arg| (arg, false)));
@@ -3352,7 +3362,7 @@ impl ExpressionState {
                 values.push(
                     self.scalar_cursor(cursor)
                         .map(|item| self.formatter.item(item, Some(arg.form)))
-                        .unwrap_or_else(|| source("<?>")),
+                        .unwrap_or_else(|| source("<?>").into()),
                 );
             } else {
                 values.push(self.element_expression_cursor(cursor));
@@ -3361,7 +3371,7 @@ impl ExpressionState {
         values.pop().unwrap()
     }
 
-    fn element_expression_cursor(&self, cursor: &mut StackCursor) -> SourceText {
+    fn element_expression_cursor(&self, cursor: &mut StackCursor) -> ExpressionText {
         let (start, end) = self.element_cursor(cursor);
         let items = &self.stack[start..end];
         let resolved = self.scan_path(items, 0, self.tables.global, None);
@@ -3369,7 +3379,7 @@ impl ExpressionState {
             .as_ref()
             .and_then(|path| self.render_path(items, path))
             .or_else(|| items.last().map(|item| self.formatter.item(item, None)))
-            .unwrap_or_else(|| source("<?>"))
+            .unwrap_or_else(|| source("<?>").into())
     }
 
     fn scalar_value_cursor(&self, arg: &Argument, cursor: &mut StackCursor) -> V {
@@ -3432,7 +3442,7 @@ impl ExpressionState {
                     .is_some_and(|form| self.tables.scalar.contains(&form))
                 {
                     if self.render {
-                        out.expr = Some(self.peek_expression(event.form.unwrap()).into());
+                        out.expr = Some(self.peek_expression(event.form.unwrap()));
                     }
                     self.pop();
                 }
@@ -3471,7 +3481,7 @@ impl ExpressionState {
                             .get(start)
                             .and_then(|item| self.tables.receiver_value(item.form))
                     });
-                    out.expr = expr.clone().map(ExpressionText::from);
+                    out.expr = expr.clone();
                     self.collapse(start, form, expr);
                 } else {
                     self.pop();
@@ -3503,7 +3513,7 @@ impl ExpressionState {
                 if form == self.tables.int_list || form == self.tables.string_list {
                     out.size = self.stack.last().and_then(|item| self.int_value(item));
                     if self.render {
-                        out.size_expr = Some(self.peek_expression(self.tables.int));
+                        out.size_expr = Some(self.peek_expression(self.tables.int).source());
                     }
                     self.pop();
                 }
@@ -3515,7 +3525,7 @@ impl ExpressionState {
             }
             Opcode::GotoTrue | Opcode::GotoFalse => {
                 if self.render && !self.stack.is_empty() {
-                    out.condition = Some(self.peek_expression(self.tables.int));
+                    out.condition = Some(self.peek_expression(self.tables.int).source());
                 }
                 self.pop();
             }
@@ -3524,7 +3534,7 @@ impl ExpressionState {
                     out.arguments = self.peek_expressions(&event.args);
                 }
                 if event.op == Opcode::Return {
-                    out.expr = out.arguments.first().cloned().map(ExpressionText::from);
+                    out.expr = out.arguments.first().cloned();
                 } else if self.render && self.gosub_expressions {
                     let keyword = if event.op == Opcode::Gosub {
                         "gosub"
@@ -3532,16 +3542,15 @@ impl ExpressionState {
                         "gosubstr"
                     };
                     let label = event.label.unwrap_or(0);
-                    out.expr = Some(ExpressionText::from(if out.arguments.is_empty() {
-                        source(&format!("{keyword} L{label}"))
+                    out.expr = Some(if out.arguments.is_empty() {
+                        source(&format!("{keyword} L{label}")).into()
                     } else {
-                        let args = source_join(&out.arguments, ", ");
-                        source_concat(&[
-                            &source(&format!("{keyword}(")).chars,
-                            &args.chars,
-                            &source(&format!(") L{label}")).chars,
-                        ])
-                    }));
+                        ExpressionText::delimited(
+                            vec![source(&format!("{keyword}(")).into()],
+                            out.arguments.iter().cloned(),
+                            &format!(") L{label}"),
+                        )
+                    });
                 }
                 for arg in event.args.iter().rev() {
                     self.consume_argument(arg);
@@ -3576,11 +3585,11 @@ impl ExpressionState {
                         &mut cursor,
                     );
                     let left = self.element_expression_cursor(&mut cursor);
-                    out.expr = Some(ExpressionText::from(source_concat(&[
-                        &left.chars,
-                        &source(" = ").chars,
-                        &right.chars,
-                    ])));
+                    out.expr = Some(ExpressionText::join(vec![
+                        left,
+                        source(" = ").into(),
+                        right,
+                    ]));
                 }
                 if let Some(start) = self.points.last().copied() {
                     self.drop_tail(start);
@@ -3592,11 +3601,7 @@ impl ExpressionState {
                 let form = event.form.unwrap_or(self.tables.int);
                 let operator = event.operator.unwrap_or(0);
                 let rhs = if self.render {
-                    Some(if self.tables.scalar.contains(&form) {
-                        self.scalar_expression(self.stack.len().wrapping_sub(1), form)
-                    } else {
-                        self.peek_expression(form).into()
-                    })
+                    Some(self.peek_expression(form))
                 } else {
                     None
                 };
@@ -3644,7 +3649,7 @@ impl ExpressionState {
                                 sub: vec![],
                             },
                         ]);
-                        [args[0].clone().into(), args[1].clone().into()]
+                        [args[0].clone(), args[1].clone()]
                     };
                     self.tables.binary.get(&operator).map(|op| {
                         ExpressionText::join(vec![
@@ -3707,7 +3712,7 @@ impl ExpressionState {
                         .as_ref()
                         .and_then(|path| self.render_path(&self.stack[path.start..path.end], path));
                     if self.command_fallback
-                        && name.as_ref().is_none_or(|name| name.chars.is_empty())
+                        && name.as_ref().is_none_or(|name| name.len() == 0)
                         && let Some(code) = event.element_code
                         && let Some(fallback) = self
                             .resolver
@@ -3716,13 +3721,14 @@ impl ExpressionState {
                             .filter(|info| info.kind == self.tables.command_kind)
                     {
                         info = Some(fallback.clone());
-                        name = Some(if fallback.name.chars.is_empty() {
+                        let fallback_name = if fallback.name.chars.is_empty() {
                             fallback.qualified.clone()
                         } else {
                             fallback.name.clone()
-                        });
+                        };
+                        name = Some(fallback_name.into());
                     }
-                    if let Some(name) = name.filter(|name| !name.chars.is_empty()) {
+                    if let Some(name) = name.filter(|name| name.len() != 0) {
                         if let Some(info) = &info
                             && let Some(named) = info.arguments.get(&-1)
                             && let Some(start) = args.len().checked_sub(event.named.len())
@@ -3734,17 +3740,20 @@ impl ExpressionState {
                                     .find(|spec| spec.id == *id)
                                     .filter(|spec| !spec.name.chars.is_empty())
                                 {
-                                    args[start + index] = source_concat(&[
-                                        &spec.name.chars,
-                                        &[61],
-                                        &args[start + index].chars,
+                                    args[start + index] = ExpressionText::join(vec![
+                                        spec.name.clone().into(),
+                                        source("=").into(),
+                                        args[start + index].clone(),
                                     ]);
                                 }
                             }
                         }
-                        let args = source_join(&args, ", ");
-                        expr = Some(source_concat(&[&name.chars, &[40], &args.chars, &[41]]));
-                        out.expr = expr.clone().map(ExpressionText::from);
+                        expr = Some(ExpressionText::delimited(
+                            vec![name, source("(").into()],
+                            args,
+                            ")",
+                        ));
+                        out.expr = expr.clone();
                     }
                 }
                 if let Some(start) = command.start {
@@ -3755,7 +3764,7 @@ impl ExpressionState {
                     }
                     self.consume_element();
                     if event.ret != self.tables.void {
-                        self.push(Some(event.ret), None, None, expr.map(ExpressionText::from));
+                        self.push(Some(event.ret), None, None, expr);
                     }
                 }
             }
@@ -4169,7 +4178,7 @@ fn dump_instruction(
                     if index != 0 {
                         out.push_str(", ");
                     }
-                    append_dump_text::<false>(out, value)?;
+                    append_dump_text::<false>(out, &value.source())?;
                 }
                 out.push(')');
             }
@@ -4180,7 +4189,7 @@ fn dump_instruction(
             out.push_str("] ; expr=return");
             if let Some(value) = annotation.arguments.first() {
                 out.push_str(" (");
-                append_dump_text::<false>(out, value)?;
+                append_dump_text::<false>(out, &value.source())?;
                 out.push(')');
             }
         }

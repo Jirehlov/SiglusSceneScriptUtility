@@ -57,11 +57,7 @@ pub struct NativeLspProject {
 
 fn build_base_ia(constants: &CompileConstants) -> Result<IaData, String> {
     let codes = RuntimeCodes::from_constants(constants)?;
-    let data = IaData::new(
-        FormTable::from_constants(constants)?,
-        codes,
-        std::iter::empty::<String>(),
-    );
+    let data = IaData::new(FormTable::from_constants(constants)?, codes);
     Ok(data)
 }
 
@@ -411,10 +407,28 @@ fn collect_definitions_node<'a>(
     }
 }
 
+struct SourceFiles<'a> {
+    scene: (&'a PyBackedStr, &'a [Vec<char>]),
+    includes: &'a [(PyBackedStr, Vec<Vec<char>>)],
+}
+
+impl<'a> SourceFiles<'a> {
+    fn get(&self, source_id: isize) -> Option<(&'a PyBackedStr, &'a [Vec<char>])> {
+        match source_id {
+            0 => Some(self.scene),
+            id if id > 0 => self
+                .includes
+                .get(id as usize - 1)
+                .map(|(path, lines)| (path, lines.as_slice())),
+            _ => None,
+        }
+    }
+}
+
 struct CollectOccurrencesInput<'a> {
     project: &'a NativeLspProject,
     lex: &'a LexResult,
-    source_files: &'a [(&'a PyBackedStr, &'a [Vec<char>])],
+    source_files: &'a SourceFiles<'a>,
     path_identity: &'a str,
     bindings: &'a HashMap<i32, super::ma::SourceBinding>,
     replace_uses: &'a [ReplaceUse],
@@ -438,7 +452,7 @@ fn collect_occurrences<'a>(
             unmapped_bindings.push(symbol_id);
             return;
         };
-        let Some((path, lines)) = input.source_files.get(token.source_id as usize) else {
+        let Some((path, lines)) = input.source_files.get(token.source_id) else {
             unmapped_bindings.push(symbol_id);
             return;
         };
@@ -604,11 +618,11 @@ fn collect_occurrences<'a>(
 fn add_inline_inc_definitions<'a>(
     document_symbols: &mut Vec<LspDefinition<'a>>,
     sidecar: &IncSidecar,
-    source_files: &[(&'a PyBackedStr, &[Vec<char>])],
+    source_files: &SourceFiles<'a>,
     path_identity: &str,
 ) {
     for decl in &sidecar.decls {
-        let Some((path, _)) = source_files.get(decl.source_id as usize) else {
+        let Some((path, _)) = source_files.get(decl.source_id) else {
             continue;
         };
         if decl.name.is_empty() {
@@ -776,13 +790,10 @@ pub fn lsp_scan_document(
         .split('\n')
         .map(|line| line.chars().collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    let mut source_files = vec![(path, source_lines.as_slice())];
-    source_files.extend(
-        project
-            .source_files
-            .iter()
-            .map(|(path, lines)| (path, lines.as_slice())),
-    );
+    let source_files = SourceFiles {
+        scene: (path, &source_lines),
+        includes: &project.source_files,
+    };
     add_inline_inc_definitions(
         &mut document_symbols,
         &scene_sidecar,
@@ -797,8 +808,7 @@ pub fn lsp_scan_document(
                 record.name.clone()
             };
             if let Some(token) = token_span_from_atom(&lex, atom, &name)
-                && let Some((source_path, source_lines)) =
-                    source_files.get(token.source_id as usize)
+                && let Some((source_path, source_lines)) = source_files.get(token.source_id)
                 && token_matches_text(source_lines, &token)
             {
                 record.path = source_path;

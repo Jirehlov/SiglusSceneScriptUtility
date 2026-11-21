@@ -36,7 +36,6 @@ from .common import (
     read_bytes,
     parse_i32_header,
     parse_i32_header_checked,
-    parse_code,
     is_named_filename,
     find_angou_dat,
     open_atomic_output,
@@ -446,10 +445,9 @@ def _pck_original_source_entries(blob, h, only_names=()):
         raise ValueError("original-source (OS) section is declared but missing")
     if pos + os_hsz > len(blob):
         raise ValueError("original-source (OS) header is truncated")
-    ctx = {"source_angou": C.SOURCE_ANGOU}
     view = memoryview(blob)
     try:
-        size_bytes, _ = source_angou_decrypt(view[pos : pos + os_hsz], ctx)
+        size_bytes, _ = source_angou_decrypt(view[pos : pos + os_hsz])
     except (ValueError, RuntimeError, struct.error) as exc:
         raise ValueError(
             f"original-source (OS) header cannot be decoded: {exc}"
@@ -464,9 +462,7 @@ def _pck_original_source_entries(blob, h, only_names=()):
         raise ValueError("original-source (OS) data is truncated")
     for index, sz in enumerate(sizes):
         try:
-            raw, nm = source_angou_decrypt(
-                view[pos : pos + sz], ctx, only_names=only_names
-            )
+            raw, nm = source_angou_decrypt(view[pos : pos + sz], only_names=only_names)
         except (ValueError, RuntimeError, struct.error) as exc:
             raise ValueError(
                 f"original-source (OS) chunk {index:d} at {pos:#x} cannot be decoded: {exc}"
@@ -1816,21 +1812,13 @@ def _write_extracted_file(
             return path
 
 
-def source_angou_decrypt(enc: bytes | memoryview, ctx: dict, *, only_names=()):
-    sa = ctx.get("source_angou")
-    if not sa:
-        raise RuntimeError("source_angou: missing ctx.source_angou")
-    eg = parse_code(sa.get("easy_code"))
-    mg = parse_code(sa.get("mask_code"))
-    gg = parse_code(sa.get("gomi_code"))
-    lg = parse_code(sa.get("last_code"))
-    ng = parse_code(sa.get("name_code"))
-    hs = int(sa.get("header_size") or 0)
-    if not all([eg, mg, gg, lg, ng]) or hs < 72:
-        raise RuntimeError("source_angou: missing codes/params")
+def source_angou_decrypt(enc: bytes | memoryview, *, only_names=()):
+    sa = C.SOURCE_ANGOU
+    lg = sa["last_code"]
+    hs = sa["header_size"]
     if len(enc) < hs + 4:
         raise ValueError("source_angou: truncated header")
-    last_index = int(sa.get("last_index", 0))
+    last_index = sa["last_index"]
     dec = bytearray(enc[: hs + 4] if only_names else enc)
     xor_cycle_inplace(dec, lg, last_index)
     ver = struct.unpack_from("<I", dec, 0)[0]
@@ -1848,15 +1836,13 @@ def source_angou_decrypt(enc: bytes | memoryview, ctx: dict, *, only_names=()):
         xor_cycle_inplace(nameb, lg, last_index + p)
     else:
         nameb = dec[p : p + name_len]
-    xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
+    xor_cycle_inplace(nameb, sa["name_code"], sa["name_index"])
     name = nameb.decode("utf-16le", "surrogatepass")
     p += name_len
     lzsz = read_u32_le(smd5_code, 64, default=0)
     if lzsz > len(enc) - p or 0 < lzsz < 8:
         raise ValueError("source_angou: invalid compressed size")
-    mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
-        smd5_code, sa, mg, lzsz
-    )
+    mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(smd5_code, lzsz)
     if mapt * 2 > len(enc) - p:
         raise ValueError("source_angou: truncated payload")
     if mapt * 2 != len(enc) - p:
@@ -1871,9 +1857,9 @@ def source_angou_decrypt(enc: bytes | memoryview, ctx: dict, *, only_names=()):
     dp1 = bytes(dec_mv[p : p + mapt])
     dp2 = bytes(dec_mv[p + mapt : p + mapt * 2])
     lzb = bytearray(mapt * 2)
-    repx = int(sa.get("tile_repx", 0))
-    repy = int(sa.get("tile_repy", 0))
-    lim = int(sa.get("tile_limit", 0))
+    repx = sa["tile_repx"]
+    repy = sa["tile_repy"]
+    lim = sa["tile_limit"]
     lzb_mv = memoryview(lzb)
     sp1 = lzb_mv[0:mapt]
     sp2 = lzb_mv[bh : bh + mapt]
@@ -1887,7 +1873,7 @@ def source_angou_decrypt(enc: bytes | memoryview, ctx: dict, *, only_names=()):
         if smd5_digest(packed) != smd5_code[:16]:
             raise ValueError("source_angou: checksum mismatch for both source layouts")
     lz = bytearray(packed)
-    xor_cycle_inplace(lz, eg, int(sa.get("easy_index", 0)))
+    xor_cycle_inplace(lz, sa["easy_code"], sa["easy_index"])
     if lz and read_u32_le(lz, 0) != lzsz:
         raise ValueError("source_angou: compressed size does not match LZSS header")
     try:

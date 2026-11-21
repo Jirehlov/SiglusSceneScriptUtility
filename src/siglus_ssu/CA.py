@@ -50,7 +50,7 @@ def copy_replace_tree(rt):
 
 
 def add_replace_tree(rt, name, rep):
-    rt.pop("prefix_pattern", None)
+    rt.pop("prefix_scan", None)
     n = rt
     for ch in name:
         if isinstance(n, _ReplaceTreeCopy):
@@ -79,23 +79,62 @@ def build_replace_tree(replacements):
     return tree
 
 
-def _replacement_prefix_pattern(tree):
-    if not tree:
-        return "(?!)"
-    pattern = tree.get("prefix_pattern")
-    if pattern is not None:
-        return pattern
-    pending = [(tree, "")]
-    prefixes = []
-    while pending:
-        node, prefix = pending.pop()
-        if node["r"] is not None or len(prefix) == 3:
-            prefixes.append(re.escape(prefix))
+class _ReplacementScan:
+    __slots__ = ("search", "prefixes")
+
+    def __init__(self, tree):
+        pending = [(tree, "")]
+        prefixes = {"\0"}
+        while pending:
+            node, prefix = pending.pop()
+            if node["r"] is not None or len(prefix) == 3:
+                prefixes.add(prefix)
+            else:
+                pending.extend((child, prefix + ch) for ch, child in node["c"].items())
+        regex_limit = 32
+        if len(prefixes) <= regex_limit:
+            self.search = re.compile("|".join(map(re.escape, sorted(prefixes)))).search
+            self.prefixes = None
         else:
-            pending.extend((child, prefix + ch) for ch, child in node["c"].items())
-    pattern = "|".join(prefixes) if prefixes else "(?!)"
-    tree["prefix_pattern"] = pattern
-    return pattern
+            self.prefixes = tuple(
+                {prefix for prefix in prefixes if len(prefix) == size}
+                for size in (1, 2, 3)
+            )
+            leads = tree["c"].keys() | {"\0"}
+            self.search = (
+                re.compile("[" + re.escape("".join(sorted(leads))) + "]").search
+                if len(leads) <= regex_limit
+                else None
+            )
+
+    def find(self, value, start, end):
+        search = self.search
+        if self.prefixes is None:
+            match = search(value, start, end)
+            return match.start() if match else end
+        single, double, triple = self.prefixes
+        limit = end - 2
+        while start < limit:
+            if search is not None:
+                match = search(value, start, limit)
+                if match is None:
+                    break
+                start = match.start()
+            if (
+                value[start] in single
+                or value[start : start + 2] in double
+                or value[start : start + 3] in triple
+            ):
+                return start
+            start += 1
+        return end
+
+
+def _replacement_scan(tree):
+    scan = tree.get("prefix_scan")
+    if scan is None:
+        scan = tree["prefix_scan"] = _ReplacementScan(tree)
+    return scan
 
 
 def search_replace_tree(rt, text):
@@ -700,11 +739,9 @@ class CharacterAnalizer:
         rest_min = len(text)
         stops = self._replacement_stops
         local_stops = (
-            re.compile(_replacement_prefix_pattern(added_rt))
-            if added_rt and added_rt["c"]
-            else None
+            _replacement_scan(added_rt) if added_rt and added_rt["c"] else None
         )
-        patterns = (stops, local_stops)
+        scans = (stops, local_stops)
         piece_stops = {}
         while text[0] != "\0":
             consumed = 0
@@ -712,8 +749,7 @@ class CharacterAnalizer:
                 piece = len(text.pieces) - 1
                 value, start, end = text.pieces[piece]
                 if local_stops is None:
-                    match = stops.search(value, start, end)
-                    stop = match.start() if match else end
+                    stop = stops.find(value, start, end)
                 else:
                     entry = piece_stops.get(piece)
                     if (
@@ -725,10 +761,9 @@ class CharacterAnalizer:
                         positions = entry[3]
                     else:
                         positions = [-1, -1]
-                    for index, pattern in enumerate(patterns):
+                    for index, scan in enumerate(scans):
                         if positions[index] < start:
-                            match = pattern.search(value, start, end)
-                            positions[index] = match.start() if match else end
+                            positions[index] = scan.find(value, start, end)
                     piece_stops[piece] = (value, start, end, positions)
                     stop = min(positions)
                 consumed = max(0, min(stop, end - 2) - start)
@@ -819,14 +854,14 @@ class CharacterAnalizer:
         loop = 0
         rest_min = len(t)
         tree = self.iad["replace_tree"]
-        stops = re.compile("\0|" + _replacement_prefix_pattern(tree))
+        stops = _replacement_scan(tree)
         self._replacement_stops = stops
         while t[0] != "\0":
             consumed = 0
             if len(t) <= rest_min:
                 value, start, end = t.pieces[-1]
-                match = stops.search(value, start, end)
-                consumed = max(0, min(match.start() if match else end, end - 2) - start)
+                stop = stops.find(value, start, end)
+                consumed = max(0, min(stop, end - 2) - start)
                 if consumed:
                     self.m_line += value.count("\n", start, start + consumed)
             if not consumed:

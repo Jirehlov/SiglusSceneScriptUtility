@@ -500,7 +500,8 @@ def _scan_bundle_calls(bundle, scene_root: str):
             inline_name = str(inline.get("name") or "")
             inline_text = str(inline.get("text") or "")
             ref_names = [names[0] if names else inline_name]
-            ref_names.extend(name for name in names[1:] if name in aliases)
+            if aliases:
+                ref_names.extend(name for name in names[1:] if name in aliases)
             ref_text = text or inline_text
             callsite = f"{rel}:{line_no}" if line_no is not None else rel
             refs.append([koe_no, ref_names, ref_text, callsite])

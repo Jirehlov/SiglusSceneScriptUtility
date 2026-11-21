@@ -457,6 +457,8 @@ Counts are dialogue units, not a universal linguistic word count:
 - Internal apostrophes, hyphens, and underscores join word runs. Internal `.`, `,`, `/`, `:`, and fullwidth equivalents join numeric runs when surrounded by decimal digits.
 - Punctuation, whitespace, emoji, and other symbols add no units.
 
+The counter evaluates `print` text built from string literals by concatenation or repetition. Repeat counts can use integer literals, unary signs, and integer addition, subtraction, and multiplication.
+
 | CSV column | Meaning |
 |---|---|
 | `type` | `dat` or `ss`. |

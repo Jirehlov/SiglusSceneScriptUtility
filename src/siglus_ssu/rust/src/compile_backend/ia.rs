@@ -110,14 +110,10 @@ pub struct IncAnalyzer<const TRACK_USAGE: bool = true> {
 }
 
 impl IaData {
-    pub fn new(
-        form_table: FormTable,
-        codes: Arc<RuntimeCodes>,
-        defined_names: impl IntoIterator<Item = String>,
-    ) -> Self {
+    pub fn new(form_table: FormTable, codes: Arc<RuntimeCodes>) -> Self {
         Self {
             replace_tree: ReplaceTree::default(),
-            name_set: Arc::new(defined_names.into_iter().collect()),
+            name_set: Arc::default(),
             global_name_set: None,
             macro_defs: Arc::default(),
             used_macros: HashSet::new(),

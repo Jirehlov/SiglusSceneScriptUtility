@@ -422,10 +422,9 @@ def parallel_lzss_compress(
     return (dat_list, lzss_list)
 
 
-def parallel_source_encrypt(ctx, sources):
+def parallel_source_encrypt(sources):
     from .compiler import source_angou_encrypt
 
-    source_ctx = {"source_angou": ctx["source_angou"]}
     workers = min(get_max_workers(None), len(sources))
     print(
         f"[PARALLEL] Encrypting {len(sources)} source files with {workers} workers..."
@@ -443,7 +442,7 @@ def parallel_source_encrypt(ctx, sources):
     chunks = [b""] * len(sources)
     with executor_context as executor:
         futures = {
-            executor.submit(source_angou_encrypt, raw, name, source_ctx): index
+            executor.submit(source_angou_encrypt, raw, name): index
             for index, (name, raw) in enumerate(sources)
         }
         for future in as_completed(futures):

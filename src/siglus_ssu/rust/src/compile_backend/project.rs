@@ -180,7 +180,6 @@ pub struct ReadFlagStats {
 
 #[derive(Default)]
 pub struct SourceStats {
-    pub scene_count: usize,
     pub preprocess: BTreeMap<&'static str, usize>,
     pub inc: BTreeMap<&'static str, usize>,
     pub directives: BTreeMap<&'static str, usize>,
@@ -576,7 +575,6 @@ fn collect_macro_stats(
 }
 
 fn merge_source_stats(dst: &mut SourceStats, src: SourceStats) {
-    dst.scene_count += src.scene_count;
     for (key, value) in src.preprocess {
         if key == "max_ifdef_depth" {
             max_counter(&mut dst.preprocess, key, value);
@@ -600,7 +598,7 @@ fn merge_source_stats(dst: &mut SourceStats, src: SourceStats) {
     for (key, value) in src.labels {
         inc_counter(&mut dst.labels, key, value);
     }
-    for key in ["unary_ops", "binary_ops", "named_args", "default_arg_fills"] {
+    for key in ["named_args", "default_arg_fills"] {
         inc_counter(
             &mut dst.expressions,
             key,
@@ -631,26 +629,10 @@ fn merge_source_stats(dst: &mut SourceStats, src: SourceStats) {
 fn finalize_source_stats(stats: &mut SourceStats, ia_data: &IaData) {
     let global_props = ia_data.inc_property_cnt.max(0) as usize;
     let global_cmds = ia_data.inc_command_cnt.max(0) as usize;
-    let scene_props = stats
-        .directives
-        .get("scene_inc_properties")
-        .copied()
-        .unwrap_or_default();
-    let scene_cmds = stats
-        .directives
-        .get("scene_inc_commands")
-        .copied()
-        .unwrap_or_default();
     stats
         .directives
         .insert("global_inc_properties", global_props);
     stats.directives.insert("global_inc_commands", global_cmds);
-    stats
-        .directives
-        .insert("property_directives_total", global_props + scene_props);
-    stats
-        .directives
-        .insert("command_directives_total", global_cmds + scene_cmds);
     stats.strings.insert("unique", stats.unique_strings.len());
     stats
         .strings
@@ -742,11 +724,9 @@ fn visit_statement_stats(
                 }
             }
             AstPayload::Label { .. } => {
-                inc_counter(&mut stats.statements, "label", 1);
                 *ctx.label_def_count += 1;
             }
             AstPayload::ZLabel { z_index, .. } => {
-                inc_counter(&mut stats.statements, "z_label", 1);
                 ctx.z_defs.insert(*z_index as i32);
             }
             AstPayload::DefProperty { .. } => {
@@ -755,8 +735,6 @@ fn visit_statement_stats(
             AstPayload::DefCommand {
                 command_id, body, ..
             } => {
-                inc_counter(&mut stats.statements, "command_def", 1);
-                inc_counter(&mut stats.directives, "command_definitions", 1);
                 if *command_id >= 0 && *command_id < ctx.inc_command_cnt {
                     inc_counter(&mut stats.directives, "global_command_implementations", 1);
                 } else {
@@ -822,14 +800,11 @@ fn visit_statement_stats(
                     }
                 }
             }
-            AstPayload::Assign { .. } => inc_counter(&mut stats.statements, "assign", 1),
             AstPayload::Command { .. } => inc_counter(&mut stats.statements, "command_call", 1),
             AstPayload::Text { .. } => {
-                inc_counter(&mut stats.statements, "text", 1);
                 inc_counter(&mut stats.strings, "dialogue_text_lines", 1);
             }
             AstPayload::Name { string_index } => {
-                inc_counter(&mut stats.statements, "name", 1);
                 inc_counter(&mut stats.strings, "speaker_names", 1);
                 if let Some(name) = ctx
                     .strings
@@ -839,7 +814,6 @@ fn visit_statement_stats(
                     stats.unique_speakers.insert(name.clone());
                 }
             }
-            AstPayload::Eof => inc_counter(&mut stats.statements, "eof", 1),
             _ => {}
         }
         pending.extend(children.drain(..).rev());
@@ -865,7 +839,6 @@ fn visit_expression_stats(
                 }
             }
             AstPayload::Unary { operators, .. } => {
-                inc_counter(&mut stats.expressions, "unary_ops", operators.len());
                 for (operator, _) in operators {
                     inc_operator_counter::<false>(
                         &mut stats.unary_op_kinds,
@@ -876,7 +849,6 @@ fn visit_expression_stats(
                 }
             }
             AstPayload::Binary { operator, .. } => {
-                inc_counter(&mut stats.expressions, "binary_ops", 1);
                 inc_operator_counter::<false>(&mut stats.binary_op_kinds, codes, *operator, false);
             }
             AstPayload::Goto { target, args, .. } => {
@@ -933,10 +905,7 @@ fn visit_expression_stats(
 }
 
 fn collect_scene_source_stats(input: SceneSourceInputs<'_>) -> SourceStats {
-    let mut stats = SourceStats {
-        scene_count: 1,
-        ..SourceStats::default()
-    };
+    let mut stats = SourceStats::default();
     for (key, value) in [
         ("ifdef", input.preprocess.ifdef),
         ("elseifdef", input.preprocess.elseifdef),
@@ -1185,11 +1154,7 @@ fn build_global_ia<const FULL_STATS: bool>(
     log: &mut OutputLog<'_>,
 ) -> Result<IaData, String> {
     let codes = RuntimeCodes::from_constants(&config.constants)?;
-    let mut data = IaData::new(
-        FormTable::from_constants(&config.constants)?,
-        codes,
-        std::iter::empty::<String>(),
-    );
+    let mut data = IaData::new(FormTable::from_constants(&config.constants)?, codes);
     let base = Path::new(&config.input_dir);
     let mut scratch_list = Vec::new();
     for name in &config.context.inc_list {

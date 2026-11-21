@@ -22,7 +22,6 @@ from .common import (
     merge_macro_stat_counts,
     record_stage_time,
     set_stage_time,
-    write_u16_le,
     write_i32_le,
     write_i32_le_array,
     read_compile_source,
@@ -640,7 +639,7 @@ def build_scn_dat(plad, out_scn):
     for orig in order:
         k = scene_string_xor_key(orig)
         for w in u16_map[orig]:
-            write_u16_le(b, (w ^ k) & 0xFFFF)
+            b.extend(struct.pack("<H", w ^ k))
     scn = out_scn.get("scn_bytes") or b""
     sec("scn_ofs", "scn_size", len(b), len(scn))
     b.extend(scn)

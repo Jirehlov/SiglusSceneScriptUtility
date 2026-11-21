@@ -7,6 +7,7 @@ from . import const as C
 from .common import (
     format_arg_layout,
     append_element_member,
+    delimited_expression,
     new_expression_item_formatter,
     int_or_none as _int_or_none,
     iterative_method,
@@ -954,7 +955,7 @@ class _Decompiler:
             label_id = event["label_id"]
             keyword = "gosub" if event["op"] == "CD_GOSUB" else "gosubstr"
             return (
-                f"{keyword}({', '.join(args)}) L{label_id:d}"
+                delimited_expression((f"{keyword}(",), args, f") L{label_id:d}")
                 if args
                 else f"{keyword} L{label_id:d}"
             )

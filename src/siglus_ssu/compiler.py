@@ -53,7 +53,6 @@ from .common import (
     angou_to_exe_el,
     StagedOutputs,
     write_bytes,
-    parse_code,
     KEY_TXT_NAME,
     SCENE_SCRIPT_ID_PREFIX,
     MACRO_STAT_KINDS,
@@ -139,39 +138,13 @@ def _load_compile_keys(
     return None, exe_el, sources
 
 
-def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
-    sa = ctx.get("source_angou")
-    if not sa:
-        raise ValueError(
-            "source_angou_encrypt requires ctx['source_angou'] (dict with codes and header_size)"
-        )
-    eg = parse_code(sa.get("easy_code"))
-    mg = parse_code(sa.get("mask_code"))
-    gg = parse_code(sa.get("gomi_code"))
-    lg = parse_code(sa.get("last_code"))
-    ng = parse_code(sa.get("name_code"))
-    missing_codes = [
-        n
-        for n, v in (
-            ("easy_code", eg),
-            ("mask_code", mg),
-            ("gomi_code", gg),
-            ("last_code", lg),
-            ("name_code", ng),
-        )
-        if not v
-    ]
-    if missing_codes:
-        raise ValueError(
-            "source_angou_encrypt: missing codes: " + ", ".join(missing_codes)
-        )
-    hs = sa.get("header_size")
-    if not hs:
-        raise ValueError("source_angou_encrypt: missing header_size")
+def source_angou_encrypt(data: bytes, name: str) -> bytes:
+    sa = C.SOURCE_ANGOU
+    hs = sa["header_size"]
     lz = lzss_pack(data)
     lzsz = len(lz)
     lzb = bytearray(lz)
-    xor_cycle_inplace(lzb, eg, int(sa.get("easy_index", 0)))
+    xor_cycle_inplace(lzb, sa["easy_code"], sa["easy_index"])
     lz = bytes(lzb)
     smd5 = smd5_digest(lz)
     smd5_code = bytearray(68)
@@ -179,15 +152,14 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     n0x40 = lzsz
     struct.pack_into("<I", smd5_code, 64, n0x40)
     nameb = bytearray((name or "").encode("utf-16le"))
-    xor_cycle_inplace(nameb, ng, int(sa.get("name_index", 0)))
-    mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(
-        smd5_code, sa, mg, lzsz
-    )
+    xor_cycle_inplace(nameb, sa["name_code"], sa["name_index"])
+    mw, mh, mask, mapw, maph, mapt, bh = build_source_angou_layout(smd5_code, lzsz)
     lzb.extend(bytearray(mapt * 2 - lzsz))
     cnt = len(lzb) - lzsz
     if cnt > 0:
-        ind = int(sa.get("gomi_index", 0))
-        mi = int(sa.get("gomi_md5_index", 0))
+        gg = sa["gomi_code"]
+        ind = sa["gomi_index"]
+        mi = sa["gomi_md5_index"]
         for i in range(cnt):
             gomi_smd5_ofs = (mi % 16) * 4
             lzb[lzsz + i] = gg[ind % len(gg)] ^ smd5_code[gomi_smd5_ofs]
@@ -205,9 +177,6 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
     dp2 = dp1 + mapt
     sp1 = 0
     sp2 = bh
-    repx = int(sa.get("tile_repx", 0))
-    repy = int(sa.get("tile_repy", 0))
-    lim = int(sa.get("tile_limit", 0))
     out_mv = memoryview(out)
     lzb_mv = memoryview(lzb)
     for dest, source, reverse in (
@@ -224,12 +193,12 @@ def source_angou_encrypt(data: bytes, name: str, ctx: dict) -> bytes:
             mask,
             mw,
             mh,
-            repx,
-            repy,
+            sa["tile_repx"],
+            sa["tile_repy"],
             reverse,
-            lim,
+            sa["tile_limit"],
         )
-    xor_cycle_inplace(out, lg, int(sa.get("last_index", 0)))
+    xor_cycle_inplace(out, sa["last_code"], sa["last_index"])
     return bytes(out)
 
 
@@ -1353,7 +1322,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "easy_link": bool(a.no_lzss),
         "easy_angou_code": C.EASY_ANGOU_CODE,
         "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
-        "source_angou": C.SOURCE_ANGOU,
         "stats": stats,
     }
     stats["angou_content"] = angou_content

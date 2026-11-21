@@ -242,7 +242,6 @@ impl DecompileFrontend {
         let mut data = ia::IaData::new(
             form_table::FormTable::from_constants(&self.constants)?,
             self.codes.clone(),
-            std::iter::empty::<String>(),
         );
         let mut analyzer =
             ia::IncAnalyzer::new(declarations, self.codes.forms.global.name.as_str());
@@ -428,7 +427,6 @@ fn set_extra_stats(
     }
     if let Some(source_stats) = &result.source_stats {
         let source = PyDict::new(py);
-        source.set_item("scene_count", source_stats.scene_count)?;
         source.set_item(
             "preprocess",
             usize_map_to_dict(py, &source_stats.preprocess)?,

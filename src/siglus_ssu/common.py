@@ -672,7 +672,7 @@ def _element_member_name(info):
 def append_element_member(base, info, *, qualified_root):
     name = _element_member_name(info)
     if base:
-        return f"{base}.{name}" if name else base
+        return _expression(base, ".", name) if name else base
     return name if name and not qualified_root else info["q"]
 
 
@@ -793,6 +793,16 @@ def _expression(*parts):
     if size <= 128:
         return "".join(map(str, parts))
     return _Expression(parts, size)
+
+
+def delimited_expression(prefix, values, suffix):
+    parts = list(prefix)
+    for index, value in enumerate(values):
+        if index:
+            parts.append(", ")
+        parts.append(value)
+    parts.append(suffix)
+    return _expression(*parts)
 
 
 def new_expression_item_formatter(*, str_list, string_literal, format_form):
@@ -1035,7 +1045,7 @@ def new_expression_state(
                 idx += 1
             elif code == C.ELM_ARRAY:
                 parent_form = array_result_form(parent_form)
-                base = f"{base}[{item_expr(items[idx + 1])}]"
+                base = _expression(base, "[", item_expr(items[idx + 1]), "]")
                 idx += 2
             else:
                 info = resolved["path"][idx]
@@ -1086,7 +1096,7 @@ def new_expression_state(
                 target.reverse()
                 pending.pop()
                 if pending and expressions:
-                    pending[-1][1][-1] = "[" + ", ".join(map(str, target)) + "]"
+                    pending[-1][1][-1] = delimited_expression(("[",), target, "]")
                 continue
             if arg_info["form"] == fm_list:
                 sub = []
@@ -1320,7 +1330,7 @@ def new_expression_state(
         cursor = SimpleNamespace(end=len(stack), point_count=len(elm_points))
         right = "[]" if right_form == fm_list else _cursor_arg(cursor, right_form)
         left = _cursor_element_expr(cursor)
-        return f"{left} = {right}"
+        return _expression(left, " = ", right)
 
     def _prepare_command(event, call_scope):
         arg_layout = event["arg_layout"]
@@ -1416,7 +1426,7 @@ def new_expression_state(
                     result["_expr"] = args[0]
             else:
                 expression = (
-                    gosub_expression(event, list(map(str, args)))
+                    gosub_expression(event, args)
                     if render_expressions and gosub_expression is not None
                     else None
                 )
@@ -1509,8 +1519,14 @@ def new_expression_state(
                 if command_expression is not None:
                     name, info = command_expression(event, name, info)
                 if name:
-                    result["_call_name"] = name
-                    expression = f"{name}({', '.join(format_named_command_args(info, args, event['named_ids']))})"
+                    named_ids = event["named_ids"]
+                    for idx, (arg_name, arg) in enumerate(
+                        iter_named_command_args(info, args, named_ids),
+                        len(args) - len(named_ids),
+                    ):
+                        if arg_name:
+                            args[idx] = _expression(arg_name, "=", arg)
+                    expression = delimited_expression((name, "("), args, ")")
                     result["_expr"] = expression
             stack_start = command["stack_start"]
             if stack_start is not None:
@@ -2696,25 +2712,6 @@ def iter_exe_el_sources(
                 yield src
 
 
-def parse_code(v):
-    if v is None:
-        return None
-    if isinstance(v, (bytes, bytearray)):
-        return bytes(v)
-    if isinstance(v, list):
-        return bytes(int(x) & 255 for x in v)
-    if isinstance(v, int):
-        return bytes([int(v) & 255])
-    if isinstance(v, str):
-        if v.startswith("@"):
-            return read_bytes(v[1:])
-        s = re.sub(r"[^0-9a-fA-F]", "", v)
-        if s and len(s) % 2 == 0:
-            return bytes.fromhex(s)
-        return v.encode("latin1", "ignore")
-    raise TypeError(f"Unsupported code type: {type(v).__name__}")
-
-
 def _scene_name_keys(file_path):
     name = os.path.basename(str(file_path or ""))
     if not name:
@@ -2833,10 +2830,6 @@ def read_i32_le(buf, off, *, strict: bool = False, default=None):
 def read_i32_le_advancing(buf, off):
     ok, v, off_i = _read_struct_le(_I32_LE, buf, off, strict=False, default=None)
     return v, (off_i + 4 if ok else off_i)
-
-
-def write_u16_le(out: bytearray, v) -> None:
-    out.extend(_U16_LE.pack(int(v) & 0xFFFF))
 
 
 def write_i32_le(out: bytearray, v) -> None:
@@ -3273,7 +3266,9 @@ def diff_kv(k, a, b):
     return f"{k}: {a!r} -> {b!r}"
 
 
-def build_source_angou_layout(smd5_code, sa, mask_code, lzsz):
+def build_source_angou_layout(smd5_code, lzsz):
+    sa = C.SOURCE_ANGOU
+    mask_code = sa["mask_code"]
     mw = (
         read_u32_le(smd5_code, int(sa["mask_w_md5_i"]), default=0)
         % int(sa["mask_w_sur"])
@@ -3283,8 +3278,8 @@ def build_source_angou_layout(smd5_code, sa, mask_code, lzsz):
         % int(sa["mask_h_sur"])
     ) + int(sa["mask_h_add"])
     mask = bytearray(mw * mh)
-    ind = int(sa.get("mask_index", 0))
-    mi = int(sa.get("mask_md5_index", 0))
+    ind = sa["mask_index"]
+    mi = sa["mask_md5_index"]
     mask_len = len(mask_code)
     for i in range(len(mask)):
         mask[i] = mask_code[ind % mask_len] ^ smd5_code[(mi % 16) * 4]
@@ -3310,16 +3305,6 @@ def iter_named_command_args(info, args, named_ids):
         return
     for value, nid in zip(args[pos_cnt:], reversed(named_ids)):
         yield name_by_id.get(nid), value
-
-
-def format_named_command_args(info, arg_exprs, named_ids):
-    args = [str(value) for value in arg_exprs]
-    for idx, (name, expr) in enumerate(
-        iter_named_command_args(info, args, named_ids), len(args) - len(named_ids)
-    ):
-        if name:
-            args[idx] = f"{name}={expr}"
-    return args
 
 
 def parse_mode_flag(argv, flags):

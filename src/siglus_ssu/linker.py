@@ -203,13 +203,13 @@ def _build_original_source_chunks(ctx):
     if len(sources) > 1:
         from .parallel import parallel_source_encrypt
 
-        chunks = parallel_source_encrypt(ctx, sources)
+        chunks = parallel_source_encrypt(sources)
     else:
         name, raw = sources[0]
         log_stage("OS", name, ctx)
-        chunks = [source_angou_encrypt(raw, name, ctx)]
+        chunks = [source_angou_encrypt(raw, name)]
     size_list = struct.pack(f"<{len(chunks)}I", *(len(chunk) for chunk in chunks))
-    header = source_angou_encrypt(size_list, "__DummyName__", ctx)
+    header = source_angou_encrypt(size_list, "__DummyName__")
     set_stage_time(ctx, "OS", time.time() - start)
     return len(header), [header, *chunks]
 

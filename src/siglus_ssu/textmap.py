@@ -30,6 +30,7 @@ from .common import (
     new_call_scope,
     new_expression_state,
     new_scene_element_resolver,
+    to_i32,
 )
 from .path_policy import open_read, resolve_read_path
 
@@ -255,37 +256,45 @@ def collect_dialogue_texts(text: str, iad_base):
     unknown_list = lad.get("unknown_list") or []
 
     def _constant_string(expression):
-        parts = []
-        pending = [expression]
+        values = []
+        pending = [(expression, False)]
         while pending:
-            node = pending.pop()
+            node, visited = pending.pop()
             if not isinstance(node, dict):
                 return None
             nt = node.get("node_type")
             if nt == C.NT_EXP_SIMPLE:
-                pending.append(node.get("smp_exp"))
+                pending.append((node.get("smp_exp"), False))
             elif nt == C.NT_SMP_KAKKO:
-                pending.append(node.get("exp"))
+                pending.append((node.get("exp"), False))
             elif nt == C.NT_SMP_LITERAL:
                 atom = (node.get("Literal") or {}).get("atom") or {}
                 opt = _int_value(atom.get("opt"))
                 if atom.get("type") == C.LA_T["VAL_INT"]:
-                    parts.append(str(atom["opt"]))
-                    continue
-                if atom.get("type") != C.LA_T["VAL_STR"] or not 0 <= opt < len(
-                    str_list
-                ):
+                    values.append(opt)
+                elif atom.get("type") == C.LA_T["VAL_STR"] and 0 <= opt < len(str_list):
+                    values.append(str_list[opt])
+                else:
                     return None
-                parts.append(str_list[opt])
-            elif (
-                nt == C.NT_EXP_OPR2
-                and node.get("node_form") == C.FM_STR
-                and ((node.get("opr") or {}).get("atom") or {}).get("opt") == C.OP_PLUS
-            ):
-                pending.extend((node.get("exp_2"), node.get("exp_1")))
+            elif nt in (C.NT_EXP_OPR1, C.NT_EXP_OPR2):
+                if not visited:
+                    pending.append((node, True))
+                    if nt == C.NT_EXP_OPR2:
+                        pending.append((node.get("exp_2"), False))
+                    pending.append((node.get("exp_1"), False))
+                    continue
+                opr = ((node.get("opr") or {}).get("atom") or {}).get("opt")
+                value = values.pop()
+                if nt == C.NT_EXP_OPR1:
+                    value = _constant_unary(opr, value)
+                else:
+                    value = _constant_binary(opr, values.pop(), value)
+                if value is None:
+                    return None
+                values.append(value)
             else:
                 return None
-        return "".join(parts)
+        return _constant_text(values[0])
 
     texts = []
     pending = [root]
@@ -315,15 +324,76 @@ def collect_dialogue_texts(text: str, iad_base):
     return texts
 
 
+class _StringRepeat:
+    __slots__ = ("value", "count")
+
+    def __init__(self, value, count):
+        self.value = value
+        self.count = count
+
+
 def _string_use_fragments(value):
     pending = [value]
+    repeats = []
     while pending:
         part = pending.pop()
         if isinstance(part, tuple):
             left, right = part
             pending.extend((right, left))
-        elif part is not None:
+            continue
+        if isinstance(part, _StringRepeat):
+            repeats.append((part.count, []))
+            pending.extend((None, part.value))
+            continue
+        if part is None:
+            if not repeats:
+                continue
+            count, fragments = repeats.pop()
+            part = "".join(fragments) * count
+        if repeats:
+            repeats[-1][1].append(part)
+        else:
             yield part
+
+
+def _constant_text(value):
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return str(value)
+    return "".join(_string_use_fragments(value))
+
+
+def _constant_unary(opr, value):
+    if isinstance(value, int):
+        if opr == C.OP_PLUS:
+            return value
+        if opr == C.OP_MINUS:
+            return to_i32(-value)
+    return None
+
+
+def _constant_binary(opr, left, right):
+    if left is None or right is None:
+        return None
+    if isinstance(left, int):
+        if isinstance(right, int):
+            if opr == C.OP_PLUS:
+                return to_i32(left + right)
+            if opr == C.OP_MINUS:
+                return to_i32(left - right)
+            if opr == C.OP_MULTIPLE:
+                return to_i32(left * right)
+    elif isinstance(right, int):
+        if opr == C.OP_MULTIPLE:
+            if right <= 0:
+                return ""
+            if right == 1:
+                return left
+            return _StringRepeat(left, right)
+    elif opr == C.OP_PLUS:
+        return left, right
+    return None
 
 
 def iter_dat_string_uses(bundle, *, with_text=False, global_elements=None):
@@ -351,11 +421,7 @@ def iter_dat_string_uses(bundle, *, with_text=False, global_elements=None):
     strings = bundle["str_list"]
 
     def _string_argument(item, _form):
-        if item is None:
-            return None
-        if with_text and item["form"] == fm_int and item["val"] is not None:
-            return str(item["val"])
-        return item.get("string_use")
+        return item.get("string_use") if item is not None else None
 
     for event in bundle.get("trace") or []:
         scope.advance(event["ofs"])
@@ -363,20 +429,30 @@ def iter_dat_string_uses(bundle, *, with_text=False, global_elements=None):
         value = None
         kind = None
         used_value = None
-        if op == "CD_PUSH" and event.get("form") == fm_str:
-            sid = event["value"]
-            value = strings[sid] if with_text else sid
-        elif op == "CD_OPERATE_2" and event.get("left_form") == fm_str:
+        if op == "CD_PUSH":
+            if event["form"] == fm_str:
+                sid = event["value"]
+                value = strings[sid] if with_text else sid
+            elif with_text and event["form"] == fm_int:
+                value = event["value"]
+        elif op == "CD_OPERATE_1" and with_text and state.stack:
+            value = _constant_unary(event["opr"], state.stack[-1].get("string_use"))
+        elif (
+            op == "CD_OPERATE_2"
+            and (with_text or event["left_form"] == fm_str)
+            and len(state.stack) >= 2
+        ):
             left, right = state.stack[-2:]
-            lhs = left.get("string_use")
-            if event.get("right_form") == fm_str and event["opr"] == C.OP_PLUS:
-                rhs = right.get("string_use")
-                if lhs is not None and rhs is not None:
-                    value = (lhs, rhs)
-                elif not with_text:
-                    value = lhs if lhs is not None else rhs
-            elif not with_text:
+            lhs, rhs = left.get("string_use"), right.get("string_use")
+            if with_text:
+                value = _constant_binary(event["opr"], lhs, rhs)
+            else:
                 value = lhs
+                if event["right_form"] == fm_str and event["opr"] == C.OP_PLUS:
+                    if lhs is not None and rhs is not None:
+                        value = lhs, rhs
+                    elif lhs is None:
+                        value = rhs
         elif op == "CD_TEXT" or (op == "CD_NAME" and not with_text):
             kind = TEXTMAP_KIND_DIALOGUE if op == "CD_TEXT" else TEXTMAP_KIND_NAME
             if state.stack:
@@ -391,14 +467,15 @@ def iter_dat_string_uses(bundle, *, with_text=False, global_elements=None):
                 if args:
                     used_value = args[0]
         if kind is not None:
-            parts = _string_use_fragments(used_value)
             if with_text:
-                yield kind, "".join(parts) if used_value is not None else None
+                yield kind, _constant_text(used_value)
             else:
-                yield kind, parts
+                yield kind, _string_use_fragments(used_value)
         state.apply_event(event, scope)
-        if value is not None and state.stack and state.stack[-1]["form"] == fm_str:
-            state.stack[-1]["string_use"] = value
+        if value is not None and state.stack:
+            form = fm_int if with_text and isinstance(value, int) else fm_str
+            if state.stack[-1]["form"] == form:
+                state.stack[-1]["string_use"] = value
 
 
 def _collect_dat_string_kinds(bundle, source_name: str = ""):
