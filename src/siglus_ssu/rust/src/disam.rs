@@ -6184,7 +6184,7 @@ fn split_standalone_labels(
             if let Some(&target) = standalone.get(&token) {
                 let earlier = line.target.is_some_and(|line| target < line);
                 if !definition_has_tail(&line.text, label) {
-                    if earlier {
+                    if unreferenced && earlier {
                         line.target = Some(target);
                         keep.insert(token);
                     }

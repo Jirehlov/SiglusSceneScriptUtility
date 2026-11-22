@@ -1413,7 +1413,7 @@ class _Decompiler:
             indent, label, tail = m.groups()
             standalone_target = standalone.get(label)
             if standalone_target is not None and not tail:
-                if target is not None and standalone_target < target:
+                if unreferenced and target is not None and standalone_target < target:
                     target = standalone_target
                     keep.add(label)
             elif standalone_target is not None:
