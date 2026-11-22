@@ -192,15 +192,15 @@ class _ExpansionBuffer:
             if end <= high - low:
                 return value[low + start : low + end]
         pieces = []
+        part = bisect_right(self.ends, self.size - start - 1)
         while start < end:
-            reverse = self.size - start - 1
-            part = bisect_right(self.ends, reverse)
             value, low, high = self.pieces[part]
-            previous = self.ends[part - 1] if part else 0
-            offset = high - 1 - (reverse - previous)
+            piece_start = self.size - self.ends[part]
+            offset = low + start - piece_start
             count = min(end - start, high - offset)
             pieces.append(value[offset : offset + count])
             start += count
+            part -= 1
         return (
             "".join(pieces)
             if self.text

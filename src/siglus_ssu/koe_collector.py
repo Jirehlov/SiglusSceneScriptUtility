@@ -777,19 +777,17 @@ def main(argv):
         referenced = sum(1 for v in entries.values() if v["callsites"])
         unreferenced = len(entries) - referenced
         multi_text_koe_nos = _multi_text_koe_nos(call_refs)
-    current_ovk_path = ""
-    current_ovk_file = None
+    current_ovk = None
 
     def _close_current_ovk():
-        nonlocal current_ovk_path, current_ovk_file
-        if current_ovk_file is not None:
-            current_ovk_file.close()
-            current_ovk_file = None
-            current_ovk_path = ""
+        nonlocal current_ovk
+        if current_ovk is not None:
+            current_ovk[1].close()
+            current_ovk = None
 
     def _read_ogg_from_ovk(ovk_path: str, entry) -> bytes:
-        nonlocal current_ovk_path, current_ovk_file
-        if current_ovk_file is None or current_ovk_path != ovk_path:
+        nonlocal current_ovk
+        if current_ovk is None or current_ovk[0] != ovk_path:
             _close_current_ovk()
             source = open_read(ovk_path)
             try:
@@ -801,8 +799,8 @@ def main(argv):
             except BaseException:
                 source.close()
                 raise
-            current_ovk_path, current_ovk_file = ovk_path, source
-        return sound.extract_ogg_bytes_from_ovk_stream(current_ovk_file, entry)
+            current_ovk = ovk_path, source
+        return sound.extract_ogg_bytes_from_ovk_stream(current_ovk[1], entry)
 
     os.makedirs(out_dir, exist_ok=True)
     total_rows = 0

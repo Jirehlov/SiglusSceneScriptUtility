@@ -155,15 +155,26 @@ fn msvc_next(x: u32) -> u32 {
         .wrapping_add(MSVCRT_INCREMENT)
 }
 
+fn msvc_jump_powers() -> impl Iterator<Item = (u32, u32)> {
+    std::iter::successors(
+        Some((MSVCRT_MULTIPLIER, MSVCRT_INCREMENT)),
+        |&(multiplier, increment)| {
+            Some((
+                multiplier.wrapping_mul(multiplier),
+                multiplier.wrapping_add(1).wrapping_mul(increment),
+            ))
+        },
+    )
+}
+
 fn msvc_advance(mut state: u32, mut steps: usize) -> u32 {
-    let mut multiplier = MSVCRT_MULTIPLIER;
-    let mut increment = MSVCRT_INCREMENT;
-    while steps != 0 {
+    for (multiplier, increment) in msvc_jump_powers() {
+        if steps == 0 {
+            break;
+        }
         if steps & 1 != 0 {
             state = multiplier.wrapping_mul(state).wrapping_add(increment);
         }
-        increment = multiplier.wrapping_add(1).wrapping_mul(increment);
-        multiplier = multiplier.wrapping_mul(multiplier);
         steps >>= 1;
     }
     state
@@ -175,6 +186,13 @@ fn msvc_rand15(x: &mut u32) -> u32 {
     (*x >> 16) & 0x7FFF
 }
 
+fn msvc_matches_bytes(mut state: u32, expected_bytes: &[u8]) -> bool {
+    expected_bytes.iter().all(|&expected| {
+        state = msvc_next(state);
+        (state >> 16) as u8 == expected
+    })
+}
+
 #[pyfunction]
 fn find_rand_skip(
     py: Python<'_>,
@@ -182,42 +200,44 @@ fn find_rand_skip(
     pattern: &[u8],
     start_skip: usize,
 ) -> PyResult<Option<usize>> {
-    let max_scan: usize = 1 << 24;
-    let scan_len = max_scan
-        .checked_add(pattern.len() - 1)
-        .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
+    const STATE_BITS: usize = 24;
+    const PERIOD: usize = 1 << STATE_BITS;
+    const CANDIDATE_COUNT: u32 = 1 << 16;
+
     start_skip
-        .checked_add(max_scan - 1)
+        .checked_add(PERIOD - 1)
         .ok_or_else(|| PyOverflowError::new_err("scan range is too large"))?;
-    let pattern = pattern.to_vec();
+    let first = pattern[0];
+    let tail = &pattern[1..];
     Ok(py.detach(move || {
-        let mut prefix = vec![0usize; pattern.len()];
-        let mut matched = 0usize;
-        for i in 1..pattern.len() {
-            while matched > 0 && pattern[i] != pattern[matched] {
-                matched = prefix[matched - 1];
+        let origin = msvc_next(msvc_advance(seed, start_skip));
+        let mut state = origin;
+        for skip in 0..CANDIDATE_COUNT as usize {
+            if (state >> 16) as u8 == first && msvc_matches_bytes(state, tail) {
+                return Some(start_skip + skip);
             }
-            if pattern[i] == pattern[matched] {
-                matched += 1;
-            }
-            prefix[i] = matched;
-        }
-        let mut state = msvc_advance(seed, start_skip);
-        matched = 0;
-        for pos in 0..scan_len {
             state = msvc_next(state);
-            let value = ((state >> 16) & 0xFF) as u8;
-            while matched > 0 && value != pattern[matched] {
-                matched = prefix[matched - 1];
-            }
-            if value == pattern[matched] {
-                matched += 1;
-            }
-            if matched == pattern.len() {
-                return Some(start_skip + (pos + 1 - pattern.len()));
-            }
         }
-        None
+
+        let jump_powers = msvc_jump_powers().take(STATE_BITS).collect::<Vec<_>>();
+        let mut earliest = PERIOD;
+        let first_candidate = u32::from(first) * CANDIDATE_COUNT;
+        for candidate in first_candidate..first_candidate + CANDIDATE_COUNT {
+            if !msvc_matches_bytes(candidate, tail) {
+                continue;
+            }
+            let mut state = origin;
+            let mut distance = 0;
+            for (bit, &(multiplier, increment)) in jump_powers.iter().enumerate() {
+                let step = 1 << bit;
+                if (state ^ candidate) & step != 0 {
+                    state = multiplier.wrapping_mul(state).wrapping_add(increment);
+                    distance |= step as usize;
+                }
+            }
+            earliest = earliest.min(distance);
+        }
+        (earliest < PERIOD).then(|| start_skip + earliest)
     }))
 }
 

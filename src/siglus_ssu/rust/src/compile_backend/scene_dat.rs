@@ -6,7 +6,7 @@ pub struct ScnHeaderLayout<'a> {
 }
 
 pub struct MsvcRand {
-    state: u32,
+    pub(super) state: u32,
 }
 
 impl MsvcRand {

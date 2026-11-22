@@ -1288,7 +1288,7 @@ pub(crate) mod decompiler {
         for pass in [LinePass::RestoreLabels, LinePass::DedupeLabels] {
             body = native_line_postprocess(rt, instance, pass, body)?;
         }
-        let standalone = standalone_label_targets(instance);
+        let standalone = standalone_label_targets(instance)?;
         let (lines, mut keep) = split_standalone_labels(rt, body, &standalone, true)?;
         body = native_late_line_pass(rt, instance, LateLinePass::SyntheticGaps, lines)?;
         let (lines, restored) = native_restore_empty_lines(rt, instance, body)?;
@@ -1656,13 +1656,23 @@ impl DisamConfig {
     fn context_field(&self, name: &'static str, value: &Bound<'_, PyAny>) -> PyResult<V> {
         let mut fields = self.context_fields.lock().unwrap();
         let entries = fields.entry(name).or_default();
+        if let Some(cached) = entries
+            .iter()
+            .find(|cached| cached.original.bind(value.py()).is(value))
+        {
+            return Ok(cached.converted.clone());
+        }
+        let mut equivalent = None;
         for cached in entries.iter() {
-            let original = cached.original.bind(value.py());
-            if original.is(value) || original.eq(value)? {
-                return Ok(cached.converted.clone());
+            if cached.original.bind(value.py()).eq(value)? {
+                equivalent = Some(cached.converted.clone());
+                break;
             }
         }
-        let converted = from_py(value)?;
+        let converted = match equivalent {
+            Some(converted) => converted,
+            None => from_py(value)?,
+        };
         if entries.len() == 2 {
             entries.remove(0);
         }
@@ -5665,7 +5675,9 @@ enum LateLinePass {
     MoveReferenced,
     DropAfterZ,
 }
-fn standalone_label_targets(instance: &DecompilerState) -> HashMap<SourceText, i64> {
+fn standalone_label_targets(
+    instance: &DecompilerState,
+) -> Result<HashMap<SourceText, i64>, Failure> {
     let scene = &instance.scene;
     let mut out = HashMap::new();
     for previous_index in scene.newline_indices() {
@@ -5684,7 +5696,16 @@ fn standalone_label_targets(instance: &DecompilerState) -> HashMap<SourceText, i
         let previous_line = previous.line.unwrap_or(0);
         let line = event.line.unwrap_or(0);
         let target = if event.op == Opcode::Nl {
-            if !scene.labels[index - 1].is_empty() || previous_line <= 0 || line <= previous_line {
+            if previous_line <= 0 || line <= previous_line {
+                continue;
+            }
+            let previous_labels = scene.active_labels(instance, previous_index)?;
+            if !previous_labels.is_empty()
+                && !(previous_index > 0
+                    && scene.events[previous_index - 1].op == Opcode::Nl
+                    && scene.events[previous_index - 1].line == previous.line
+                    && previous_labels.iter().any(|label| label.z))
+            {
                 continue;
             }
             previous_line
@@ -5698,7 +5719,7 @@ fn standalone_label_targets(instance: &DecompilerState) -> HashMap<SourceText, i
             out.entry(label.token()).or_insert(target);
         }
     }
-    out
+    Ok(out)
 }
 
 fn native_line_postprocess(
@@ -6157,31 +6178,28 @@ fn split_standalone_labels(
     let mut emitted = std::collections::HashSet::new();
     let mut keep = std::collections::HashSet::new();
     let mut out = vec![];
-    for line in lines {
-        if let Some(label) = label_definition(&line.text)
-            .filter(|label| !label.label.z && definition_has_tail(&line.text, *label))
-        {
+    for mut line in lines {
+        if let Some(label) = label_definition(&line.text).filter(|label| !label.label.z) {
             let token = definition_token(&line.text, label);
-            let target = standalone.get(&token).copied();
-            if let Some(target) = target.filter(|target| {
-                if unreferenced {
-                    !references.contains(&token)
-                } else {
-                    line.target.is_some_and(|line| *target < line)
+            if let Some(&target) = standalone.get(&token) {
+                let earlier = line.target.is_some_and(|line| target < line);
+                if !definition_has_tail(&line.text, label) {
+                    if earlier {
+                        line.target = Some(target);
+                        keep.insert(token);
+                    }
+                } else if (unreferenced && !references.contains(&token))
+                    || (!unreferenced && earlier)
+                {
+                    if emitted.insert(token.clone()) {
+                        out.push(SourceLine {
+                            text: Arc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
+                            target: Some(target),
+                        });
+                        keep.insert(token);
+                    }
+                    line.text = definition_without_label(&line.text, label);
                 }
-            }) {
-                if emitted.insert(token.clone()) {
-                    out.push(SourceLine {
-                        text: Arc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
-                        target: Some(target),
-                    });
-                    keep.insert(token);
-                }
-                out.push(SourceLine {
-                    text: definition_without_label(&line.text, label),
-                    target: line.target,
-                });
-                continue;
             }
         }
         out.push(line);
@@ -6344,18 +6362,21 @@ fn native_late_line_pass(
             let references = line_references(rt, &lines)?;
             for index in 0..lines.len() {
                 let line = &lines[index];
-                if let Some(label) = label_definition(&line.text).filter(|label| {
-                    !label.label.z
-                        && !definition_has_tail(&line.text, *label)
-                        && !references.contains(&definition_token(&line.text, *label))
-                }) {
-                    let _ = label;
-                    if let Some(next) = next_source_statement(&lines, index + 1)
+                if let Some(label) = label_definition(&line.text)
+                    .filter(|label| !label.label.z && !definition_has_tail(&line.text, *label))
+                {
+                    let token = definition_token(&line.text, label);
+                    if !references.contains(&token)
+                        && let Some(next) = next_source_statement(&lines, index + 1)
                         && line.target.is_some()
                         && lines[next].target == line.target
                         && label_definition(&lines[next].text).is_some_and(|label| {
                             label.label.z && !definition_has_tail(&lines[next].text, label)
                         })
+                        && let Some(offset) = source_label_offset(scene, &token)
+                        && offset > 0
+                        && let Some(&event_idx) = scene.index.get(&offset)
+                        && scene.labels[event_idx].iter().any(|label| label.z)
                     {
                         lines[index] = lines[next].clone();
                         lines[next] = SourceLine {
@@ -6409,11 +6430,10 @@ fn native_late_line_pass(
                 };
                 let z_token = definition_token(&line.text, z);
                 let l_token = definition_token(&lines[next].text, label);
-                let same_target = line.target.is_some() && lines[next].target == line.target;
                 let same_offset = source_label_offset(scene, &z_token).is_some_and(|offset| {
                     offset > 0 && Some(offset) == source_label_offset(scene, &l_token)
                 });
-                if !same_target && !same_offset {
+                if !same_offset {
                     continue;
                 }
                 if references.contains(&l_token) {
@@ -7263,11 +7283,11 @@ fn native_restore_empty_lines(
             }
         }
         if seen.contains(&target) {
-            let positions = rows.targets.get(&target).cloned().unwrap_or_default();
-            let has_statement = statements.contains(&target);
-            if has_z && l_labels.len() == 1 && (references.contains(&l_labels[0]) || !has_statement)
+            if has_z
+                && l_labels.len() == 1
+                && (references.contains(&l_labels[0]) || !statements.contains(&target))
             {
-                for position in positions {
+                for position in rows.targets.get(&target).cloned().unwrap_or_default() {
                     let Some(line) = &rows.lines[position] else {
                         continue;
                     };
@@ -7642,9 +7662,18 @@ impl<'a> SourceParser<'a> {
                     vec![],
                     self.scene.events[index - 1].line,
                 ));
-                labels.retain(|label| !label.z);
-                if !lines.is_empty() {
-                    labels.retain(|label| !z.iter().any(|z| z.id == label.id));
+                if self
+                    .scene
+                    .events
+                    .get(index + 1)
+                    .is_some_and(|next| next.op == Opcode::Nl && next.line == event.line)
+                {
+                    labels.clear();
+                } else {
+                    labels.retain(|label| !label.z);
+                    if !lines.is_empty() {
+                        labels.retain(|label| !z.iter().any(|z| z.id == label.id));
+                    }
                 }
             }
         }

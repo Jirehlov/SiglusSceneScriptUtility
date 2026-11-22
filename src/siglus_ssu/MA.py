@@ -125,10 +125,6 @@ class FormTable:
             s.form_map_by_code[code] = info
         return info
 
-    def _load_system_forms(s):
-        for it in C._FORM_CODE:
-            s._ensure_form(it)
-
     def _load_system_elements(s):
         for tp, parent, form, name, owner, group, code, spec in C.SYSTEM_ELEMENT_DEFS:
             args = parse_arg_spec(spec)
@@ -164,7 +160,6 @@ class FormTable:
             C.FM___ARGSREF,
         }:
             s._ensure_form(k)
-        s._load_system_forms()
         s._load_system_elements()
         s.call_base = copy.deepcopy(s.get_form_by_name(C.FM_CALL))
 

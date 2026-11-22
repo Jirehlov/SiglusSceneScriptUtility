@@ -226,31 +226,39 @@ def _label_ref_spans(text):
     spans = lad["atom_span_list"]
     line_starts = [0]
     line_starts.extend(i + 1 for i, ch in enumerate(text) if ch == "\n")
+    codes = C.LA_T
+    gosubs = (codes["GOSUB"], codes["GOSUBSTR"])
+    jumps = (codes["GOTO"], *gosubs)
+    open_paren, close_paren, label_token = (
+        codes["OPEN_PAREN"],
+        codes["CLOSE_PAREN"],
+        codes["LABEL"],
+    )
     refs = []
+    parentheses = []
+    previous = None
+    after_arguments = False
     for idx, atom in enumerate(atoms):
         token = atom["type"]
-        if token not in (C.LA_T["GOTO"], C.LA_T["GOSUB"], C.LA_T["GOSUBSTR"]):
-            continue
-        nxt = idx + 1
-        if token != C.LA_T["GOTO"] and atoms[nxt]["type"] == C.LA_T["OPEN_PAREN"]:
-            depth = 1
-            nxt += 1
-            while nxt < len(atoms) and depth:
-                if atoms[nxt]["type"] == C.LA_T["OPEN_PAREN"]:
-                    depth += 1
-                elif atoms[nxt]["type"] == C.LA_T["CLOSE_PAREN"]:
-                    depth -= 1
-                nxt += 1
-        if nxt >= len(atoms) or atoms[nxt]["type"] != C.LA_T["LABEL"]:
-            continue
-        span = spans[nxt]
-        label = span["text"]
-        if label.startswith("#l") and label[2:].isdigit():
-            start = line_starts[int(span["line"]) - 1]
-            refs.append(
-                (start + int(span["start_char"]), start + int(span["end_char"]), label)
-            )
-    return tuple(sorted(set(refs)))
+        if token == open_paren:
+            parentheses.append(previous in gosubs)
+        elif token == label_token and (after_arguments or previous in jumps):
+            span = spans[idx]
+            label = span["text"]
+            if label.startswith("#l") and label[2:].isdigit():
+                start = line_starts[int(span["line"]) - 1]
+                refs.append(
+                    (
+                        start + int(span["start_char"]),
+                        start + int(span["end_char"]),
+                        label,
+                    )
+                )
+        after_arguments = (
+            token == close_paren and bool(parentheses) and parentheses.pop()
+        )
+        previous = token
+    return tuple(refs)
 
 
 def _line_label_refs(lines):
@@ -1226,16 +1234,23 @@ class _Decompiler:
                     z_labels = [label for label in labels if label.startswith("Z")]
                     if z_labels:
                         out.extend(self._with_labels(z_labels, [], prev_line))
-                        labels = [
-                            label for label in labels if not label.startswith("Z")
-                        ]
-                        if lines:
-                            moved_z_ids = {int(label[1:]) for label in z_labels}
+                        if (
+                            event_idx + 1 < len(self.events)
+                            and self.event_ops[event_idx + 1] == "CD_NL"
+                            and self.event_lines[event_idx + 1] == line
+                        ):
+                            labels = []
+                        else:
                             labels = [
-                                label
-                                for label in labels
-                                if int(label[1:]) not in moved_z_ids
+                                label for label in labels if not label.startswith("Z")
                             ]
+                            if lines:
+                                moved_z_ids = {int(label[1:]) for label in z_labels}
+                                labels = [
+                                    label
+                                    for label in labels
+                                    if int(label[1:]) not in moved_z_ids
+                                ]
         out.extend(self._with_labels(labels, lines, line))
         return out
 
@@ -1362,7 +1377,15 @@ class _Decompiler:
             prev_line = prev["line"]
             cur_line = ev["line"]
             if self.event_ops[idx] == "CD_NL":
-                if prev["labels"] or prev_line <= 0 or cur_line <= prev_line:
+                if prev_line <= 0 or cur_line <= prev_line:
+                    continue
+                previous_labels = self._event_labels(prev)
+                if previous_labels and not (
+                    idx >= 2
+                    and self.event_ops[idx - 2] == "CD_NL"
+                    and self.event_lines[idx - 2] == prev_line
+                    and any(label.startswith("Z") for label in previous_labels)
+                ):
                     continue
                 target_line = prev_line
             else:
@@ -1389,7 +1412,11 @@ class _Decompiler:
                 continue
             indent, label, tail = m.groups()
             standalone_target = standalone.get(label)
-            if label.startswith("#l") and tail and standalone_target is not None:
+            if standalone_target is not None and not tail:
+                if target is not None and standalone_target < target:
+                    target = standalone_target
+                    keep.add(label)
+            elif standalone_target is not None:
                 split = (
                     label not in refs
                     if unreferenced
@@ -1710,13 +1737,22 @@ class _Decompiler:
                         next_text = _line_text(lines[j])
                         next_target = _line_target(lines[j])
                         next_m = _LINE_LABEL_RE.match(next_text)
+                        offset = self._label_offset(label)
+                        event_idx = self.offset_to_index.get(offset)
                         if (
                             next_m
                             and target is not None
                             and next_target is not None
                             and int(next_target) == int(target)
                             and not next_m.group(3)
-                            and str(next_m.group(2) or "").startswith("#z")
+                            and next_m.group(2).startswith("#z")
+                            and offset is not None
+                            and offset > 0
+                            and event_idx is not None
+                            and any(
+                                event_label.startswith("Z")
+                                for event_label in self.events[event_idx]["labels"]
+                            )
                         ):
                             out[idx] = _line_item(next_text, target)
                             out[j] = _line_item("", next_target)
@@ -1777,52 +1813,34 @@ class _Decompiler:
         refs = _line_label_refs(lines)
         mapping = {}
         rewrites = {}
-        idx = 0
-        while idx < len(lines):
-            text = _line_text(lines[idx])
-            target = _line_target(lines[idx])
-            m = _LINE_LABEL_RE.match(text)
+        for idx, line in enumerate(lines):
+            m = _LINE_LABEL_RE.match(_line_text(line))
             if not m:
-                idx += 1
                 continue
             _, z_label, z_tail = m.groups()
-            if (not z_label.startswith("#z")) or z_tail:
-                idx += 1
+            if not z_label.startswith("#z") or z_tail:
                 continue
             j = idx + 1
             while j < len(lines) and not _line_text(lines[j]).strip():
                 j += 1
             if j >= len(lines):
-                idx += 1
                 continue
-            next_text = _line_text(lines[j])
-            next_target = _line_target(lines[j])
-            next_m = _LINE_LABEL_RE.match(next_text)
+            next_m = _LINE_LABEL_RE.match(_line_text(lines[j]))
             if not next_m:
-                idx += 1
                 continue
             indent, l_label, l_tail = next_m.groups()
-            same_target = (
-                target is not None
-                and next_target is not None
-                and int(target) == int(next_target)
-            )
+            if not l_label.startswith("#l") or not l_tail:
+                continue
             z_offset = self._label_offset(z_label)
-            l_offset = self._label_offset(l_label)
-            same_raw_offset = (
-                z_offset is not None and z_offset > 0 and z_offset == l_offset
-            )
             if (
-                (not l_label.startswith("#l"))
-                or (not l_tail)
-                or ((not same_target) and (not same_raw_offset))
+                z_offset is None
+                or z_offset <= 0
+                or z_offset != self._label_offset(l_label)
             ):
-                idx += 1
                 continue
             if l_label in refs:
                 mapping[l_label] = z_label
             rewrites[j] = indent + l_tail
-            idx += 1
         if (not mapping) and (not rewrites):
             return lines
         out = []
@@ -2308,7 +2326,6 @@ class _Decompiler:
         if empty_switch is not None:
             return empty_switch
         parts = []
-        eof_only = True
         assign_ctx = (
             self._merge_ctx(ctx, allow_compound_assign=True)
             if self._has_explicit_compound_assign(ops)
@@ -2317,8 +2334,6 @@ class _Decompiler:
         fm_void = C._FORM_CODE[C.FM_VOID]
         for idx, ev in enumerate(ops):
             op = ev["op"]
-            if op != "CD_EOF":
-                eof_only = False
             part = ""
             if op == "CD_TEXT":
                 part = quote_ss_text(ev["text"] or "")
@@ -2368,8 +2383,6 @@ class _Decompiler:
             if part:
                 if not parts or parts[-1] != part:
                     parts.append(part)
-        if eof_only:
-            return ""
         return "\t".join(parts)
 
     def _render_simple_line_range(self, stmt_idx, next_idx, ctx):

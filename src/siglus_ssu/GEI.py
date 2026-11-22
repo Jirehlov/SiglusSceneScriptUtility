@@ -61,14 +61,18 @@ class IniFileAnalizer:
 def _decode_gameexe_payload(payload, exe_el=b""):
     if not payload:
         return (0, 0), ""
+    if len(payload) < 8:
+        raise ValueError("truncated LZSS header")
+    header = payload
+    if exe_el:
+        header = payload[:8]
+        xor_cycle_inplace(header, exe_el)
+    packed_size, raw_size = struct.unpack_from("<II", header)
+    if packed_size != len(payload) or not raw_size or raw_size % 2:
+        raise ValueError("invalid LZSS sizes")
     if exe_el:
         payload = payload.copy()
         xor_cycle_inplace(payload, exe_el)
-    if len(payload) < 8:
-        raise ValueError("truncated LZSS header")
-    packed_size, raw_size = struct.unpack_from("<II", payload)
-    if packed_size != len(payload) or not raw_size or raw_size % 2:
-        raise ValueError("invalid LZSS sizes")
     raw = lzss_unpack(bytes(payload))
     if len(raw) != raw_size:
         raise ValueError("invalid decompressed size")
@@ -155,7 +159,6 @@ def write_gameexe_dat(ctx):
     out = ctx.get("out_path") or "."
     tmp = ctx.get("tmp_path") or ""
     gameexe_ini = ctx["gameexe_ini"]
-    base = ctx.get("gameexe_dat_angou_code") or C.GAMEEXE_DAT_ANGOU_CODE
     gei = ctx["source_texts"].get(gameexe_ini)
     if gei is None:
         return None
@@ -177,7 +180,7 @@ def write_gameexe_dat(ctx):
     lz = None
     if ged:
         lz = bytearray(lzss_pack(ged.encode("utf-16le")))
-        xor_cycle_inplace(lz, base)
+        xor_cycle_inplace(lz, C.GAMEEXE_DAT_ANGOU_CODE)
     dat_out = bytearray(struct.pack("<ii", 0, mode))
     if lz:
         if mode:

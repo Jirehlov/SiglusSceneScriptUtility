@@ -598,7 +598,7 @@ def main(argv):
     if apply and (compare_payload or dat_disam):
         return 2
     if word:
-        if gei or dat_disam or readall or apply or compare_payload:
+        if gei or readall or apply or compare_payload:
             return 2
         if len(args) not in (1, 2):
             return 2

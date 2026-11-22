@@ -1789,7 +1789,7 @@ def compile_one_pipeline(
     }
 
 
-def compile_all(ctx, only, max_workers=None, parallel=True):
+def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=None):
     if ctx.get("ia_data") is None:
         ctx["ia_data"] = build_ia_data(ctx)
     ss_files = list(only)
@@ -1822,6 +1822,8 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
         lzss_started = None
         for p in ss_files:
             res = compile_one_pipeline(ctx, p, record_time=True)
+            if shuffle_seeds is not None:
+                shuffle_seeds[ascii_lower(os.path.basename(p))] = get_shuffle_seed()
             merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
             used_global_macros.update(res["used_global_macros"])
             merge_source_stat_counts(source_stats, res["source_stats"])
@@ -1832,7 +1834,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True):
                     lzss_started = time.time()
                 future = executor.submit(
                     _lzss_compress_task,
-                    (nm, res["out_scn"], lz_path, ctx.get("easy_angou_code") or b""),
+                    (nm, res["out_scn"], lz_path),
                 )
                 futures[future] = res["out_scn"]
         if futures:

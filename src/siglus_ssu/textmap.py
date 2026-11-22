@@ -10,7 +10,7 @@ from . import SA
 from . import const as C
 from . import dat as DAT
 from . import pck
-from .native_ops import lzss_pack, xor_cycle_inplace
+from .native_ops import lzss_pack, lzss_unpack, xor_cycle_inplace
 from .common import (
     eprint,
     hint_help as _hint_help,
@@ -22,6 +22,7 @@ from .common import (
     is_trace_command_base as _is_trace_command_base,
     consume_angou_option,
     read_struct_list,
+    I32_STRUCT,
     I32_PAIR_STRUCT,
     read_scn_metadata,
     format_exe_el_source,
@@ -654,51 +655,37 @@ def _apply_dat_map(str_list, rows, filename: str = ""):
 
 
 def _parse_scn_dat_with_decrypt(blob: bytes, exe_el: bytes):
-    easy_code = C.EASY_ANGOU_CODE or b""
-
-    def _try(b: bytes, used_exe: bool, used_easy: bool, used_lzss: bool):
-        p = _parse_scn_dat(b)
-        if p:
-            return p, b, {"exe": used_exe, "easy": used_easy, "lzss": used_lzss}
-        return None
-
-    def _unpack_if_lzss(b: bytes):
-        if pck.looks_like_lzss(b):
-            try:
-                return pck.lzss_unpack(b)
-            except Exception:
-                return None
-        return None
-
-    for used_exe in (False, True):
-        if used_exe:
-            if not exe_el:
+    size = len(blob)
+    if size < 8:
+        return None, blob, None
+    easy_code = C.EASY_ANGOU_CODE
+    for outer in (b"", exe_el) if exe_el else (b"",):
+        for inner in (b"", easy_code) if easy_code else (b"",):
+            keys = tuple(key for key in (outer, inner) if key)
+            header = bytearray(blob[:8])
+            for key in keys:
+                xor_cycle_inplace(header, key, 0)
+            raw_candidate = C.SCN_HDR_SIZE <= I32_STRUCT.unpack_from(header)[0] <= size
+            packed_candidate = pck.looks_like_lzss(header, packed_size=size)
+            if not (raw_candidate or packed_candidate):
                 continue
-            bt = bytearray(blob)
-            xor_cycle_inplace(bt, exe_el, 0)
-            bx = bytes(bt)
-        else:
-            bx = blob
-        r = _try(bx, used_exe, False, False)
-        if r:
-            return r
-        dec = _unpack_if_lzss(bx)
-        if dec is not None:
-            r = _try(dec, used_exe, False, True)
-            if r:
-                return r
-        if easy_code:
-            bt2 = bytearray(bx)
-            xor_cycle_inplace(bt2, easy_code, 0)
-            by = bytes(bt2)
-            r = _try(by, used_exe, True, False)
-            if r:
-                return r
-            dec2 = _unpack_if_lzss(by)
-            if dec2 is not None:
-                r = _try(dec2, used_exe, True, True)
-                if r:
-                    return r
+            data = blob
+            if keys:
+                decoded = bytearray(blob)
+                for key in keys:
+                    xor_cycle_inplace(decoded, key, 0)
+                data = bytes(decoded)
+            encoding = {"exe": bool(outer), "easy": bool(inner), "lzss": False}
+            if raw_candidate and (parsed := _parse_scn_dat(data)):
+                return parsed, data, encoding
+            if packed_candidate:
+                try:
+                    unpacked = lzss_unpack(data)
+                except Exception:
+                    continue
+                if parsed := _parse_scn_dat(unpacked):
+                    encoding["lzss"] = True
+                    return parsed, unpacked, encoding
     return None, blob, None
 
 

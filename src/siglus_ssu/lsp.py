@@ -2455,9 +2455,7 @@ def completion_items(
             if rec.kind == "command"
             else COMPLETION_KIND_VARIABLE
         )
-        if rec.kind in ("label", "z_label"):
-            kind = COMPLETION_KIND_REFERENCE
-        elif rec.kind in ("macro", "define", "replace"):
+        if rec.kind in ("macro", "define", "replace"):
             kind = COMPLETION_KIND_CONSTANT
         add(rec.name, kind, rec.detail or rec.signature or rec.scope)
     for rec in result.label_definitions.values():

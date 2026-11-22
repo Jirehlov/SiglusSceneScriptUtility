@@ -171,7 +171,7 @@ impl DecompileFrontend {
         if let Some(reference) = decompile_goto_reference(text) {
             return vec![reference];
         }
-        let Ok(lex) = la::lex_scene_text(text, &self.codes.la, None, None) else {
+        let Ok(lex) = la::lex_scene_text::<true>(text, &self.codes.la, None, None) else {
             return Vec::new();
         };
         let chars: Vec<char> = text.chars().collect();
@@ -183,37 +183,27 @@ impl DecompileFrontend {
                 .filter_map(|(index, ch)| (*ch == '\n').then_some(index + 1)),
         );
         let codes = &self.codes.la;
+        let gosubs = [codes.gosub, codes.gosubstr];
+        let jumps = [codes.goto, codes.gosub, codes.gosubstr];
         let mut refs = Vec::new();
+        let mut parentheses = Vec::new();
+        let mut previous = None;
+        let mut after_arguments = false;
         for (index, atom) in lex.atom_list.iter().enumerate() {
-            if ![codes.goto, codes.gosub, codes.gosubstr].contains(&atom.atom_type) {
-                continue;
+            let token = atom.atom_type;
+            let prev = previous.replace(token);
+            let follows_arguments = std::mem::take(&mut after_arguments);
+            if token == codes.open_paren {
+                parentheses.push(prev.is_some_and(|token| gosubs.contains(&token)));
+            } else if token == codes.close_paren {
+                after_arguments = parentheses.pop().unwrap_or(false);
             }
-            let mut next = index + 1;
-            if atom.atom_type != codes.goto
-                && lex
-                    .atom_list
-                    .get(next)
-                    .is_some_and(|atom| atom.atom_type == codes.open_paren)
-            {
-                let mut depth = 1;
-                next += 1;
-                while next < lex.atom_list.len() && depth != 0 {
-                    if lex.atom_list[next].atom_type == codes.open_paren {
-                        depth += 1;
-                    } else if lex.atom_list[next].atom_type == codes.close_paren {
-                        depth -= 1;
-                    }
-                    next += 1;
-                }
-            }
-            if !lex
-                .atom_list
-                .get(next)
-                .is_some_and(|atom| atom.atom_type == codes.label)
+            if token != codes.label
+                || !(follows_arguments || prev.is_some_and(|token| jumps.contains(&token)))
             {
                 continue;
             }
-            let Some(span) = lex.atom_span_list.get(next) else {
+            let Some(span) = lex.atom_span_list.get(index) else {
                 continue;
             };
             let Some(base) = span.line.checked_sub(1).and_then(|line| starts.get(line)) else {
@@ -229,8 +219,6 @@ impl DecompileFrontend {
                 refs.push((start, end, label));
             }
         }
-        refs.sort();
-        refs.dedup();
         refs
     }
 
@@ -244,7 +232,7 @@ impl DecompileFrontend {
             self.codes.clone(),
         );
         let mut analyzer =
-            ia::IncAnalyzer::new(declarations, self.codes.forms.global.name.as_str());
+            ia::IncAnalyzer::<true>::new(declarations, self.codes.forms.global.name.as_str());
         let mut scratch = ia::IaScratch::default();
         analyzer
             .step1(&mut data, &mut scratch)
@@ -260,8 +248,10 @@ impl DecompileFrontend {
             .analyze_file_2_with_stats::<false>(&first, &data)
             .map_err(|_| ca.error_str.clone())?;
         if !second.inc_text.is_empty() {
-            let mut analyzer =
-                ia::IncAnalyzer::new(&second.inc_text, self.codes.forms.scene.name.as_str());
+            let mut analyzer = ia::IncAnalyzer::<true>::new(
+                &second.inc_text,
+                self.codes.forms.scene.name.as_str(),
+            );
             let mut scratch = ia::IaScratch::default();
             analyzer
                 .step1(&mut data, &mut scratch)
@@ -273,7 +263,7 @@ impl DecompileFrontend {
         let expanded = ca
             .analyze_line(&second.scene_text, &data.replace_tree)
             .map_err(|_| ca.error_str.clone())?;
-        let mut lex = la::lex_scene_text(&expanded, &self.codes.la, None, None)
+        let mut lex = la::lex_scene_text::<true>(&expanded, &self.codes.la, None, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
         let mut syntax = sa::SyntaxAnalyzer::new(&lex, &lex.unknown_list, &self.codes);
         let root = syntax
@@ -283,7 +273,7 @@ impl DecompileFrontend {
         semantic
             .analyze(root)
             .map_err(|_| format!("{:?}", semantic.last))?;
-        let source = la::lex_scene_text(text, &self.codes.la, None, None)
+        let source = la::lex_scene_text::<true>(text, &self.codes.la, None, None)
             .map_err(|error| format!("lexer line {}", error.line))?;
         let mut in_command = false;
         let mut bracket = None;
@@ -537,6 +527,9 @@ pub fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<
             stats.set_item("full_compile_stats", result.full_compile_stats)?;
             stats.set_item("stage_time", stage_time_dict(py, &result.stage_times)?)?;
             set_extra_stats(py, &stats, &result)?;
+            if !result.shuffle_seeds.is_empty() {
+                out.set_item("shuffle_seeds", result.shuffle_seeds)?;
+            }
             out.set_item("stats", stats)?;
             out.set_item("stderr", "")?;
         }

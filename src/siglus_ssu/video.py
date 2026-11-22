@@ -281,7 +281,6 @@ def _index_ogv(source, theora_serial, flags_hi24):
     page_summaries = []
     frames_in_page = []
     first_frame_index = []
-    frame_no_in_page = []
     header_pages = set()
     table_b = []
     assembler = _OggPacketAssembler()
@@ -334,7 +333,6 @@ def _index_ogv(source, theora_serial, flags_hi24):
         )
         frames_in_page.append(0)
         first_frame_index.append(-1)
-        frame_no_in_page.append(0)
         x0 += page_bytes_len
         assembler.start_page(
             is_packet_start=bool(page.header_type & 1 == 0),
@@ -355,9 +353,8 @@ def _index_ogv(source, theora_serial, flags_hi24):
             last_page = int(span[-1])
             if first_frame_index[last_page] < 0:
                 first_frame_index[last_page] = int(seq)
-            frame_no = int(frame_no_in_page[last_page])
-            frame_no_in_page[last_page] = frame_no + 1
-            frames_in_page[last_page] = int(frames_in_page[last_page]) + 1
+            frame_no = frames_in_page[last_page]
+            frames_in_page[last_page] = frame_no + 1
             is_key = bool(packet) and (packet[0] & 128) == 0 and (packet[0] & 64) == 0
             if is_key:
                 last_key_seq = int(seq)

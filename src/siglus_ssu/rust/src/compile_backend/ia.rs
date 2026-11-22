@@ -210,10 +210,6 @@ impl IaData {
 }
 
 impl IncAnalyzer {
-    pub fn new(text: &str, parent_form: impl Into<String>) -> Self {
-        Self::new_with_usage_tracking(text, parent_form)
-    }
-
     pub fn new_with_sidecar(
         text: &str,
         parent_form: impl Into<String>,
@@ -227,7 +223,7 @@ impl IncAnalyzer {
 }
 
 impl<const TRACK_USAGE: bool> IncAnalyzer<TRACK_USAGE> {
-    pub fn new_with_usage_tracking(text: &str, parent_form: impl Into<String>) -> Self {
+    pub fn new(text: &str, parent_form: impl Into<String>) -> Self {
         Self {
             text: text.chars().collect(),
             column_base: 0,

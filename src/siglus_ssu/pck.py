@@ -35,7 +35,7 @@ from .common import (
     build_source_angou_layout,
     read_bytes,
     parse_i32_header,
-    parse_i32_header_checked,
+    read_scn_payload_header,
     is_named_filename,
     find_angou_dat,
     open_atomic_output,
@@ -617,6 +617,8 @@ def _resolve_pck_scene_exe_el(
         input_source_entries=source_entries,
         read_paths=read_paths,
     )
+    first_candidate = True
+    entries_by_prefix = None
     while True:
         try:
             src = next(sources)
@@ -630,7 +632,29 @@ def _resolve_pck_scene_exe_el(
             return b""
         exe_el = src["exe_el"]
         sys.stderr.write(f"key source try: {format_exe_el_source(src)}\n")
-        for offset, size in data_entries:
+        if first_candidate:
+            candidates = data_entries
+            first_candidate = False
+        else:
+            if entries_by_prefix is None:
+                entries_by_prefix = {}
+                easy_prefix = int.from_bytes(easy_code[:4], "little")
+                for offset, size in data_entries:
+                    if size < 4:
+                        continue
+                    first_word = read_u32_le(view, data_start + offset)
+                    if first_word is None:
+                        continue
+                    prefixes = {
+                        first_word ^ C.SCN_HDR_SIZE,
+                        first_word ^ size,
+                        first_word ^ size ^ easy_prefix,
+                    }
+                    for prefix in prefixes:
+                        entries_by_prefix.setdefault(prefix, []).append((offset, size))
+            prefix = int.from_bytes(exe_el[:4], "little")
+            candidates = entries_by_prefix.get(prefix, ())
+        for offset, size in candidates:
             start = data_start + offset
             header = bytearray(view[start : start + min(size, 8)])
             xor_cycle_inplace(header, exe_el, 0)
@@ -692,6 +716,7 @@ def iter_pck_scene_dat_items(
     *,
     wanted_scene_names=None,
     with_pack_context=True,
+    headers_only=False,
 ):
     if not looks_like_siglus_pck(blob):
         return
@@ -718,17 +743,21 @@ def iter_pck_scene_dat_items(
     else:
         exe_el = bytes(scene_exe_el)
     data_start = hdr["scn_data_list_ofs"]
+    scene_data = memoryview(blob) if headers_only else blob
+    data_key = "header" if headers_only else "blob"
     for scn_no, (nm, (offset, size)) in enumerate(zip(scn_names, data_entries)):
         if wanted_scene_names is not None and ascii_lower(nm) not in wanted_scene_names:
             continue
         rel = _safe_relpath(nm + ".dat") or (nm + ".dat")
         start = data_start + offset
-        out_dat = _decode_scene_blob(blob[start : start + size], hdr, exe_el)
+        decoded = _decode_scene_blob(
+            scene_data[start : start + size], hdr, exe_el, header_only=headers_only
+        )
         yield {
             "scene_no": scn_no,
             "scene_name": nm,
             "relpath": rel,
-            "blob": out_dat,
+            data_key: decoded,
             "pack_context": pack_context,
         }
 
@@ -755,26 +784,15 @@ def _collect_pck_read_flag_stats(
         explicit_angou=explicit_angou,
         source_entries=source_entries,
         with_pack_context=False,
+        headers_only=True,
     ):
         nm = str(item.get("scene_name") or "")
-        scn_blob = item.get("blob")
-        if not isinstance(scn_blob, (bytes, bytearray)):
-            stats["unavailable_scene_files"] += 1
-            continue
-        scn_blob = bytes(scn_blob)
-        if not looks_like_siglus_dat(scn_blob):
-            stats["unavailable_scene_files"] += 1
-            continue
-        scn_hdr = parse_i32_header_checked(
-            scn_blob,
-            C.SCN_HDR_FIELDS,
-            C.SCN_HDR_SIZE,
-        )
+        scn_hdr = item["header"]
         if not scn_hdr:
             stats["unavailable_scene_files"] += 1
             continue
         stats["available_scene_files"] += 1
-        cnt = int((scn_hdr or {}).get("read_flag_cnt", 0) or 0)
+        cnt = scn_hdr["read_flag_cnt"]
         stats["read_flags"] += cnt
         if cnt > 0:
             stats["read_flags_scenes"] += 1
@@ -1676,43 +1694,63 @@ def compare_pck(
     return 1 if source_failed or payload_cmp_counts["INCOMPLETE"] else 0
 
 
-def _decode_scene_blob(blob, hdr, exe_el):
-    if not isinstance(blob, (bytes, bytearray)) or not blob:
+def _decode_scene_blob(blob, hdr, exe_el, *, header_only=False):
+    if not isinstance(blob, (bytes, bytearray, memoryview)) or not blob:
         return None
     try:
         exe_mod = int((hdr or {}).get("scn_data_exe_angou_mod", 0) or 0)
     except Exception:
         return None
-    b = bytes(blob)
+    size = len(blob)
+    if header_only:
+        header_size = C.SCN_HDR_SIZE
+        flag_bytes = (header_size + 7) // 8
+        max_packed_prefix = 8 + flag_bytes + header_size + 1
+        blob = blob[:max_packed_prefix]
+    clear = bytes(blob)
     if exe_mod != 0:
         if not exe_el:
             return None
         try:
-            _b = bytearray(b)
-            xor_cycle_inplace(_b, exe_el, 0)
-            b = bytes(_b)
+            decrypted = bytearray(clear)
+            xor_cycle_inplace(decrypted, exe_el, 0)
+            clear = bytes(decrypted)
         except Exception:
             return None
     easy_code = C.EASY_ANGOU_CODE
-    lz = b""
-    cand = b""
-    if easy_code:
+    packed = b""
+    if easy_code and len(clear) >= 8:
         try:
-            _b = bytearray(b)
-            xor_cycle_inplace(_b, easy_code, 0)
-            cand = bytes(_b)
+            header = bytearray(clear[:8])
+            xor_cycle_inplace(header, easy_code, 0)
+            if looks_like_lzss(header, packed_size=size):
+                decrypted = bytearray(clear)
+                xor_cycle_inplace(decrypted, easy_code, 0)
+                packed = bytes(decrypted)
         except Exception:
-            cand = b""
-    if cand and looks_like_lzss(cand):
-        lz = cand
-    elif looks_like_lzss(b):
-        lz = b
-    if lz:
+            pass
+    if not packed and looks_like_lzss(clear, packed_size=size):
+        packed = clear
+    if packed:
+        if header_only:
+            unpacked_size = read_u32_le(packed, 4)
+            limited = bytearray(packed)
+            struct.pack_into(
+                "<II", limited, 0, len(limited), min(unpacked_size, C.SCN_HDR_SIZE)
+            )
+            packed = bytes(limited)
         try:
-            return lzss_unpack(lz)
+            unpacked = lzss_unpack(packed)
         except Exception:
-            return b if looks_like_siglus_dat(b) else None
-    return b
+            if not header_only:
+                return clear if looks_like_siglus_dat(clear) else None
+        else:
+            if header_only:
+                return read_scn_payload_header(unpacked, data_size=unpacked_size)
+            return unpacked
+    if header_only:
+        return read_scn_payload_header(clear, data_size=size)
+    return clear
 
 
 def looks_like_lzss(blob: bytes, *, packed_size=None) -> bool:

@@ -229,7 +229,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 | `--max-workers N` | 场景并行编译的最大工作数，必须为正整数。默认每阶段使用可用 CPU 数的一半，限制为 1–16。自动分配线程的全量编译中，Rust 后端可以让编译和压缩共用两个阶段分配的线程。Windows 上的 Python 编译最多接受 61。与 `--serial` 同用时无效。 |
 | `--set-shuffle SEED` | 设置字符串表乱序种子（`0`–`0xFFFFFFFF`，十进制或十六进制，默认 `1`），并启用串行编译。不能与 `--tmp` 同用。 |
 | `--tmp <tmp_dir>` | 复用指定目录进行增量编译。串行构建从首个变化的场景开始重新编译，以保持字符串表顺序。并发构建需要各用一个缓存目录。不能与 `--debug`、`--dat-repack`、`--no-angou`、`--no-lzss`、`--set-shuffle`、`--test-shuffle`、`--csv`、`--gei` 或全局 `--const-profile` 同用。 |
-| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，找到任意一条与 `<test_dir>` 中全部参考 DAT 的字符串索引匹配的连续种子链。可选种子后必须保留三个路径参数。省略种子时，可用 `--set-shuffle` 的值作为搜索起点。不能与 `--tmp` 或 `--gei` 同用。 |
+| `--test-shuffle [seed0]` | 从 `seed0`（默认 `0`）搜索至 `0xFFFFFFFF`，找到任意一条与 `<test_dir>` 中全部参考 DAT 的字符串索引匹配的连续种子链。程序按固定的 Windows 文件名大小写映射查找同名 DAT，优先选用拼写完全一致的文件。可选种子后必须保留三个路径参数。省略种子时，可用 `--set-shuffle` 的值作为搜索起点。不能与 `--tmp` 或 `--gei` 同用。 |
 | `--csv <seed_csv>` | 与 `--test-shuffle` 同用时，随链接后的 PCK 一并发布各场景的初始和最终种子。目录目标下的文件名为 `test_shuffle_seeds.csv`。 |
 | `--gei` | 仅将 `Gameexe.ini` 编译为 `Gameexe.dat`，输出始终按目录处理。缺少 INI 时会警告并成功结束，不创建 `Gameexe.dat`。不能与 `--tmp` 或 `--test-shuffle` 同用。 |
 

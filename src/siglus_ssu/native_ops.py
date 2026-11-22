@@ -1,4 +1,5 @@
 from functools import lru_cache
+from itertools import islice
 import os
 import struct
 import math
@@ -702,14 +703,21 @@ def msvcrt_rand15(state: int):
     return s, (s >> 16) & 0x7FFF
 
 
-def msvcrt_advance(state: int, steps: int) -> int:
+def _msvcrt_jump_powers():
     multiplier = _MSVCRT_MULTIPLIER
     increment = _MSVCRT_INCREMENT
-    while steps > 0:
-        if steps & 1:
-            state = (multiplier * state + increment) & 0xFFFFFFFF
+    while True:
+        yield multiplier, increment
         increment = ((multiplier + 1) * increment) & 0xFFFFFFFF
         multiplier = (multiplier * multiplier) & 0xFFFFFFFF
+
+
+def msvcrt_advance(state: int, steps: int) -> int:
+    powers = _msvcrt_jump_powers()
+    while steps > 0:
+        multiplier, increment = next(powers)
+        if steps & 1:
+            state = (multiplier * state + increment) & 0xFFFFFFFF
         steps >>= 1
     return state
 
@@ -719,27 +727,41 @@ def msvcrt_rand_byte(state: int):
     return s, v & 0xFF
 
 
-def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int):
-    pat_len = len(pattern)
-    prefix = [0] * pat_len
-    matched = 0
-    for i in range(1, pat_len):
-        while matched and pattern[i] != pattern[matched]:
-            matched = prefix[matched - 1]
-        if pattern[i] == pattern[matched]:
-            matched += 1
-        prefix[i] = matched
-    state = msvcrt_advance(seed, start_skip)
-    matched = 0
-    for pos in range((1 << 24) + pat_len - 1):
+def _msvcrt_matches_bytes(state, expected_bytes):
+    for expected in expected_bytes:
         state, value = msvcrt_rand_byte(state)
-        while matched and value != pattern[matched]:
-            matched = prefix[matched - 1]
-        if value == pattern[matched]:
-            matched += 1
-        if matched == pat_len:
-            return start_skip + (pos + 1 - pat_len)
-    return None
+        if value != expected:
+            return False
+    return True
+
+
+def _py_find_rand_skip(seed: int, pattern: bytes, start_skip: int):
+    first, tail = pattern[0], pattern[1:]
+    candidate_count = 1 << 16
+    origin, value = msvcrt_rand_byte(msvcrt_advance(seed, start_skip))
+    state = origin
+    for skip in range(candidate_count):
+        if value == first and _msvcrt_matches_bytes(state, tail):
+            return start_skip + skip
+        state, value = msvcrt_rand_byte(state)
+
+    state_bits = 24
+    period = 1 << state_bits
+    jump_powers = tuple(islice(_msvcrt_jump_powers(), state_bits))
+    earliest = period
+    first_candidate = first * candidate_count
+    for candidate in range(first_candidate, first_candidate + candidate_count):
+        if not _msvcrt_matches_bytes(candidate, tail):
+            continue
+        state = origin
+        distance = 0
+        for bit, (multiplier, increment) in enumerate(jump_powers):
+            step = 1 << bit
+            if (state ^ candidate) & step:
+                state = (multiplier * state + increment) & 0xFFFFFFFF
+                distance |= step
+        earliest = min(earliest, distance)
+    return start_skip + earliest if earliest < period else None
 
 
 def find_rand_skip(seed: int, pattern: bytes, start_skip: int = 0):

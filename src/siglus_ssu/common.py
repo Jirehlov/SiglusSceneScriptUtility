@@ -1800,8 +1800,9 @@ def is_named_filename(name: str, target_name: str) -> bool:
     return windows_filename_key(name) == windows_filename_key(target_name)
 
 
-def find_named_paths(base_dir, target_names):
-    wanted = {windows_filename_key(name) for name in target_names}
+def find_named_paths(base_dir, target_names, *, prefer_exact=False):
+    names = set(target_names)
+    wanted = {windows_filename_key(name) for name in names}
     try:
         _, entries = read_directory(base_dir)
     except (FileNotFoundError, NotADirectoryError):
@@ -1812,7 +1813,10 @@ def find_named_paths(base_dir, target_names):
         key = windows_filename_key(entry.name)
         if key in wanted and entry.is_file():
             validate_input_paths([entry.path], seen=seen, warn_only=True)
-            selected.setdefault(key, entry.path)
+            if prefer_exact and entry.name in names:
+                selected[key] = entry.path
+            else:
+                selected.setdefault(key, entry.path)
     return selected
 
 
@@ -2314,27 +2318,35 @@ def read_scn_header(blob):
     return parse_i32_header(blob, fields, C.SCN_HDR_SIZE)
 
 
-def parse_i32_header_checked(dat: bytes, fields, size: int) -> dict:
+def parse_i32_header_checked(dat: bytes, fields, size: int, *, data_size=None) -> dict:
     h = parse_i32_header(dat, fields, size)
     if not h:
         return {}
     hs = h.get("header_size", 0)
-    if hs < int(size or 0) or hs > len(dat):
+    if data_size is None:
+        data_size = len(dat)
+    if hs < int(size or 0) or hs > data_size:
         return {}
     return h
 
 
+def read_scn_payload_header(blob, *, data_size=None) -> dict:
+    header = parse_i32_header_checked(
+        blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE, data_size=data_size
+    )
+    if not header:
+        return {}
+    if data_size is None:
+        data_size = len(blob)
+    scene_offset = header.get("scn_ofs", 0)
+    scene_size = header.get("scn_size", 0)
+    if scene_offset < 0 or scene_size < 0 or scene_offset + scene_size > data_size:
+        return {}
+    return header
+
+
 def looks_like_siglus_dat(blob: bytes) -> bool:
-    h = parse_i32_header_checked(blob, C.SCN_HDR_FIELDS, C.SCN_HDR_SIZE)
-    if not h:
-        return False
-    so = h.get("scn_ofs", 0)
-    ss = h.get("scn_size", 0)
-    if so < 0 or ss < 0 or so > len(blob):
-        return False
-    if ss and so + ss > len(blob):
-        return False
-    return True
+    return bool(read_scn_payload_header(blob))
 
 
 def looks_like_siglus_pck(blob: bytes) -> bool:
@@ -2786,7 +2798,6 @@ def eprint(msg: str, errors: str = "backslashreplace") -> None:
             pass
 
 
-_U16_LE = struct.Struct("<H")
 _U32_LE = struct.Struct("<I")
 _I32_LE = struct.Struct("<i")
 _I32_PAIR_LE = struct.Struct("<ii")

@@ -48,6 +48,7 @@ from .common import (
     open_atomic_output,
     decode_exe_el_key,
     find_angou_dat,
+    find_named_paths,
     directory_lock,
     decode_angou_first_line,
     angou_to_exe_el,
@@ -308,6 +309,8 @@ def _compile_cache_state(
     with suppress(FileNotFoundError):
         digest_path.unlink()
     verified = pending["artifacts"] = {}
+    if serial:
+        pending["shuffle_seeds"] = {}
     if (
         not isinstance(old, dict)
         or old.get("meta") != cache_meta
@@ -339,7 +342,31 @@ def _compile_cache_state(
             verified[name] = current
         else:
             compile_list.append(scene)
+    cached_seeds = old.get("shuffle_seeds")
+    if serial and isinstance(cached_seeds, dict):
+        for name in verified:
+            seed = cached_seeds.get(name)
+            if type(seed) is int and 0 <= seed <= 0xFFFFFFFF:
+                pending["shuffle_seeds"][name] = seed
     return compile_list, pending
+
+
+def _resume_cached_shuffle(tmp_dir, cached_scenes, seed, shuffle_seeds):
+    first = len(cached_scenes)
+    while first:
+        name = ascii_lower(os.path.basename(cached_scenes[first - 1]))
+        cached_seed = shuffle_seeds.get(name)
+        if cached_seed is not None:
+            seed = cached_seed
+            break
+        first -= 1
+    for scene in cached_scenes[first:]:
+        dat_path = Path(tmp_dir, "bs", Path(scene).stem + ".dat")
+        with open_read(dat_path) as stream:
+            header = read_scn_header(stream.read(C.SCN_HDR_SIZE))
+        seed = msvcrand_shuffle_inplace(seed, [None] * header["str_index_cnt"])
+        shuffle_seeds[ascii_lower(os.path.basename(scene))] = seed
+    return seed
 
 
 def _tmp_incompatible_options(argv, test_shuffle=False):
@@ -371,13 +398,6 @@ def _scn_dat_string_index(blob, path):
         raise ValueError(f"{path}: bad str_index_list")
     index = list(I32_PAIR_STRUCT.iter_unpack(memoryview(blob)[start:end]))
     return header, index
-
-
-def _read_scn_dat_header(path):
-    h = read_scn_header(read_bytes(path))
-    if not h:
-        raise ValueError(f"{path}: bad dat header")
-    return h
 
 
 def _scn_dat_str_pool(b, h, idx):
@@ -431,16 +451,15 @@ def _compile_shuffle_chain(
 ):
     from .parallel import find_shuffle_chain_seed
 
+    reference_names = [Path(path).stem + ".dat" for path in compile_list]
+    references = find_named_paths(test_dir, reference_names, prefer_exact=True)
     targets = []
-    for index, ss_path in enumerate(compile_list):
-        name = Path(ss_path).stem
-        expected_path = os.path.join(test_dir, name + ".dat")
-        try:
-            expected_path = resolve_read_path(expected_path, kind="file")
-        except (FileNotFoundError, NotADirectoryError):
+    for index, name in enumerate(reference_names):
+        expected_path = references.get(windows_filename_key(name))
+        if expected_path is None:
             raise FileNotFoundError(
-                f"expected dat not found: {expected_path}"
-            ) from None
+                f"expected dat not found: {os.path.join(test_dir, name)}"
+            )
         check_output_inputs(output_paths, [expected_path])
         input_paths.append(expected_path)
         blob = read_bytes(expected_path)
@@ -609,25 +628,6 @@ def _collect_macro_stats(ctx, compile_stats):
             bucket["unused"] += 1
     merge_macro_stat_counts(macro_counts, compile_stats["scene_macro_counts"])
     return macro_counts
-
-
-def _collect_read_flag_stats(bs_dir, scene_paths):
-    total = 0
-    scene_total = 0
-    scene_counts = []
-    for scene_path in scene_paths:
-        nm = os.path.splitext(os.path.basename(scene_path))[0]
-        dat_path = os.path.join(bs_dir, nm + ".dat")
-        header = _read_scn_dat_header(dat_path)
-        cnt = header["read_flag_cnt"]
-        total += cnt
-        if cnt > 0:
-            scene_total += 1
-            scene_counts.append((nm, cnt))
-    top_scenes = nsmallest(
-        5, scene_counts, key=lambda item: (-item[1], ascii_lower(item[0]), item[0])
-    )
-    return total, scene_total, top_scenes
 
 
 def _finalize_source_stats(ctx, compile_stats):
@@ -845,6 +845,7 @@ def _native_compile_config(
             "lzss_paths": lzss_paths,
             "compiled_scene_files": len(compile_list),
             "full_compile_stats": full_compile_stats,
+            "save_shuffle_seeds": bool(args.tmp_dir and force_serial_compile),
         },
         "options": {
             "dat_repack": bool(args.dat_repack),
@@ -869,7 +870,7 @@ def _native_compile_config(
     }
 
 
-def _try_native_compile(config, ctx):
+def _try_native_compile(config, ctx, shuffle_seeds):
     result = compile_project_native(config)
     if not isinstance(result, dict):
         sys.stderr.write(
@@ -887,6 +888,8 @@ def _try_native_compile(config, ctx):
     if isinstance(stats, dict):
         ctx.setdefault("stats", {}).update(stats)
     ok = bool(result.get("ok"))
+    if ok and shuffle_seeds is not None:
+        shuffle_seeds.update(result.get("shuffle_seeds", ()))
     stderr = str(result.get("stderr") or "")
     if stderr:
         sys.stderr.write(stderr)
@@ -1245,6 +1248,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         resources.callback(outputs.close)
         compile_list = ss
         pending_digests = None
+        shuffle_seeds = None
         cache_workers = 1
         if a.tmp_dir and not force_serial_compile:
             from .parallel import get_max_workers
@@ -1263,13 +1267,12 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 workers=cache_workers,
                 serial=force_serial_compile,
             )
-            if a.tmp_dir and force_serial_compile and compile_list:
-                for path in ss[: len(ss) - len(compile_list)]:
-                    with open_read(Path(tmp, "bs", Path(path).stem + ".dat")) as stream:
-                        header = read_scn_header(stream.read(C.SCN_HDR_SIZE))
-                    initial_seed = msvcrand_shuffle_inplace(
-                        initial_seed, [None] * header["str_index_cnt"]
-                    )
+            shuffle_seeds = pending_digests.get("shuffle_seeds")
+            if shuffle_seeds is not None and compile_list:
+                cached_scenes = ss[: len(ss) - len(compile_list)]
+                initial_seed = _resume_cached_shuffle(
+                    tmp, cached_scenes, initial_seed, shuffle_seeds
+                )
     except (OSError, ValueError) as exc:
         sys.stderr.write(f"{prog}: error: {exc}\n")
         return 1
@@ -1320,8 +1323,6 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "debug_outputs": bool(a.debug),
         "lzss_mode": (not a.no_angou),
         "easy_link": bool(a.no_lzss),
-        "easy_angou_code": C.EASY_ANGOU_CODE,
-        "gameexe_dat_angou_code": C.GAMEEXE_DAT_ANGOU_CODE,
         "stats": stats,
     }
     stats["angou_content"] = angou_content
@@ -1348,7 +1349,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 force_serial_compile=force_serial_compile,
                 initial_seed=initial_seed,
             )
-            native_rc = _try_native_compile(native_config, ctx)
+            native_rc = _try_native_compile(native_config, ctx, shuffle_seeds)
             if native_rc == 0:
                 if pending_digests is not None:
                     _write_digest_cache(
@@ -1444,23 +1445,12 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                         compile_list,
                         max_workers=a.max_workers,
                         parallel=(not force_serial_compile),
+                        shuffle_seeds=shuffle_seeds,
                     )
             if full_compile_stats:
                 stage = "statistics"
                 stats["macro_counts"] = _collect_macro_stats(ctx, compile_stats)
                 stats["source_stats"] = _finalize_source_stats(ctx, compile_stats)
-                bs_dir = os.path.join(tmp, "bs")
-                (
-                    stats["read_flags"],
-                    stats["read_flags_scenes"],
-                    stats["top5_read_flags_scenes"],
-                ) = _collect_read_flag_stats(bs_dir, ss)
-            else:
-                stats["macro_counts"] = None
-                stats["source_stats"] = None
-                stats["read_flags"] = None
-                stats["read_flags_scenes"] = None
-                stats["top5_read_flags_scenes"] = None
             stage = "link"
             link_pack(ctx)
             if pending_digests is not None:

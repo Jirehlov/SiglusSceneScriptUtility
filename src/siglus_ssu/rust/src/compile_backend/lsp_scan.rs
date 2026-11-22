@@ -77,7 +77,7 @@ fn build_inc_project(mut data: IaData, inc_docs: &Bound<'_, PyList>) -> Result<I
         scratch_list.push((path, scratch));
     }
     for (path, scratch) in scratch_list {
-        let mut analyzer = IncAnalyzer::new("", data.codes.forms.global.name.as_str());
+        let mut analyzer = IncAnalyzer::<true>::new("", data.codes.forms.global.name.as_str());
         analyzer
             .step2(&mut data, &scratch)
             .map_err(|_| format!("{path}:{}: {}", analyzer.error_line, analyzer.error_str))?;
@@ -732,7 +732,7 @@ pub fn lsp_scan_document(
             return diagnostic_result(py);
         }
     };
-    let mut lex = match lex_scene_text(
+    let mut lex = match lex_scene_text::<true>(
         &scene.text,
         &ia_data.codes.la,
         Some(&scene.source_map),

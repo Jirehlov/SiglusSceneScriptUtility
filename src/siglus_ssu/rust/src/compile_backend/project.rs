@@ -6,7 +6,7 @@ use super::config::CompileConfig;
 use super::form_table::FormTable;
 use super::frontend_common::{CaseMode, SingleQuoteMode, TextCommentOptions, scan_text_comments};
 use super::ia::{IaData, IaScratch, IncAnalyzer};
-use super::la::lex_scene_text_for_compile;
+use super::la::lex_scene_text;
 use super::ma::SemanticAnalyzer;
 use super::pack::{IncPropertyPack, PackHeaderLayout, PackInput, build_pack_bytes};
 use super::sa::SyntaxAnalyzer;
@@ -27,6 +27,7 @@ pub struct ProjectOutput {
     pub read_flag_stats: Option<ReadFlagStats>,
     pub source_stats: Option<SourceStats>,
     pub binary_size_stats: Option<BinarySizeStats>,
+    pub shuffle_seeds: Vec<(String, u32)>,
 }
 
 pub struct CompileFailure {
@@ -1166,10 +1167,8 @@ fn build_global_ia<const FULL_STATS: bool>(
             .to_string();
         log_stage(log, "IA", &display_name)?;
         let text = read_source(config, &path)?;
-        let mut analyzer = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
-            text,
-            data.codes.forms.global.name.as_str(),
-        );
+        let mut analyzer =
+            IncAnalyzer::<FULL_STATS>::new(text, data.codes.forms.global.name.as_str());
         let mut scratch = IaScratch::default();
         analyzer
             .step1(&mut data, &mut scratch)
@@ -1177,10 +1176,8 @@ fn build_global_ia<const FULL_STATS: bool>(
         scratch_list.push((display_name, scratch));
     }
     for (display_name, scratch) in scratch_list {
-        let mut analyzer = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
-            "",
-            data.codes.forms.global.name.as_str(),
-        );
+        let mut analyzer =
+            IncAnalyzer::<FULL_STATS>::new("", data.codes.forms.global.name.as_str());
         analyzer
             .step2(&mut data, &scratch)
             .map_err(|_| line_error(&display_name, analyzer.error_line, &analyzer.error_str))?;
@@ -1231,7 +1228,7 @@ fn prepare_scene<const FULL_STATS: bool>(
     let mut scene_inc_commands = 0usize;
     if !file2.inc_text.is_empty() {
         let mut scratch = IaScratch::default();
-        let mut scene_ia = IncAnalyzer::<FULL_STATS>::new_with_usage_tracking(
+        let mut scene_ia = IncAnalyzer::<FULL_STATS>::new(
             &file2.inc_text,
             ia_data.codes.forms.scene.name.as_str(),
         );
@@ -1267,7 +1264,7 @@ fn prepare_scene<const FULL_STATS: bool>(
         log_stage(log, "LA", display_name)?;
     }
     let stage_start = Instant::now();
-    let lex_result = lex_scene_text_for_compile(&scene_text, &ia_data.codes.la);
+    let lex_result = lex_scene_text::<false>(&scene_text, &ia_data.codes.la, None, None);
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "LA", stage_start);
     }
@@ -1526,6 +1523,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             read_flag_stats: None,
             source_stats: None,
             binary_size_stats: None,
+            shuffle_seeds: Vec::new(),
         });
     }
     let stage_start = Instant::now();
@@ -1581,6 +1579,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         })
         .collect::<Vec<_>>();
     let mut compiled = Vec::new();
+    let mut shuffle_seeds = Vec::new();
     let code = config.constants.easy_angou_code.as_slice();
     let prepack = use_lzss
         && !code.is_empty()
@@ -1727,10 +1726,11 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     if scene.stem.is_empty() {
                         scene.stem = scene_stem(task.name);
                     }
-                    emit(
-                        task.key.as_str(),
-                        finalize_scene::<FULL_STATS>(config, scene, &mut rand)?,
-                    )?;
+                    let scene = finalize_scene::<FULL_STATS>(config, scene, &mut rand)?;
+                    if config.cache.save_shuffle_seeds {
+                        shuffle_seeds.push((task.key.clone(), rand.state));
+                    }
+                    emit(task.key.as_str(), scene)?;
                 }
                 Ok(())
             },
@@ -2042,6 +2042,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         read_flag_stats,
         source_stats,
         binary_size_stats,
+        shuffle_seeds,
     })
 }
 

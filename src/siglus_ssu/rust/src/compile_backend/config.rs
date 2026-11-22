@@ -154,6 +154,7 @@ pub struct CompileCache {
     pub lzss_paths: HashMap<String, String>,
     pub compiled_scene_files: usize,
     pub full_compile_stats: bool,
+    pub save_shuffle_seeds: bool,
 }
 
 pub struct CompileConfig {
@@ -343,6 +344,7 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         lzss_paths: extract_item(&cache_dict, "lzss_paths")?,
         compiled_scene_files: extract_item::<i64>(&cache_dict, "compiled_scene_files")? as usize,
         full_compile_stats: extract_item(&cache_dict, "full_compile_stats")?,
+        save_shuffle_seeds: extract_item(&cache_dict, "save_shuffle_seeds")?,
     };
     Ok(CompileConfig {
         input_dir: extract_item(&dict, "input_dir")?,

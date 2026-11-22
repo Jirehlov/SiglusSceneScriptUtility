@@ -238,20 +238,7 @@ fn read_flag_spans(
     merged
 }
 
-pub fn lex_scene_text(
-    text: &str,
-    codes: &LexCodes,
-    source_map: Option<&[Option<SourcePoint>]>,
-    read_origins: Option<&[(usize, usize, usize)]>,
-) -> Result<LexResult, LexError> {
-    lex_scene_text_inner::<true>(text, codes, source_map, read_origins)
-}
-
-pub fn lex_scene_text_for_compile(text: &str, codes: &LexCodes) -> Result<LexResult, LexError> {
-    lex_scene_text_inner::<false>(text, codes, None, None)
-}
-
-fn lex_scene_text_inner<const WITH_SPANS: bool>(
+pub fn lex_scene_text<const WITH_SPANS: bool>(
     text: &str,
     codes: &LexCodes,
     source_map: Option<&[Option<SourcePoint>]>,

@@ -36,11 +36,9 @@ def _parse_cmd_labels(dat):
     return out
 
 
-def compress_scene_dat(dat, lz_path, easy_code):
-    if not easy_code:
-        raise RuntimeError("ctx.easy_angou_code is not set")
+def compress_scene_dat(dat, lz_path):
     packed = bytearray(lzss_pack(dat))
-    xor_cycle_inplace(packed, easy_code, 0)
+    xor_cycle_inplace(packed, C.EASY_ANGOU_CODE, 0)
     write_bytes(lz_path, packed)
     return packed
 
@@ -57,7 +55,6 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
         return dat_list, lzss_list
     dat_list = []
     lzss_list = []
-    easy_code = ctx.get("easy_angou_code") or b""
     for nm in scn_names:
         dat_path = os.path.join(bs_dir, nm + ".dat")
         try:
@@ -73,7 +70,7 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
                 lz_path = resolve_read_path(lz_path, kind="file")
             except (FileNotFoundError, NotADirectoryError):
                 t = time.time()
-                lz = compress_scene_dat(dat, lz_path, easy_code)
+                lz = compress_scene_dat(dat, lz_path)
                 record_stage_time(ctx, "LZSS", time.time() - t)
                 log_stage("LZSS", nm + ".ss", ctx)
             else:
@@ -83,30 +80,48 @@ def _load_scene_data(ctx, scn_names, lzss_mode):
     return dat_list, lzss_list
 
 
-def _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
+def _set_scene_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode):
+    stats = ctx["stats"]
+    collect_read_flags = stats["full_compile_stats"]
     total_dat = 0
     total_scn = 0
     total_lzss = 0
+    read_flags = 0
     dat_rows = []
+    read_flag_rows = []
     for i, name in enumerate(scn_names):
         dat = dat_list[i]
         dat_size = len(dat)
+        header = read_scn_header(dat)
         total_dat += dat_size
-        total_scn += read_scn_header(dat)["scn_size"]
+        total_scn += header["scn_size"]
         total_lzss += len(lzss_list[i]) if lzss_mode else 0
         dat_rows.append({"name": name, "dat_bytes": dat_size})
+        if collect_read_flags:
+            count = header["read_flag_cnt"]
+            read_flags += count
+            if count > 0:
+                read_flag_rows.append((name, count))
     top_dat_scenes = nsmallest(
         5,
         dat_rows,
         key=lambda row: (-row["dat_bytes"], ascii_lower(row["name"]), row["name"]),
     )
-    ctx["stats"]["binary_size_stats"] = {
+    stats["binary_size_stats"] = {
         "dat_bytes": total_dat,
         "scn_bytes": total_scn,
         "lzss_bytes": total_lzss,
         "lzss_ratio": total_lzss / total_dat if total_dat and lzss_mode else None,
         "top_dat_scenes": top_dat_scenes,
     }
+    if collect_read_flags:
+        stats["read_flags"] = read_flags
+        stats["read_flags_scenes"] = len(read_flag_rows)
+        stats["top5_read_flags_scenes"] = nsmallest(
+            5,
+            read_flag_rows,
+            key=lambda item: (-item[1], ascii_lower(item[0]), item[0]),
+        )
 
 
 def _build_index_list_for_strings(strs):
@@ -254,7 +269,7 @@ def link_pack(ctx):
         os.path.splitext(os.path.basename(scene))[0] for scene in ctx["scn_list"]
     ]
     dat_list, lzss_list = _load_scene_data(ctx, scn_names, lzss_mode)
-    _set_binary_size_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode)
+    _set_scene_stats(ctx, scn_names, dat_list, lzss_list, lzss_mode)
     scn_name_list = [ascii_lower(nm) for nm in scn_names]
     inc_prop_name_list = [p["name"] for p in inc_props]
     inc_cmd_name_list = [c["name"] for c in inc_cmds]

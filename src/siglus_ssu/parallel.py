@@ -48,7 +48,6 @@ def _multiprocessing_main():
 
 
 def _init_process(
-    legacy_compile,
     legacy_full,
     multiplier,
     multiplier_explicit,
@@ -57,7 +56,6 @@ def _init_process(
     initargs,
 ):
     _runtime._configure_output_streams()
-    _runtime._LEGACY_COMPILE = legacy_compile
     _runtime._LEGACY_FULL = legacy_full
     _runtime._SCENE_STRING_XOR_MULTIPLIER = multiplier
     _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT = multiplier_explicit
@@ -73,7 +71,6 @@ def _new_process_pool(max_workers, initializer, initargs):
         max_workers=max_workers,
         initializer=_init_process,
         initargs=(
-            _runtime._LEGACY_COMPILE,
             _runtime._LEGACY_FULL,
             _runtime._SCENE_STRING_XOR_MULTIPLIER,
             _runtime._SCENE_STRING_XOR_MULTIPLIER_EXPLICIT,
@@ -340,13 +337,13 @@ def parallel_compile(
 
 
 def _lzss_compress_task(
-    args: tuple[str, bytes, str, bytes],
+    args: tuple[str, bytes, str],
 ) -> tuple[str, bytes | bytearray, str | None]:
-    nm, dat, lz_path, easy_code = args
+    nm, dat, lz_path = args
     try:
         from .linker import compress_scene_dat
 
-        lz = compress_scene_dat(dat, lz_path, easy_code)
+        lz = compress_scene_dat(dat, lz_path)
         return (nm, lz, None)
     except Exception as e:
         return (nm, b"", str(e))
@@ -357,7 +354,6 @@ def parallel_lzss_compress(
 ) -> tuple[list[bytes], list[bytes | bytearray]]:
     from .common import format_scene_name, read_bytes
 
-    easy_code = ctx.get("easy_angou_code") or b""
     results = ctx.pop("compressed_scenes", {})
     tasks = []
     for nm in scn_names:
@@ -375,7 +371,7 @@ def parallel_lzss_compress(
         try:
             lz_path = resolve_read_path(lz_path, kind="file")
         except (FileNotFoundError, NotADirectoryError):
-            tasks.append((nm, dat, lz_path, easy_code))
+            tasks.append((nm, dat, lz_path))
         else:
             results[nm] = (dat, read_bytes(lz_path))
     if not tasks:

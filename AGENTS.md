@@ -11,11 +11,11 @@
 9. Keep both language versions of the manuals aligned with the implementation and with each other.
 10. For every diff, manually run and pass all lint checks defined in CI.
 11. Code comments are prohibited.
-12. Do not document scripts/ or CI in either manual or the changelog; they are outside the project's scope.
-13. Do not modify changelog entries for released versions.
+12. Do not document scripts/ or CI in either manual or in future changelog entries. They are outside the project's scope.
+13. Apply changelog rules only to new entries. Do not audit or modify changelog entries for released versions.
 14. Avoid pure forwarding functions with only a few references.
 15. Unsafe Rust is prohibited.
 16. Do not duplicate constants defined in `const.py` elsewhere; always reference their definitions in `const.py`.
 17. Limit PCK compatibility work and parsing accuracy guarantees to combinations of on-disk layout, metadata, and payload encodings that this project can produce through a supported generation path using valid inputs and supported options. Flix resource PCKs are the sole exception and have read-only support. Successful parsing or extraction of an unsupported PCK is permitted, with no accuracy guarantee. Skip work aimed solely at cataloging unsupported variants, improving their decoding, or adding checks to identify or reject them.
-18. Record only major changes in the changelog.
+18. Record only major changes in future changelog entries.
 19. Use Python's built-ins, the Python standard library, or the Rust standard library to interact with the operating system. High-level cross-platform Python APIs such as psutil are allowed. Project code must not call platform OS APIs directly through FFI or low-level bindings.
