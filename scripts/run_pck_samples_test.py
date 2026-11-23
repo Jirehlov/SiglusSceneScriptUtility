@@ -272,7 +272,7 @@ def _command_prefix(command: str | None) -> list[str]:
     return [sys.executable, "-m", "siglus_ssu"]
 
 
-def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
+def _run_test_command(cmd, expected_status: str) -> int:
     print(f"running: {' '.join(cmd)}")
     completed = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if completed.stdout:
@@ -281,7 +281,6 @@ def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
         sys.stderr.write(completed.stderr)
     if completed.returncode != 0:
         return int(completed.returncode)
-    expected_status = str(expected_status or "")
     if not expected_status:
         return 0
     matches = list(_TEST_SUMMARY_RE.finditer(completed.stdout))
@@ -297,10 +296,8 @@ def _run_test_command(cmd, expected_count: int, expected_status: str) -> int:
         "SKIP": skipped,
         "FAIL": failed,
     }
-    if expected_status not in counts:
-        raise ValueError(f"unsupported expected status: {expected_status}")
     if (
-        total != expected_count
+        total != 1
         or counts[expected_status] != total
         or any(count for status, count in counts.items() if status != expected_status)
     ):
@@ -391,7 +388,7 @@ def _run_siglus_test(
                 cmd.extend(["--report-json", str(child_report)])
             cmd.append(str(path))
             status = expected_status or ("PAYLOAD_SAME" if decompile else "")
-            rc = _run_test_command(cmd, 1, status)
+            rc = _run_test_command(cmd, status)
             if child_report is not None:
                 if child_report.is_file():
                     report = json.loads(child_report.read_text(encoding="utf-8"))

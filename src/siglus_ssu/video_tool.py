@@ -13,7 +13,7 @@ from .common import (
     is_option_token,
 )
 from . import video
-from .path_policy import resolve_read_path
+from .path_policy import resolve_read_path, validate_input_paths
 
 
 def _build_hi24_ranges(hi24):
@@ -263,6 +263,7 @@ def main(argv):
                 eprint(f"refer not found: {refer_path}")
                 return 1
             try:
+                validate_input_paths((inp, refer_path))
                 ref_info = video.read_omv_full_info(refer_path)
             except (EOFError, OSError, ValueError, struct.error) as exc:
                 eprint(f"error: refer analyze failed: {exc}")

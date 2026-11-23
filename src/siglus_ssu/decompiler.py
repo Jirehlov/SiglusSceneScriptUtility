@@ -23,8 +23,17 @@ _OPEN_NAME = "\u3010"
 _CLOSE_NAME = "\u3011"
 
 
-def _line_item(text, target_line=None):
-    return (str(text or ""), int(target_line) if target_line is not None else None)
+def _line_item(text, target_line=None, indent=0):
+    return (
+        str(text or ""),
+        int(target_line) if target_line is not None else None,
+        indent,
+    )
+
+
+def _indented_text(line):
+    text, _, indent = line
+    return " " * indent + text if indent and text else text
 
 
 def _line_text(line):
@@ -324,34 +333,13 @@ def _default_return_form():
     return C._FORM_CODE[C.FM_INT]
 
 
-def _indent_lines(lines):
-    out = []
-    for line in lines or []:
-        text = _line_text(line)
-        out.append(_line_item(("    " + text) if text else "", _line_target(line)))
-    return out
-
-
-def _merge_head_with_first_line(head, body_lines):
-    text = str(head or "")
-    if not body_lines:
-        return [_line_item(text)]
-    first = body_lines[0]
-    m = _LINE_LABEL_RE.match(_line_text(first))
-    if m:
-        indent, label, tail = m.groups()
-        if tail:
-            target = _line_target(first)
-            merged = text + "\t" + str(tail or "").lstrip()
-            return [
-                _line_item(indent + label, target),
-                _line_item(merged, target),
-            ] + body_lines[1:]
-        return [_line_item(text)] + body_lines
-    merged = text + "\t" + str(_line_text(first) or "").lstrip()
-    out = [_line_item(merged, _line_target(first))]
-    out.extend(body_lines[1:])
-    return out
+def _indent_lines(lines, spaces=4):
+    return [
+        (line[0], line[1], line[2] + spaces)
+        if type(line) is tuple
+        else _line_item(line, indent=spaces)
+        for line in lines
+    ]
 
 
 def _merge_same_target_lines(lines):
@@ -1195,15 +1183,21 @@ class _Decompiler:
     def _with_labels(self, labels, lines, target_line):
         labs = self._label_lines(labels)
         out = list(lines)
+        if target_line is not None and out and _line_target(out[0]) is None:
+            first = out[0]
+            out[0] = _line_item(
+                _line_text(first), target_line, first[2] if type(first) is tuple else 0
+            )
         if labs and out:
             first_target = _line_target(out[0])
-            if first_target is None and target_line is not None:
-                first_target = target_line
-                out[0] = _line_item(_line_text(out[0]), first_target)
             if first_target is not None and first_target == target_line:
                 return (
                     [_line_item(x, target_line) for x in labs[:-1]]
-                    + [_line_item(labs[-1] + "\t" + _line_text(out[0]), first_target)]
+                    + [
+                        _line_item(
+                            labs[-1] + "\t" + _indented_text(out[0]), first_target
+                        )
+                    ]
                     + out[1:]
                 )
             return [_line_item(x, target_line) for x in labs] + out
@@ -1211,8 +1205,6 @@ class _Decompiler:
             return [_line_item(labs[0], target_line)] + [
                 _line_item(x) for x in labs[1:]
             ]
-        if target_line is not None and out and _line_target(out[0]) is None:
-            out[0] = _line_item(_line_text(out[0]), target_line)
         return out
 
     def _is_empty_cd_nl_sentence(self, idx):
@@ -3219,22 +3211,21 @@ class _Decompiler:
                 if item.get("kind") == "case"
                 else "    default"
             )
-            body = _indent_lines(_indent_lines(item.get("body") or []))
-            first_label = _LINE_LABEL_RE.match(_line_text(body[0])) if body else None
+            body = _indent_lines(item.get("body") or [], 8)
+            if not body:
+                out.append(_line_item(head, item.get("sort_line")))
+                continue
+            first, target, spaces = body[0]
+            first_label = _LINE_LABEL_RE.match(first)
             if first_label:
                 indent, label, tail = first_label.groups()
-                target = _line_target(body[0])
-                body[0] = _line_item(indent + label, target)
+                body[0] = _line_item(indent + label, target, spaces)
                 if tail:
-                    body.insert(1, _line_item(indent + tail, target))
+                    body.insert(1, _line_item(indent + tail, target, spaces))
                 out.append(_line_item(head, item.get("start_line")))
-                out.extend(body)
             else:
-                out.extend(
-                    _merge_head_with_first_line(head, body)
-                    if body
-                    else [_line_item(head, item.get("sort_line"))]
-                )
+                body[0] = _line_item(head + "\t" + first.lstrip(), target)
+            out.extend(body)
         out.append(_line_item("}"))
         out, tramp_idx = self._append_trampolines(out, out_idx, end_ofs, ctx)
         return self._with_event(start_idx, out), tramp_idx
@@ -3303,6 +3294,9 @@ class _Decompiler:
     def decompile(self):
         eof_line = self.event_lines[-1] or 0
         body_lines = self._parse_block(0, 1 << 30, None)
+        for index, line in enumerate(body_lines):
+            if type(line) is tuple and line[2]:
+                body_lines[index] = (_indented_text(line), line[1], 0)
         body_lines = self._restore_missing_l_labels(body_lines)
         body_lines = self._dedupe_l_label_defs(body_lines)
         standalone = self._standalone_l_label_targets()

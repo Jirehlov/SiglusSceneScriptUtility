@@ -21,6 +21,7 @@ from .common import (
     read_struct_list,
 )
 from .path_policy import (
+    FilenameCaseCollisionError,
     read_file_stat,
     resolve_read_path,
     check_output_inputs,
@@ -243,17 +244,22 @@ def analyze_read_flags(
 ):
     try:
         save_path = resolve_read_path(save_path, kind="file")
+        input_paths = [save_path]
         if input_pck:
             input_pck = resolve_read_path(input_pck, kind="file")
-    except (FileNotFoundError, NotADirectoryError) as exc:
+            input_paths.append(input_pck)
+        if key_paths:
+            direct_key_path = os.path.abspath(explicit_angou.strip())
+            if direct_key_path in key_paths:
+                input_paths.append(direct_key_path)
+        validate_input_paths(input_paths, allow_same_file=True)
+    except (FileNotFoundError, NotADirectoryError, FilenameCaseCollisionError) as exc:
         sys.stderr.write(f"analyze: {exc}\n")
         return 2
     report_json = os.path.abspath(
         report_json or os.path.splitext(save_path)[0] + ".flags.json"
     )
-    inputs = {save_path, *(key_paths or ())}
-    if input_pck:
-        inputs.add(input_pck)
+    inputs = {*input_paths, *(key_paths or ())}
     try:
         check_output_inputs([report_json], inputs)
     except (OSError, ValueError) as exc:

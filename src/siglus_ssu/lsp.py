@@ -215,6 +215,14 @@ class AnalysisResult:
     directive_tokens: list[dict[str, Any]] = field(default_factory=list)
     unmapped_bindings: list[str] = field(default_factory=list)
     read_flag_ranges: list[list[tuple[int, int, int]]] | None = None
+    _partial_completion_definitions: (
+        tuple[
+            dict[str, list[DefinitionRecord]],
+            dict[str, DefinitionRecord],
+            dict[str, DefinitionRecord],
+        ]
+        | None
+    ) = field(default=None, init=False, repr=False, compare=False)
     _occurrences_by_line: dict[int, list[SymbolOccurrence]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -1032,17 +1040,17 @@ def _compiler_token_at_position(
 
 
 def _collect_scene_symbols(
-    lad: dict[str, Any] | None,
-    sad: dict[str, Any] | None,
     result: AnalysisResult,
+    sad: dict[str, Any] | None,
+    inc_iad2: dict[str, Any],
 ) -> tuple[
     dict[str, list[DefinitionRecord]],
     dict[str, DefinitionRecord],
     dict[str, DefinitionRecord],
     list[DefinitionRecord],
 ]:
-    if not isinstance(lad, dict) or not isinstance(sad, dict):
-        return {}, {}, {}, []
+    lad = result.lad
+    bindings = (result.mad or {}).get("bindings") or {}
     local_defs: dict[str, list[DefinitionRecord]] = {}
     label_defs: dict[str, DefinitionRecord] = {}
     z_label_defs: dict[str, DefinitionRecord] = {}
@@ -1062,14 +1070,16 @@ def _collect_scene_symbols(
             record.line = token.line + 1
             record.start_char = token.start_char
             record.end_char = token.end_char
-        binding = (result.mad.get("bindings") or {}).get(atom.get("id"))
+        else:
+            record.path = result.path
+        binding = bindings.get(atom.get("id"))
         if binding is not None:
             record.symbol_id = _binding_symbol_id(result.path, binding[0], binding[1])
         elif record.kind in ("label", "z_label"):
             record.symbol_id = _label_symbol_id(result.path, record.name)
         return record
 
-    root = sad.get("root") or {}
+    root = (sad or {}).get("root") or {}
     pending = [(sentence, "") for sentence in reversed(root.get("sentense_list") or [])]
 
     def queue_block(items: Any, cmd_name: str) -> None:
@@ -1208,6 +1218,13 @@ def _collect_scene_symbols(
                 queue_block(case.get("block"), current_command)
             continue
 
+    for record in _extract_iad2_definition_records(
+        result.path, inc_iad2, result.project.source_files
+    ):
+        record.scope = "scene-local"
+        record.symbol_id = _definition_symbol_id(replace(record, path=result.path))
+        add_local(record)
+
     return local_defs, label_defs, z_label_defs, doc_symbols
 
 
@@ -1229,6 +1246,20 @@ def _analyze_ss_document(
     result = AnalysisResult(path=abs_path, text=text, project=project)
     iad = copy_ia_data(project.iad)
     pcad: dict[str, Any] = {}
+
+    def finish(sad=None, *, complete=False):
+        local_defs, labels, z_labels, symbols = _collect_scene_symbols(
+            result, sad, pcad.get("inc_iad2", {})
+        )
+        if complete:
+            result.local_definitions = local_defs
+            result.label_definitions = labels
+            result.z_label_definitions = z_labels
+            result.document_symbols = symbols
+        else:
+            result._partial_completion_definitions = local_defs, labels, z_labels
+        return result
+
     ca = CharacterAnalizer(sidecar=True, read_flags=read_flags)
     compiled = ca.analize_file(_analysis_source_text(text), iad, pcad)
     result.directive_tokens = pcad.get("directive_tokens", [])
@@ -1241,7 +1272,7 @@ def _analyze_ss_document(
                 code="CA",
             )
         )
-        return result
+        return finish()
     result.replace_uses = [
         item for item in pcad.get("replace_uses", []) if isinstance(item, dict)
     ]
@@ -1255,7 +1286,7 @@ def _analyze_ss_document(
                 code="LA",
             )
         )
-        return result
+        return finish()
     result.lad = lad
     sa = SA(iad, lad)
     ok, sad = sa.analize()
@@ -1279,7 +1310,7 @@ def _analyze_ss_document(
                 code="SA",
             )
         )
-        return result
+        return finish(sad)
     ma = MA(iad, lad, sad)
     ok, mad = ma.analize()
     if not ok:
@@ -1293,7 +1324,7 @@ def _analyze_ss_document(
                 code="MA",
             )
         )
-        return result
+        return finish(sad)
     result.mad = mad
     if run_bs:
         bs = BS()
@@ -1308,38 +1339,14 @@ def _analyze_ss_document(
                     code="BS",
                 )
             )
-            return result
+            return finish(sad)
         if read_flag_atoms is not None:
             spans = lad["read_flag_span_list"]
             result.read_flag_ranges = [
                 spans[atom] if 0 <= atom < len(spans) else []
                 for atom in read_flag_atoms
             ]
-    local_defs, label_defs, z_label_defs, doc_symbols = _collect_scene_symbols(
-        lad, sad, result
-    )
-    for item in _extract_iad2_definition_records(
-        abs_path,
-        pcad.get("inc_iad2", {}),
-        project.source_files,
-    ):
-        item.scope = "scene-local"
-        item.symbol_id = _definition_symbol_id(replace(item, path=abs_path))
-        _append_definition(local_defs, item)
-        doc_symbols.append(item)
-    for bucket in local_defs.values():
-        for item in bucket:
-            item.path = item.path or abs_path
-    for mapping in (label_defs, z_label_defs):
-        for item in mapping.values():
-            item.path = item.path or abs_path
-    for item in doc_symbols:
-        item.path = item.path or abs_path
-    result.local_definitions = local_defs
-    result.label_definitions = label_defs
-    result.z_label_definitions = z_label_defs
-    result.document_symbols = doc_symbols
-    return result
+    return finish(sad, complete=True)
 
 
 def analyze_document(
@@ -2405,6 +2412,11 @@ def completion_items(
         result, line, character, position_encoding
     )
     prefix = ascii_lower(token)
+    local_defs, labels, z_labels = result._partial_completion_definitions or (
+        result.local_definitions,
+        result.label_definitions,
+        result.z_label_definitions,
+    )
     items: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -2422,15 +2434,11 @@ def completion_items(
 
     want_labels = token_kind == "label"
     if want_labels:
-        for rec in sorted(
-            result.label_definitions.values(), key=lambda x: (x.line, x.name)
-        ):
-            if ascii_lower(rec.name).startswith(prefix):
-                add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
-        for rec in sorted(
-            result.z_label_definitions.values(), key=lambda x: (x.line, x.name)
-        ):
-            if ascii_lower(rec.name).startswith(prefix):
+        for definitions in (labels, z_labels):
+            for rec in sorted(
+                (rec for key, rec in definitions.items() if key.startswith(prefix)),
+                key=lambda rec: (rec.line, rec.name),
+            ):
                 add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
         for label in DIRECTIVES:
             if label.startswith(prefix):
@@ -2447,7 +2455,7 @@ def completion_items(
             add(name, COMPLETION_KIND_TYPE_PARAMETER, FORM_DOCS.get(name, ""))
     for rec in chain(
         result.project.completion_definitions(prefix),
-        _matching_definitions(result.local_definitions, prefix),
+        _matching_definitions(local_defs, prefix),
         _matching_definitions(BUILTIN_RECORDS, prefix, BUILTIN_COMPLETION_KEYS),
     ):
         kind = (
@@ -2458,12 +2466,10 @@ def completion_items(
         if rec.kind in ("macro", "define", "replace"):
             kind = COMPLETION_KIND_CONSTANT
         add(rec.name, kind, rec.detail or rec.signature or rec.scope)
-    for rec in result.label_definitions.values():
-        if not prefix or ascii_lower(rec.name).startswith(prefix):
-            add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
-    for rec in result.z_label_definitions.values():
-        if not prefix or ascii_lower(rec.name).startswith(prefix):
-            add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
+    for definitions in (labels, z_labels):
+        for key, rec in definitions.items():
+            if key.startswith(prefix):
+                add(rec.name, COMPLETION_KIND_REFERENCE, rec.detail)
     items.sort(
         key=lambda x: (str(x.get("label", "")).casefold(), int(x.get("kind", 999)))
     )

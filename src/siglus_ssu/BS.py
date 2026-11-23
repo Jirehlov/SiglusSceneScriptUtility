@@ -1563,10 +1563,7 @@ class BS:
         s.out_scn["scn"].push_u8(C.CD_ELM_POINT)
         s.out_scn["scn"].push_u8(C.CD_PUSH)
         s.out_scn["scn"].push_i32(_fc(C.FM_INT))
-        msg_block = C.ELM_GLOBAL_MSG_BLOCK
-        if not isinstance(msg_block, int):
-            msg_block = int(msg_block or 0)
-        s.out_scn["scn"].push_i32(int(msg_block))
+        s.out_scn["scn"].push_i32(C.ELM_GLOBAL_MSG_BLOCK)
         s.out_scn["scn"].push_u8(C.CD_COMMAND)
         s.out_scn["scn"].push_i32(0)
         s.out_scn["scn"].push_i32(0)

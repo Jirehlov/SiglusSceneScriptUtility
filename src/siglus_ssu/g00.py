@@ -2,7 +2,7 @@ import json
 import struct
 import sys
 import re
-from collections import Counter
+from collections import Counter, OrderedDict
 from io import BytesIO
 from pathlib import Path
 from . import const as C
@@ -29,6 +29,7 @@ from .path_policy import (
     same_file_path,
     open_read,
     read_directory,
+    read_file_stat,
     resolve_read_path,
     windows_filename_key,
     validate_input_paths,
@@ -50,6 +51,7 @@ _JPEG_SUFFIXES = (".jpg", ".jpeg")
 _SIMPLE_G00_TYPES = (0, 1, 3)
 _SIMPLE_EXT = {0: ".png", 1: ".png", 3: ".jpeg"}
 _SIMPLE_COMP = {0: "LZSS32", 1: "LZSS"}
+_TYPE2_SOURCE_CACHE_BYTES = 64 * 1024 * 1024
 if len(C.G00_XOR_T) != 256:
     raise SystemExit(f"bad G00_XOR_T: {len(C.G00_XOR_T)}")
 
@@ -1057,13 +1059,15 @@ def _load_type2_layout_json(config_path: Path, default_source_hint: Path | None 
     }
 
 
-def _build_type2_official_g00_from_image(img_p: Path | None, layout) -> bytes:
+def _build_type2_official_g00_from_image(
+    img_p: Path | None, layout, decode_image
+) -> bytes:
     cache = {}
 
     def _load_source(path):
         path = str(path)
         if path not in cache:
-            cache[path] = _load_image_bgra(path)
+            cache[path] = decode_image(path)
         return cache[path]
 
     if layout is not None:
@@ -1152,7 +1156,7 @@ def _report_single_update(report, img_p: Path, wh: tuple[int, int], changed: boo
     ]
 
 
-def _build_g00_from_image(img_p: Path | None, g00_type: int, layout):
+def _build_g00_from_image(img_p: Path | None, g00_type: int, layout, decode_image):
     if g00_type == 0:
         bgra, w, h = _load_type0_image_bgra(img_p)
         return bytes([0]) + struct.pack("<HH", w, h) + lzss32_pack(bgra)
@@ -1162,7 +1166,7 @@ def _build_g00_from_image(img_p: Path | None, g00_type: int, layout):
     if g00_type == 1:
         raise ValueError("type1 create is not implemented yet; use --refer to update")
     if g00_type == 2:
-        return _build_type2_official_g00_from_image(img_p, layout)
+        return _build_type2_official_g00_from_image(img_p, layout, decode_image)
     raise ValueError(f"unsupported create type: {g00_type}")
 
 
@@ -1420,8 +1424,49 @@ def _create_g00_files(targets, type_opt, *, use_sidecars=True):
     check_output_inputs(
         (out_path for out_path, *_ in plans), source_paths.values(), distinct=True
     )
+    remaining_uses = Counter(
+        source
+        for _, _, _, _, layout in plans
+        if layout is not None
+        for source in set(layout["sources"])
+    )
+    cached_sources = OrderedDict()
+    cached_bytes = 0
+
+    def decode_image(path):
+        nonlocal cached_bytes
+        remaining = remaining_uses[path]
+        if remaining:
+            remaining_uses[path] -= 1
+        cached = cached_sources.pop(path, None)
+        if cached is None and remaining <= 1:
+            return _load_image_bgra(path)
+        if cached is not None:
+            cached_bytes -= len(cached[1][0])
+        info = read_file_stat(path)
+        version = (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            info.st_mtime_ns,
+            info.st_ctime_ns,
+        )
+        image = (
+            cached[1]
+            if cached is not None and cached[0] == version
+            else _load_image_bgra(path)
+        )
+        image_bytes = len(image[0])
+        if remaining > 1 and image_bytes <= _TYPE2_SOURCE_CACHE_BYTES:
+            while cached_bytes + image_bytes > _TYPE2_SOURCE_CACHE_BYTES:
+                _, (_, evicted) = cached_sources.popitem(last=False)
+                cached_bytes -= len(evicted[0])
+            cached_sources[path] = version, image
+            cached_bytes += image_bytes
+        return image
+
     for out_path, kind, image, layout_path, layout in plans:
-        data = _build_g00_from_image(image, kind, layout)
+        data = _build_g00_from_image(image, kind, layout, decode_image)
         with open_atomic_output(out_path) as output:
             output.write(data)
         _print_create_report(out_path, kind, data, source=image, layout=layout_path)

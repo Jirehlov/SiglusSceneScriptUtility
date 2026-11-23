@@ -125,7 +125,7 @@ class SA:
         while s._a(p).get("type") != C.LA_T["NONE"]:
             ok, p2, sen = s.sa_sentence(p)
             if not ok:
-                return 0, 0, None
+                return 0, p, ss
             ss["sentense_list"].append(sen)
             p = p2
         s.last = err
@@ -1301,8 +1301,15 @@ class SA:
         s.clear()
         s.warnings.clear()
         ok, root = s.sa_ss()[::2]
+        sad = {
+            "root": root,
+            "call_prop_name_list": [],
+            "cur_call_prop_cnt": 0,
+            "total_call_prop_cnt": 0,
+            "command_in": 0,
+        }
         if not ok:
-            return 0, None
+            return 0, sad
         s.clear()
         for i, x in enumerate(s.label_list):
             if not x.get("exist"):
@@ -1316,17 +1323,11 @@ class SA:
                         "subopt": 0,
                     },
                 )
-                return 0, None
+                return 0, sad
         if not s.z_label_list[0].get("exist"):
             s.error("TNMSERR_SA_Z_LABEL_00_NOT_EXIST")
-            return 0, None
+            return 0, sad
         if any(not cmd["is_defined"] for cmd in s.piad["commands"].values()):
             s.error("TNMSERR_SA_DEF_CMD_NOT_EXIST")
-            return 0, None
-        return 1, {
-            "root": root,
-            "call_prop_name_list": [],
-            "cur_call_prop_cnt": 0,
-            "total_call_prop_cnt": 0,
-            "command_in": 0,
-        }
+            return 0, sad
+        return 1, sad

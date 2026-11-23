@@ -833,88 +833,25 @@ fn format_argument_layout(rt: &Runtime, layout: &[Argument]) -> SourceText {
         }
     }
 }
-fn merge_source_head(head: SourceText, mut body: Vec<SourceLine>) -> Vec<SourceLine> {
-    if body.is_empty() {
-        return vec![SourceLine {
-            text: head,
-            target: None,
-        }];
-    }
-    let first = body.remove(0);
-    if let Some(label) = label_definition(&first.text) {
-        if let Some(tail) = label.tail.filter(|start| *start < first.text.chars.len()) {
-            let text = source_concat(&[
-                &head.chars,
-                &[9],
-                &trim_source_left(&source_slice(&first.text, tail, first.text.chars.len())).chars,
-            ]);
-            body.insert(
-                0,
-                SourceLine {
-                    text,
-                    target: first.target,
-                },
-            );
-            body.insert(
-                0,
-                SourceLine {
-                    text: source_slice(&first.text, 0, label.label_end),
-                    target: first.target,
-                },
-            );
-        } else {
-            body.insert(0, first);
-            body.insert(
-                0,
-                SourceLine {
-                    text: head,
-                    target: None,
-                },
-            );
-        }
-    } else {
-        body.insert(
-            0,
-            SourceLine {
-                text: source_concat(&[&head.chars, &[9], &trim_source_left(&first.text).chars]),
-                target: first.target,
-            },
-        );
-    }
-    body
-}
 fn wrap_source_block(
     head: SourceText,
     body: Vec<SourceLine>,
     inline: Option<Vec<SourceText>>,
 ) -> Vec<SourceLine> {
     if let Some(inline) = inline {
-        return vec![SourceLine {
-            text: source_concat(&[
+        return vec![SourceLine::new(
+            source_concat(&[
                 &head.chars,
                 &[123],
                 &source_join(&inline, "\t").chars,
                 &[125],
             ]),
-            target: None,
-        }];
+            None,
+        )];
     }
-    let mut out = vec![SourceLine {
-        text: source_concat(&[&head.chars, &[123]]),
-        target: None,
-    }];
-    out.extend(body.into_iter().map(|line| SourceLine {
-        text: if line.text.chars.is_empty() {
-            line.text
-        } else {
-            source_concat(&[&[32; 4], &line.text.chars])
-        },
-        target: line.target,
-    }));
-    out.push(SourceLine {
-        text: source("}"),
-        target: None,
-    });
+    let mut out = vec![SourceLine::new(source_concat(&[&head.chars, &[123]]), None)];
+    out.extend(body.into_iter().map(|line| line.indented(4)));
+    out.push(SourceLine::new(source("}"), None));
     out
 }
 
@@ -1285,6 +1222,9 @@ pub(crate) mod decompiler {
             executor
                 .clone()
                 .run(parser.block(executor, 0, 1 << 30, ParserContext::default()))?;
+        for line in &mut body {
+            line.apply_indent();
+        }
         for pass in [LinePass::RestoreLabels, LinePass::DedupeLabels] {
             body = native_line_postprocess(rt, instance, pass, body)?;
         }
@@ -5202,7 +5142,34 @@ type RestoredLines = (Vec<SourceLine>, std::collections::HashSet<SourceText>);
 struct SourceLine {
     text: SourceText,
     target: Option<i64>,
+    indent: usize,
 }
+
+impl SourceLine {
+    fn new(text: SourceText, target: Option<i64>) -> Self {
+        Self {
+            text,
+            target,
+            indent: 0,
+        }
+    }
+
+    fn indented(mut self, spaces: usize) -> Self {
+        self.indent += spaces;
+        self
+    }
+
+    fn apply_indent(&mut self) {
+        let indent = std::mem::take(&mut self.indent);
+        if indent != 0 && !self.text.chars.is_empty() {
+            let mut chars = Vec::with_capacity(indent + self.text.chars.len());
+            chars.resize(indent, 32);
+            chars.extend_from_slice(&self.text.chars);
+            self.text = Arc::new(Text::new(chars));
+        }
+    }
+}
+
 fn materialize_source_lines(lines: Vec<SourceLine>) -> Vec<SourceText> {
     let mut out: Vec<SourceText> = vec![];
     let mut current = 1i64;
@@ -5409,8 +5376,9 @@ fn attach_source_labels(
             let mut out = labels[..labels.len() - 1]
                 .iter()
                 .cloned()
-                .map(|text| SourceLine { text, target })
+                .map(|text| SourceLine::new(text, target))
                 .collect::<Vec<_>>();
+            lines[0].apply_indent();
             lines[0].text =
                 source_concat(&[&labels.last().unwrap().chars, &[9], &lines[0].text.chars]);
             out.extend(lines);
@@ -5418,7 +5386,7 @@ fn attach_source_labels(
         }
         let mut out = labels
             .into_iter()
-            .map(|text| SourceLine { text, target })
+            .map(|text| SourceLine::new(text, target))
             .collect::<Vec<_>>();
         out.extend(lines);
         return out;
@@ -5427,10 +5395,7 @@ fn attach_source_labels(
         return labels
             .into_iter()
             .enumerate()
-            .map(|(index, text)| SourceLine {
-                text,
-                target: if index == 0 { target } else { None },
-            })
+            .map(|(index, text)| SourceLine::new(text, if index == 0 { target } else { None }))
             .collect();
     }
     if target.is_some() && !lines.is_empty() && lines[0].target.is_none() {
@@ -5613,7 +5578,7 @@ impl LineInsertions {
         self.additions
             .entry((position, effective, appended))
             .or_default()
-            .push(SourceLine { text, target });
+            .push(SourceLine::new(text, target));
     }
     fn finish(self, lines: Vec<SourceLine>) -> Vec<SourceLine> {
         let mut output =
@@ -6192,10 +6157,10 @@ fn split_standalone_labels(
                     || (!unreferenced && earlier)
                 {
                     if emitted.insert(token.clone()) {
-                        out.push(SourceLine {
-                            text: Arc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
-                            target: Some(target),
-                        });
+                        out.push(SourceLine::new(
+                            Arc::new(Text::new(line.text.chars[..label.label_end].to_vec())),
+                            Some(target),
+                        ));
                         keep.insert(token);
                     }
                     line.text = definition_without_label(&line.text, label);
@@ -6226,10 +6191,7 @@ fn native_late_line_pass(
                     current += 1;
                 }
                 if current - 1 < target {
-                    lines.push(SourceLine {
-                        text: empty_source(),
-                        target: Some(target),
-                    });
+                    lines.push(SourceLine::new(empty_source(), Some(target)));
                 }
             }
         }
@@ -6278,10 +6240,10 @@ fn native_late_line_pass(
                 {
                     let (name, target) = &specs[*index];
                     if emitted.insert(name.clone()) {
-                        out.push(SourceLine {
-                            text: source_concat(&[&line.text.chars[..label.indent], &name.chars]),
-                            target: Some(*target),
-                        });
+                        out.push(SourceLine::new(
+                            source_concat(&[&line.text.chars[..label.indent], &name.chars]),
+                            Some(*target),
+                        ));
                     }
                     if definition_has_tail(&line.text, label) {
                         let tail = rewrite_source_references(
@@ -6289,17 +6251,17 @@ fn native_late_line_pass(
                             &definition_tail(&line.text, label),
                             &mapping,
                         )?;
-                        out.push(SourceLine {
-                            text: source_concat(&[&line.text.chars[..label.indent], &tail.chars]),
-                            target: line.target,
-                        });
+                        out.push(SourceLine::new(
+                            source_concat(&[&line.text.chars[..label.indent], &tail.chars]),
+                            line.target,
+                        ));
                     }
                     continue;
                 }
-                out.push(SourceLine {
-                    text: rewrite_source_references(rt, &line.text, &mapping)?,
-                    target: line.target,
-                });
+                out.push(SourceLine::new(
+                    rewrite_source_references(rt, &line.text, &mapping)?,
+                    line.target,
+                ));
             }
             lines = out;
         }
@@ -6332,10 +6294,10 @@ fn native_late_line_pass(
                 {
                     let token = definition_token(&line.text, label);
                     if definition_has_tail(&line.text, label) && !references.contains(&token) {
-                        out.push(SourceLine {
-                            text: definition_without_label(&line.text, label),
-                            target: line.target,
-                        });
+                        out.push(SourceLine::new(
+                            definition_without_label(&line.text, label),
+                            line.target,
+                        ));
                         continue;
                     }
                     if !definition_has_tail(&line.text, label)
@@ -6379,10 +6341,7 @@ fn native_late_line_pass(
                         && scene.labels[event_idx].iter().any(|label| label.z)
                     {
                         lines[index] = lines[next].clone();
-                        lines[next] = SourceLine {
-                            text: empty_source(),
-                            target: lines[next].target,
-                        };
+                        lines[next] = SourceLine::new(empty_source(), lines[next].target);
                     }
                 }
             }
@@ -6400,10 +6359,10 @@ fn native_late_line_pass(
                         label.label.z && !definition_has_tail(&kept[previous].text, label)
                     })
                 {
-                    out.push(SourceLine {
-                        text: definition_without_label(&line.text, label),
-                        target: line.target,
-                    });
+                    out.push(SourceLine::new(
+                        definition_without_label(&line.text, label),
+                        line.target,
+                    ));
                     continue;
                 }
                 out.push(line.clone());
@@ -6584,14 +6543,14 @@ fn native_late_line_pass(
                         end += 1;
                     }
                     if let Some(tail) = tail.filter(|_| counts.get(&alias) == Some(&1)) {
-                        out.push(SourceLine {
-                            text: source_concat(&[
+                        out.push(SourceLine::new(
+                            source_concat(&[
                                 &line.text.chars[..label.label_end],
                                 &[9],
                                 &tail.chars,
                             ]),
-                            target: line.target,
-                        });
+                            line.target,
+                        ));
                         index = end;
                         continue;
                     }
@@ -6628,17 +6587,17 @@ fn native_late_line_pass(
                         && lines[mid].target < lines[next].target
                     {
                         out.push(line.clone());
-                        out.push(SourceLine {
-                            text: source_concat(&[
+                        out.push(SourceLine::new(
+                            source_concat(&[
                                 &lines[mid].text.chars[..mid_label.indent],
                                 &moved.chars,
                             ]),
-                            target: lines[mid].target,
-                        });
-                        out.push(SourceLine {
-                            text: definition_without_label(&lines[next].text, next_label),
-                            target: lines[next].target,
-                        });
+                            lines[mid].target,
+                        ));
+                        out.push(SourceLine::new(
+                            definition_without_label(&lines[next].text, next_label),
+                            lines[next].target,
+                        ));
                         index = next + 1;
                         continue;
                     }
@@ -7761,7 +7720,7 @@ impl<'a> SourceParser<'a> {
                 if text.chars.is_empty() {
                     vec![]
                 } else {
-                    vec![SourceLine { text, target: None }]
+                    vec![SourceLine::new(text, None)]
                 },
             )?,
             index + 1,
@@ -7850,10 +7809,7 @@ impl<'a> SourceParser<'a> {
         let lines = if line.chars.is_empty() {
             vec![]
         } else {
-            vec![SourceLine {
-                text: line,
-                target: None,
-            }]
+            vec![SourceLine::new(line, None)]
         };
         let lines = if has_nl {
             self.with_event(start, lines)?
@@ -8194,13 +8150,7 @@ impl<'a> SourceParser<'a> {
         if multiline {
             out.splice(
                 out.len() - 1..,
-                self.with_event(
-                    out_index - 1,
-                    vec![SourceLine {
-                        text: source("}"),
-                        target: None,
-                    }],
-                )?,
+                self.with_event(out_index - 1, vec![SourceLine::new(source("}"), None)])?,
             );
         }
         let (out, next) = self.append_trampolines(out, out_index, end, context)?;
@@ -8345,13 +8295,7 @@ impl<'a> SourceParser<'a> {
             if multiline {
                 out.splice(
                     out.len() - 1..,
-                    self.with_event(
-                        out_index - 1,
-                        vec![SourceLine {
-                            text: source("}"),
-                            target: None,
-                        }],
-                    )?,
+                    self.with_event(out_index - 1, vec![SourceLine::new(source("}"), None)])?,
                 );
             }
             if head_event != start {
@@ -8616,10 +8560,10 @@ impl<'a> SourceParser<'a> {
         }
         blocks.sort_by_key(|case| (case.sort_line.unwrap_or(1 << 30), case.order));
         let expr = native_expression_source(self.rt, &condition, context.render.compound, true);
-        let mut out = vec![SourceLine {
-            text: source_concat(&[&source("switch(").chars, &expr.chars, &source("){").chars]),
-            target: None,
-        }];
+        let mut out = vec![SourceLine::new(
+            source_concat(&[&source("switch(").chars, &expr.chars, &source("){").chars]),
+            None,
+        )];
         for case in blocks {
             let head = if let Some(value) = &case.value {
                 let expr = native_expression_source(self.rt, value, context.render.compound, false);
@@ -8627,57 +8571,41 @@ impl<'a> SourceParser<'a> {
             } else {
                 source("    default")
             };
-            let mut body = case
-                .body
-                .into_iter()
-                .map(|line| SourceLine {
-                    text: if line.text.chars.is_empty() {
-                        line.text
-                    } else {
-                        source_concat(&[&[32; 8], &line.text.chars])
-                    },
-                    target: line.target,
-                })
-                .collect::<Vec<_>>();
-            if let Some(label) = body.first().and_then(|line| label_definition(&line.text)) {
-                let first = body.remove(0);
-                body.insert(
-                    0,
-                    SourceLine {
-                        text: source_slice(&first.text, 0, label.label_end),
-                        target: first.target,
-                    },
-                );
-                if let Some(tail) = label.tail.filter(|tail| *tail < first.text.chars.len()) {
-                    body.insert(
-                        1,
-                        SourceLine {
-                            text: source_concat(&[
+            let mut body = case.body;
+            for line in &mut body {
+                line.indent += 8;
+            }
+            let Some(first) = body.first_mut() else {
+                out.push(SourceLine::new(head, case.sort_line));
+                continue;
+            };
+            if let Some(label) = label_definition(&first.text) {
+                let tail = label
+                    .tail
+                    .filter(|tail| *tail < first.text.chars.len())
+                    .map(|tail| {
+                        SourceLine::new(
+                            source_concat(&[
                                 &first.text.chars[..label.indent],
                                 &first.text.chars[tail..],
                             ]),
-                            target: first.target,
-                        },
-                    );
+                            first.target,
+                        )
+                        .indented(first.indent)
+                    });
+                first.text = source_slice(&first.text, 0, label.label_end);
+                if let Some(tail) = tail {
+                    body.insert(1, tail);
                 }
-                out.push(SourceLine {
-                    text: head,
-                    target: case.line,
-                });
-                out.extend(body);
-            } else if body.is_empty() {
-                out.push(SourceLine {
-                    text: head,
-                    target: case.sort_line,
-                });
+                out.push(SourceLine::new(head, case.line));
             } else {
-                out.extend(merge_source_head(head, body));
+                let text =
+                    source_concat(&[&head.chars, &[9], &trim_source_left(&first.text).chars]);
+                *first = SourceLine::new(text, first.target);
             }
+            out.extend(body);
         }
-        out.push(SourceLine {
-            text: source("}"),
-            target: None,
-        });
+        out.push(SourceLine::new(source("}"), None));
         let (out, next) = self.append_trampolines(out, out_index, end, context)?;
         Ok(Some((self.with_event(start, out)?, next)))
     }
@@ -8970,10 +8898,7 @@ impl<'a> SourceParser<'a> {
                 text.extend_from_slice(&source_join(clause.inline.as_ref().unwrap(), "\t").chars);
                 text.push(125);
             }
-            out.push(SourceLine {
-                text: Arc::new(Text::new(text)),
-                target: None,
-            });
+            out.push(SourceLine::new(Arc::new(Text::new(text)), None));
         } else {
             let mut last_inline = false;
             for (index, clause) in clauses.iter().enumerate() {
@@ -9002,39 +8927,23 @@ impl<'a> SourceParser<'a> {
                         &source_join(clause.inline.as_ref().unwrap(), "\t").chars,
                         if last { &[125] } else { &[] },
                     ]);
-                    out.push(SourceLine { text, target });
+                    out.push(SourceLine::new(text, target));
                     last_inline = last;
                     continue;
                 }
                 if index == 0 {
-                    out.push(SourceLine {
-                        text: head,
-                        target: None,
-                    });
+                    out.push(SourceLine::new(head, None));
                 } else {
                     out.extend(self.with_event(
                         clauses[index - 1].tail.unwrap(),
-                        vec![SourceLine {
-                            text: head,
-                            target: None,
-                        }],
+                        vec![SourceLine::new(head, None)],
                     )?);
                 }
-                out.extend(clause.body.iter().map(|line| SourceLine {
-                    text: if line.text.chars.is_empty() {
-                        line.text.clone()
-                    } else {
-                        source_concat(&[&[32; 4], &line.text.chars])
-                    },
-                    target: line.target,
-                }));
+                out.extend(clause.body.iter().cloned().map(|line| line.indented(4)));
                 last_inline = false;
             }
             if !last_inline {
-                let line = SourceLine {
-                    text: source("}"),
-                    target: None,
-                };
+                let line = SourceLine::new(source("}"), None);
                 if let Some(tail) = clauses.last().unwrap().tail {
                     out.extend(self.with_event(tail, vec![line])?);
                 } else {

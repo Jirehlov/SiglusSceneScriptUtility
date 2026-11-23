@@ -1197,14 +1197,15 @@ fn build_global_ia<const FULL_STATS: bool>(
 
 fn prepare_scene<const FULL_STATS: bool>(
     config: &CompileConfig,
-    source_path: &Path,
-    display_name: &str,
+    task: &SceneTask<'_>,
     base_ia: &IaData,
     mut log: Option<&mut OutputLog<'_>>,
     mut stage_times: Option<&mut Vec<(String, f64)>>,
     warnings: &mut Vec<String>,
 ) -> Result<PreparedScene, String> {
-    let source = read_source(config, source_path)?;
+    let source = read_source(config, &task.path)?;
+    let stem = scene_stem(task.name);
+    let display_name = task.display_name;
     let mut ia_data = base_ia.for_scene();
     let mut ca = CharacterAnalyzer::<FULL_STATS>::new_with_usage_tracking(false);
     if let Some(log) = log.as_mut() {
@@ -1245,10 +1246,6 @@ fn prepare_scene<const FULL_STATS: bool>(
         .analyze_line(&file2.scene_text, &ia_data.replace_tree)
         .map_err(|_| scene_error("UNK_ERROR", display_name, ca.error_line))?;
     if config.context.debug_outputs && !config.tmp_dir.is_empty() {
-        let stem = source_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or_default();
         write_text_encoded(
             &Path::new(&config.tmp_dir)
                 .join("ca")
@@ -1365,11 +1362,6 @@ fn prepare_scene<const FULL_STATS: bool>(
     if let Some(times) = stage_times.as_mut() {
         record_stage_time(times, "BS", stage_start);
     }
-    let stem = source_path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_string();
     Ok(PreparedScene {
         stem,
         scene: bs_output.scene,
@@ -1581,11 +1573,8 @@ fn compile_project_inner<const FULL_STATS: bool>(
     let mut compiled = Vec::new();
     let mut shuffle_seeds = Vec::new();
     let code = config.constants.easy_angou_code.as_slice();
-    let prepack = use_lzss
-        && !code.is_empty()
-        && config.tmp_dir.is_empty()
-        && link_workers > 1
-        && compile_targets.len() > 1;
+    let prepack =
+        use_lzss && config.tmp_dir.is_empty() && link_workers > 1 && compile_targets.len() > 1;
     let concurrent_lzss_elapsed = if compile_workers > 1 && compile_targets.len() > 1 {
         let stage_start = Instant::now();
         let mut compile_tasks = tasks
@@ -1637,30 +1626,23 @@ fn compile_project_inner<const FULL_STATS: bool>(
                         let mut warnings = Vec::new();
                         let result = match prepare_scene::<FULL_STATS>(
                             config,
-                            &task.path,
-                            task.display_name,
+                            task,
                             &base_ia,
                             None,
                             None,
                             &mut warnings,
                         ) {
-                            Ok(mut scene) => {
-                                if scene.stem.is_empty() {
-                                    scene.stem = scene_stem(task.name);
-                                }
-                                finalize_scene::<FULL_STATS>(config, scene, worker_rand).and_then(
-                                    |mut scene| {
-                                        let compression = if combine_workers {
-                                            let start = Instant::now();
-                                            scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
-                                            Some((start, Instant::now()))
-                                        } else {
-                                            None
-                                        };
-                                        Ok((scene, compression))
-                                    },
-                                )
-                            }
+                            Ok(scene) => finalize_scene::<FULL_STATS>(config, scene, worker_rand)
+                                .and_then(|mut scene| {
+                                    let compression = if combine_workers {
+                                        let start = Instant::now();
+                                        scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
+                                        Some((start, Instant::now()))
+                                    } else {
+                                        None
+                                    };
+                                    Ok((scene, compression))
+                                }),
                             Err(message) => Err(message),
                         };
                         (key, status, warnings, result)
@@ -1714,18 +1696,14 @@ fn compile_project_inner<const FULL_STATS: bool>(
                     .iter()
                     .filter(|task| compile_targets.contains(&task.key))
                 {
-                    let mut scene = prepare_scene::<FULL_STATS>(
+                    let scene = prepare_scene::<FULL_STATS>(
                         config,
-                        &task.path,
-                        task.display_name,
+                        task,
                         &base_ia,
                         Some(&mut *stdout),
                         Some(stage_times),
                         &mut Vec::new(),
                     )?;
-                    if scene.stem.is_empty() {
-                        scene.stem = scene_stem(task.name);
-                    }
                     let scene = finalize_scene::<FULL_STATS>(config, scene, &mut rand)?;
                     if config.cache.save_shuffle_seeds {
                         shuffle_seeds.push((task.key.clone(), rand.state));
@@ -1895,9 +1873,6 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 link_workers,
                 || (),
                 |(), (stem, dat, path)| -> Result<(String, Vec<u8>), String> {
-                    if code.is_empty() {
-                        return Err("ctx.easy_angou_code is not set".to_string());
-                    }
                     let packed = pack_scene_data(dat, code)?;
                     if let Some(path) = path {
                         fs::write(&path, &packed)
@@ -1920,9 +1895,6 @@ fn compile_project_inner<const FULL_STATS: bool>(
         } else {
             for (stem, dat, path) in lzss_tasks {
                 let stage_start = Instant::now();
-                if code.is_empty() {
-                    return Err("ctx.easy_angou_code is not set".to_string());
-                }
                 let packed = pack_scene_data(dat, code)?;
                 if let Some(path) = path {
                     fs::write(&path, &packed).map_err(|error| format_path_error(&path, error))?;
