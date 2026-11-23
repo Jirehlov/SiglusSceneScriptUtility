@@ -220,12 +220,15 @@ _SYNTH_LINE_LABEL_RE = re.compile(r"^(\s*)(#__(?:gap_l\d+|cdnl_gap_\d+))(?:\t(.*
 
 
 @functools.lru_cache(maxsize=8192)
-def _label_ref_spans(text):
-    if "#l" not in text or ("goto" not in text and "gosub" not in text):
+def _label_spans(text, *, references=True):
+    if "#l" not in text:
         return ()
-    match = _GOTO_LABEL_REF_RE.fullmatch(text)
-    if match:
-        return ((match.start(1), match.end(1), match.group(1)),)
+    if references:
+        if "goto" not in text and "gosub" not in text:
+            return ()
+        match = _GOTO_LABEL_REF_RE.fullmatch(text)
+        if match:
+            return ((match.start(1), match.end(1), match.group(1)),)
     from .LA import la_analize
 
     lad, err = la_analize({"scn_text": text, "sidecar": True})
@@ -243,7 +246,7 @@ def _label_ref_spans(text):
         codes["CLOSE_PAREN"],
         codes["LABEL"],
     )
-    refs = []
+    matches = []
     parentheses = []
     previous = None
     after_arguments = False
@@ -251,12 +254,15 @@ def _label_ref_spans(text):
         token = atom["type"]
         if token == open_paren:
             parentheses.append(previous in gosubs)
-        elif token == label_token and (after_arguments or previous in jumps):
+        elif (
+            token == label_token
+            and (after_arguments or previous in jumps) == references
+        ):
             span = spans[idx]
             label = span["text"]
             if label.startswith("#l") and label[2:].isdigit():
                 start = line_starts[int(span["line"]) - 1]
-                refs.append(
+                matches.append(
                     (
                         start + int(span["start_char"]),
                         start + int(span["end_char"]),
@@ -267,7 +273,7 @@ def _label_ref_spans(text):
             token == close_paren and bool(parentheses) and parentheses.pop()
         )
         previous = token
-    return tuple(refs)
+    return tuple(matches)
 
 
 def _line_label_refs(lines):
@@ -275,7 +281,7 @@ def _line_label_refs(lines):
     for line in lines or []:
         text = _line_text(line)
         if "#l" in text and ("goto" in text or "gosub" in text):
-            refs.update(ref for _, _, ref in _label_ref_spans(text))
+            refs.update(ref for _, _, ref in _label_spans(text))
     return refs
 
 
@@ -503,7 +509,7 @@ def _rewrite_refs(text, mapping):
         return s
     parts = []
     end = 0
-    for start, stop, label in _label_ref_spans(s):
+    for start, stop, label in _label_spans(s):
         replacement = mapping.get(label)
         if replacement is not None and replacement != label:
             parts.extend((s[end:start], str(replacement)))
@@ -1073,7 +1079,7 @@ class _Decompiler:
                     ),
                     "body_range": (parsed["body_ofs"], parsed["trim_end_ofs"]),
                 }
-            idx = parsed["end_idx"]
+            idx = parsed["body_start_idx"]
         return out
 
     def _build_scene_inc_lines(self):
@@ -1257,14 +1263,6 @@ class _Decompiler:
             out.append(label)
         return out
 
-    def _has_inline_blocking_labels(self, ev):
-        if not ev["labels"]:
-            return False
-        active_labels = self._event_labels(ev)
-        if ev["ofs"] in self.suppressed_label_offsets:
-            return any(label.startswith("Z") for label in active_labels)
-        return bool(active_labels)
-
     def _goto_target_token(self, target, label_id):
         idx = self.offset_to_index[target]
         for label in self.events[idx]["labels"]:
@@ -1311,9 +1309,14 @@ class _Decompiler:
                     label_events.setdefault(_label_token(int(label[1:])), ev)
         defs = set()
         for line in lines:
-            m = _LINE_LABEL_RE.match(_line_text(line))
+            text = _line_text(line)
+            m = _LINE_LABEL_RE.match(text)
             if m and m.group(2).startswith("#l"):
                 defs.add(m.group(2))
+            if "for(" in text and "#l" in text:
+                defs.update(
+                    label for _, _, label in _label_spans(text, references=False)
+                )
         refs = _line_label_refs(lines)
         missing = refs - defs
         while missing:
@@ -1328,7 +1331,7 @@ class _Decompiler:
                     text = label + "\t" + self._goto_stmt(ev, None)
                 insertions.add(text, insert_target)
                 defs.add(label)
-                pending.update(ref for _, _, ref in _label_ref_spans(text))
+                pending.update(ref for _, _, ref in _label_spans(text))
             missing = pending - defs
         return insertions.finish(lines)
 
@@ -1950,7 +1953,7 @@ class _Decompiler:
             text = _line_text(line)
             if "#l" not in text:
                 continue
-            for _, _, ref in _label_ref_spans(text):
+            for _, _, ref in _label_spans(text):
                 ref_counts[ref] = int(ref_counts.get(ref, 0) or 0) + 1
         idx = 0
         while idx < len(lines):
@@ -2394,16 +2397,28 @@ class _Decompiler:
         next_idx = self._next_stmt_idx(stmt_idx, end_ofs)
         has_ops, line = self._render_simple_line_range(stmt_idx, next_idx, ctx)
         if inline:
-            if self._has_inline_blocking_labels(self.events[start_idx]):
-                return None, start_idx
-            if not has_ops:
-                return "", next_idx
+            labels = self._event_labels(self.events[start_idx])
             if (
-                line
+                labels
+                and self.event_offsets[start_idx] in self.suppressed_label_offsets
+            ):
+                labels = [label for label in labels if label.startswith("Z")]
+            if labels and (
+                not has_nl
+                or start_idx == 0
+                or self.event_ops[start_idx - 1] != "CD_NL"
+                or self.event_lines[start_idx - 1] != self.event_lines[start_idx]
+                or any(label.startswith("Z") for label in labels)
+            ):
+                return None, start_idx
+            if (
+                has_ops
                 and any(x in line for x in ("\n", "{", "}"))
                 and line not in ("continue", "break")
             ):
                 return None, start_idx
+            if labels:
+                line = _join_inline_sentences([*self._label_lines(labels), line])
             return line, next_idx
         out = [line] if line else []
         return (self._with_event(start_idx, out) if has_nl else out), next_idx

@@ -633,19 +633,21 @@ def format_integer_literal(value):
 
 def new_call_scope(ranges):
     state = SimpleNamespace(slots={}, decl_forms=[], version=0)
-    frames = []
+    command_ends = []
 
     def advance(ofs):
-        while frames and ofs >= frames[-1][0]:
-            _, state.slots, state.decl_forms = frames.pop()
+        while command_ends and ofs >= command_ends[-1]:
+            command_ends.pop()
+            state.slots.clear()
+            state.decl_forms.clear()
             state.version += 1
         if ofs in ranges:
-            frames.append((ranges[ofs], state.slots, state.decl_forms))
-            state.slots, state.decl_forms = {}, []
+            command_ends.append(ranges[ofs])
+            state.decl_forms.clear()
             state.version += 1
 
     def declare(form, name):
-        slot = len(state.decl_forms)
+        slot = len(state.slots)
         state.slots[slot] = {
             "type": C.ET_PROPERTY,
             "parent": C.FM_CALL,

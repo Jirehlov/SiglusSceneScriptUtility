@@ -90,7 +90,7 @@ def _parse_save_stream_head(b):
     if not b:
         return None
     try:
-        r = _SaveStreamReader(b, size_t_size=4)
+        r = _SaveStreamReader(b)
         scn = r.str_u16()
         line_no = int(r.i32())
         prg_cntr = int(r.i32())
@@ -179,43 +179,20 @@ def _parse_local_entry(r):
 
 
 def _parse_local_payload(raw):
-    r = _SaveStreamReader(raw, size_t_size=4)
+    r = _SaveStreamReader(raw)
     out = {}
     out["local_save"] = _parse_local_entry(r)
-    pos0 = r.tell()
-    if pos0 + 4 > len(r.buf):
-        raise ValueError("eof")
-    cnt4 = struct.unpack_from("<I", r.buf, pos0)[0]
-    ok4 = True
-    if cnt4 > 10000:
-        ok4 = False
-    if ok4 and cnt4 > 0:
-        ok4 = _peek_tid_ok(r.buf, pos0 + 4)
-    if ok4:
-        r.seek(pos0 + 4)
-        sel_cnt = int(cnt4)
-        sel_cnt_size = 4
-    else:
-        if pos0 + 8 > len(r.buf):
-            raise ValueError("eof")
-        cnt8 = struct.unpack_from("<Q", r.buf, pos0)[0]
-        if cnt8 > 10000:
-            raise ValueError("bad sel_save cnt")
-        if cnt8 > 0 and (not _peek_tid_ok(r.buf, pos0 + 8)):
-            raise ValueError("bad sel_save cnt")
-        r.seek(pos0 + 8)
-        sel_cnt = int(cnt8)
-        sel_cnt_size = 8
-    out["sel_save_cnt"] = int(sel_cnt)
-    out["sel_save_cnt_size"] = int(sel_cnt_size)
-    lst = []
-    for _ in range(sel_cnt):
-        lst.append(_parse_local_entry(r))
-    out["sel_save"] = lst
+    sel_cnt = r.i32()
+    if not 0 <= sel_cnt <= 10000 or (sel_cnt and not _peek_tid_ok(r.buf, r.tell())):
+        raise ValueError("bad sel_save cnt")
+    variant = {"sel_save_cnt_size": 4}
+    out["sel_save_cnt"] = sel_cnt
+    out.update(variant)
+    out["sel_save"] = [_parse_local_entry(r) for _ in range(sel_cnt)]
     tail = raw[r.tell() :]
     if tail and any(x != 0 for x in tail):
         out["_tail_hex"] = tail.hex()
-    return out, {"sel_save_cnt_size": int(sel_cnt_size)}
+    return out, variant
 
 
 def _peek_lzss_header(blob, start, data_size):
@@ -352,12 +329,11 @@ def _pack_tnm_data(raw):
 
 
 class _SaveStreamReader:
-    __slots__ = ("buf", "pos", "size_t_size")
+    __slots__ = ("buf", "pos")
 
-    def __init__(self, buf, *, size_t_size=4):
+    def __init__(self, buf):
         self.buf = buf
         self.pos = 0
-        self.size_t_size = int(size_t_size)
 
     def tell(self):
         return self.pos
@@ -387,11 +363,6 @@ class _SaveStreamReader:
 
     def bool1(self):
         return bool(self.u8())
-
-    def sizet(self):
-        if self.size_t_size == 4:
-            return int(self.u32())
-        return int(struct.unpack_from("<Q", self._read(8), 0)[0])
 
     def str_u16(self, *, skip=False):
         ln = self.i32()
@@ -443,8 +414,8 @@ def _read_fixed_str_list(r, *, skip=False):
     return out
 
 
-def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False):
-    r = _SaveStreamReader(raw, size_t_size=size_t_size)
+def _parse_global_payload(raw, major, minor, *, with_layout=False):
+    r = _SaveStreamReader(raw)
     out = {}
     real_time = r.i64() if major > 1 or (major == 1 and minor >= 2) else 0
     if not with_layout:
@@ -477,7 +448,7 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
         out["bgm_table"] = _read_fixed_int_list(r, with_layout=with_layout)
     else:
         out["bgm_table"] = None if with_layout else []
-    cnt = r.sizet()
+    cnt = r.u32()
     if with_layout:
         offsets = []
         for _ in range(cnt):
@@ -495,8 +466,8 @@ def _parse_global_payload(raw, major, minor, *, size_t_size=4, with_layout=False
     return out
 
 
-def _parse_config_payload(raw, major, minor, *, size_t_size=4):
-    r = _SaveStreamReader(raw, size_t_size=size_t_size)
+def _parse_config_payload(raw, major, minor):
+    r = _SaveStreamReader(raw)
     out = {}
     if major > 1 or (major == 1 and minor >= 3):
         out["screen_size_mode"] = int(r.i32())
@@ -539,7 +510,7 @@ def _parse_config_payload(raw, major, minor, *, size_t_size=4):
     out["jitan_msgbk_onoff"] = bool(r.bool1())
     out["jitan_speed"] = int(r.i32())
     out["koe_mode"] = int(r.i32())
-    cnt = int(r.sizet())
+    cnt = r.u32()
     blob = r._read(cnt * 8) if cnt > 0 else b""
     chrkoe = []
     for i in range(cnt):
@@ -549,11 +520,11 @@ def _parse_config_payload(raw, major, minor, *, size_t_size=4):
         chrkoe.append({"onoff": onoff, "volume": int(vol)})
     out["chrkoe"] = chrkoe
     out["message_chrcolor_flag"] = bool(r.bool1())
-    n = int(r.sizet())
+    n = r.u32()
     out["object_disp_flag"] = [bool(r.bool1()) for _ in range(n)]
-    n = int(r.sizet())
+    n = r.u32()
     out["global_extra_switch_flag"] = [bool(r.bool1()) for _ in range(n)]
-    n = int(r.sizet())
+    n = r.u32()
     out["global_extra_mode_flag"] = [int(r.i32()) for _ in range(n)]
     out["system_sleep_flag"] = bool(r.bool1())
     out["system_no_wipe_anime_flag"] = bool(r.bool1())
@@ -574,32 +545,24 @@ def _parse_config_payload(raw, major, minor, *, size_t_size=4):
     return out
 
 
-def _try_parse_payload(parser, raw, major, minor, **options):
-    last_err = None
-    for sz in (4, 8):
-        try:
-            d = parser(raw, major, minor, size_t_size=sz, **options)
-            return d, {"size_t_size": sz}, None
-        except Exception as e:
-            last_err = str(e)
-    return None, None, last_err or "eof"
-
-
 def _parse_global_or_config(blob, metadata):
     raw = _unpack_global_or_config(blob, metadata)
     parser = (
         _parse_global_payload if metadata["kind"] == "global" else _parse_config_payload
     )
-    payload, variant, err = _try_parse_payload(
-        parser, raw, metadata["major"], metadata["minor"]
-    )
+    payload = None
+    err = None
+    try:
+        payload = parser(raw, metadata["major"], metadata["minor"])
+    except (ValueError, struct.error) as exc:
+        err = str(exc)
     info = dict(metadata)
     info.pop("raw", None)
     info.update(
         unpacked_size=len(raw),
         unpacked_sha256=content_digest(raw),
         payload=payload,
-        payload_variant=variant,
+        payload_variant={"size_t_size": 4} if payload is not None else None,
         payload_error=err,
     )
     return info
@@ -820,15 +783,12 @@ def _parse_global_for_patch(blob, metadata=None):
     if metadata is None or metadata["kind"] != "global":
         raise ValueError("not global.sav")
     raw = _unpack_global_or_config(blob, metadata)
-    layout, _, err = _try_parse_payload(
-        _parse_global_payload,
-        raw,
-        metadata["major"],
-        metadata["minor"],
-        with_layout=True,
-    )
-    if layout is None:
-        raise ValueError(f"global.sav: {err or 'parse failed'}")
+    try:
+        layout = _parse_global_payload(
+            raw, metadata["major"], metadata["minor"], with_layout=True
+        )
+    except (ValueError, struct.error) as exc:
+        raise ValueError(f"global.sav: {exc}") from exc
     return {
         "major": metadata["major"],
         "minor": metadata["minor"],

@@ -2275,25 +2275,20 @@ impl NativeTables {
     }
 }
 
-struct ScopeFrame {
-    end: i64,
-    slots: Vec<Arc<Element>>,
-    declarations: Vec<Argument>,
-}
 struct CallScope {
     ranges: Vec<(i64, i64)>,
     range_cursor: usize,
     slots: Vec<Arc<Element>>,
     declarations: Vec<Argument>,
-    frames: Vec<ScopeFrame>,
+    command_ends: Vec<i64>,
     version: u64,
 }
 impl CallScope {
     fn advance(&mut self, offset: i64) {
-        while self.frames.last().is_some_and(|frame| offset >= frame.end) {
-            let frame = self.frames.pop().unwrap();
-            self.slots = frame.slots;
-            self.declarations = frame.declarations;
+        while self.command_ends.last().is_some_and(|end| offset >= *end) {
+            self.command_ends.pop();
+            self.slots.clear();
+            self.declarations.clear();
             self.version += 1;
         }
         let end = self
@@ -2306,18 +2301,15 @@ impl CallScope {
                 end
             });
         if let Some(end) = end {
-            self.frames.push(ScopeFrame {
-                end,
-                slots: std::mem::take(&mut self.slots),
-                declarations: std::mem::take(&mut self.declarations),
-            });
+            self.command_ends.push(end);
+            self.declarations.clear();
             self.version += 1;
         }
     }
 
     fn declare(&mut self, tables: &NativeTables, form: i64, name: SourceText) {
         let qualified = if name.chars.is_empty() {
-            source(&format!("$slot_{}", self.declarations.len()))
+            source(&format!("$slot_{}", self.slots.len()))
         } else {
             name.clone()
         };
@@ -4305,7 +4297,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
         range_cursor: 0,
         slots: vec![],
         declarations: vec![],
-        frames: vec![],
+        command_ends: vec![],
         version: 0,
     }));
     let global_property_count = record_int(&context, "inc_property_cnt").unwrap_or(0).max(0);
@@ -5085,7 +5077,7 @@ fn native_annotate_scene(
         range_cursor: 0,
         slots: vec![],
         declarations: vec![],
-        frames: vec![],
+        command_ends: vec![],
         version: 0,
     }));
     let meta = &instance.meta;
@@ -5428,7 +5420,7 @@ fn label_references(rt: &Runtime, text: &SourceText) -> Result<Arc<Vec<LabelRefe
     }
     let refs = Arc::new(
         rt.frontend
-            .label_refs(&display_source(text)?)
+            .label_spans(&display_source(text)?, true)
             .into_iter()
             .map(|(start, end, label)| LabelReference {
                 start,
@@ -5784,14 +5776,22 @@ fn native_line_postprocess(
         }
         LinePass::RestoreLabels => {
             let scene = &instance.scene;
-            let mut definitions = lines
-                .iter()
-                .filter_map(|line| {
-                    label_definition(&line.text)
-                        .filter(|label| !label.label.z)
-                        .map(|label| definition_token(&line.text, label))
-                })
-                .collect::<std::collections::HashSet<_>>();
+            let mut definitions = std::collections::HashSet::new();
+            for line in &lines {
+                if let Some(label) = label_definition(&line.text).filter(|label| !label.label.z) {
+                    definitions.insert(definition_token(&line.text, label));
+                }
+                if text_contains(&line.text, &[35, 108])
+                    && text_contains(&line.text, &[102, 111, 114, 40])
+                {
+                    definitions.extend(
+                        rt.frontend
+                            .label_spans(&display_source(&line.text)?, false)
+                            .into_iter()
+                            .map(|(_, _, label)| source(&label)),
+                    );
+                }
+            }
             let references = line_references(rt, &lines)?;
             let mut pending = references
                 .difference(&definitions)
@@ -7372,7 +7372,7 @@ fn native_prepare_analysis(
                 },
             );
         }
-        index = parsed.end;
+        index = parsed.body_start;
     }
     let mut calls: HashMap<i64, CommandCall> = HashMap::new();
     for event in instance.scene.events.iter() {
@@ -7780,29 +7780,43 @@ impl<'a> SourceParser<'a> {
         };
         let (has_ops, line) = self.line(statement, next, context)?;
         if inline {
-            let labels = self.scene.active_labels(self.instance, start)?;
-            let suppressed = self
-                .instance
-                .suppressed
-                .borrow()
-                .values
-                .contains(&self.scene.events[start].offset);
-            if (if suppressed {
-                labels.iter().any(|label| label.z)
-            } else {
-                !labels.is_empty()
-            }) || (!line.chars.is_empty()
+            let event = &self.scene.events[start];
+            let mut labels = self.scene.active_labels(self.instance, start)?;
+            if !labels.is_empty()
+                && self
+                    .instance
+                    .suppressed
+                    .borrow()
+                    .values
+                    .contains(&event.offset)
+            {
+                labels.retain(|label| label.z);
+            }
+            if !labels.is_empty()
+                && (!has_nl
+                    || start == 0
+                    || self.scene.events[start - 1].op != Opcode::Nl
+                    || self.scene.events[start - 1].line != event.line
+                    || labels.iter().any(|label| label.z))
+            {
+                return Ok((None, vec![], start));
+            }
+            if has_ops
                 && line
                     .chars
                     .iter()
                     .any(|code| matches!(*code, 10 | 123 | 125))
                 && line != source("continue")
-                && line != source("break"))
+                && line != source("break")
             {
                 return Ok((None, vec![], start));
             }
-            if !has_ops {
-                return Ok((Some(empty_source()), vec![], next));
+            if !labels.is_empty() {
+                let mut parts = native_label_tokens(&labels);
+                if !line.chars.is_empty() {
+                    parts.push(line);
+                }
+                return Ok((Some(source_join(&parts, "\t")), vec![], next));
             }
             return Ok((Some(line), vec![], next));
         }

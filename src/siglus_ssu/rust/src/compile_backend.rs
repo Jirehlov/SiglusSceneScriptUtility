@@ -164,12 +164,17 @@ impl DecompileFrontend {
         Ok(Self { constants, codes })
     }
 
-    pub(crate) fn label_refs(&self, text: &str) -> Vec<(usize, usize, String)> {
-        if !text.contains("#l") || (!text.contains("goto") && !text.contains("gosub")) {
+    pub(crate) fn label_spans(&self, text: &str, references: bool) -> Vec<(usize, usize, String)> {
+        if !text.contains("#l") {
             return Vec::new();
         }
-        if let Some(reference) = decompile_goto_reference(text) {
-            return vec![reference];
+        if references {
+            if !text.contains("goto") && !text.contains("gosub") {
+                return Vec::new();
+            }
+            if let Some(reference) = decompile_goto_reference(text) {
+                return vec![reference];
+            }
         }
         let Ok(lex) = la::lex_scene_text::<true>(text, &self.codes.la, None, None) else {
             return Vec::new();
@@ -185,7 +190,7 @@ impl DecompileFrontend {
         let codes = &self.codes.la;
         let gosubs = [codes.gosub, codes.gosubstr];
         let jumps = [codes.goto, codes.gosub, codes.gosubstr];
-        let mut refs = Vec::new();
+        let mut matches = Vec::new();
         let mut parentheses = Vec::new();
         let mut previous = None;
         let mut after_arguments = false;
@@ -198,9 +203,9 @@ impl DecompileFrontend {
             } else if token == codes.close_paren {
                 after_arguments = parentheses.pop().unwrap_or(false);
             }
-            if token != codes.label
-                || !(follows_arguments || prev.is_some_and(|token| jumps.contains(&token)))
-            {
+            let is_reference =
+                follows_arguments || prev.is_some_and(|token| jumps.contains(&token));
+            if token != codes.label || is_reference != references {
                 continue;
             }
             let Some(span) = lex.atom_span_list.get(index) else {
@@ -216,10 +221,10 @@ impl DecompileFrontend {
             };
             let label: String = slice.iter().collect();
             if label.starts_with("#l") && label[2..].bytes().all(|byte| byte.is_ascii_digit()) {
-                refs.push((start, end, label));
+                matches.push((start, end, label));
             }
         }
-        refs
+        matches
     }
 
     pub(crate) fn string_pool(
