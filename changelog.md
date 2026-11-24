@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 
+## [v0.5.9] - 2026-11-24
+
+- Added LSP requests `siglus/setReadFlag` and `siglus/setReadFlags` to mark individual flags or batches as read or unread in `read.sav`.
+- Applied the same filename collision checks to selected multi-file inputs across platforms and staged compilation outputs before publishing them.
+
+
 ## [v0.5.8] - 2026-10-31
 
 - Added `-a --read-flags` to export unread flag indices to JSON, optionally validate them against a scene PCK and include original source lines, and report compatibility according to the engine's scene-name and flag-count rules. LSP accepts `--read-sav` and exposes individual saved states and precise compiler-derived source ranges through hover and `siglus/readFlags`, preserving separate flags on the same line, mapping macro expansions to their source origins, and reporting mismatches explicitly.

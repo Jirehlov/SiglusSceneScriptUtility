@@ -2,7 +2,7 @@
 
 > **CLI only:** This project supports only the `siglus-ssu` command-line interface, provides no support for direct module imports or calls, and accepts no responsibility for any resulting issues.
 
-**Version:** 0.5.8
+**Version:** 0.5.9
 
 **Repository:** [GitHub](https://github.com/Jirehlov/SiglusSceneScriptUtility)
 
@@ -36,22 +36,13 @@
    - [-v / --video — Work with `.omv` Video Files](#-v----video--work-with-omv-video-files)
    - [-p / --patch — Patch `SiglusEngine.exe`](#-p----patch--patch-siglusengineexe)
    - [test — Round-Trip Compile Test](#test--round-trip-compile-test)
-5. [SiglusSceneScript Language Reference](#siglusss-language-spec)
-6. [Tips and Troubleshooting](#tips-and-troubleshooting)
+5. [SiglusSS Language Specification](#siglusss-language-spec)
 
 ---
 
 ## Overview
 
-SiglusSceneScriptUtility (`siglus-ssu`) is a command-line tool for SiglusEngine games. It can:
-
-- Compile, extract, disassemble, and decompile scene scripts.
-- Export and apply translations, edit saves, and analyze game data.
-- Extract and rebuild images, audio, and video, and collect voices by character.
-- Patch engine keys and language settings.
-- Provide editor support through LSP.
-
-Choose the game's [const profile](#const-profiles) when processing scene scripts. Unsupported engine variants may use different formats.
+`siglus-ssu` is the command-line interface for compiling and translating SiglusEngine scripts, analyzing game data, editing saves and engine settings, handling media, and serving editors over LSP. Select the game's [const profile](#const-profiles) for scene script operations.
 
 ---
 
@@ -59,19 +50,19 @@ Choose the game's [const profile](#const-profiles) when processing scene scripts
 
 ### Option 1: Install from PyPI
 
-Requires Python 3.12 or later:
+Requires Python 3.12 or later.
 
 ```bash
 pip install siglus-ssu
 ```
 
-Compatible platform wheels include Rust acceleration. Other platforms can use the slower pure-Python wheel or build from source for native acceleration. No initialization or separate constants download is needed.
+Platform wheels include Rust acceleration. A pure Python wheel is also available.
 
 ### Option 2: Install from Source
 
 Requires Python 3.12+, [uv](https://github.com/astral-sh/uv), and [Rust 1.88+](https://rustup.rs/).
 
-Clone the repository, then run from its root:
+Run these commands from the repository root.
 
 ```bash
 uv sync
@@ -105,11 +96,11 @@ In-place translation, save edits, and EXE patches check whether the original cha
 | `--const-profile N` | Select the game's profile (`0`–`10`, default `0`). Cannot be combined with `-c --tmp`. An explicit profile disables automatic retries in `test`; `test --decompile` requires one. |
 | `--string-xor-multiplier N` | Override the scene-string XOR multiplier. Accepts `0`–`0xFFFF` in decimal or hexadecimal. Profiles `3`, `5`, and `8` default to `0`; all others default to `0x7087`. See [Scene String XOR Multiplier](#scene-string-xor-multiplier). |
 
-Global options may appear before or after the mode, but must precede `--`. `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
+Place global options before `--`, on either side of the mode. `--const-profile=N` and `--string-xor-multiplier=N` are also accepted.
 
 ### Const Profiles
 
-Profiles select built-in types, element codes, command signatures, and compilation rules. The table describes differences from the reference profile in each row; other compilation rules remain unchanged. Game names are compatibility examples.
+Profiles select built-in types, element codes, command signatures, and compilation rules. Each row gives the changes from its reference profile and an example engine or game.
 
 Profile `2` is the comparison baseline: scene-string XOR multiplier `0x7087`, local `property` declarations only inside `command`, `&&` higher precedence than `||`, and z-labels `#z0`–`#z999`. It inserts a message block before `global.ruby`, assigns a read flag to `global.koe`, and emits selection blocks for `global.sel`, `global.sel_cancel`, `global.selmsg`, `global.selmsg_cancel`, and `global.sel_image`.
 
@@ -127,19 +118,19 @@ Profile `2` is the comparison baseline: scene-string XOR multiplier `0x7087`, lo
 | `9` | `2` | Element code `47` is the `global.world` property of type `worldlist`, replacing the `global.msgbtn` command. | Rewrite Harvest festa! |
 | `10` | `0` | Adds mobile UI, touch, network, store, and extension-resource interfaces, including `global.sheet`, `global.touch`, `global.connect`, `global.appstore`, `global.googleplay`, and `global.extend`. Changes `global.message_box` from `void` to `int` and adds named argument `title_str`. | FlixEngine (mobile SiglusEngine). |
 
-Profile numbers are not chronological. Use the same profile for disassembly, decompilation, compilation, and payload comparison. To identify a profile for a PCK with embedded sources, run `siglus-ssu test Scene.pck` and check the successful result.
+Use the same profile when compiling, disassembling, decompiling, and comparing a title. For a PCK with embedded sources, `siglus-ssu test Scene.pck` reports the profile used for a successful rebuild.
 
-Profile `10` has partial mobile API coverage. Its `mobile_*` type names are internal placeholders, not official types for source declarations; emitting these objects as bytecode values is unverified.
+Profile `10` uses internal `mobile_*` placeholders for parts of the mobile API.
 
 ### Scene String XOR Multiplier
 
-Use `--string-xor-multiplier N` only when the game's scene-string encoding differs from the profile default. `0` selects plain UTF-16LE strings. This option does not change compression, outer encryption, or the engine executable; `--no-angou` does not disable scene-string XOR.
+Use `--string-xor-multiplier N` for a title with a different scene-string encoding. `0` selects plain UTF-16LE. Scene-string XOR is independent of compression and outer encryption. `--no-angou` leaves this XOR in effect.
 
-Use the same profile and multiplier whenever decoding, editing, or recompiling a title. Extraction does not save these settings. A wrong multiplier can produce unreadable text without a format error. One command applies one multiplier to all scenes and both comparison inputs, so inputs using different multipliers must be analyzed separately.
+Use the same profile and multiplier for decoding, editing, and rebuilding a title. Each invocation uses one multiplier for all scenes and comparison inputs. The extraction directory does not store the settings. An incorrect multiplier can produce unreadable text.
 
-Changing the multiplier rebuilds all `-c --tmp` cached scenes. Operations that do not process scene strings ignore it, including plain extraction, `--dat-repack`, and `--gei`.
+Changing the multiplier invalidates the `-c --tmp` scene cache. Plain extraction, `--dat-repack`, and `--gei` ignore the multiplier.
 
-For a title using plain scene strings:
+Example for plain scene strings
 
 ```bash
 siglus-ssu --string-xor-multiplier 0 -x --disam /path/to/Scene.pck
@@ -154,7 +145,7 @@ siglus-ssu --string-xor-multiplier 0 -c /path/to/source/ /path/to/translated.pck
 
 After selecting a mode and required sub-operation, use `--` before positional paths beginning with `-`, for example `siglus-ssu test -- --sample.pck`. All options must precede `--`. For an option value beginning with `-`, use an absolute path or prefix it with `./`.
 
-Write long options in full; arbitrary prefixes are not accepted.
+Write long options in full.
 
 ### Getting Help
 
@@ -170,43 +161,39 @@ Mode-specific `--help` shows the same global help page.
 
 ### `-lsp` — Start the Language Server
 
-Starts a stdio language server for `.ss` and `.inc` files. Configure your editor's LSP client to run this command:
-
 ```bash
 siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 ```
 
+The stdio server supports diagnostics, semantic highlighting, completion, hover, definitions, references, rename, and document symbols for `.ss` and `.inc`. Use the same global `--const-profile` as for compilation. Analysis includes unsaved changes and same-directory include files.
+
 | Option | Description |
-|---|---|
-| `--serial` | Scan the workspace serially instead of in parallel. |
-| `--read-sav PATH` | Show saved read states in hover details and let compatible clients view or edit individual flags. A missing or unreadable save does not prevent startup. |
+| --- | --- |
+| `--serial` | Disable parallel scene scanning. |
+| `--read-sav PATH` | Show saved flag states in hover details and expose read and edit requests to LSP clients. The server can start before the save is available. |
 
-Features include diagnostics, semantic highlighting, completion, hover, definition and reference lookup, rename, and document symbols. Analysis uses the current scene and same-directory `.inc` files, including unsaved editor changes. Select the game's global `--const-profile` as for compilation.
+Link checks use the scenes and includes in the document's directory. Push diagnostics refresh file checks as you edit, reusing cached link results. Opening or saving a file, or closing it with unsaved changes, can refresh links. A diagnostic request uses the current source and runs link checks when applicable.
 
-For pushed diagnostics, the server updates local checks while you edit and reuses the last available link results. Link checks refresh on open or save and when a document closes with unsaved changes. A diagnostic request checks the current workspace.
+Set `SIGLUS_SSU_LSP_CACHE_DIR` to override the workspace index location. The server rebuilds incompatible indexes.
 
-Workspace indexes are cached between sessions and rebuilt when incompatible. Set `SIGLUS_SSU_LSP_CACHE_DIR` to change the cache location. Defaults are:
-
-- Windows: `%LOCALAPPDATA%\siglus_ssu\lsp-index`, falling back to `%APPDATA%\siglus_ssu\lsp-index`.
-- Other platforms: `$XDG_CACHE_HOME/siglus_ssu/lsp-index`, falling back to `~/.cache/siglus_ssu/lsp-index`.
+- Windows uses the first nonempty setting from `%LOCALAPPDATA%\siglus_ssu\lsp-index` and `%APPDATA%\siglus_ssu\lsp-index`.
+- The fallback on all systems is `$XDG_CACHE_HOME/siglus_ssu/lsp-index`, or `~/.cache/siglus_ssu/lsp-index` if that variable is empty or unset.
 
 #### Read flags
 
-Read flags are numbered from `0` within each scene. A saved zero means not marked as read; the content may already have appeared before the engine commits the flag, for example at a wait or text-clear operation.
+Flag indices start at `0` in each scene. A saved zero means the engine has yet to mark the flag as read. The engine can commit flags after displaying the content, for example on a wait or text clear. The server matches the scene name and flag count before mapping saved states to the current source. A range points to the text, command, or macro invocation that produced the flag. Multiple flags can share a range.
 
-Saved states are shown only when the scene name and flag count match the current source. A count mismatch is reported without applying the saved states. Hover details refer to the text, command, or macro invocation that produced the flag. Multiple flags can share one source location.
+In the VS Code extension, open **SiglusSS: Read Flags** to enable the mode and select `read.sav`. **Go to First/Last Unread Flag** uses flag order in the current scene. **Go to Previous/Next Unread Flag** uses range starts strictly before or after the cursor, with no wrap. Choose **Mark Flags as Read** or **Mark Flags as Unread** from the editor context menu to update every flag overlapping a selection. If several flags share the cursor position and the selection is empty, choose one from the list.
 
-Clients can reuse the source ranges from `siglus/readFlags` by returning the last `mappingId` and `saveRevision`. For the same mapping, a changed save returns the scene’s flag bytes in the base64 `states` field. An unchanged report omits both the ranges and the state bytes. Clients can request a fresh content check with `verifySave: true` after a file change. Editor clients manage highlighting and file watching.
+`siglus/readFlags` accepts `textDocument.uri`. Send the previous `mappingId` and `saveRevision` to reuse mapped ranges. With the same mapping and a changed save, `states` contains the base64-encoded flag bytes. An unchanged report omits ranges and state bytes. Set `verifySave: true` to recheck file contents.
 
-When the server advertises `experimental.siglusReadFlags.setReadFlag`, a client can send `siglus/setReadFlag` with the open document’s URI and version in `textDocument`, the current `mappingId`, the flag `index`, and a boolean `read`. The server updates that flag in the selected `read.sav` and checks the original contents before replacing the file. A stale mapping, missing scene, or flag count mismatch leaves the save intact.
-
-When the server advertises `experimental.siglusReadFlags.setReadFlags`, clients can send `siglus/setReadFlags` with the same `textDocument`, `mappingId`, and `read` fields and a nonempty `indices` array of flag numbers. The server validates the entire batch, counts each flag once, and writes the requested states together. A successful response includes the updated counts and `saveRevision`, along with the original save’s `previousRevision`.
+Check `experimental.siglusReadFlags` for write capabilities. `siglus/setReadFlag` takes `index`. `siglus/setReadFlags` takes a nonempty `indices` array. Both take the open document's URI and version in `textDocument`, the current `mappingId`, and a boolean `read`. The server validates the mapping and indices, deduplicates a batch, and checks the original save before replacing it. A successful response includes updated counts, `previousRevision`, and `saveRevision`.
 
 ---
 
 ### `-c` / `--compile` — Compile Scripts
 
-Compiles `.ss` sources and same-directory `.inc` declarations into a `.pck`. Sources are scanned only in the input directory, not its subdirectories. Keep dot-prefixed sources such as `.scene.ss` and `.defs.inc` when recompiling extracted files.
+Compile scene `.ss` files and same-directory `.inc` files into a PCK. The compiler reads the input directory's immediate files, including dot-prefixed names.
 
 #### Syntax
 
@@ -220,22 +207,22 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 
 | Parameter | Description |
 |---|---|
-| `<input_dir>` | Directory with at least one named `.ss` script, plus any `.inc`, `Gameexe.ini`, and `暗号.dat` files. `--dat-repack` and `--gei` do not require `.ss` files. |
+| `<input_dir>` | At least one named `.ss`, with optional `.inc`, `Gameexe.ini`, `暗号.dat`, and `key.txt` files. `--dat-repack` and `--gei` take other inputs as described below. |
 | `<output_pck \| output_dir>` | An existing directory or a path ending in `/` or `\` receives `Scene.pck`. Any other path is treated as the exact output filename. |
 | `--debug` | Keep intermediate files after compilation. Cannot be combined with `--tmp`. |
-| `--charset ENC` | Set one encoding for all source files. Default: detect UTF-8 or CP932 per file, with BOM detection for UTF-16 and UTF-32. Shift-JIS aliases such as `sjis` and `shift_jis` select Windows CP932. Other Python codecs are accepted explicitly. |
-| `--allow-invalid` | Replace invalid input bytes with U+FFFD, including in `Gameexe.ini` and `暗号.dat`. Without a forced charset or a UTF-16/32 BOM, it tries strict UTF-8 and CP932 before using UTF-8 replacement. Syntax and type errors still fail. |
+| `--charset ENC` | Force one encoding for text inputs. Otherwise detect UTF-8 or CP932 per file, with BOM detection for UTF-16/32. Shift-JIS aliases select Windows CP932. Other Python text codecs can be selected explicitly. |
+| `--allow-invalid` | Replace undecodable bytes with U+FFFD using the selected or BOM-detected codec. In auto mode without a UTF-16/32 BOM, fall back to UTF-8 replacement only if both strict UTF-8 and CP932 fail. |
 | `--no-os` | Omit embedded original sources without changing script encryption or compression. |
-| `--dat-repack` | Pack existing scene `.dat` files without recompiling. A damaged scene aborts the repack and preserves the existing PCK. Only `Gameexe.dat` and `暗号.dat` may be skipped as auxiliary files. Same-directory `.inc` files supply package command metadata; missing `.inc` files produce a warning. Use `--charset` or `--allow-invalid` for text inputs. A valid `key.txt` takes priority over `暗号.dat` when repacking. Also accepts `--no-os` and `--no-lzss`. |
+| `--dat-repack` | Pack existing scene DATs. Invalid scenes stop publication. Non-scene `Gameexe.dat` and `暗号.dat` are skipped. Same-directory `.inc` files supply package command metadata. The command warns if no includes are found. Supports `--no-os`, `--no-lzss`, `--charset`, `--allow-invalid`, and global options. A valid `key.txt` takes precedence over `暗号.dat`. |
 | `--no-angou` | Disable LZSS compression, outer XOR encryption, and original-source embedding. Does not disable scene-string XOR. Cannot be combined with `--tmp`. |
 | `--no-lzss` | Disable LZSS compression and original-source embedding, retaining script encryption. Cannot be combined with `--tmp`. |
 | `--serial` | Compile scene scripts sequentially. Packaging can use multiple workers. |
-| `--max-workers N` | Positive maximum worker count for parallel scene compilation. The default per-stage allocation is half the available CPUs, limited to 1–16. In a full build with automatic worker counts, Rust can combine the allocations for compilation and compression in one worker pool. On Windows, Python compilation caps explicit values at 61. Ignored with `--serial`. |
-| `--set-shuffle SEED` | Set the string-table shuffle seed (`0`–`0xFFFFFFFF`, decimal or hexadecimal; default `1`). Implies `--serial`. Cannot be combined with `--tmp`. |
+| `--max-workers N` | Limit parallel scene compilation to a positive worker count. Automatic allocation per stage is half the available CPUs, limited to 1–16. Python workers on Windows are capped at 61. `--serial` takes precedence. |
+| `--set-shuffle SEED` | Set the string-table shuffle seed. Accepts decimal or hexadecimal in `0`–`0xFFFFFFFF`. Defaults to `1` and implies `--serial`. Cannot be combined with `--tmp`. |
 | `--tmp <tmp_dir>` | Reuse a directory for incremental compilation. Serial builds reuse cached scenes up to the first change and rebuild the rest to preserve string-table order. Concurrent builds cannot share the cache. Cannot be combined with `--debug`, `--dat-repack`, `--no-angou`, `--no-lzss`, `--set-shuffle`, `--test-shuffle`, `--csv`, `--gei`, or global `--const-profile`. |
 | `--test-shuffle [seed0]` | Search from `seed0` (default `0`) through `0xFFFFFFFF` for any continuous seed chain that matches the string indexes of every reference DAT in `<test_dir>`. The compiler matches each source stem to a DAT using the fixed Windows filename case mapping and prefers exact spelling. Requires three paths after the optional seed. If the seed is omitted, a supplied `--set-shuffle` value becomes the search start. Cannot be combined with `--tmp` or `--gei`. |
 | `--csv <seed_csv>` | With `--test-shuffle`, publish per-scene initial and final seeds with the linked PCK. A directory target receives `test_shuffle_seeds.csv`. |
-| `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. Output is always a directory. A missing INI produces a warning and succeeds without creating `Gameexe.dat`. Cannot be combined with `--tmp` or `--test-shuffle`. |
+| `--gei` | Compile only `Gameexe.ini` to `Gameexe.dat`. The output is a directory. If the input is a directory without `Gameexe.ini`, the command warns and skips output. Cannot be combined with `--tmp` or `--test-shuffle`. |
 
 `Gameexe.ini` is optional in normal compilation too. If absent, `Gameexe.dat` is skipped. An empty INI produces a warning and is compiled. The compiler rejects output paths that refer to its inputs and publishes results only after generating all requested files.
 
@@ -266,11 +253,11 @@ siglus-ssu -c --test-shuffle 12345 --csv /path/to/seeds.csv /path/to/src /path/t
 
 #### Notes
 
-- **Source encoding:** Use `--charset utf8 --allow-invalid` only to reproduce output made by interpreting invalid UTF-8 with replacement. It can preserve garbled text. Compilation stops at the first DOS EOF character (U+001A); later bytes are ignored. See the [language reference](#siglusss-language-spec) for literal and character rules.
+- See the [language specification](#siglusss-language-spec) for source processing and syntax.
 - **Key compatibility:** Keys derived from `暗号.dat` or `angou=text` use CP932 and can differ from official Windows conversion. For existing official files, prefer the raw 16-byte key or matching engine executable. For normal compilation, put the raw key in `key.txt` and remove any higher-priority `暗号.dat` from the input directory.
-- **Incremental builds:** Scenes are rebuilt when their source changes or their cached DAT or LZSS file goes missing or changes. Adding, changing, or removing an `.inc`, changing compiler settings, or upgrading the program can require a full rebuild. Failed or interrupted scene cache updates trigger a full rebuild on the next run. When embedding original sources, packaging also reuses the compressed and encrypted data for unchanged files.
-- **Shuffle search:** String-table order does not affect normal translation work. If no chain matches every scene, the command returns failure before publishing the PCK or CSV. Pass the first scene's reported initial seed to `--set-shuffle` to reproduce the chain.
-- **Paths and names:** Paths follow the host filesystem's lookup rules. Multi-file operations reject selected input paths that collide under a fixed Windows filename case mapping, such as `A.ss` and `a.ss` in one directory; unrelated directory entries are ignored. Automatic filename discovery warns about case-colliding candidates and selects one in its usual order, including for embedded configuration sources. Existing output naming rules still apply. Runtime scene names fold only ASCII `A`–`Z` to lowercase; embedded source filenames retain their spelling.
+- Incremental builds recompile a scene when its source or cached DAT/LZSS changes or goes missing. Include or setting changes can invalidate the full scene cache. Packaging reuses compressed and encrypted data for unchanged original sources.
+- A shuffle search with no matching chain publishes neither PCK nor CSV. Pass the first scene's reported initial seed to `--set-shuffle` to reproduce a matching chain.
+- Selected multi-file inputs are checked for collisions under a fixed Windows filename case mapping on all platforms. Automatic file discovery warns on ambiguous names and picks a candidate. Runtime scene names fold ASCII case. Embedded source filenames retain their spelling.
 
 #### Compiling Stats
 
@@ -280,7 +267,7 @@ The final summary reports stage timings and file counts. Compilation and scene c
 
 ### `-x` / `--extract` — Extract Files
 
-Extracts decoded scene `.dat` files and any embedded original sources from a `.pck`. `--decompile` reconstructs `.ss` / `.inc` without requiring embedded sources.
+Plain extraction writes decoded scene DATs and embedded sources. `--decompile` writes DATs and reconstructs sources from bytecode.
 
 #### Syntax
 
@@ -298,19 +285,17 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `<input_dir>` | With `--disam`, scan immediate `.dat` files, skipping non-scene files. |
 | `[output_dir]` | Base output directory. Defaults to the input file's directory, or the input directory itself. PCK extraction creates a timestamped subdirectory. |
 | `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
-| `--decompile` | Write reconstructed `decompiled/<scene>.ss`, plus `decompiled/__decompiled.inc` when needed. Add `--disam` to also write disassembly listings. Requires a complete scene PCK with package metadata, not a single `.dat` or directory. Cannot be combined with `--gei`. |
+| `--decompile` | With a complete scene PCK, reconstruct `decompiled/<scene>.ss` and, when needed, `decompiled/__decompiled.inc`. Add `--disam` for listings. |
 | `--angou VALUE` | Specify a [decryption key source](#decryption-keys). |
 | `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. If the output already exists, use `Gameexe_1.ini` and so on. |
 
-The extraction directory is printed after `Output:`. PCK extraction adds numeric suffixes to resolve output-name collisions and reports filenames that are invalid on the output filesystem. To edit embedded sources, work in the extraction directory and pass it directly to `-c`.
+PCK extraction prints the timestamped subdirectory after `Output:`. It adds numeric suffixes to resolve output collisions and reports filenames the output filesystem cannot represent. Edit embedded sources in that directory and pass it to `-c`.
 
 If a scene and its embedded key file are both named `暗号.dat`, the key goes in `.siglus-ssu-keys/`. Compilation and repacking can read the key from there.
 
-Decompilation does not automatically detect the profile or recover original macros, comments, or formatting. Recompile `decompiled/` with the same profile and string multiplier, then verify with `-a --payload`. The rebuilt PCK need not be byte-identical. Incomplete disassembly fails decompilation.
+Select the profile and string multiplier used by the title. Recompiled output can differ in byte layout. Incomplete disassembly fails decompilation.
 
-**Limitation:** Pass individual integer or string arguments to `gosub` and `gosubstr`. List-literal arguments can produce output that cannot be fully disassembled or decompiled.
-
-FlixEngine scenes use profile `10`. Flix resource PCK containers support plain extraction only.
+FlixEngine scenes use profile `10`. For Flix resource PCKs, use plain `-x` to extract files or plain `-a` to inspect the container.
 
 #### Examples
 
@@ -330,7 +315,7 @@ siglus-ssu --const-profile 0 -c /path/to/translation_work/output_.../decompiled 
 siglus-ssu --const-profile 0 -a --payload /path/to/Scene.pck /path/to/rebuilt.pck
 ```
 
-Verify that no scenes are missing or added and no payload differences or unavailable results remain. Exit status `0` alone does not establish equality; see [Payload Comparison Results](#payload-comparison-results).
+Check equality using the [payload results](#payload-comparison-results).
 
 ---
 
@@ -371,7 +356,7 @@ PCK reports include an `ID` column when embedded `.ss` sources contain `SCENE_SC
 
 #### Decryption Keys
 
-Use `--angou VALUE` as the final mode-specific option, with a separate, nonempty value:
+Place `--angou VALUE` at the end of the arguments before any `--` separator. Supply `VALUE` as a separate, nonempty argument.
 
 | Value | Meaning |
 |---|---|
@@ -380,9 +365,9 @@ Use `--angou VALUE` as the final mode-specific option, with a separate, nonempty
 | `angou=text` | Derive a key from a literal `暗号.dat` first line. |
 | `key=bytes` | Supply a 16-byte key. Prefer explicit `0xNN` tokens to avoid numeric ambiguity. |
 
-Decryption tries the explicit key source first, then embedded `key.txt` or `暗号.dat`, the current directory, and its parent. Directory search order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`; searches are not recursive. An explicit path disables parent-directory probing. An explicit source that is missing, malformed, or contains no key is an error; a valid key that fails decryption allows lower-priority candidates.
+Key lookup tries the explicit source, the input PCK's embedded keys, the input directory, then its parent. An explicit file or directory path skips the parent lookup. Directory order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`. Lookup scans immediate files. An explicit source must yield a valid key. If that key fails decryption, lookup can try subsequent candidates.
 
-When compiling or decrypting an encrypted `Gameexe.dat`, each nonblank line after comment removal must be a configuration assignment such as `#WINDOW_XSIZE=640`. The `#` prefix is optional. Names start with an ASCII letter, digit, or underscore and may also contain periods, square brackets, hyphens, spaces, and tabs. Values may contain Unicode text. The format has no checksum to distinguish keys that produce syntactically valid text. Decryption fails if candidate keys produce different valid texts.
+Encrypted `Gameexe.dat` requires a configuration assignment on each nonblank line after comment removal. For example, `#WINDOW_XSIZE=640`. The `#` is optional. Names begin with an ASCII letter, digit, or underscore and may also contain periods, brackets, hyphens, spaces, and tabs. Values may contain Unicode. Decryption fails if keys produce different valid texts.
 
 Text keys from `暗号.dat` and `angou=text` can differ from official Windows conversion. For existing official files, prefer the matching engine executable or its raw key. Embedded `暗号.dat` supports UTF-16 or UTF-32 with a BOM. A 16-byte `key.txt` is read as binary; other text keys are parsed as `0xNN`, two-digit hex, then decimal, taking the first 16 matches from the first applicable format. Thus sixteen `10` tokens mean hex `0x10` bytes.
 
@@ -494,7 +479,7 @@ siglus-ssu -d --c [--type N] [--set-shuffle SEED] --test-shuffle [skip0] <expect
 | `--x` | Export `.dbs` to CSV, preserving existing CSV files. |
 | `--a` | Analyze one database or compare two. |
 | `--c` | Compile CSV to `.dbs`. |
-| `--type N` | Output database type (`0`–`2147483647`; default `1`). Type `0` strings must be encodable as CP932; other types use UTF-16LE. |
+| `--type N` | Output database type (`0`–`2147483647`). Normal creation defaults to `1`. With `--test-shuffle`, the default comes from the reference DBS. Type `0` uses CP932 strings. Other types use UTF-16LE. |
 | `--set-shuffle SEED` | Set the random-padding seed (decimal or hexadecimal; default `1`). |
 | `--test-shuffle [skip0]` | Try up to 16,777,216 random-generator skip counts from `skip0` (default `0`) to match a reference database's padding. Writes output only after an exact match and preserves the reference file. Single-file mode only. |
 
@@ -538,7 +523,7 @@ siglus-ssu -k [--stats-only] --single KOE_NO <voice_dir> <output_dir>
 | Parameter | Description |
 |---|---|
 | `<scene_input>` | `Scene.pck`, a scene `.dat`, or a recursively scanned DAT directory. Not used with `--single`. |
-| `<voice_dir>` | One `.ovk` or a directory containing `.ovk` files, scanned at the immediate level only. |
+| `<voice_dir>` | One `zNNNN.ovk` archive, or a directory scanned for those archives at the immediate level. `NNNN` is the four-digit scene number. |
 | `<output_dir>` | Destination for audio and, in normal mode, `koe_master.csv`. |
 | `--angou VALUE` | [Decryption key source](#decryption-keys) for encrypted scene input. Not valid with `--single`. |
 | `--stats-only` | Write the CSV and summary without audio. With `--single`, write only the summary. |
@@ -591,7 +576,7 @@ siglus-ssu -e <path_to_engine> <scene_name> <label>
 |---|---|
 | `<path_to_engine>` | Path to `SiglusEngine.exe`. |
 | `<scene_name>` | Nonempty bare scene name, optionally ending in `.ss`; no directory components or whitespace-only names. |
-| `<label>` | Non-negative decimal number, optionally prefixed with `z` or `#z`. |
+| `<label>` | Non-negative decimal label number. Optional prefixes are `#`, `z`, and `#z`. |
 
 The command creates or reuses `work_YYYYMMDD` beside the executable, launches the engine, and returns immediately. The work directory is retained.
 
@@ -664,7 +649,7 @@ Image processing requires [Pillow](https://pillow.readthedocs.io/) (`pip install
 siglus-ssu -g --a <input_g00>
 siglus-ssu -g --x [--trim] <input_g00 | input_dir> <output_dir>
 siglus-ssu -g --m [--trim] <input_g00[:cutNNN]> <input_g00[:cutNNN]> [...] [--o <output_dir>]
-siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_json | input_dir> [output_g00 | output_dir]
+siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jpeg | input_layout | input_dir> [output_g00 | output_dir]
 ```
 
 | Parameter | Description |
@@ -676,18 +661,18 @@ siglus-ssu -g --c [--type N] [--refer <ref_g00 | ref_dir>] <input_png | input_jp
 | `--c` | Create a new G00, or update from `--refer`. |
 | `--o`, `-o`, `--output`, `--output-dir` | Merge output directory; default is the current directory. |
 | `--type N`, `--t N` | Choose the created type, or validate the reference type during updates. Only valid with `--c`. |
-| `--refer <ref_g00 \| ref_dir>` | Update an existing G00. Directory input requires a reference directory. A single input accepts a reference file or directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. With no output path, the selected reference is overwritten. |
+| `--refer <ref_g00 \| ref_dir>` | Update from a reference. Directory input requires a reference directory. Single-file input accepts a reference file or directory. File lookup in the reference directory warns on case ambiguity. Omitting the output path updates the reference in place. |
 | `:cutNNN` | Select a type2 cut for merging, for example `sprite.g00:cut002`. |
 
 Extraction and creation scan directory inputs at the immediate level only. When creating a new type2 layout, extraction fails if an existing cut PNG is unreadable or has a different size from the untrimmed cut.
 
 #### Create and Update
 
-Without `--refer`, PNG creates type0 and JPEG creates type3. Creating or updating type0 sets alpha to 255. Use `--type 2` with a `.type2.json` layout to create type2. Creating type1 is not supported.
+For creation, PNG defaults to type0 and JPEG to type3. Type0 output sets alpha to 255. Use `--type 2` to create from an image or a `.json`/`.jsonc` layout. A single image uses a matching sidecar such as `sprite.type2.json` if found and creates one cut otherwise. For directory input, `--type 2` processes layouts if present and images otherwise. Creation supports types 0, 2, and 3.
 
-With no output path, creation writes beside the input and updates overwrite the reference. Outputs cannot overwrite a source image, layout, or another target's reference, and must resolve to distinct files. An in-place update verifies the reference bytes immediately before replacement. Concurrent updates to the same output directory wait up to 30 seconds for the active update. After an interrupted update, remove `.siglus-g00.lockdir` only after confirming no update is running.
+Creation without an output path writes beside the input. Output paths must be distinct and must avoid source images, layouts, and other targets' references. In-place updates verify the reference bytes before replacement. If interrupted, remove `.siglus-g00.lockdir` after confirming no update is running.
 
-Back up original assets before updating them. JSON layouts cannot be combined with `--refer`. To update an individual cut through a reference directory, name its replacement `<basename>_cut###.png`.
+Use JSON/JSONC layouts in create mode. Name individual replacements `<basename>_cut###.png` when a reference has multiple cuts.
 
 ```bash
 siglus-ssu -g --x /path/to/sprite.g00 /path/to/work/
@@ -704,7 +689,7 @@ Untrimmed type2 extraction produces `<basename>.type2.json` and either `<basenam
 siglus-ssu -g --c --type 2 /path/to/work/sprite.type2.json /path/to/rebuilt/sprite.g00
 ```
 
-Pass the JSON, not an individual cut PNG, to rebuild a multi-cut image. Extraction preserves RGB beneath transparent pixels; rebuilding uses the edited PNG values as supplied.
+Use the layout to rebuild all cuts. Extraction preserves RGB beneath transparent pixels, and rebuilding uses the edited PNG values.
 
 ```json
 {
@@ -727,8 +712,8 @@ Pass the JSON, not an individual cut PNG, to rebuild a multi-cut image. Extracti
 ```
 
 - `canvas` sets the output canvas dimensions.
-- `cuts` is ordered by index; `null` leaves a hole.
-- `source` is relative to the JSON file; `/` and `\` are accepted as separators.
+- `cuts` assigns successive indices. A cut can set an explicit `index`. `null` leaves an empty slot.
+- `source` paths can be relative to the layout. Both `/` and `\` are accepted. A cut without `source` uses `default_source` or the companion image when one was supplied.
 - `canvas_rect` sets placement. Optional `source_rect` selects part of the PNG; otherwise the whole PNG is used. Source and canvas rectangles must have equal dimensions.
 - Per-cut `center` defaults to `default_center`, or `(0, 0)` if absent.
 
@@ -806,7 +791,7 @@ siglus-ssu -s --play /path/to/BGM/
 
 ### `-v` / `--video` — Work with `.omv` Video Files
 
-Extracts Ogg video from OMV and wraps Theora video as OMV without re-encoding or converting colors/transparency. Extraction preserves embedded audio. Creation keeps only the first Theora video stream. Both operations reject Ogg streams with missing pages, truncated pages, or invalid page checksums.
+Extraction copies embedded Ogg streams, including audio. Creation wraps only the first Theora stream, without re-encoding. Both reject missing, truncated, or checksum-invalid Ogg pages.
 
 #### Syntax
 
@@ -831,7 +816,7 @@ Existing outputs require `y` or `yes` at `Overwrite? [y/N]`. The command preserv
 
 #### Pixel Layouts and `.ogv` Inputs
 
-Inspect the original with `-v --a` and keep its mode when extracting. The Ogg file does not store the OMV mode. Standard modes use Theora 4:4:4 planes:
+Use `-v --a` to record the original OMV mode. The extracted Ogg omits it. For the layouts below, prepare full-size Theora 4:4:4 planes.
 
 | Mode | Layout |
 |---|---|
@@ -841,7 +826,7 @@ Inspect the original with `-v --a` and keep its mode when extracting. The Ogg fi
 
 For mode `1`, visible height `H` needs Theora picture height `H + ceil(H / 3)`. The first `H` rows of each plane hold color. Concatenate the following alpha segments in plane order and take the first `H` rows as alpha. A 1080-row image needs a 1440-row encoded picture.
 
-Ordinary players treat planes as YUV, so mode `0`/`1` needs color/alpha reconstruction for normal viewing. Neither `--mode` nor `--refer` performs that conversion. Wrapping ordinary YUV video with a mode `0`/`1` reference produces an incorrect picture. Other numeric modes are accepted as metadata but are outside the standard layouts above.
+Ordinary players interpret these planes as YUV. Modes `0` and `1` require color or alpha reconstruction for normal viewing. `--mode` and `--refer` set pixel interpretation metadata, so supply an Ogg encoded for the target layout.
 
 For ordinary opaque SDR video, prepare mode `2` using FFmpeg with `libtheora`:
 
@@ -888,7 +873,7 @@ siglus-ssu -p --loc (0 | 1) <input_exe> [-o output_exe] [--inplace]
 | `--revert` | Restore the byte-identical original from a previous language patch. Requires `--lang`; cannot be combined with `--allow-partial`. |
 | `--info` | Inspect patchable key, language, and region settings without writing. |
 | `--loc 0` | Disable region detection. |
-| `--loc 1` | Restore region detection previously disabled by this tool. |
+| `--loc 1` | Restore region detection for an EXE patched by this tool's `--loc 0`. |
 
 #### Language Configuration
 
@@ -929,7 +914,8 @@ By default, the command uses embedded original sources. PCKs with no declared so
 #### Syntax
 
 ```bash
-siglus-ssu [--const-profile N] test [--allow-invalid] [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu [--const-profile N] test [--serial] [--report-json FILE] <input_pck|input_dir>
+siglus-ssu --const-profile N test --allow-invalid [--serial] [--report-json FILE] <input_pck|input_dir>
 siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <input_pck|input_dir>
 ```
 
@@ -938,7 +924,7 @@ siglus-ssu --const-profile N test --decompile [--serial] [--report-json FILE] <i
 | `--decompile` | Reconstruct source without using embedded sources, rebuild it, and compare payloads. Requires an explicit global profile; uses strict UTF-8 without retries. |
 | `--allow-invalid` | With an explicit profile in embedded-source mode, compile as UTF-8 with replacement for invalid bytes. Not accepted with `--decompile`. |
 | `--serial` | Disable parallel compilation during rebuilds. |
-| `--report-json FILE` | Write results and timings as JSON. Cannot overwrite an input PCK or a file read for its key. |
+| `--report-json FILE` | Write results and timings as JSON. Also accepts `--report-json=FILE`. The report cannot replace an input PCK or a file read for its key. |
 
 An explicit `--const-profile` makes one attempt with that profile and normal encoding detection, unless `--allow-invalid` is supplied. Without an explicit profile, embedded-source tests try profiles `0`–`10`, then retry with UTF-8 replacement if needed. An explicit string multiplier applies to all attempts.
 
@@ -964,514 +950,231 @@ siglus-ssu --const-profile 0 test --decompile /path/to/Scene.pck
 
 <a id="siglusss-language-spec"></a>
 
-## SiglusSceneScript Language Reference
+## SiglusSS Language Specification
 
-These rules describe source accepted by `siglus-ssu -c`. The selected profile supplies available types (`form`), built-in properties and commands, and profile-specific constraints.
+The selected [const profile](#const-profiles) supplies the forms, built-in members, and command signatures used by both compiler backends. See the profile tables in [const.py](src/siglus_ssu/const.py) for these definitions.
 
-### Source Files
+### Source and preprocessing
 
-Each scene uses its `.ss` file and all same-directory `.inc` files. Includes are processed in ASCII-lowercased filename order.
+A scene is a `.ss` file. Global `.inc` files come from the same directory, in filename order after ASCII lowercasing. The compiler detects the encoding per file unless given `--charset`, removes leading BOM characters, normalizes CRLF and CR to LF, and stops at the first DOS EOF character (U+001A). Use `--allow-invalid` to replace undecodable bytes.
 
-Source encoding is detected per file or selected with `--charset`. Invalid bytes fail unless `--allow-invalid` is enabled. Compilation ignores bytes after the first DOS EOF character (U+001A), ignores leading BOM characters, and normalizes CRLF/lone CR to LF. No Unicode normalization is performed.
+The compiler loads global declarations before processing each scene.
 
-### Processing Order
+1. Strip comments and lowercase ASCII outside quotes.
+2. Resolve conditional directives and collect the local declarations between `#inc_start` and `#inc_end`.
+3. Process those declarations and expand replacements in the remaining scene text.
+4. Tokenize, parse, check forms, and emit bytecode. Link global user commands across the directory.
 
-1. Load same-directory `.inc` declarations.
-2. Remove scene comments, fold ASCII case, process conditional directives, and collect `#inc_start ... #inc_end` regions.
-3. Process those local declarations and expand replacements in scene text.
-4. Check scene syntax/types and directory-level command definitions, then build the PCK.
+`;` and `//` start line comments. `/* ... */` removes a non-nesting block and preserves line breaks. Adjacent text can join across a block comment. `/*/` also closes an empty block comment. Quoted literals protect comment markers. An unclosed block comment is an error.
 
-Scene-level conditions run before local include declarations, so they cannot see names declared in those regions. Every global `.inc #command` must have exactly one implementation in the directory, even when each scene otherwise compiles successfully.
+A first line beginning with `// #SCENE_SCRIPT_ID = ` followed immediately by four ASCII digits supplies the scene ID. The compiler reads the first four digits and ignores the rest of that line.
 
-### Character-level processing
-
-#### Case folding
-
-ASCII keywords, identifiers, labels, and directive names are case-insensitive. `A`–`Z` are lowercased outside strings, character literals, and comments; non-ASCII characters are unchanged.
-
-#### Comments
-
-Both scene text and `.inc` text accept these comment forms:
-
-- `;` to end of line;
-- `//` to end of line;
-- `/* ... */` block comments.
-
-`/* ... */` does not nest. An unterminated block comment is invalid. Comment openers inside single-quoted and double-quoted literals are ignored.
-
-In scene files, `.inc`, and `Gameexe.ini`, delimiters may share a `*`: `/*/` is a closed empty comment. In `/*/text*/`, `text*/` remains outside the comment. Use `/* text */` to comment out text.
-
-#### Conditional compilation
-
-Both scene text and `.inc` text support:
+#### Conditional directives and scene-local declarations
 
 ```text
-#ifdef <word>
-#elseifdef <word>
+#ifdef name
+#elseifdef name
 #else
 #endif
 ```
 
-1. `#ifdef` and `#elseifdef` test name existence, not numeric truth.
-2. Nesting is limited to 15 levels. Unmatched or unclosed directives are errors.
-3. A tested name may start with an ASCII letter, CP932 double-byte character, `_`, or `@`; later characters may also be digits.
-4. Only the innermost condition controls text inclusion. Nested conditions do not inherit an enclosing false state.
+`#ifdef` and `#elseifdef` test whether an include name has been registered. A tested name starts with an ASCII letter, a CP932 double-byte character, `_`, or `@`. Subsequent characters can also be ASCII digits. Nesting is limited to 15 levels. Only the innermost condition governs whether text is included. An inner true branch can include text inside an outer false branch.
 
-For example, if `inner_present` exists but `outer_missing` does not, `kept` is included:
+In `.ss`, conditions have access to global include names. The compiler checks them before registering scene-local names. In a `.inc` file, conditional directives occur in declaration text, where conditions can use the names already registered when that text is collected.
 
-```text
-#ifdef outer_missing
-#ifdef inner_present
-kept
-#endif
-#endif
-```
+`#inc_start` switches to collecting local declarations, and `#inc_end` switches back to scene text. A repeated start inside an open region leaves collection active. One end closes the region. An end outside a region or an open region at EOF is an error.
 
-#### `#inc_start` / `#inc_end`
+### Tokens
 
-Use `#inc_start` and `#inc_end` to place local `.inc` declarations inside a scene file. Blocks cannot nest. Unmatched or unclosed blocks are errors.
-
-#### Source metadata comment
-
-If the first line after source decoding begins with this exact text prefix:
+Spaces, tabs, and newlines separate tokens. Statements can span lines or share a line. In the grammar, braces mean repetition, brackets mark optional parts, and quotes mark literal tokens. `ascii-letter` denotes `a`–`z` after case folding, `digit` denotes `0`–`9`, and `hex-digit` also includes `a`–`f`.
 
 ```text
-// #SCENE_SCRIPT_ID = dddd
+identifier ::= id-start { id-start | digit }
+id-start   ::= "_" | "$" | "@" | ascii-letter
+label      ::= "#" { "_" | ascii-letter | digit }
+decimal    ::= digit { digit }
+integer    ::= decimal | "0b" { "0" | "1" } | "0x" { hex-digit }
 ```
 
-`dddd` is four decimal digits recorded as scene metadata. Later text on the first line is ignored for this ID.
-
-### Lexical structure
-
-#### White space and newlines
-
-Whitespace consists of spaces, tabs, and newlines. A newline does not terminate a statement. Semicolons start comments, not statement terminators.
-
-#### Identifiers
-
-Ordinary scene identifiers follow:
-
-```text
-identifier ::= identifier-start { identifier-continue }
-identifier-start ::= "_" | "$" | "@" | ascii-letter
-identifier-continue ::= identifier-start | digit
-```
-
-where `ascii-letter` is effectively `a ... z` after case folding.
-
-The reserved keywords are:
+Reserved words
 
 ```text
 command  property  goto  gosub  gosubstr  return
-if  elseif  else  for  while  continue  break
-switch  case  default
+if  elseif  else  for  while  continue  break  switch  case  default
 ```
 
-#### Labels and z-labels
+The lexer recognizes `#z` followed by one to three digits as a z-label when the number is below `100` in profiles `7` and `8`, or below `1000` in other profiles. All other matches of `label` are ordinary labels, including `#` and `#z1234`. Z-label definitions reserve a numeric slot, so `#z1` and `#z01` cannot both be defined. References use the full spelling after ASCII case folding. Each scene needs a definition for numeric slot `0`. All labels are unique within a scene, and all references must resolve within that scene.
 
-A label token begins with `#`:
+Integer literals wrap to signed 32-bit values. A sign is a unary operator. Bare `0b` and `0x` denote zero. A single-quoted literal encloses one character after escape processing and yields its code as `int`. A double-quoted literal has form `str`. Literals written in `.ss` must fit on one physical line.
+
+| Escape | Single quotes | Double quotes |
+| --- | --- | --- |
+| `\\` | Backslash | Backslash |
+| `\n` | The character `n` | LF |
+| `\'` | Apostrophe | — |
+| `\"` | — | Double quote |
+
+Runs of characters that encode to two bytes in Windows CP932 form bare string tokens. The brackets `【` and `】` are delimiters. Use double quotes for text outside that set or to keep spaces and punctuation in one string token.
+
+### Include declarations
+
+Global `.inc` files and scene-local include regions use the same declaration grammar.
 
 ```text
-label-token ::= "#" { "_" | ascii-letter | digit }
-z-label-token ::= "#z" digit [digit [digit]]
+inc-file ::= { declaration }
+declaration ::= ("#replace" | "#define" | "#define_s") name text
+              | "#macro" macro-name ["(" parameter {"," parameter} ")"] text
+              | "#property" name [":" form-name ["[" decimal "]"]]
+              | "#command" name ["(" inc-arg {"," inc-arg} ")"] [":" form-name]
+              | "#expand" text
+
+parameter ::= parameter-name ["(" default-text ")"]
+inc-arg   ::= form-name ["(" default-literal ")"]
 ```
 
-- A lone `#` is accepted as an ordinary label.
-- Z-labels use 1–3 ASCII digits. Profiles `7` and `8` accept values below `100`; other profiles accept values below `1000`.
-- `#z0`, `#z00`, and `#z000` occupy the same numeric label slot, but a jump reference must exactly match the definition's spelling. `#z1234`, and `#z100`–`#z999` in profiles `7`/`8`, are ordinary labels.
-- Labels must be uniquely defined and all references must resolve. Every scene must define a Z-label with numeric value `0`.
+| Declaration | Where the name ends |
+| --- | --- |
+| `#replace`, `#define` | Space, tab, or newline |
+| `#define_s` | Tab or newline, so the name can contain spaces |
+| `#macro` | Space, tab, newline, or `(`. The name starts with `@`. |
+| `#property` | Space, tab, newline, or `:` |
+| `#command` | Space, tab, newline, `(`, or `:` |
 
-#### Integer literals
+Include names share a namespace with the global include declarations visible to the scene. The compiler rejects duplicate names. A declaration name used directly as a scene identifier must also follow the scene identifier grammar.
 
-Three forms of integer literal are accepted:
+#### Text replacement and macros
+
+Declaration text skips leading whitespace, ends at the next unescaped `#` in included text or EOF, joins lines with spaces, and trims trailing spaces and tabs. Write `##` to emit a literal `#`, including within a quoted string in declaration text.
+
+`#replace` inserts text and advances past it. `#define` and `#define_s` rescan inserted text. Matches operate on characters before tokenization, including inside quotes. Each replacement table prefers its longest matching name. When a definition and a macro parameter both match, the lexicographically larger name wins. A parameter wins a tie.
+
+Write macro arguments immediately after the name in parentheses. The name alone and `()` both supply zero arguments. Omitted trailing arguments use nonempty defaults. Commas outside quotes and nested parentheses separate arguments. Empty entries and excess arguments are errors. Omit the parameter list when declaring a zero-parameter macro. A parameter default ends at the first `)` and cannot contain a tab or newline.
+
+The compiler expands arguments and defaults before substituting them, then expands the body with the resulting parameter values. A repeated parameter name uses its first value. The other occurrences still take arguments or defaults. After expanding the body, scanning resumes after the inserted text.
+
+`#expand` expands its text immediately and reads the result as more include declarations. Replacements and macros become available as they are collected. The compiler queues `#property` and `#command` text, expands it after collection, and registers properties before commands within each include. All global includes finish collection before this registration pass.
+
+Macro nesting is limited to 128. Text expansion stops after more than 10,000 consecutive scanning steps without reaching a new minimum remaining length. The same guard counts declarations during `#expand` processing.
+
+#### Property and command signatures
+
+- `#property` defaults to `int` and rejects `void`. Only `intlist` and `strlist` take a bracketed size. The size is an unsigned decimal spelling.
+- `#command` defaults to return form `int`. Write only forms in its parameter list. Omit the parentheses for zero parameters.
+- An `int` default uses signed decimal notation, with an optional `+` or `-` directly before the digits. A `str` default uses a double-quoted literal. Starting with the first default, all parameters must have defaults. The compiler fills omitted `int` arguments. Pass `str` arguments explicitly even when the declaration supplies a default.
+
+### Scene grammar
 
 ```text
-decimal ::= digit { digit }
-binary  ::= "0b" { "0" | "1" }
-hex     ::= "0x" { hex-digit }
+scene         ::= { statement }
+statement     ::= label-target | command-def | property-def | jump | return-stmt
+                | if-stmt | for-stmt | while-stmt | "continue" | "break"
+                | switch-stmt | element-expr [assign-op expr]
+                | "【" string-token "】" | string-token
+
+command-def   ::= "command" identifier [ "(" [property-def {"," property-def}] ")" ]
+                  [":" form] block
+property-def  ::= "property" identifier [":" form]
+form          ::= form-name ["[" expr "]"]
+block         ::= "{" { statement } "}"
+jump          ::= "goto" label-target | ("gosub" | "gosubstr") [args] label-target
+label-target  ::= label | z-label
+return-stmt   ::= "return" ["(" expr ")"]
+
+if-stmt       ::= "if" "(" expr ")" block {"elseif" "(" expr ")" block} ["else" block]
+for-stmt      ::= "for" "(" {statement} "," expr "," {statement} ")" block
+while-stmt    ::= "while" "(" expr ")" block
+switch-stmt   ::= "switch" "(" expr ")" "{" {case-clause} [default-clause] "}"
+case-clause   ::= "case" "(" expr ")" {statement}
+default-clause ::= "default" {statement}
+
+expr          ::= unary {binary-op unary}
+unary         ::= {"+" | "-" | "~"} primary
+primary       ::= "(" expr ")" | "[" expr {"," expr} "]" | jump
+                | integer | character-literal | string-token | label | element-expr
+element-expr  ::= element {"." element | "[" expr "]"}
+element       ::= identifier [args]
+args          ::= "(" [arg {"," arg}] ")"
+arg           ::= [identifier "="] expr
 ```
 
-Integers are signed 32-bit values with wrapping overflow. The minus sign is a unary operator. Bare `0b` and `0x` are accepted as zero.
+Binary operators associate from left to right at each level. Precedence increases down the table.
 
-#### Character and string literals
+| Level | Operators |
+| --- | --- |
+| 1 | `\|\|` |
+| 2 | `&&` |
+| 3 | `\|` |
+| 4 | `^` |
+| 5 | `&` |
+| 6 | `==`, `!=` |
+| 7 | `>`, `>=`, `<`, `<=` |
+| 8 | `<<`, `>>`, `>>>` |
+| 9 | `+`, `-` |
+| 10 | `*`, `/`, `%` |
 
-Single-quoted and double-quoted literals may not cross a physical line. The only accepted escape spellings are:
+Prefix operators bind more tightly than any binary operator. Profile `7` groups `&&` and `||` at level 1. Both logical operands are evaluated. A list literal has form `list` and contains at least one expression. Parentheses preserve the form and length of a list argument, as in `wipe(option=([1,2]))`.
 
-- `\\`
-- `\n`
-- `\'` inside single-quoted literals, or `\"` inside double-quoted literals
-
-In double quotes, `\n` becomes a newline. In single quotes, `'\n'` yields the character `n`. A single-quoted literal must produce exactly one character and has integer type; a double-quoted literal has string type.
-
-#### Fullwidth / double-byte bare strings
-
-Runs of Windows CP932 double-byte characters, excluding `【` and `】`, can be written as unquoted strings:
-
-```text
-"こんにちは"
-こんにちは
-```
-
-Non-ASCII characters outside that set need quotes, even in UTF-8 source. Speaker names can use `【名前】`.
-
-#### Delimiters and operators
-
-The delimiters are:
-
-```text
-.  ,  :  (  )  [  ]  {  }  【  】
-```
-
-Assignment operators are statement-only, not expression operators:
+Assignments use these operators:
 
 ```text
 =  +=  -=  *=  /=  %=  &=  |=  ^=  <<=  >>=  >>>=
 ```
 
-Expression precedence, from lowest to highest, is:
+### Forms and name resolution
 
-| Level | Operators | Associativity |
-|---|---|---|
-| 1 | `\|\|` | left |
-| 2 | `&&` | left |
-| 3 | `\|` | left |
-| 4 | `^` | left |
-| 5 | `&` | left |
-| 6 | `==`, `!=` | left |
-| 7 | `>`, `>=`, `<`, `<=` | left |
-| 8 | `<<`, `>>`, `>>>` | left |
-| 9 | `+`, `-` | left |
-| 10 | `*`, `/`, `%` | left |
-| unary | `+`, `-`, `~` | prefix |
+Unqualified element names are looked up in call, scene, then global scope. The call scope contains parameters and local `property` declarations. The scene scope contains scene-local include declarations and scene commands. The global scope contains global include declarations and the profile's built-ins. A member is looked up on the preceding segment's form. Indexing requires an indexed member and an `int` or `intref` expression.
 
-Profile `7` treats `&&` and `||` as the same precedence level, evaluated left to right. All other profiles use the table above.
+An unresolved single name used as an expression becomes a string after ASCII case folding. The name must contain neither `@` nor `$` and take zero arguments. A standalone ordinary label in an expression has form `label`. Z-label tokens are jump targets and definitions.
 
-### The `.inc` declaration language
+An element chain ending in a property of form `int`, `str`, `intlist`, or `strlist` has the corresponding reference form `intref`, `strref`, `intlistref`, or `strlistref`. A chain used as a statement without an assignment must end in a command.
 
-Global `.inc` files and scene-local include regions accept the same declarations:
+#### Operators and assignment
 
-```text
-inc-unit ::= { inc-decl }
-inc-decl ::= replace-decl
-           | define-decl
-           | define-s-decl
-           | macro-decl
-           | property-decl
-           | command-decl
-           | expand-decl
-```
+| Operands | Operators and result |
+| --- | --- |
+| One `int` or `intref` | Prefix `+`, `-`, `~` yield `int`. |
+| Two `int`/`intref` operands | All binary operators in the precedence table yield `int`. |
+| Two `str`/`strref` operands | `+` yields `str`. `==`, `!=`, `>`, `>=`, `<`, and `<=` yield `int`. |
+| `str`/`strref` followed by `int`/`intref` | `*` yields `str`. |
 
-#### Declaration Names
+Plain assignment to `intref` or `strref` accepts the corresponding value or reference. Other assignable forms must match exactly. Compound assignment applies the binary operator and assigns the result. For example, `s[0] *= 3` repeats a string in place.
 
-- `#replace` / `#define` names end at space, tab, or newline.
-- `#define_s` names end at tab or newline and may contain spaces.
-- `#property` names also end at `:`; `#command` names also end at `(` or `:`.
-- Property and command names may use characters outside the ordinary scene identifier set.
-- Macro names must begin with `@`.
-- All declarations share one namespace. Duplicate names fail; successful declarations immediately affect later `#ifdef` / `#elseifdef` tests.
+For bytecode comparisons with the reference Siglus compiler, `s[0] *= 3` records both operand forms correctly in both compilers. The reference compiler writes the left form twice for binary expressions such as `s[0] * 3`.
 
-#### `#replace`, `#define`, and `#define_s`
+#### Declaration and call rules
+
+- Scene `property` and `command` return forms default to `int`. Profiles `6`–`8` allow call-local properties outside commands. Other profiles require a command body. Finishing a command definition clears the call scope and exits command context, including after a nested definition.
+- A bracketed expression in a property or parameter form must have form `int`. For `intlist` and `strlist`, the expression supplies the runtime length, with zero used when omitted. The form name alone determines a command's return form.
+- A global `.inc #command` needs exactly one definition in the directory, even if unused. The definition must match the return form, parameter count, and positional forms. A scene-local `#command` needs a definition in that scene and supplies the call signature there.
+- Arguments match the selected command signature. A value parameter of form `int` or `str` can take its scalar reference form. Pass references to reference parameters. Named arguments require recognized names and matching forms. The compiler places positional arguments before named arguments, preserving order within each group. Profile `8` preserves integer references for `wipe(key_skip=...)` and `mask_wipe(key_skip=...)`.
+- The declared return form determines the form at call sites. The compiler checks the expression in `return(expr)` without matching it against the declared return form.
+
+#### Control flow and dialogue
+
+- `if`, `elseif`, `for`, and `while` conditions use `int` or `intref`. A `switch` with cases compares integer values to integer values, or strings to strings. The runtime evaluates the condition once and executes the first matching case or the optional `default`. Each branch exits the switch. `break` and `continue` target loops.
+- `goto`, `gosub`, and `gosubstr` have forms `void`, `int`, and `str` in expressions. Pass individual integers or strings to `gosub` and `gosubstr` when the result needs to be disassembled or decompiled.
+- The compiler rejects selection commands from the active profile in conditions, `case` expressions, command arguments, standalone subroutine-call arguments, and index expressions. See the [profile table](#const-profiles) for the selection command family.
+- A bare string statement displays text and allocates a read flag. `【 string-token 】` displays a speaker name. Certain built-in calls also allocate flags according to the selected profile.
+- The compiler and LSP warn when syntax nesting exceeds 64 levels or expression-tree height exceeds 128. Macro expansion has separate hard limits.
+
+### Example
+
+`names.inc` declares a command and its integer default.
 
 ```text
-replace-decl   ::= "#replace"  name replacement-text
-define-decl    ::= "#define"   name replacement-text
-define-s-decl  ::= "#define_s" name-s replacement-text
+#define title "ABC"
+#command repeat_name(int(3)) : void
 ```
 
-`replacement-text` is extracted as follows:
-
-1. skip leading white space after the name;
-2. read until the next unescaped `#` or end of file;
-3. fold embedded newlines into spaces;
-4. trim trailing spaces and TABs;
-5. `##` denotes a literal `#`;
-6. nested `#ifdef` / `#elseifdef` / `#else` / `#endif` are allowed inside it.
-
-`#replace` inserts its text without immediately expanding the inserted result again. `#define` and `#define_s` immediately rescan their result for further replacement.
-
-The longest matching name wins within the ordinary definitions or macro parameters. If both groups match, the lexicographically larger candidate name wins. Declaration order does not determine priority.
-
-#### `#macro`
+`main.ss` calls the command and defines it.
 
 ```text
-macro-decl ::= "#macro" macro-name ["(" macro-param {"," macro-param} ")"] replacement-text
-macro-name ::= "@" <non-space-sequence>
-macro-param ::= param-name ["(" default-text ")"]
+#z0
+repeat_name()
+
+command repeat_name(property count : int) : void {
+    s[0] = title
+    s[0] *= count
+    set_namae(s[0])
+}
 ```
-
-- Macros substitute text. Arguments and defaults are expanded before substitution.
-- Parentheses, when present, must contain at least one parameter; empty `()` is rejected.
-- Argument splitting respects nested parentheses and quoted literals.
-- The body expands with its parameter values, and the inserted result is not immediately rescanned.
-- Repeated parameter names use the first occurrence's argument/default. Later occurrences still count as parameters and their values are expanded.
-
-**Expansion limits:** Macro nesting is limited to **128 levels**. Text, argument, and body expansion stops after more than **10000 consecutive scanning steps** without a new minimum remaining-text length. Include `#expand` processing applies the same rule in declaration steps. These are progress limits, not limits on total macros or declarations in a file.
-
-Exceeding a limit fails compilation or LSP analysis. Correct cyclic definitions or reduce expansion depth before retrying.
-
-#### `#property`
-
-```text
-property-decl ::= "#property" name [":" form-name ["[" integer-literal "]"]]
-```
-
-Rules:
-
-1. the default form is `int`;
-2. `void` shall not be used as a property form;
-3. the array suffix is allowed only for `intlist` and `strlist`;
-4. the array size shall be a decimal integer constant, not an arbitrary expression.
-
-#### `#command`
-
-```text
-command-decl ::= "#command" name ["(" inc-arg {"," inc-arg} ")"] [":" form-name]
-inc-arg ::= form-name ["(" default-literal ")"]
-default-literal ::= signed-int-literal | double-quoted-string
-```
-
-- Default return form: `int`.
-- Parameters specify forms and defaults, without names.
-- Parentheses, when present, must contain at least one parameter.
-- Every parameter after the first default must also have a default.
-- `int` and `str` defaults are accepted, but only integer defaults can be omitted at calls. Omitted string defaults cause compilation failure.
-
-#### `#expand`
-
-```text
-expand-decl ::= "#expand" replacement-text
-```
-
-`#expand` immediately expands its text and processes the result as `.inc` declarations.
-
-### Scene grammar
-
-After removing scene-local inc regions, ordinary scene text is analyzed by the following skeleton:
-
-```text
-program ::= { sentence }
-
-sentence ::= label-stmt
-           | z-label-stmt
-           | command-def
-           | property-def
-           | goto-stmt
-           | return-stmt
-           | if-stmt
-           | for-stmt
-           | while-stmt
-           | continue-stmt
-           | break-stmt
-           | switch-stmt
-           | call-or-assign-stmt
-           | name-stmt
-           | text-stmt
-```
-
-#### Core statements
-
-```text
-label-stmt   ::= label-token
-z-label-stmt ::= z-label-token
-
-command-def  ::= "command" identifier ["(" [property-def {"," property-def}] ")"] [":" form] block
-property-def ::= "property" identifier [":" form]
-
-goto-stmt ::= "goto" label-target
-            | "gosub" [arg-list] label-target
-            | "gosubstr" [arg-list] label-target
-
-return-stmt ::= "return"
-              | "return" "(" exp ")"
-
-if-stmt ::= "if" "(" exp ")" block
-            { "elseif" "(" exp ")" block }
-            [ "else" block ]
-
-for-stmt ::= "for" "(" { sentence } "," exp "," { sentence } ")" block
-while-stmt ::= "while" "(" exp ")" block
-continue-stmt ::= "continue"
-break-stmt ::= "break"
-
-switch-stmt ::= "switch" "(" exp ")" "{" { case-clause } [ default-clause ] "}"
-case-clause ::= "case" "(" exp ")" { sentence }
-default-clause ::= "default" { sentence }
-
-call-or-assign-stmt ::= elm-exp [ assign-op exp ]
-name-stmt ::= "【" string-token "】"
-text-stmt ::= string-token
-
-block ::= "{" { sentence } "}"
-label-target ::= label-token | z-label-token
-assign-op ::= "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | ">>>="
-```
-
-Rules:
-
-1. `switch` / `case` / `default` use **no colon**; `case(exp)` is followed directly by a sentence sequence;
-2. the three `for` clauses are separated by commas, not semicolons;
-3. the initializer and loop clauses of `for` are not expressions but “zero or more sentences”;
-4. `name-stmt` contains exactly one string token;
-5. a standalone string token is itself a legal text statement.
-
-#### Forms, element expressions, and argument lists
-
-```text
-form ::= form-name ["[" exp "]"]
-arg-list ::= "(" [arg {"," arg}] ")"
-arg ::= exp | identifier "=" exp
-
-elm-exp ::= element { "." element | "[" exp "]" }
-element ::= identifier [arg-list]
-```
-
-Supplementary rules:
-
-1. `form-name` shall be present in the active form table;
-2. named and positional arguments may be mixed syntactically; after parsing, named arguments are moved to the tail of the argument sequence while preserving the relative order within the positional and named subsets;
-3. `form[exp]` in scene `property` and `command` parameter declarations requires an `int` expression but does not give call-local properties a fixed array size as `.inc #property` does.
-
-A bracketed expression after a `command` return type is ignored. The return type is determined by `form-name`.
-
-#### Expressions
-
-```text
-simple-exp ::= "(" exp ")"
-             | "[" exp {"," exp} "]"
-             | goto-exp
-             | literal
-             | elm-exp
-
-goto-exp ::= "goto" label-target
-           | "gosub" [arg-list] label-target
-           | "gosubstr" [arg-list] label-target
-
-literal ::= integer-literal | string-token | label-token
-```
-
-Additionally:
-
-- a list literal `[...]` shall contain at least one element; an empty list `[]` is not accepted;
-- parentheses around a list argument do not change its element count or type information; for example, `wipe(option=([1,2]))` and `wipe(option=[1,2])` are equivalent;
-- `goto`, `gosub`, and `gosubstr` may appear both as statements and as expressions inside larger expressions.
-
-### Name lookup and form rules
-
-#### Root-name lookup order
-
-Root names are resolved in the order:
-
-```text
-call  ->  scene  ->  global
-```
-
-where:
-
-- `call` is the current command call frame;
-- `scene` is the current scene namespace;
-- `global` includes global `.inc` declarations together with profile-supplied built-ins.
-
-Available members in a chain such as `a.b[c].d(...)` depend on the preceding segment's type and the selected profile.
-
-#### Reference forms for properties
-
-Property expressions use the corresponding reference type:
-
-- `int` -> `intref`
-- `str` -> `strref`
-- `intlist` -> `intlistref`
-- `strlist` -> `strlistref`
-
-Therefore the left-hand side of an assignment shall be an element expression that resolves to a reference form.
-
-#### Unresolved Names as Strings
-
-An unresolved single-segment name with no arguments and no `@` or `$` is treated as a string literal of the same spelling. Other unresolved element names are errors.
-
-### Types and static constraints
-
-#### Analysis depth warnings
-
-Syntax nesting beyond `64` levels or expression-tree height beyond `128` produces a warning; compilation and LSP analysis continue. These are separate from hard [macro expansion limits](#macro).
-
-#### Unary and binary operators
-
-Operator types:
-
-1. unary `+`, `-`, and `~`: operand shall be `int` or `intref`; result is `int`;
-2. when both operands are `int` / `intref`, `+ - * / % == != > >= < <= && || & | ^ << >> >>>` are valid and yield `int`;
-3. when both operands are `str` / `strref`:
-   - `+` yields `str`;
-   - `== != > >= < <=` yield `int`;
-4. `str` / `strref` times `int` / `intref` with `*` yields `str`;
-5. the reverse `int * str` is invalid;
-6. assignment operators are not expressions and appear only in `call-or-assign-stmt`.
-
-#### Assignment
-
-An assignment shall satisfy:
-
-1. the left-hand side is a reference form;
-2. `intref` accepts `int` and `intref`;
-3. `strref` accepts `str` and `strref`;
-4. other reference forms require strict match with the right-hand side.
-
-#### Statement-level constraints
-
-1. profiles `0`–`5`, `9`, and `10` allow `property` only inside `command`. Profiles `6`–`8` also allow call-local properties outside commands;
-2. conditions of `if`, `for`, and `while` shall be `int` or `intref`;
-3. the `switch` condition shall be `int`, `intref`, `str`, or `strref`, and each `case` value shall belong to the same integer family or string family as the condition;
-4. the form of `goto` as an expression is `void`; `gosub` is `int`; `gosubstr` is `str`;
-5. `continue` and `break` are invalid outside loops;
-6. certain commands marked by the active profile as selection-related shall not appear in conditions, ordinary arguments, goto arguments, or index expressions;
-7. `name-stmt` emits a name-display event, and `text-stmt` emits a text-display event and consumes a read-flag slot.
-
-In profiles `0`–`5`, `9`, and `10`, a local `property` after a nested `command` definition is also rejected unless inside another command definition. Profiles `6`–`8` allow it.
-
-#### Matching command definitions to declarations
-
-A scene command can be local or implement a global `.inc #command`. Global implementations must match the declared return form, parameter count, and positional parameter forms. Parameter names and defaults are not compared.
-
-#### Return Values
-
-Call-site type checking uses the declared return form. The compiler does not check whether `return(exp)` actually matches that form.
-
-#### Named arguments
-
-Named arguments are accepted only by commands with named parameters. Unknown names and type mismatches are errors.
-
-### Whole-file and directory-level constraints
-
-#### Labels and z-labels
-
-A scene file shall satisfy:
-
-1. ordinary labels are not redefined;
-2. z-labels are not redefined;
-3. every referenced label and z-label is defined;
-4. `#z0` is present;
-5. every scene-local `command` declaration is eventually defined in the same file.
-
-#### Directory-level linking of global `.inc #command`
-
-Every global `.inc #command` needs exactly one scene implementation, even when unused. Missing or duplicate implementations fail linking.
-
-## Tips and Troubleshooting
-
-### Unexpected Tokens During Compilation
-
-Quote text containing commas or parentheses when it should be one argument:
-
-```ss
-set_namae("Hello, world")
-```
-
-### Mixed-Form String Multiplication
-
-String-by-integer `*` expressions, such as `set_namae("ABC" * 3)`, generate different bytecode from the official compiler. For matching output under both compilers, assign to a string variable and use `*=`:
-
-```ss
-s[0] = "ABC" s[0] *= 3 set_namae(s[0])
-```
-
-Using `s[0] = s[0] * 3` does not avoid the compatibility issue.
