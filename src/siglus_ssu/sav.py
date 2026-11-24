@@ -238,6 +238,7 @@ def parse_read_sav(blob):
     q = 0
     rows = []
     scene_flags = {}
+    flag_offsets = {}
     read_counts = {}
     tr = 0
     tc = 0
@@ -261,11 +262,11 @@ def parse_read_sav(blob):
             raise ValueError("read.sav: bad flag_cnt")
         if q + int(cnt) > len(mv):
             raise ValueError("read.sav: truncated (flags)")
-        flags = mv[q : q + int(cnt)]
-        q += int(cnt)
         scene = ascii_lower(name)
-        scene_flags[scene] = flags
-        r = sum(1 for x in flags if x)
+        flag_offsets[scene] = q
+        scene_flags[scene] = mv[q : q + cnt]
+        r = cnt - unpacked.count(b"\x00", q, q + cnt)
+        q += cnt
         read_counts[scene] = r
         tr += r
         tc += int(cnt)
@@ -281,6 +282,7 @@ def parse_read_sav(blob):
         "unpacked_sha256": content_digest(unpacked),
         "rows": rows,
         "flags": scene_flags,
+        "flag_offsets": flag_offsets,
         "read_counts": read_counts,
         "total_read": tr,
         "total_cnt": tc,
@@ -895,7 +897,7 @@ def readall(blob):
         return _readall_global(blob, kind)
     if kind["kind"] != "read":
         raise ValueError("--readall supports read.sav and global.sav only")
-    major, minor, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
+    _, _, data_size, scn_cnt = struct.unpack_from("<4i", blob, 0)
     if int(data_size) <= 0 or int(data_size) > (len(blob) - 16):
         raise ValueError("read.sav: bad data_size")
     enc = bytearray(blob[16 : 16 + int(data_size)])
@@ -926,14 +928,26 @@ def readall(blob):
         if int(cnt) > 0:
             mv[q : q + int(cnt)] = b"\x01" * int(cnt)
         q += int(cnt)
-    enc2 = _pack_tnm_data(bytes(u))
-    tail = blob[16 + int(data_size) :]
-    out = bytearray()
-    out.extend(struct.pack("<4i", int(major), int(minor), len(enc2), int(scn_cnt)))
-    out.extend(enc2)
-    if tail:
-        out.extend(tail)
-    return bytes(out)
+    return _replace_read_payload(blob, u)
+
+
+def _replace_read_payload(blob, raw):
+    major, minor, size, scenes = struct.unpack_from("<4i", blob)
+    packed = _pack_tnm_data(bytes(raw))
+    return (
+        struct.pack("<4i", major, minor, len(packed), scenes)
+        + packed
+        + blob[16 + size :]
+    )
+
+
+def set_read_flag(blob, info, scene, index, read):
+    flags = info["flags"][scene]
+    if bool(flags[index]) == read:
+        return blob
+    raw = bytearray(flags.obj)
+    raw[info["flag_offsets"][scene] + index] = int(read)
+    return _replace_read_payload(blob, raw)
 
 
 def sav(blob, path=None, *, metadata=None):

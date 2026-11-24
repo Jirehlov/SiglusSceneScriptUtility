@@ -2,16 +2,20 @@ from __future__ import annotations
 from bisect import bisect_left, bisect_right
 from collections import deque
 from itertools import chain, groupby
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from functools import cache, lru_cache, partial
+import base64
+import gc
 import io
 import json
 import os
 import re
+import struct
 import sys
 import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from uuid import uuid4
 from typing import Any, Callable, Iterable
 from . import const as C, package_version
 from . import sav
@@ -32,6 +36,7 @@ from .common import (
     content_digest,
     decode_text_auto,
     read_bytes,
+    open_atomic_output,
     split_end_of_options,
 )
 from .native_ops import (
@@ -232,6 +237,7 @@ class AnalysisResult:
     _replacement_tokens_by_line: dict[int, list[SourceToken]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
+    read_flag_mapping_id: str | None = field(default=None, repr=False, compare=False)
     _read_flags_by_line: dict[int, list[tuple[int, int, int]]] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -278,20 +284,6 @@ class SymbolOccurrence:
     name: str
     definition: bool = False
     renamable: bool = False
-
-    def __reduce__(self):
-        return type(self), (
-            self.symbol_id,
-            self.path,
-            self.line,
-            self.start_char,
-            self.end_char,
-            self.kind,
-            self.semantic_type,
-            self.name,
-            self.definition,
-            self.renamable,
-        )
 
 
 @dataclass(slots=True)
@@ -1414,6 +1406,7 @@ def _init_scan_worker(
     project: ProjectContext, native_config: dict[str, Any] | None = None
 ) -> None:
     global _SCAN_WORKER_PROJECT, _SCAN_WORKER_NATIVE_PROJECT
+    gc.enable()
     if project.iad is not None:
         project.iad["replace_tree"] = build_replace_tree(
             project.iad["macro_defs"].values()
@@ -1584,16 +1577,18 @@ def _native_scene_analysis_result(
         return None
 
 
-def _link_scan_worker(job: tuple[str, str]) -> LinkScanResult:
+def _link_scan_worker(
+    job: tuple[str, str],
+) -> tuple[bool, list[DefinitionRecord], dict, list[str]]:
     path, text = job
-    native_result = _native_link_scan_result(_SCAN_WORKER_NATIVE_PROJECT, path, text)
-    if native_result is not None:
-        return native_result
-    return _link_scan_result(
+    failed, commands, occurrences, unmapped = _native_link_scan_result(
+        _SCAN_WORKER_NATIVE_PROJECT, path, text
+    ) or _link_scan_result(
         _silent_stdout_call(
             analyze_document, path, text, project=_scan_worker_project(), run_bs=False
         )
     )
+    return failed, commands, _pack_occurrences(occurrences), unmapped
 
 
 def _range(
@@ -2587,6 +2582,8 @@ class DocumentState:
     file_state: tuple[int, ...] | None = None
     base_analysis: AnalysisResult | None = None
     base_analysis_signature: tuple[Any, ...] | None = None
+    native_analysis: AnalysisResult | None = None
+    native_analysis_signature: tuple[Any, ...] | None = None
     symbol_analysis: AnalysisResult | None = None
     analysis: AnalysisResult | None = None
     analysis_signature: tuple[Any, ...] | None = None
@@ -2780,25 +2777,118 @@ def _source_diagnostic_from_cache(item: dict[str, Any], path: str) -> SourceDiag
     )
 
 
-def _symbol_occurrence_to_cache(
-    name_by_path: dict[str, str], occurrence: SymbolOccurrence
-) -> tuple[Any, ...]:
-    name = name_by_path.get(occurrence.path)
-    if name is None:
-        name = _cache_file_name_from_path(occurrence.path)
-        name_by_path[occurrence.path] = name
-    return (
-        occurrence.symbol_id,
-        name,
-        occurrence.line,
-        occurrence.start_char,
-        occurrence.end_char,
-        occurrence.kind,
-        occurrence.semantic_type,
-        occurrence.name,
-        occurrence.definition,
-        occurrence.renamable,
-    )
+_OCCURRENCE_POSITION = struct.Struct("<Iiii")
+
+
+def _pack_occurrences(items: list[SymbolOccurrence], *, disk: bool = False) -> dict:
+    symbols = {}
+    positions = bytearray(len(items) * _OCCURRENCE_POSITION.size)
+    wide = None
+    for i, item in enumerate(items):
+        fields = (
+            item.symbol_id,
+            item.path,
+            item.kind,
+            item.semantic_type,
+            item.name,
+            item.definition,
+            item.renamable,
+        )
+        group = symbols.setdefault(fields, len(symbols))
+        if wide is None:
+            offset = i * _OCCURRENCE_POSITION.size
+            try:
+                _OCCURRENCE_POSITION.pack_into(
+                    positions, offset, group, item.line, item.start_char, item.end_char
+                )
+                continue
+            except struct.error:
+                wide = list(
+                    _OCCURRENCE_POSITION.iter_unpack(memoryview(positions)[:offset])
+                )
+        wide.append((group, item.line, item.start_char, item.end_char))
+    if disk:
+        groups = [
+            (symbol, _cache_file_name_from_path(path), *rest)
+            for symbol, path, *rest in symbols
+        ]
+        data = base64.b64encode(positions).decode("ascii") if wide is None else wide
+    else:
+        groups = list(symbols)
+        data = bytes(positions) if wide is None else wide
+    return {"symbols": groups, "positions": data}
+
+
+def _unpack_occurrences(
+    table: dict, directory: str | None = None, paths: dict[str, str] | None = None
+) -> list[SymbolOccurrence]:
+    groups = table.get("symbols")
+    positions = table.get("positions")
+    if directory is not None:
+        assert paths is not None
+        if not isinstance(groups, list):
+            raise ValueError("occurrence symbols")
+        resolved = []
+        for group in groups:
+            if (
+                not isinstance(group, list)
+                or len(group) != 7
+                or not (
+                    all(isinstance(value, str) for value in group[:5])
+                    and type(group[5]) is type(group[6]) is bool
+                )
+            ):
+                raise ValueError("occurrence symbol")
+            symbol, file, *rest = group
+            resolved.append((symbol, _cache_record_path(file, directory, paths), *rest))
+        groups = resolved
+        if isinstance(positions, str):
+            positions = base64.b64decode(positions, validate=True)
+        elif not isinstance(positions, list) or not all(
+            isinstance(row, list)
+            and len(row) == 4
+            and all(type(value) is int for value in row)
+            and row[0] >= 0
+            for row in positions
+        ):
+            raise ValueError("occurrence positions")
+    if isinstance(positions, bytes):
+        if len(positions) % _OCCURRENCE_POSITION.size:
+            raise ValueError("occurrence positions")
+        positions = _OCCURRENCE_POSITION.iter_unpack(positions)
+    result = []
+    try:
+        for group, line, start, end in positions:
+            symbol, path, kind, semantic, name, definition, renamable = groups[group]
+            result.append(
+                SymbolOccurrence(
+                    symbol,
+                    path,
+                    line,
+                    start,
+                    end,
+                    kind,
+                    semantic,
+                    name,
+                    definition,
+                    renamable,
+                )
+            )
+    except IndexError as exc:
+        raise ValueError("occurrence symbol index") from exc
+    return result
+
+
+@contextmanager
+def _defer_index_gc():
+    enabled = gc.isenabled()
+    if enabled:
+        gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def _symbol_occurrence_from_cache(
@@ -2997,7 +3087,6 @@ def _write_lsp_index_cache(
     directory: str,
     inputs: dict[str, dict[str, str]],
     data: dict[str, Any],
-    name_by_path: dict[str, str],
 ) -> None:
     path = _lsp_index_cache_path(directory, inputs)
     tmp_path = path + f".{os.getpid()}.tmp"
@@ -3005,7 +3094,6 @@ def _write_lsp_index_cache(
         ensure_ascii=False,
         separators=(",", ":"),
         check_circular=False,
-        default=partial(_symbol_occurrence_to_cache, name_by_path),
     )
 
     def chunks(value: Any) -> Iterable[str]:
@@ -3039,7 +3127,6 @@ def _update_lsp_index_cache(
     directory: str,
     inputs: dict[str, dict[str, str]],
     payload: dict[str, Any],
-    name_by_path: dict[str, str],
 ) -> None:
     data = {
         "version": LSP_INDEX_CACHE_VERSION,
@@ -3048,7 +3135,15 @@ def _update_lsp_index_cache(
         "cache": _lsp_index_cache_key(directory, inputs),
         "link": payload,
     }
-    _write_lsp_index_cache(directory, inputs, data, name_by_path)
+    _write_lsp_index_cache(directory, inputs, data)
+
+
+@dataclass(slots=True)
+class ReadSaveSnapshot:
+    state: tuple[int, ...] | None
+    blob: bytes
+    revision: str
+    info: dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -3085,7 +3180,7 @@ class SSLanguageServer:
         self.shutdown_requested = False
         self.serial = bool(serial)
         self.read_sav = os.path.abspath(read_sav) if read_sav else ""
-        self.read_sav_cache: tuple[str, dict[str, Any]] | None = None
+        self.read_sav_cache: ReadSaveSnapshot | None = None
         self.client_capabilities: dict[str, Any] = {}
         self.position_encoding = POSITION_ENCODING_UTF16
         self.completion_kind_value_set = set(DEFAULT_COMPLETION_KIND_VALUE_SET)
@@ -3621,6 +3716,8 @@ class SSLanguageServer:
     def clear_document_cache(self, doc: DocumentState) -> None:
         doc.base_analysis = None
         doc.base_analysis_signature = None
+        doc.native_analysis = None
+        doc.native_analysis_signature = None
         doc.symbol_analysis = None
         doc.analysis = None
         doc.analysis_signature = None
@@ -3742,10 +3839,12 @@ class SSLanguageServer:
                 if name in raw_has_diagnostics_by_name:
                     return None
                 raw_has_diagnostics_by_name[name] = value
-            raw_occurrences_by_name: dict[str, list[Any]] = {}
+            raw_occurrences_by_name: dict[str, list | dict] = {}
             for name, items in raw_occurrences.items():
                 name = _cache_file_name(name)
-                if name in raw_occurrences_by_name or not isinstance(items, list):
+                if name in raw_occurrences_by_name or not isinstance(
+                    items, (list, dict)
+                ):
                     return None
                 raw_occurrences_by_name[name] = items
             raw_unmapped_by_name: dict[str, list[str]] = {}
@@ -3800,11 +3899,18 @@ class SSLanguageServer:
                 ]
                 file_commands[path] = commands
                 file_has_diagnostics[path] = raw_has_diagnostics_by_name[name]
-                occurrences_for_path = [
-                    _symbol_occurrence_from_cache(item, source_directory, record_paths)
-                    for item in raw_occurrences_by_name[name]
-                ]
-                file_occurrences[path] = occurrences_for_path
+                table = raw_occurrences_by_name[name]
+                if isinstance(table, dict):
+                    file_occurrences[path] = _unpack_occurrences(
+                        table, source_directory, record_paths
+                    )
+                else:
+                    file_occurrences[path] = [
+                        _symbol_occurrence_from_cache(
+                            item, source_directory, record_paths
+                        )
+                        for item in table
+                    ]
                 file_unmapped_bindings[path] = raw_unmapped_by_name[name]
                 file_signatures[path] = signature
                 group = os.path.splitext(name)[1].lower()[1:]
@@ -3872,7 +3978,9 @@ class SSLanguageServer:
                 for path in paths
             },
             "file_occurrences": {
-                name_by_path[path]: entry.file_occurrences.get(path, [])
+                name_by_path[path]: _pack_occurrences(
+                    entry.file_occurrences.get(path, []), disk=True
+                )
                 for path in paths
             },
             "file_unmapped_bindings": {
@@ -3887,7 +3995,7 @@ class SSLanguageServer:
                 for path, diagnostics in entry.diagnostics.items()
             },
         }
-        _update_lsp_index_cache(directory, inputs, payload, name_by_path)
+        _update_lsp_index_cache(directory, inputs, payload)
 
     def project_for_directory(self, directory: str) -> ProjectCacheEntry:
         directory = os.path.abspath(directory or ".")
@@ -4053,8 +4161,10 @@ class SSLanguageServer:
                 pass
             else:
                 return {
-                    path: result
-                    for (path, _doc), result in zip(docs, results, strict=True)
+                    path: (failed, commands, _unpack_occurrences(table), unmapped)
+                    for (path, _doc), (failed, commands, table, unmapped) in zip(
+                        docs, results, strict=True
+                    )
                 }
         out = {}
         for path, doc in docs:
@@ -4063,6 +4173,7 @@ class SSLanguageServer:
             self.report_scan_progress(progress)
         return out
 
+    @_defer_index_gc()
     def link_diagnostics_for_directory(
         self, directory: str, *, project_entry: ProjectCacheEntry | None = None
     ) -> DirectoryLinkDiagnosticsEntry:
@@ -4364,6 +4475,13 @@ class SSLanguageServer:
     def native_scene_analysis(self, doc: DocumentState) -> AnalysisResult | None:
         directory = os.path.abspath(os.path.dirname(doc.path) or ".")
         project_entry = self.project_for_directory(directory)
+        signature = (
+            doc.path,
+            project_entry.signature,
+            self.document_source_signature(doc),
+        )
+        if doc.native_analysis_signature == signature:
+            return doc.native_analysis
         native_project, _native_config = self.native_lsp_project_for_directory(
             directory, project_entry
         )
@@ -4375,6 +4493,8 @@ class SSLanguageServer:
             project_entry.project,
             bool(self.read_sav),
         )
+        doc.native_analysis_signature = signature
+        doc.native_analysis = result
         if result is None:
             self.report_work_done_progress("Falling back to Python symbols...", 55)
             return None
@@ -4502,7 +4622,9 @@ class SSLanguageServer:
                 "renameProvider": rename_provider,
                 "semanticTokensProvider": semantic_tokens_provider,
                 "documentSymbolProvider": document_symbol_provider,
-                "experimental": {"siglusReadFlags": {"version": 1}},
+                "experimental": {
+                    "siglusReadFlags": {"version": 1, "setReadFlag": True}
+                },
             },
             "serverInfo": {
                 "name": "siglus-ssu",
@@ -4810,11 +4932,37 @@ class SSLanguageServer:
                 hover["range"] = anchor
         self.respond(msg_id, result=hover)
 
+    def read_save_snapshot(self, verify: bool) -> ReadSaveSnapshot:
+        state = _file_state(self.read_sav)
+        cached = self.read_sav_cache
+        if (
+            not verify
+            and state is not None
+            and cached is not None
+            and cached.state == state
+        ):
+            return cached
+        blob = read_bytes(self.read_sav)
+        if state != _file_state(self.read_sav):
+            state = None
+        if cached is not None and blob == cached.blob:
+            cached.state = state
+            return cached
+        snapshot = ReadSaveSnapshot(
+            state, blob, content_digest(blob), sav.parse_read_sav(blob)
+        )
+        self.read_sav_cache = snapshot
+        return snapshot
+
     def read_flag_report(
         self,
         doc: DocumentState,
         analysis: AnalysisResult | None = None,
         flag_indices: list[int] | None = None,
+        *,
+        known_mapping: str | None = None,
+        known_save: str | None = None,
+        verify_save: bool = False,
     ) -> dict[str, Any]:
         scene = ascii_lower(os.path.splitext(os.path.basename(doc.path))[0])
         report = {
@@ -4835,12 +4983,8 @@ class SSLanguageServer:
             report["status"] = "unsupportedDocument"
             return report
         try:
-            blob = read_bytes(self.read_sav)
-            digest = content_digest(blob)
-            if self.read_sav_cache is None or self.read_sav_cache[0] != digest:
-                info = sav.parse_read_sav(blob)
-                self.read_sav_cache = (digest, info)
-            info = self.read_sav_cache[1]
+            snapshot = self.read_save_snapshot(verify_save)
+            info = snapshot.info
         except (OSError, ValueError, RuntimeError) as exc:
             self.read_sav_cache = None
             report["status"] = "saveUnavailable"
@@ -4862,11 +5006,23 @@ class SSLanguageServer:
         read_count = info["read_counts"][scene]
         report["readCount"] = read_count
         report["unreadCount"] = len(flags) - read_count
+        if analysis.read_flag_mapping_id is None:
+            analysis.read_flag_mapping_id = uuid4().hex
+        report["mappingId"] = analysis.read_flag_mapping_id
+        report["saveRevision"] = snapshot.revision
+        if flag_indices is not None:
+            report["items"] = [
+                {"index": i, "read": bool(flags[i])} for i in flag_indices
+            ]
+            return report
+        if known_mapping == analysis.read_flag_mapping_id:
+            if known_save != snapshot.revision:
+                report["states"] = base64.b64encode(flags).decode("ascii")
+            return report
         source_lines = _split_lines_cached(doc.text)
-        indices = range(len(flags)) if flag_indices is None else flag_indices
         columns_by_line: dict[int, list[int]] = {}
         selected = []
-        for index in indices:
+        for index in range(len(flags)):
             if index % 256 == 0:
                 self.raise_if_request_cancelled()
             ranges = []
@@ -4911,7 +5067,76 @@ class SSLanguageServer:
                 result={"uri": uri, "status": "documentUnavailable", "items": []},
             )
             return
-        self.respond(msg_id, result=self.read_flag_report(doc))
+        self.respond(
+            msg_id,
+            result=self.read_flag_report(
+                doc,
+                known_mapping=params.get("mappingId"),
+                known_save=params.get("saveRevision"),
+                verify_save=params.get("verifySave") is True
+                or not params.get("mappingId"),
+            ),
+        )
+
+    def handle_set_read_flag(self, msg_id: Any, params: dict[str, Any]) -> None:
+        uri = self.text_document_uri_from_params(msg_id, params)
+        if uri is None:
+            return
+        version = params["textDocument"].get("version")
+        index, read, mapping = (
+            params.get("index"),
+            params.get("read"),
+            params.get("mappingId"),
+        )
+        if (
+            type(index) is not int
+            or index < 0
+            or type(read) is not bool
+            or type(version) is not int
+            or not isinstance(mapping, str)
+        ):
+            self.respond(
+                msg_id,
+                error={
+                    "code": JSONRPC_INVALID_PARAMS,
+                    "message": "Expected a document version, mappingId, flag index and read state.",
+                },
+            )
+            return
+        doc = self.document_for_uri(uri)
+        if doc is None or uri not in doc.open_uris or doc.version != version:
+            self.respond(msg_id, result={"status": "sourceChanged"})
+            return
+        report = self.read_flag_report(doc, flag_indices=[], verify_save=True)
+        if report["status"] == "matched":
+            if mapping != report["mappingId"] or index >= report["flagCount"]:
+                report["status"] = "sourceChanged"
+            else:
+                snapshot = self.read_sav_cache
+                assert snapshot is not None
+                scene = report["scene"]
+                try:
+                    updated = sav.set_read_flag(
+                        snapshot.blob, snapshot.info, scene, index, read
+                    )
+                    report["previousRevision"] = snapshot.revision
+                    if updated is not snapshot.blob:
+                        self.raise_if_request_cancelled()
+                        with open_atomic_output(
+                            self.read_sav, expected=snapshot.blob
+                        ) as stream:
+                            stream.write(updated)
+                        self.read_sav_cache = None
+                        report["saveRevision"] = content_digest(updated)
+                        report["readCount"] += 1 if read else -1
+                        report["unreadCount"] = (
+                            report["flagCount"] - report["readCount"]
+                        )
+                    report["items"] = [{"index": index, "read": read}]
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.read_sav_cache = None
+                    report.update(status="writeFailed", message=str(exc))
+        self.respond(msg_id, result=report)
 
     def handle_definition(self, msg_id: Any, params: dict[str, Any]) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
@@ -5697,6 +5922,7 @@ class SSLanguageServer:
             "textDocument/semanticTokens/full",
             "textDocument/documentSymbol",
             "siglus/readFlags",
+            "siglus/setReadFlag",
         }
         if method in methods_with_object_params:
             params = self.coerce_params_object(msg_id, has_id, raw_params)
@@ -5734,6 +5960,12 @@ class SSLanguageServer:
             if has_id:
                 self.run_request_handler(
                     msg_id, params, lambda: self.handle_hover(msg_id, params)
+                )
+            return
+        if method == "siglus/setReadFlag":
+            if has_id:
+                self.run_request_handler(
+                    msg_id, params, lambda: self.handle_set_read_flag(msg_id, params)
                 )
             return
         if method == "siglus/readFlags":

@@ -179,7 +179,7 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 | Option | Description |
 |---|---|
 | `--serial` | Scan the workspace serially instead of in parallel. |
-| `--read-sav PATH` | Show saved read states in hover details and clients supporting the `siglus/readFlags` extension. A missing or unreadable save does not prevent startup. |
+| `--read-sav PATH` | Show saved read states in hover details and let compatible clients view or edit individual flags. A missing or unreadable save does not prevent startup. |
 
 Features include diagnostics, semantic highlighting, completion, hover, definition and reference lookup, rename, and document symbols. Analysis uses the current scene and same-directory `.inc` files, including unsaved editor changes. Select the game's global `--const-profile` as for compilation.
 
@@ -196,7 +196,9 @@ Read flags are numbered from `0` within each scene. A saved zero means not marke
 
 Saved states are shown only when the scene name and flag count match the current source. A count mismatch is reported without applying the saved states. Hover details refer to the text, command, or macro invocation that produced the flag. Multiple flags can share one source location.
 
-Refresh the hover or read-flag request after saving in-game; the server does not actively watch the save file. Editor clients control any background highlighting.
+Clients can reuse the source ranges from `siglus/readFlags` by returning the last `mappingId` and `saveRevision`. For the same mapping, a changed save returns the scene’s flag bytes in the base64 `states` field. An unchanged report omits both the ranges and the state bytes. Clients can request a fresh content check with `verifySave: true` after a file change. Editor clients manage highlighting and file watching.
+
+When the server advertises `experimental.siglusReadFlags.setReadFlag`, a client can send `siglus/setReadFlag` with the open document’s URI and version in `textDocument`, the current `mappingId`, the flag `index`, and a boolean `read`. The server updates that flag in the selected `read.sav` and checks the original contents before replacing the file. A stale mapping, missing scene, or flag count mismatch leaves the save intact.
 
 ---
 

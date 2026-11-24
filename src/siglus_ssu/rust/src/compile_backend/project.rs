@@ -77,7 +77,11 @@ enum SceneBytes {
 }
 
 impl SceneBytes {
-    fn pack<const FULL_STATS: bool>(self, config: &CompileConfig) -> Result<Self, String> {
+    fn pack<const FULL_STATS: bool>(
+        self,
+        config: &CompileConfig,
+        stem: &str,
+    ) -> Result<Self, String> {
         let Self::Dat(dat) = self else {
             return Ok(self);
         };
@@ -86,8 +90,16 @@ impl SceneBytes {
         } else {
             0
         };
+        let data = pack_scene_data(&dat, &config.constants.easy_angou_code)?;
+        if !config.tmp_dir.is_empty() {
+            let dir = Path::new(&config.tmp_dir).join("bs");
+            for (extension, bytes) in [("dat", &dat), ("lzss", &data)] {
+                let path = dir.join(format!("{stem}.{extension}"));
+                fs::write(&path, bytes).map_err(|error| format_path_error(&path, error))?;
+            }
+        }
         Ok(Self::Packed {
-            data: pack_scene_data(&dat, &config.constants.easy_angou_code)?,
+            data,
             dat_size: dat.len(),
             scn_size,
         })
@@ -1459,7 +1471,7 @@ fn link_compiled_scenes<'a, const FULL_STATS: bool>(
                 || (),
                 |(), (key, mut scene)| {
                     let started = Instant::now();
-                    scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
+                    scene.bytes = scene.bytes.pack::<FULL_STATS>(config, &scene.stem)?;
                     Ok::<_, String>((key, scene, started, Instant::now()))
                 },
                 |result| {
@@ -1573,8 +1585,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
     let mut compiled = Vec::new();
     let mut shuffle_seeds = Vec::new();
     let code = config.constants.easy_angou_code.as_slice();
-    let prepack =
-        use_lzss && config.tmp_dir.is_empty() && link_workers > 1 && compile_targets.len() > 1;
+    let prepack = use_lzss && link_workers > 1 && compile_targets.len() > 1;
     let concurrent_lzss_elapsed = if compile_workers > 1 && compile_targets.len() > 1 {
         let stage_start = Instant::now();
         let mut compile_tasks = tasks
@@ -1636,7 +1647,8 @@ fn compile_project_inner<const FULL_STATS: bool>(
                                 .and_then(|mut scene| {
                                     let compression = if combine_workers {
                                         let start = Instant::now();
-                                        scene.bytes = scene.bytes.pack::<FULL_STATS>(config)?;
+                                        scene.bytes =
+                                            scene.bytes.pack::<FULL_STATS>(config, &scene.stem)?;
                                         Some((start, Instant::now()))
                                     } else {
                                         None

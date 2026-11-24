@@ -41,10 +41,10 @@ impl LzssTree {
     }
 
     #[inline(never)]
-    fn connect(&mut self, target: usize) {
+    fn connect(&mut self, target: usize) -> Option<usize> {
         let node = self.nodes[target];
         if node.parent == UNUSED_NODE as u32 {
-            return;
+            return None;
         }
         let parent = node.parent as usize;
         if node.big == UNUSED_NODE as u16 {
@@ -72,7 +72,9 @@ impl LzssTree {
             }
             self.detach_predecessor(next);
             self.replace(target, next);
+            return Some(next);
         }
+        None
     }
 
     #[inline(never)]
@@ -133,6 +135,7 @@ struct LzssTreeFind<'a> {
     tree: LzssTree,
     previous_match_distance: usize,
     first_keys: Box<[u64; WINDOW_SIZE]>,
+    prefix_roots: Vec<u16>,
 }
 
 impl<'a> LzssTreeFind<'a> {
@@ -148,14 +151,39 @@ impl<'a> LzssTreeFind<'a> {
             tree: LzssTree::new(),
             previous_match_distance: 0,
             first_keys,
+            prefix_roots: if src.len() >= WINDOW_SIZE {
+                vec![UNUSED_NODE as u16; 1 << 16]
+            } else {
+                Vec::new()
+            },
         }
+    }
+
+    fn replace_match(&mut self, slot: usize, next: usize) {
+        let first = self.first_keys[slot];
+        self.first_keys[next] = first;
+        if let Some(root) = self.prefix_roots.get_mut((first >> 48) as usize)
+            && *root == slot as u16
+        {
+            *root = next as u16;
+        }
+        self.tree.replace(slot, next);
     }
 
     #[inline(always)]
     fn proc<const TRACK_MATCH: bool>(&mut self) -> (usize, usize) {
         self.src_index += 1;
         let window_top = self.src_index % WINDOW_SIZE;
-        self.tree.connect(window_top);
+        let promoted = self.tree.connect(window_top);
+        if !self.prefix_roots.is_empty() {
+            let old_root = &mut self.prefix_roots[(self.first_keys[window_top] >> 48) as usize];
+            if *old_root == window_top as u16 {
+                *old_root = UNUSED_NODE as u16;
+            }
+            if let Some(slot) = promoted {
+                self.prefix_roots[(self.first_keys[slot] >> 48) as usize] = UNUSED_NODE as u16;
+            }
+        }
 
         let mut target = self.tree.nodes[ROOT_NODE].big as usize;
         let mut match_size = 0;
@@ -174,8 +202,7 @@ impl<'a> LzssTreeFind<'a> {
             if self.src[candidate + LOOK_AHEAD - 1] == source[LOOK_AHEAD - 1]
                 && self.tree.nodes[slot].parent != UNUSED_NODE as u32
             {
-                self.first_keys[window_top] = self.first_keys[slot];
-                self.tree.replace(slot, window_top);
+                self.replace_match(slot, window_top);
                 return (LOOK_AHEAD, slot);
             }
         }
@@ -191,6 +218,29 @@ impl<'a> LzssTreeFind<'a> {
 
         if let Some((first, _, _)) = key {
             self.first_keys[window_top] = first;
+            if !self.prefix_roots.is_empty() {
+                let prefix = first >> 48;
+                let root = &mut self.prefix_roots[prefix as usize];
+                if *root == UNUSED_NODE as u16 {
+                    loop {
+                        let other = self.first_keys[target] >> 48;
+                        if prefix == other {
+                            *root = target as u16;
+                            break;
+                        }
+                        let (done, child) =
+                            self.tree
+                                .additional_connect(target, window_top, prefix > other);
+                        if done {
+                            *root = window_top as u16;
+                            return (0, window_top);
+                        }
+                        target = child;
+                    }
+                } else {
+                    target = *root as usize;
+                }
+            }
         }
         loop {
             let (matched, goes_right) = if let Some((first, second, last)) = key {
@@ -237,7 +287,7 @@ impl<'a> LzssTreeFind<'a> {
                     self.previous_match_distance =
                         self.src_index.wrapping_sub(target) % WINDOW_SIZE;
                 }
-                self.tree.replace(target, window_top);
+                self.replace_match(target, window_top);
                 return (matched, target);
             }
             if TRACK_MATCH && matched > match_size {
@@ -364,14 +414,14 @@ pub fn unpack(src: &[u8]) -> Result<Vec<u8>, String> {
                 if off > out.len() {
                     return Err("lzss back".to_string());
                 }
-                let st = out.len() - off;
-
-                for j in 0..ln {
-                    if out.len() >= org {
-                        break;
-                    }
-                    let idx = st + j;
-                    out.push(out[idx]);
+                let start = out.len() - off;
+                let count = ln.min(org - out.len());
+                let mut copied = off.min(count);
+                out.extend_from_within(start..start + copied);
+                while copied < count {
+                    let take = copied.min(count - copied);
+                    out.extend_from_within(start..start + take);
+                    copied += take;
                 }
             }
             fl >>= 1;

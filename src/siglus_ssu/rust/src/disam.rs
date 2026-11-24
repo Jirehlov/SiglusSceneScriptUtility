@@ -30,17 +30,14 @@ impl std::fmt::Debug for Failure {
 #[derive(Clone, Eq)]
 struct Text {
     chars: Vec<u32>,
-    hash: Option<u64>,
     has_line_feed: bool,
 }
 
 impl Text {
     fn new(chars: Vec<u32>) -> Self {
         let has_line_feed = chars.contains(&10);
-        let hash = Some(Self::hash_chars(&chars));
         Self {
             chars,
-            hash,
             has_line_feed,
         }
     }
@@ -59,33 +56,17 @@ impl Text {
         text.chars()
             .all(|code| chars.next() == Some(u32::from(code)))
     }
-    fn hash_chars(chars: &[u32]) -> u64 {
-        let mut state = std::collections::hash_map::DefaultHasher::new();
-        chars.hash(&mut state);
-        state.finish()
-    }
-    fn cached_hash(&self) -> u64 {
-        self.hash.unwrap_or_else(|| Self::hash_chars(&self.chars))
-    }
-    fn complete_hash(&mut self) {
-        if self.hash.is_none() {
-            self.hash = Some(Self::hash_chars(&self.chars));
-        }
-    }
 }
 
 impl PartialEq for Text {
     fn eq(&self, other: &Self) -> bool {
-        match (self.hash, other.hash) {
-            (Some(left), Some(right)) if left != right => false,
-            _ => self.chars == other.chars,
-        }
+        self.chars == other.chars
     }
 }
 
 impl Hash for Text {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.cached_hash().hash(state);
+        self.chars.hash(state);
     }
 }
 
@@ -4333,7 +4314,9 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     let annotation_budget =
         record_int(parameters, "annotation_budget").map(|budget| budget.max(0) as usize);
     let annotate =
-        decompile_style && annotation_budget.is_none_or(|budget| scn.len() <= budget / 2);
+        decompile_style && annotation_budget.is_none_or(|budget| scn.len() <= budget / 64);
+    let has_commands = !command_starts.is_empty() || !commands.is_empty();
+    let hints_only = decompile_style && !annotate && !has_commands;
     let annotation_commands = if annotate {
         resolver.commands.clone()
     } else {
@@ -4577,7 +4560,15 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 if annotate {
                     scene_annotations.push(annotation);
                 }
-                scene_events.push(event);
+                if !hints_only
+                    || matches!(op, Opcode::Name | Opcode::Return)
+                    || (op == Opcode::Command
+                        && event.element_code.is_some_and(|code| {
+                            i64::from(code as u32 >> 24) == rt.native_tables.command_owner
+                        }))
+                {
+                    scene_events.push(event);
+                }
             } else {
                 trace.push(trace_instruction(
                     rt,
@@ -4647,7 +4638,7 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                         && annotation_budget.is_none_or(|budget| {
                             scene_events.len() <= budget / DECOMPILE_EVENT_CACHE_BYTES
                         })),
-                has_commands: !command_starts.is_empty() || !commands.is_empty(),
+                has_commands,
                 tables: rt.native_tables.clone(),
                 scene_annotations,
                 annotation_commands,
@@ -5901,7 +5892,6 @@ fn native_line_postprocess(
                             text.chars.push(9);
                             text.chars.extend_from_slice(stripped);
                             text.has_line_feed |= stripped.contains(&10);
-                            text.hash = None;
                         }
                         continue;
                     }
@@ -5944,11 +5934,6 @@ fn native_line_postprocess(
                 out.push(line);
                 body_normalized = false;
             }
-            for line in &mut out {
-                if line.text.hash.is_none() {
-                    Arc::make_mut(&mut line.text).complete_hash();
-                }
-            }
             lines = out;
         }
     }
@@ -5967,7 +5952,6 @@ fn append_source_text(text: &mut SourceText, suffix: &[u32]) {
     let text = Arc::make_mut(text);
     text.chars.truncate(end);
     text.chars.extend_from_slice(suffix);
-    text.hash = None;
     text.has_line_feed = has_line_feed;
 }
 
@@ -6009,7 +5993,6 @@ fn merge_source_body(
         text.chars.push(9);
     }
     text.chars.extend_from_slice(right);
-    text.hash = None;
     text.has_line_feed = has_line_feed;
     true
 }

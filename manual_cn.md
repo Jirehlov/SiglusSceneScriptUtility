@@ -179,7 +179,7 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 | 选项 | 说明 |
 |---|---|
 | `--serial` | 串行扫描工作区，默认并行扫描。 |
-| `--read-sav PATH` | 在悬停说明及支持 `siglus/readFlags` 扩展的客户端中显示存档已读状态。存档缺失或无法读取时也可启动服务。 |
+| `--read-sav PATH` | 在悬停说明中显示存档已读状态，支持此协议的客户端也可查看或修改单个 flag。存档缺失或无法读取时也可启动服务。 |
 
 支持诊断、语义高亮、补全、悬停说明、定义与引用查找、重命名和文档符号。分析范围包括当前场景及同目录 `.inc` 文件，也包括编辑器中未保存的修改。请像编译时一样选择对应作品的全局 `--const-profile`。
 
@@ -196,7 +196,9 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 
 场景名及 flag 数量与当前源码匹配时，服务才会显示存档状态。数量不匹配时仅报告问题，不应用存档状态。悬停说明对应生成 flag 的文本、命令或宏调用，同一位置可能对应多个 flag。
 
-游戏存档后，请重新悬停或请求已读状态。服务不会主动监视存档文件。客户端可自行绘制背景高亮。
+客户端可在 `siglus/readFlags` 请求中带上上次收到的 `mappingId` 和 `saveRevision`，复用已取得的源码范围。源码映射相同、存档有变化时，客户端会在 `states` 字段收到以 base64 编码的场景 flag 字节。两者均未变化时，响应会省略范围数据与状态字节。客户端负责绘制高亮和监视文件，可在存档变动后传入 `verifySave: true` 重新核对文件内容。
+
+服务声明支持 `experimental.siglusReadFlags.setReadFlag` 时，客户端可发送 `siglus/setReadFlag`，在 `textDocument` 中传入已打开文档的 URI 和版本，并传入当前 `mappingId`、flag 编号 `index` 及布尔值 `read`。服务会更新选定 `read.sav` 中对应的 flag，并在替换文件前核对原存档内容。遇到源码映射过期、场景缺失或 flag 数量不符时，服务会保留原存档。
 
 ---
 
