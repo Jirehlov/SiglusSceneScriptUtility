@@ -2,6 +2,7 @@ import sys
 import os
 import struct
 import json
+import hashlib
 import re
 import time
 import shutil
@@ -76,6 +77,7 @@ from .path_policy import (
 
 
 _SOURCE_DIGEST_NAME = "_source_hashes.json"
+_SOURCE_CHUNK_CACHE_NAME = "_packed_sources.bin"
 
 
 def _check_compile_cache(tmp, scenes, inputs, outputs):
@@ -83,7 +85,11 @@ def _check_compile_cache(tmp, scenes, inputs, outputs):
     bs = root / "bs"
     if bs.is_symlink() or bs.is_junction():
         raise ValueError(f"compile cache uses a directory link: {bs}")
-    files = [root / _SOURCE_DIGEST_NAME, root / "EXE_ANGOU.h"]
+    files = [
+        root / _SOURCE_DIGEST_NAME,
+        root / _SOURCE_CHUNK_CACHE_NAME,
+        root / "EXE_ANGOU.h",
+    ]
     for path in scenes:
         stem = Path(path).stem
         files.extend((bs / f"{stem}.dat", bs / f"{stem}.lzss"))
@@ -258,7 +264,50 @@ def _scene_cache_hashes(tmp_dir, scenes, workers, *, skip_unreadable=False):
         return dict(zip(scenes, executor.map(read_scene, scenes), strict=True))
 
 
-def _write_digest_cache(tmp_dir, payload, compiled_scenes, workers):
+def _source_chunk_cache_key():
+    return [1, package_version(), C.CONST_PROFILE, C.CONST_SHA512]
+
+
+def _read_source_chunks(tmp_dir, fingerprints):
+    try:
+        packed = read_bytes(Path(tmp_dir) / _SOURCE_CHUNK_CACHE_NAME)
+        if packed[64:65] != b"\n":
+            return {}
+        metadata_end = packed.find(b"\n", 65)
+        if metadata_end < 0 or packed[:64] != content_digest(
+            memoryview(packed)[65:]
+        ).encode("ascii"):
+            return {}
+        header = json.loads(packed[65:metadata_end])
+    except (OSError, ValueError):
+        return {}
+    if (
+        not isinstance(header, dict)
+        or header.get("key") != _source_chunk_cache_key()
+        or not isinstance(header.get("entries"), list)
+    ):
+        return {}
+    wanted = dict(fingerprints)
+    cached = {}
+    offset = metadata_end + 1
+    for entry in header["entries"]:
+        if not isinstance(entry, list) or len(entry) != 3:
+            return {}
+        name, digest, size = entry
+        if (
+            not isinstance(name, str)
+            or not isinstance(digest, str)
+            or type(size) is not int
+            or not 0 < size <= len(packed) - offset
+        ):
+            return {}
+        if wanted.get(name) == digest:
+            cached[name] = packed[offset : offset + size]
+        offset += size
+    return cached if offset == len(packed) else {}
+
+
+def _write_digest_cache(tmp_dir, payload, compiled_scenes, workers, ctx):
     root = Path(tmp_dir)
     if "artifacts" in payload:
         hashes = _scene_cache_hashes(root, compiled_scenes, workers)
@@ -270,6 +319,33 @@ def _write_digest_cache(tmp_dir, payload, compiled_scenes, workers):
         root / _SOURCE_DIGEST_NAME, "w", encoding="utf-8", newline="\r\n"
     ) as out:
         json.dump(payload, out, ensure_ascii=False, sort_keys=True)
+    sizes = ctx.get("original_source_sizes")
+    if sizes:
+        try:
+            total = sum(sizes)
+            with open_read(Path(ctx["out_path"]) / ctx["scene_pck"]) as stream:
+                stream.seek(-total, os.SEEK_END)
+                chunks = stream.read(total)
+            if len(chunks) != total:
+                return
+            header = {
+                "key": _source_chunk_cache_key(),
+                "entries": [
+                    [name, digest, size]
+                    for (name, digest), size in zip(
+                        ctx["source_fingerprints"], sizes, strict=True
+                    )
+                ],
+            }
+            metadata = json.dumps(header, separators=(",", ":")).encode("ascii") + b"\n"
+            checksum = hashlib.sha256(metadata)
+            checksum.update(chunks)
+            with open_atomic_output(root / _SOURCE_CHUNK_CACHE_NAME) as out:
+                out.write(checksum.hexdigest().encode("ascii") + b"\n")
+                out.write(metadata)
+                out.write(chunks)
+        except (OSError, ValueError):
+            pass
 
 
 def _compile_cache_state(
@@ -846,6 +922,7 @@ def _native_compile_config(
             "compiled_scene_files": len(compile_list),
             "full_compile_stats": full_compile_stats,
             "save_shuffle_seeds": bool(args.tmp_dir and force_serial_compile),
+            "save_original_sources": bool(ctx["source_fingerprints"]),
         },
         "options": {
             "dat_repack": bool(args.dat_repack),
@@ -888,8 +965,11 @@ def _try_native_compile(config, ctx, shuffle_seeds):
     if isinstance(stats, dict):
         ctx.setdefault("stats", {}).update(stats)
     ok = bool(result.get("ok"))
-    if ok and shuffle_seeds is not None:
-        shuffle_seeds.update(result.get("shuffle_seeds", ()))
+    if ok:
+        if shuffle_seeds is not None:
+            shuffle_seeds.update(result.get("shuffle_seeds", ()))
+        if sizes := result.get("original_source_sizes"):
+            ctx["original_source_sizes"] = sizes
     stderr = str(result.get("stderr") or "")
     if stderr:
         sys.stderr.write(stderr)
@@ -1305,6 +1385,17 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             "binary_size_stats": None,
         }
     )
+    source_fingerprints = []
+    cached_sources = {}
+    if a.tmp_dir and original_sources:
+        digests = source_digests["inc"] | source_digests["ss"]
+        source_fingerprints = [
+            (name, digests.get(ascii_lower(name)) or content_digest(raw))
+            for name, raw in original_sources
+        ]
+        cached_sources = _read_source_chunks(tmp, source_fingerprints)
+        if len(cached_sources) == len(original_sources):
+            source_fingerprints = []
     ctx = {
         "scn_path": inp,
         "tmp_path": tmp,
@@ -1316,7 +1407,11 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "scn_ssid_map": scn_ssid_map,
         "inc_list": inc,
         "source_texts": source_texts,
-        "original_sources": original_sources,
+        "original_sources": [
+            (name, cached_sources.get(name, raw), name in cached_sources)
+            for name, raw in original_sources
+        ],
+        "source_fingerprints": source_fingerprints,
         "utf8": bool(use_utf8),
         "charset_force": charset,
         "debug_charset": "utf-8" if use_utf8 else "cp932",
@@ -1353,7 +1448,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             if native_rc == 0:
                 if pending_digests is not None:
                     _write_digest_cache(
-                        tmp, pending_digests, compile_list, cache_workers
+                        tmp, pending_digests, compile_list, cache_workers, ctx
                     )
                 outputs.publish(input_paths)
         except (OSError, ValueError) as exc:
@@ -1455,7 +1550,9 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             link_pack(ctx)
             if pending_digests is not None:
                 stage = "compile cache"
-                _write_digest_cache(tmp, pending_digests, compile_list, cache_workers)
+                _write_digest_cache(
+                    tmp, pending_digests, compile_list, cache_workers, ctx
+                )
         stage = "publish"
         final_output = (
             (seed_report[0], partial(_write_test_shuffle_csv, *seed_report))

@@ -437,13 +437,43 @@ pub struct NativeValue {
 
 #[pymethods]
 impl NativeValue {
-    fn retained_bytes(&self, maximum: usize) -> Option<usize> {
+    fn render_cache(&self, maximum: usize) -> Option<(Self, usize)> {
         let V::Native(value) = &self.inner else {
-            return Some(0);
+            return None;
         };
         let NativeObject::Scene(scene) = value.as_ref() else {
-            return Some(0);
+            return None;
         };
+        scene.meta.get()?;
+        if let Some(replay) = &scene.replay {
+            let text_bytes = scene
+                .strings
+                .iter()
+                .chain(&replay.call_names)
+                .map(|text| {
+                    std::mem::size_of::<SourceText>()
+                        + std::mem::size_of::<Text>()
+                        + text.chars.capacity() * std::mem::size_of::<u32>()
+                })
+                .sum::<usize>();
+            let retained = replay.bytes.capacity()
+                + replay.commands.capacity() * std::mem::size_of::<(Option<i64>, bool)>()
+                + replay.text_values.capacity() * std::mem::size_of::<Option<i64>>()
+                + (scene.label_offsets.len() + scene.z_labels.len()) * std::mem::size_of::<i64>()
+                + std::mem::size_of::<DecompileScene>()
+                + text_bytes;
+            if retained > maximum {
+                return None;
+            }
+            let mut cached = scene.with_events(Vec::new(), false);
+            cached.replay = Some(replay.clone());
+            return Some((
+                Self {
+                    inner: NativeObject::Scene(Arc::new(cached)).value(),
+                },
+                retained,
+            ));
+        }
         if scene.next_nl.is_empty() {
             return None;
         }
@@ -491,7 +521,14 @@ impl NativeValue {
                 .iter()
                 .map(|labels| labels.len() * std::mem::size_of::<SceneLabel>())
                 .sum::<usize>();
-        (retained <= maximum).then_some(retained)
+        (retained <= maximum).then(|| {
+            (
+                Self {
+                    inner: self.inner.clone(),
+                },
+                retained,
+            )
+        })
     }
 }
 
@@ -3756,6 +3793,79 @@ impl Bytecode<'_> {
         self.position = end;
         Some(i64::from(i32::from_le_bytes(bytes.try_into().ok()?)))
     }
+    fn instruction(
+        &mut self,
+        tables: &NativeTables,
+        call_names: &[SourceText],
+        line: &mut Option<i64>,
+    ) -> Option<Instruction> {
+        let offset = self.position;
+        let op = tables.opcodes[self.byte()? as usize];
+        let mut event = Instruction::new(op, offset as i64, *line);
+        match op {
+            Opcode::Nl => {
+                let value = self.integer()?;
+                *line = Some(value);
+                event.line = *line;
+                event.value = Some(value);
+            }
+            Opcode::Push => {
+                event.form = Some(self.integer()?);
+                event.value = Some(self.integer()?);
+            }
+            Opcode::Pop | Opcode::Copy => event.form = Some(self.integer()?),
+            Opcode::DecProp => {
+                event.form = Some(self.integer()?);
+                let id = self.integer()?;
+                event.value = Some(id);
+                event.name = Some(
+                    usize::try_from(id)
+                        .ok()
+                        .and_then(|id| call_names.get(id))
+                        .cloned()
+                        .unwrap_or_else(empty_source),
+                );
+            }
+            Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
+                event.label = Some(self.integer()?)
+            }
+            Opcode::Gosub | Opcode::GosubStr => {
+                event.label = Some(self.integer()?);
+                event.args = self.arguments(tables.list)?;
+            }
+            Opcode::Return => event.args = self.arguments(tables.list)?,
+            Opcode::Assign => {
+                event.form = Some(self.integer()?);
+                event.right_form = Some(self.integer()?);
+                event.arg_id = self.integer()?;
+            }
+            Opcode::Operate1 => {
+                event.form = Some(self.integer()?);
+                event.operator = Some(i64::from(self.byte()?));
+            }
+            Opcode::Operate2 => {
+                event.form = Some(self.integer()?);
+                event.right_form = Some(self.integer()?);
+                event.operator = Some(i64::from(self.byte()?));
+            }
+            Opcode::Text => event.read_flag = Some(self.integer()?),
+            Opcode::Command => {
+                event.arg_id = self.integer()?;
+                event.args = self.arguments(tables.list)?;
+                let count = usize::try_from(self.integer()?).ok()?;
+                if count > (self.bytes.len() - self.position) / 4 {
+                    return None;
+                }
+                event.named = Vec::with_capacity(count);
+                for _ in 0..count {
+                    event.named.push(self.integer()?);
+                }
+                event.ret = self.integer()?;
+            }
+            _ => (),
+        }
+        Some(event)
+    }
     fn arguments(&mut self, list: i64) -> Option<Vec<Argument>> {
         let count = usize::try_from(self.integer()?).ok()?;
         if count > (self.bytes.len() - self.position) / 4 {
@@ -4313,8 +4423,16 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
     let decompile_style = decompile && !emit_text;
     let annotation_budget =
         record_int(parameters, "annotation_budget").map(|budget| budget.max(0) as usize);
-    let annotate =
-        decompile_style && annotation_budget.is_none_or(|budget| scn.len() <= budget / 64);
+    let annotate = decompile_style && annotation_budget.is_none();
+    let mut replay = (decompile_style
+        && annotation_budget.is_some_and(|budget| scn.len() <= budget))
+    .then(|| SceneReplay {
+        bytes: scn.clone(),
+        commands: Vec::new(),
+        text_values: Vec::new(),
+        call_names: Vec::new(),
+        event_count: 0,
+    });
     let has_commands = !command_starts.is_empty() || !commands.is_empty();
     let hints_only = decompile_style && !annotate && !has_commands;
     let annotation_commands = if annotate {
@@ -4384,80 +4502,15 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
             }
             rendered.push_str(">\r\n");
         }
-        let byte = reader.byte().unwrap();
-        let op = rt.native_tables.opcodes[byte as usize];
-        let mut event = Instruction::new(op, offset as i64, current_line);
-        let read = (|| -> Option<()> {
-            match op {
-                Opcode::Nl => {
-                    let value = reader.integer()?;
-                    current_line = Some(value);
-                    event.line = current_line;
-                    event.value = Some(value);
-                }
-                Opcode::Push => {
-                    event.form = Some(reader.integer()?);
-                    event.value = Some(reader.integer()?);
-                }
-                Opcode::Pop | Opcode::Copy => event.form = Some(reader.integer()?),
-                Opcode::DecProp => {
-                    event.form = Some(reader.integer()?);
-                    let id = reader.integer()?;
-                    event.value = Some(id);
-                    event.name = Some(
-                        usize::try_from(id)
-                            .ok()
-                            .and_then(|id| call_names.get(id))
-                            .cloned()
-                            .unwrap_or_else(empty_source),
-                    );
-                }
-                Opcode::Goto | Opcode::GotoTrue | Opcode::GotoFalse => {
-                    event.label = Some(reader.integer()?)
-                }
-                Opcode::Gosub | Opcode::GosubStr => {
-                    event.label = Some(reader.integer()?);
-                    event.args = reader.arguments(rt.native_tables.list)?;
-                }
-                Opcode::Return => event.args = reader.arguments(rt.native_tables.list)?,
-                Opcode::Assign => {
-                    event.form = Some(reader.integer()?);
-                    event.right_form = Some(reader.integer()?);
-                    event.arg_id = reader.integer()?;
-                }
-                Opcode::Operate1 => {
-                    event.form = Some(reader.integer()?);
-                    event.operator = Some(i64::from(reader.byte()?));
-                }
-                Opcode::Operate2 => {
-                    event.form = Some(reader.integer()?);
-                    event.right_form = Some(reader.integer()?);
-                    event.operator = Some(i64::from(reader.byte()?));
-                }
-                Opcode::Text => event.read_flag = Some(reader.integer()?),
-                Opcode::Command => {
-                    event.arg_id = reader.integer()?;
-                    event.args = reader.arguments(rt.native_tables.list)?;
-                    let count = usize::try_from(reader.integer()?).ok()?;
-                    if count > (scn.len() - reader.position) / 4 {
-                        return None;
-                    }
-                    event.named = Vec::with_capacity(count);
-                    for _ in 0..count {
-                        event.named.push(reader.integer()?);
-                    }
-                    event.ret = reader.integer()?;
-                }
-                _ => (),
-            }
-            Some(())
-        })();
-        if read.is_none() {
+        let Some(mut event) = reader.instruction(&rt.native_tables, &call_names, &mut current_line)
+        else {
             if emit_text {
+                let op = rt.native_tables.opcodes[scn[offset] as usize];
                 write!(rendered, "{offset:08X}: {} <truncated>\r\n", op.name()).unwrap();
             }
             break;
-        }
+        };
+        let op = event.op;
         if op == Opcode::Push
             && event.form == Some(rt.native_tables.string)
             && event.value.is_none_or(|id| {
@@ -4557,6 +4610,16 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                     &rt.native_tables,
                 ));
             } else if decompile {
+                if let Some(replay) = &mut replay {
+                    replay.event_count += 1;
+                    match op {
+                        Opcode::Command => replay
+                            .commands
+                            .push((event.element_code, event.read_flag.is_some())),
+                        Opcode::Text | Opcode::Name => replay.text_values.push(event.value),
+                        _ => (),
+                    }
+                }
                 if annotate {
                     scene_annotations.push(annotation);
                 }
@@ -4649,6 +4712,10 @@ fn decode_scene(rt: &Runtime, parameters: &V) -> Result<DisassembledScene, Failu
                 events: scene_events,
                 label_offsets: labels,
                 z_labels,
+                replay: replay.filter(|_| complete).map(|mut replay| {
+                    replay.call_names = call_names;
+                    Arc::new(replay)
+                }),
             })))
             .value()
         } else {
@@ -4679,7 +4746,16 @@ impl SceneLabel {
 const DECOMPILE_EVENT_CACHE_BYTES: usize =
     std::mem::size_of::<Instruction>() + 8 * std::mem::size_of::<usize>();
 
+struct SceneReplay {
+    bytes: Arc<Vec<u8>>,
+    commands: Vec<(Option<i64>, bool)>,
+    text_values: Vec<Option<i64>>,
+    call_names: Vec<SourceText>,
+    event_count: usize,
+}
+
 struct DecodedScene {
+    replay: Option<Arc<SceneReplay>>,
     prepare_output: bool,
     has_commands: bool,
     tables: Arc<NativeTables>,
@@ -4694,6 +4770,7 @@ struct DecodedScene {
     z_labels: Vec<i64>,
 }
 struct DecompileScene {
+    replay: Option<Arc<SceneReplay>>,
     for_blockers: Vec<usize>,
     tables: Arc<NativeTables>,
     annotation_commands: HashMap<i64, SourceText>,
@@ -4719,6 +4796,7 @@ struct DecompileScene {
 impl DecompileScene {
     fn from_events(input: DecodedScene) -> Self {
         let DecodedScene {
+            replay,
             prepare_output,
             has_commands,
             tables,
@@ -4827,6 +4905,7 @@ impl DecompileScene {
             }
         }
         Self {
+            replay,
             for_blockers,
             tables,
             annotation_commands,
@@ -4849,6 +4928,71 @@ impl DecompileScene {
             active_z,
             annotations,
         }
+    }
+    fn with_events(&self, events: Vec<Instruction>, prepare_output: bool) -> Self {
+        let mut scene = Self::from_events(DecodedScene {
+            replay: None,
+            prepare_output,
+            has_commands: false,
+            tables: self.tables.clone(),
+            scene_annotations: Vec::new(),
+            annotation_commands: HashMap::new(),
+            pack: self.pack.clone(),
+            strings: self.strings.clone(),
+            context: self.context.clone(),
+            command_ranges: self.command_ranges.clone(),
+            events,
+            label_offsets: self.label_offsets.clone(),
+            z_labels: self.z_labels.clone(),
+        });
+        scene.meta = self.meta.clone();
+        scene
+    }
+    fn restore_events(&self, replay: &SceneReplay) -> Result<Vec<Instruction>, Failure> {
+        let invalid = || Failure("inconsistent cached instructions".into());
+        let mut reader = Bytecode {
+            bytes: &replay.bytes,
+            position: 0,
+        };
+        let mut line = None;
+        let mut commands = replay.commands.iter();
+        let mut text_values = replay.text_values.iter();
+        let mut events = Vec::with_capacity(replay.event_count);
+        while reader.position < reader.bytes.len() {
+            let mut event = reader
+                .instruction(&self.tables, &replay.call_names, &mut line)
+                .ok_or_else(invalid)?;
+            event.target = event
+                .label
+                .and_then(|id| usize::try_from(id).ok())
+                .and_then(|id| self.label_offsets.get(id).copied());
+            match event.op {
+                Opcode::Command => {
+                    let &(code, has_read_flag) = commands.next().ok_or_else(invalid)?;
+                    event.element_code = code;
+                    if has_read_flag {
+                        event.read_flag = Some(reader.integer().ok_or_else(invalid)?);
+                    }
+                }
+                Opcode::Text | Opcode::Name => {
+                    event.value = *text_values.next().ok_or_else(invalid)?;
+                    event.name = event
+                        .value
+                        .and_then(|id| usize::try_from(id).ok())
+                        .and_then(|id| self.strings.get(id))
+                        .cloned();
+                }
+                _ => (),
+            }
+            events.push(event);
+        }
+        if events.len() != replay.event_count
+            || commands.next().is_some()
+            || text_values.next().is_some()
+        {
+            return Err(invalid());
+        }
+        Ok(events)
     }
     fn end(&self, offset: i64) -> usize {
         self.offsets.partition_point(|value| *value < offset)
@@ -4938,6 +5082,10 @@ fn new_decompiler(
     };
     let NativeObject::Scene(scene) = trace.as_ref() else {
         return Err(Failure("native decompile trace required".into()));
+    };
+    let scene = match scene.replay.as_ref().filter(|_| !analysis_only) {
+        Some(replay) => Arc::new(scene.with_events(scene.restore_events(replay)?, true)),
+        None => scene.clone(),
     };
     if let Some(index) = scene
         .strings

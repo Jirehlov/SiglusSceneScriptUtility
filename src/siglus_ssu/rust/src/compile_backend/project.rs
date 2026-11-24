@@ -28,6 +28,7 @@ pub struct ProjectOutput {
     pub source_stats: Option<SourceStats>,
     pub binary_size_stats: Option<BinarySizeStats>,
     pub shuffle_seeds: Vec<(String, u32)>,
+    pub original_source_sizes: Vec<usize>,
 }
 
 pub struct CompileFailure {
@@ -1112,16 +1113,24 @@ fn build_original_source_chunks(
         return Ok((0, Vec::new()));
     }
     let start = Instant::now();
-    let workers = default_parallel_worker_count(sources.len()).min(sources.len());
-    let mut chunks = if workers > 1 {
+    let mut tasks = Vec::new();
+    let mut chunks = vec![Vec::new(); sources.len()];
+    for (index, (name, data, packed)) in sources.iter().enumerate() {
+        if *packed {
+            chunks[index] = data.clone();
+        } else {
+            tasks.push((index, (name, data)));
+        }
+    }
+    let workers = default_parallel_worker_count(tasks.len()).min(tasks.len());
+    if workers > 1 {
         log.push_line(format!(
             "[PARALLEL] Encrypting {} source files with {} workers...",
-            sources.len(),
+            tasks.len(),
             workers
         ))?;
-        let mut chunks = vec![Vec::new(); sources.len()];
-        let mut tasks = sources.iter().enumerate().collect::<Vec<_>>();
         tasks.sort_unstable_by_key(|(_, (_, raw))| std::cmp::Reverse(raw.len()));
+        let task_count = tasks.len();
         parallel_visit_unordered_with_state(
             tasks,
             workers,
@@ -1139,17 +1148,14 @@ fn build_original_source_chunks(
         )?;
         log.push_line(format!(
             "[PARALLEL] Source encryption complete: {} files",
-            chunks.len()
+            task_count
         ))?;
-        chunks
     } else {
-        let mut chunks = Vec::with_capacity(sources.len());
-        for (name, raw) in sources {
+        for (index, (name, raw)) in tasks {
             log_stage(log, "OS", scene_display_name(config, name))?;
-            chunks.push(encrypt_source(raw, name, &config.constants.source_angou)?);
+            chunks[index] = encrypt_source(raw, name, &config.constants.source_angou)?;
         }
-        chunks
-    };
+    }
     let mut sizes = Vec::with_capacity(chunks.len() * 4);
     for chunk in &chunks {
         let size = u32::try_from(chunk.len()).map_err(|_| "original source chunk is too large")?;
@@ -1528,6 +1534,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
             source_stats: None,
             binary_size_stats: None,
             shuffle_seeds: Vec::new(),
+            original_source_sizes: Vec::new(),
         });
     }
     let stage_start = Instant::now();
@@ -2017,6 +2024,16 @@ fn compile_project_inner<const FULL_STATS: bool>(
     } else {
         (None, None)
     };
+    let original_source_sizes = if config.cache.save_original_sources {
+        pack_input
+            .original_source_chunks
+            .iter()
+            .skip(1)
+            .map(Vec::len)
+            .collect()
+    } else {
+        Vec::new()
+    };
     Ok(ProjectOutput {
         scene_count: pack_input.scn_name_list.len(),
         compiled_scene_count: config.cache.compiled_scene_files,
@@ -2027,6 +2044,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
         source_stats,
         binary_size_stats,
         shuffle_seeds,
+        original_source_sizes,
     })
 }
 

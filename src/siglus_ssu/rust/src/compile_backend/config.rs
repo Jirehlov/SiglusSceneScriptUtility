@@ -141,7 +141,7 @@ pub struct CompileContext {
     pub scene_display_names: HashMap<String, String>,
     pub inc_list: Vec<String>,
     pub source_texts: HashMap<String, String>,
-    pub original_sources: Vec<(String, Vec<u8>)>,
+    pub original_sources: Vec<(String, Vec<u8>, bool)>,
     pub utf8: bool,
     pub debug_outputs: bool,
     pub lzss_mode: bool,
@@ -155,6 +155,7 @@ pub struct CompileCache {
     pub compiled_scene_files: usize,
     pub full_compile_stats: bool,
     pub save_shuffle_seeds: bool,
+    pub save_original_sources: bool,
 }
 
 pub struct CompileConfig {
@@ -345,6 +346,7 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         compiled_scene_files: extract_item::<i64>(&cache_dict, "compiled_scene_files")? as usize,
         full_compile_stats: extract_item(&cache_dict, "full_compile_stats")?,
         save_shuffle_seeds: extract_item(&cache_dict, "save_shuffle_seeds")?,
+        save_original_sources: extract_item(&cache_dict, "save_original_sources")?,
     };
     Ok(CompileConfig {
         input_dir: extract_item(&dict, "input_dir")?,

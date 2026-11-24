@@ -215,15 +215,22 @@ def _build_original_source_chunks(ctx):
     from .compiler import source_angou_encrypt
 
     start = time.time()
-    if len(sources) > 1:
+    pending = [(name, data) for name, data, packed in sources if not packed]
+    encrypted = []
+    if len(pending) > 1:
         from .parallel import parallel_source_encrypt
 
-        chunks = parallel_source_encrypt(sources)
-    else:
-        name, raw = sources[0]
+        encrypted = parallel_source_encrypt(pending)
+    elif pending:
+        name, raw = pending[0]
         log_stage("OS", name, ctx)
-        chunks = [source_angou_encrypt(raw, name)]
-    size_list = struct.pack(f"<{len(chunks)}I", *(len(chunk) for chunk in chunks))
+        encrypted = [source_angou_encrypt(raw, name)]
+    results = iter(encrypted)
+    chunks = [data if packed else next(results) for _, data, packed in sources]
+    sizes = [len(chunk) for chunk in chunks]
+    if ctx["source_fingerprints"]:
+        ctx["original_source_sizes"] = sizes
+    size_list = struct.pack(f"<{len(chunks)}I", *sizes)
     header = source_angou_encrypt(size_list, "__DummyName__")
     set_stage_time(ctx, "OS", time.time() - start)
     return len(header), [header, *chunks]

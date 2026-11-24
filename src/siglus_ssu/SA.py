@@ -267,13 +267,11 @@ class SA:
             Property=pr,
             form=None,
             name=nm,
-            colon=None,
             prop_id=0,
             form_code=C.FM_INT,
         )
-        ok, p, co = s.sa_atom(p, C.LA_T["COLON"])
+        ok, p, _ = s.sa_atom(p, C.LA_T["COLON"])
         if ok:
-            n["colon"] = co
             ok, p, f = s.sa_form(p)
             if not ok:
                 return 0, i, None
@@ -296,7 +294,6 @@ class SA:
             close_p=None,
             prop_list=[],
             comma_list=[],
-            colon=None,
             form=None,
             block=None,
             cmd_id=0,
@@ -324,9 +321,8 @@ class SA:
                         return s.error("TNMSERR_SA_DEF_CMD_NO_COMMA", s._a(p)), i, None
                     n["comma_list"].append(c)
             n["close_p"] = cp
-        ok, p, co = s.sa_atom(p, C.LA_T["COLON"])
+        ok, p, _ = s.sa_atom(p, C.LA_T["COLON"])
         if ok:
-            n["colon"] = co
             ok, p, f = s.sa_form(p)
             if not ok:
                 return s.error("TNMSERR_SA_DEF_CMD_ILLEGAL_FORM", s._a(p)), i, None

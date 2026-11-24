@@ -535,6 +535,9 @@ pub fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<
             if !result.shuffle_seeds.is_empty() {
                 out.set_item("shuffle_seeds", result.shuffle_seeds)?;
             }
+            if !result.original_source_sizes.is_empty() {
+                out.set_item("original_source_sizes", result.original_source_sizes)?;
+            }
             out.set_item("stats", stats)?;
             out.set_item("stderr", "")?;
         }

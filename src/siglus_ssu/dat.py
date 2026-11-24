@@ -67,6 +67,9 @@ def decode_xor_utf16le_strings(dat, idx_pairs, blob_ofs, blob_end):
     return out
 
 
+_DECOMPILE_CACHE_BYTES = 256 * 1024 * 1024
+
+
 def _build_decompile_hints(bundles):
     def _hint_status(bundle):
         name = os.path.basename(str(bundle.get("dat_path") or "")) or str(
@@ -77,18 +80,24 @@ def _build_decompile_hints(bundles):
     try:
         if is_native_available():
             cached_bundles = {}
-            remaining_bytes = 256 * 1024 * 1024
+            remaining_bytes = _DECOMPILE_CACHE_BYTES
 
             def native_bundles():
                 nonlocal remaining_bytes
                 bundle = next(bundles, None)
                 while bundle is not None:
                     _hint_status(bundle)
-                    retained_bytes = bundle["trace"].retained_bytes(remaining_bytes)
-                    if retained_bytes is not None:
-                        cached_bundles[bundle["dat_path"]] = bundle
-                        remaining_bytes -= retained_bytes
                     yield bundle
+                    cached = bundle["trace"].render_cache(remaining_bytes)
+                    if cached is not None:
+                        trace, retained_bytes = cached
+                        dat_path = bundle["dat_path"]
+                        cached_bundles[dat_path] = {
+                            "trace": trace,
+                            "dat_path": dat_path,
+                            "complete": True,
+                        }
+                        remaining_bytes -= retained_bytes
                     try:
                         bundle = bundles.send(remaining_bytes)
                     except StopIteration:
@@ -498,7 +507,7 @@ def process_dat_output_items(
     ready_items = []
     written_paths = []
     failed_paths = []
-    annotation_budget = None
+    annotation_budget = _DECOMPILE_CACHE_BYTES if decompile and not emit_text else None
     disassembly_finished = False
 
     def ordered_results(executor, work, jobs):
