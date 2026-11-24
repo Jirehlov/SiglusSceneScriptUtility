@@ -4623,7 +4623,11 @@ class SSLanguageServer:
                 "semanticTokensProvider": semantic_tokens_provider,
                 "documentSymbolProvider": document_symbol_provider,
                 "experimental": {
-                    "siglusReadFlags": {"version": 1, "setReadFlag": True}
+                    "siglusReadFlags": {
+                        "version": 1,
+                        "setReadFlag": True,
+                        "setReadFlags": True,
+                    }
                 },
             },
             "serverInfo": {
@@ -5078,28 +5082,30 @@ class SSLanguageServer:
             ),
         )
 
-    def handle_set_read_flag(self, msg_id: Any, params: dict[str, Any]) -> None:
+    def handle_set_read_flags(
+        self, msg_id: Any, params: dict[str, Any], *, batch: bool
+    ) -> None:
         uri = self.text_document_uri_from_params(msg_id, params)
         if uri is None:
             return
         version = params["textDocument"].get("version")
-        index, read, mapping = (
-            params.get("index"),
-            params.get("read"),
-            params.get("mappingId"),
-        )
+        indices = params.get("indices") if batch else [params.get("index")]
+        read = params.get("read")
+        mapping = params.get("mappingId")
         if (
-            type(index) is not int
-            or index < 0
+            not isinstance(indices, list)
+            or not indices
+            or any(type(index) is not int or index < 0 for index in indices)
             or type(read) is not bool
             or type(version) is not int
             or not isinstance(mapping, str)
         ):
+            index_field = "a nonempty indices array" if batch else "an index"
             self.respond(
                 msg_id,
                 error={
                     "code": JSONRPC_INVALID_PARAMS,
-                    "message": "Expected a document version, mappingId, flag index and read state.",
+                    "message": f"Expected a document version, mappingId, {index_field} and read state.",
                 },
             )
             return
@@ -5109,15 +5115,15 @@ class SSLanguageServer:
             return
         report = self.read_flag_report(doc, flag_indices=[], verify_save=True)
         if report["status"] == "matched":
-            if mapping != report["mappingId"] or index >= report["flagCount"]:
+            if mapping != report["mappingId"] or max(indices) >= report["flagCount"]:
                 report["status"] = "sourceChanged"
             else:
                 snapshot = self.read_sav_cache
                 assert snapshot is not None
                 scene = report["scene"]
                 try:
-                    updated = sav.set_read_flag(
-                        snapshot.blob, snapshot.info, scene, index, read
+                    updated, read_delta = sav.set_read_flags(
+                        snapshot.blob, snapshot.info, scene, set(indices), read
                     )
                     report["previousRevision"] = snapshot.revision
                     if updated is not snapshot.blob:
@@ -5128,11 +5134,10 @@ class SSLanguageServer:
                             stream.write(updated)
                         self.read_sav_cache = None
                         report["saveRevision"] = content_digest(updated)
-                        report["readCount"] += 1 if read else -1
-                        report["unreadCount"] = (
-                            report["flagCount"] - report["readCount"]
-                        )
-                    report["items"] = [{"index": index, "read": read}]
+                        report["readCount"] += read_delta
+                        report["unreadCount"] -= read_delta
+                    if not batch:
+                        report["items"] = [{"index": indices[0], "read": read}]
                 except (OSError, ValueError, RuntimeError) as exc:
                     self.read_sav_cache = None
                     report.update(status="writeFailed", message=str(exc))
@@ -5923,6 +5928,7 @@ class SSLanguageServer:
             "textDocument/documentSymbol",
             "siglus/readFlags",
             "siglus/setReadFlag",
+            "siglus/setReadFlags",
         }
         if method in methods_with_object_params:
             params = self.coerce_params_object(msg_id, has_id, raw_params)
@@ -5962,10 +5968,14 @@ class SSLanguageServer:
                     msg_id, params, lambda: self.handle_hover(msg_id, params)
                 )
             return
-        if method == "siglus/setReadFlag":
+        if method in {"siglus/setReadFlag", "siglus/setReadFlags"}:
             if has_id:
                 self.run_request_handler(
-                    msg_id, params, lambda: self.handle_set_read_flag(msg_id, params)
+                    msg_id,
+                    params,
+                    lambda: self.handle_set_read_flags(
+                        msg_id, params, batch=(method == "siglus/setReadFlags")
+                    ),
                 )
             return
         if method == "siglus/readFlags":

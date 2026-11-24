@@ -200,6 +200,8 @@ siglus-ssu -lsp [--serial] [--read-sav /path/to/read.sav]
 
 服务声明支持 `experimental.siglusReadFlags.setReadFlag` 时，客户端可发送 `siglus/setReadFlag`，在 `textDocument` 中传入已打开文档的 URI 和版本，并传入当前 `mappingId`、flag 编号 `index` 及布尔值 `read`。服务会更新选定 `read.sav` 中对应的 flag，并在替换文件前核对原存档内容。遇到源码映射过期、场景缺失或 flag 数量不符时，服务会保留原存档。
 
+客户端可根据服务声明的 `experimental.siglusReadFlags.setReadFlags` 能力发送 `siglus/setReadFlags`，传入相同的 `textDocument`、`mappingId`、`read` 字段和包含 flag 编号的非空数组 `indices`。服务会先校验全部编号，再去重并一次写回指定状态。客户端在成功响应中会收到更新后的计数、`saveRevision` 和写入前的 `previousRevision`。
+
 ---
 
 ### `-c` / `--compile` — 编译脚本

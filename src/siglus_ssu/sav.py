@@ -941,13 +941,21 @@ def _replace_read_payload(blob, raw):
     )
 
 
-def set_read_flag(blob, info, scene, index, read):
+def set_read_flags(blob, info, scene, indices, read):
     flags = info["flags"][scene]
-    if bool(flags[index]) == read:
-        return blob
-    raw = bytearray(flags.obj)
-    raw[info["flag_offsets"][scene] + index] = int(read)
-    return _replace_read_payload(blob, raw)
+    offset = info["flag_offsets"][scene]
+    raw = None
+    changed_count = 0
+    for index in indices:
+        if bool(flags[index]) == read:
+            continue
+        if raw is None:
+            raw = bytearray(flags.obj)
+        raw[offset + index] = int(read)
+        changed_count += 1
+    if raw is None:
+        return blob, 0
+    return _replace_read_payload(blob, raw), changed_count if read else -changed_count
 
 
 def sav(blob, path=None, *, metadata=None):

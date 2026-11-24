@@ -200,6 +200,8 @@ Clients can reuse the source ranges from `siglus/readFlags` by returning the las
 
 When the server advertises `experimental.siglusReadFlags.setReadFlag`, a client can send `siglus/setReadFlag` with the open document’s URI and version in `textDocument`, the current `mappingId`, the flag `index`, and a boolean `read`. The server updates that flag in the selected `read.sav` and checks the original contents before replacing the file. A stale mapping, missing scene, or flag count mismatch leaves the save intact.
 
+When the server advertises `experimental.siglusReadFlags.setReadFlags`, clients can send `siglus/setReadFlags` with the same `textDocument`, `mappingId`, and `read` fields and a nonempty `indices` array of flag numbers. The server validates the entire batch, counts each flag once, and writes the requested states together. A successful response includes the updated counts and `saveRevision`, along with the original save’s `previousRevision`.
+
 ---
 
 ### `-c` / `--compile` — Compile Scripts
