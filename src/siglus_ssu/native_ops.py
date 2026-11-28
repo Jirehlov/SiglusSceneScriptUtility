@@ -20,8 +20,10 @@ def is_native_available() -> bool:
     return _USE_NATIVE and not _runtime._LEGACY_FULL
 
 
-def compile_project_native(config):
+def compile_project_native(config, *, check=False):
     try:
+        if check:
+            return native_accel.compile_project(config, check=True)
         return native_accel.compile_project(config)
     except Exception as exc:
         return {

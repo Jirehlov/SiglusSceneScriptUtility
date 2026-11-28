@@ -1777,13 +1777,24 @@ def compile_one_pipeline(
         scene_macro_counts = empty_macro_stat_counts()
         used_global_macros = set()
         source_stats = empty_source_stat_counts()
-    write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
-    return {
+    result = {
         "scene_macro_counts": scene_macro_counts,
         "used_global_macros": used_global_macros,
         "source_stats": source_stats,
         "out_scn": bsd["out_scn"],
     }
+    if ctx.get("check"):
+        if count := base["inc_command_cnt"]:
+            from .linker import _parse_cmd_labels
+
+            result["command_ids"] = tuple(
+                command_id
+                for command_id, _ in _parse_cmd_labels(bsd["out_scn"])
+                if 0 <= command_id < count
+            )
+    else:
+        write_bytes(os.path.join(tmp, "bs", nm + ".dat"), bsd["out_scn"])
+    return result
 
 
 def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=None):
@@ -1805,6 +1816,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=Non
     pipeline = (
         pack_workers > 0
         and len(ss_files) > 1
+        and not ctx.get("check")
         and ctx.get("lzss_mode", True)
         and not ctx.get("easy_link")
         and not is_native_available()
@@ -1813,6 +1825,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=Non
     scene_macro_counts = empty_macro_stat_counts()
     used_global_macros = set()
     source_stats = empty_source_stat_counts()
+    command_ids = []
     executor_context = process_pool(pack_workers) if pipeline else nullcontext()
     with executor_context as executor:
         futures = {}
@@ -1824,6 +1837,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=Non
             merge_macro_stat_counts(scene_macro_counts, res["scene_macro_counts"])
             used_global_macros.update(res["used_global_macros"])
             merge_source_stat_counts(source_stats, res["source_stats"])
+            command_ids.extend(res.get("command_ids", ()))
             if executor is not None:
                 nm = os.path.splitext(os.path.basename(p))[0]
                 lz_path = os.path.join(ctx["tmp_path"], "bs", nm + ".lzss")
@@ -1847,6 +1861,7 @@ def compile_all(ctx, only, max_workers=None, parallel=True, *, shuffle_seeds=Non
         "scene_macro_counts": scene_macro_counts,
         "used_global_macros": used_global_macros,
         "source_stats": source_stats,
+        "command_ids": command_ids,
     }
 
 

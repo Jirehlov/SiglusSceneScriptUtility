@@ -200,6 +200,7 @@ flag 在每个场景内从 `0` 编号。存档中的零值表示引擎尚未将 
 ```
 siglus-ssu -c [options] <input_dir> <output_pck | output_dir>
 siglus-ssu -c --gei <input_dir | Gameexe.ini> <output_dir>
+siglus-ssu -c --check <input_dir>
 siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck | output_dir> <test_dir>
 ```
 
@@ -209,6 +210,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 |---|---|
 | `<input_dir>` | 至少有一个带场景名的 `.ss`，可放入 `.inc`、`Gameexe.ini`、`暗号.dat` 和 `key.txt`。`--dat-repack` 和 `--gei` 的输入见下方。 |
 | `<output_pck \| output_dir>` | 已存在的目录或以 `/`、`\` 结尾的路径会接收 `Scene.pck`，其他路径按精确的输出文件名处理。 |
+| `--check` | 检查选中的场景和 include 源码，并校验目录中的 `Gameexe.ini`（如有）。编译器在内存中生成场景字节码，并检查每个已声明的全局命令是否恰好定义一次。只需传入 `<input_dir>`，不写入编译产物或缓存。不能与 `--tmp`、`--debug`、`--dat-repack`、`--gei`、`--test-shuffle` 或 `--csv` 同用。 |
 | `--debug` | 编译后保留中间文件。不能与 `--tmp` 同用。 |
 | `--charset ENC` | 为文本输入统一指定编码。默认逐文件检测 UTF-8 或 CP932，并根据 BOM 识别 UTF-16/32。Shift-JIS 别名使用 Windows CP932。可显式指定其他 Python 文本编码。 |
 | `--allow-invalid` | 用指定编码或 BOM 对应的编码解码，并用 U+FFFD 替换无法解码的字节。自动检测时，若没有 UTF-16/32 BOM 且严格解码 UTF-8、CP932 均失败，则按 UTF-8 替换解码。 |

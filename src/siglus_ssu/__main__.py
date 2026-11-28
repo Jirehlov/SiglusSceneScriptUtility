@@ -48,6 +48,8 @@ def _usage():
         f"  {p} -c [--debug] [--charset ENC] [--allow-invalid] [--no-os] [--dat-repack] [--no-angou] [--no-lzss] [--serial] [--max-workers N] [--set-shuffle SEED] [--tmp <tmp_dir>] <input_dir> <output_pck|output_dir>\n"
         f"  {p} -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck|output_dir> <test_dir>\n"
         f"  {p} -c --gei <input_dir|Gameexe.ini> <output_dir>\n"
+        f"  {p} -c --check <input_dir>\n"
+        "    --check         Check sources and global command linking without writing outputs\n"
         "    --debug         Keep temp files for inspection (not with --tmp)\n"
         "    --charset ENC   Force source charset (Python codec name)\n"
         "    --allow-invalid Replace invalid source bytes with U+FFFD when decoding\n"

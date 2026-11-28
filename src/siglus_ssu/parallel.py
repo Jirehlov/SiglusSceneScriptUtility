@@ -198,6 +198,7 @@ def _init_compile_worker(
     utf8: bool,
     debug_outputs: bool,
     full_compile_stats: bool,
+    check: bool,
 ) -> None:
     global _COMPILE_WORKER_STATE
     from .CA import build_replace_tree
@@ -209,6 +210,7 @@ def _init_compile_worker(
         utf8,
         debug_outputs,
         full_compile_stats,
+        check,
     )
 
 
@@ -216,13 +218,13 @@ def _compile_one_process(
     ss_path: str,
     display_name: str,
     source_text: str,
-) -> tuple[str, str | None, dict, dict, dict, list[str]]:
+) -> tuple[str, str | None, dict, set[str], dict, list[str], tuple[int, ...]]:
     fname = os.path.basename(ss_path)
     warnings = []
     try:
         if _COMPILE_WORKER_STATE is None:
             raise RuntimeError("compile worker is not initialized")
-        tmp_path, ia_data, utf8, debug_outputs, full_compile_stats = (
+        tmp_path, ia_data, utf8, debug_outputs, full_compile_stats, check = (
             _COMPILE_WORKER_STATE
         )
         from .BS import compile_one_pipeline
@@ -232,6 +234,7 @@ def _compile_one_process(
             "utf8": utf8,
             "debug_charset": "utf-8" if utf8 else "cp932",
             "debug_outputs": debug_outputs,
+            "check": check,
             "stats": {"full_compile_stats": full_compile_stats},
             "source_texts": {fname: source_text},
             "warnings": warnings,
@@ -250,9 +253,10 @@ def _compile_one_process(
             res["used_global_macros"],
             res["source_stats"],
             warnings,
+            res.get("command_ids", ()),
         )
     except Exception as e:
-        return (display_name, str(e), {}, set(), {}, warnings)
+        return (display_name, str(e), {}, set(), {}, warnings, ())
 
 
 def parallel_compile(
@@ -275,12 +279,15 @@ def parallel_compile(
     utf8 = bool(ctx.get("utf8"))
     debug_outputs = bool(ctx.get("debug_outputs"))
     source_texts = ctx["source_texts"]
-    os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
+    check = bool(ctx.get("check"))
+    if not check:
+        os.makedirs(os.path.join(tmp_path, "bs"), exist_ok=True)
     completed = 0
     total = len(ss_files)
     scene_macro_counts = empty_macro_stat_counts()
     used_global_macros = set()
     source_stats = empty_source_stat_counts()
+    scene_command_ids = {}
     print(f"[PARALLEL] Compiling {total} files with {workers} processes...")
     with process_pool(
         workers,
@@ -291,6 +298,7 @@ def parallel_compile(
             utf8,
             debug_outputs,
             ctx["stats"]["full_compile_stats"],
+            check,
         ),
     ) as executor:
         tasks = (
@@ -313,6 +321,7 @@ def parallel_compile(
                     scene_used_global_macros,
                     scene_source_stats,
                     warnings,
+                    command_ids,
                 ) = future.result()
                 for warning in warnings:
                     sys.stderr.write(warning)
@@ -326,6 +335,8 @@ def parallel_compile(
                 merge_macro_stat_counts(scene_macro_counts, macro_counts)
                 merge_source_stat_counts(source_stats, scene_source_stats)
                 used_global_macros.update(scene_used_global_macros)
+                if command_ids:
+                    scene_command_ids[display_name] = command_ids
                 print(f"  [{completed}/{total}] OK: {display_name}")
             futures.update(islice(tasks, len(done)))
     print(f"[PARALLEL] Compilation complete: {total} files")
@@ -333,6 +344,17 @@ def parallel_compile(
         "scene_macro_counts": scene_macro_counts,
         "used_global_macros": used_global_macros,
         "source_stats": source_stats,
+        "command_ids": (
+            [
+                command_id
+                for path in ss_files
+                for command_id in scene_command_ids.get(
+                    format_scene_name(path, ctx), ()
+                )
+            ]
+            if scene_command_ids
+            else []
+        ),
     }
 
 

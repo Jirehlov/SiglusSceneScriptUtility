@@ -127,6 +127,7 @@ impl CompileConstants {
 }
 
 pub struct CompileOptions {
+    pub check: bool,
     pub dat_repack: bool,
     pub max_workers: Option<usize>,
     pub set_shuffle: Option<String>,
@@ -312,7 +313,7 @@ pub fn parse_compile_constants(constants: Bound<'_, PyAny>) -> PyResult<CompileC
     })
 }
 
-pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig> {
+pub fn parse_compile_config(config: Bound<'_, PyAny>, check: bool) -> PyResult<CompileConfig> {
     let dict = config.cast_into::<PyDict>()?;
     let options_dict = extract_item::<Bound<'_, PyDict>>(&dict, "options")?;
     let context_dict = extract_item::<Bound<'_, PyDict>>(&dict, "context")?;
@@ -320,6 +321,7 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
     let cache_dict = extract_item::<Bound<'_, PyDict>>(&dict, "cache")?;
     let constants = parse_compile_constants(constants_dict.into_any())?;
     let options = CompileOptions {
+        check,
         dat_repack: extract_item(&options_dict, "dat_repack")?,
         max_workers: extract_item(&options_dict, "max_workers")?,
         set_shuffle: extract_item(&options_dict, "set_shuffle")?,
@@ -335,7 +337,7 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         source_texts: extract_item(&context_dict, "source_texts")?,
         original_sources: extract_item(&context_dict, "original_sources")?,
         utf8: extract_item(&context_dict, "utf8")?,
-        debug_outputs: extract_item(&context_dict, "debug_outputs")?,
+        debug_outputs: !check && extract_item::<bool>(&context_dict, "debug_outputs")?,
         lzss_mode: extract_item(&context_dict, "lzss_mode")?,
         easy_link: extract_item(&context_dict, "easy_link")?,
     };
@@ -344,7 +346,7 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         dat_paths: extract_item(&cache_dict, "dat_paths")?,
         lzss_paths: extract_item(&cache_dict, "lzss_paths")?,
         compiled_scene_files: extract_item::<i64>(&cache_dict, "compiled_scene_files")? as usize,
-        full_compile_stats: extract_item(&cache_dict, "full_compile_stats")?,
+        full_compile_stats: !check && extract_item::<bool>(&cache_dict, "full_compile_stats")?,
         save_shuffle_seeds: extract_item(&cache_dict, "save_shuffle_seeds")?,
         save_original_sources: extract_item(&cache_dict, "save_original_sources")?,
     };
@@ -352,7 +354,11 @@ pub fn parse_compile_config(config: Bound<'_, PyAny>) -> PyResult<CompileConfig>
         input_dir: extract_item(&dict, "input_dir")?,
         output_dir: extract_item(&dict, "output_dir")?,
         scene_pck: extract_item(&dict, "scene_pck")?,
-        tmp_dir: extract_item(&dict, "tmp_dir")?,
+        tmp_dir: if check {
+            String::new()
+        } else {
+            extract_item(&dict, "tmp_dir")?
+        },
         constants,
         cache,
         options,

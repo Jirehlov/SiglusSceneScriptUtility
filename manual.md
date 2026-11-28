@@ -200,6 +200,7 @@ Compile scene `.ss` files and same-directory `.inc` files into a PCK. The compil
 ```
 siglus-ssu -c [options] <input_dir> <output_pck | output_dir>
 siglus-ssu -c --gei <input_dir | Gameexe.ini> <output_dir>
+siglus-ssu -c --check <input_dir>
 siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck | output_dir> <test_dir>
 ```
 
@@ -209,6 +210,7 @@ siglus-ssu -c --test-shuffle [seed0] [--csv <seed_csv>] <input_dir> <output_pck 
 |---|---|
 | `<input_dir>` | At least one named `.ss`, with optional `.inc`, `Gameexe.ini`, `暗号.dat`, and `key.txt` files. `--dat-repack` and `--gei` take other inputs as described below. |
 | `<output_pck \| output_dir>` | An existing directory or a path ending in `/` or `\` receives `Scene.pck`. Any other path is treated as the exact output filename. |
+| `--check` | Check the selected scene and include sources and validate `Gameexe.ini` when present. The compiler generates scene bytecode in memory and requires exactly one definition for each declared global command. Takes only `<input_dir>` and writes no build artifacts or caches. Incompatible with `--tmp`, `--debug`, `--dat-repack`, `--gei`, `--test-shuffle`, and `--csv`. |
 | `--debug` | Keep intermediate files after compilation. Cannot be combined with `--tmp`. |
 | `--charset ENC` | Force one encoding for text inputs. Otherwise detect UTF-8 or CP932 per file, with BOM detection for UTF-16/32. Shift-JIS aliases select Windows CP932. Other Python text codecs can be selected explicitly. |
 | `--allow-invalid` | Replace undecodable bytes with U+FFFD using the selected or BOM-detected codec. In auto mode without a UTF-16/32 BOM, fall back to UTF-8 replacement only if both strict UTF-8 and CP932 fail. |

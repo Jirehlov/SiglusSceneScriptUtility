@@ -508,9 +508,10 @@ fn find_shuffle_chain_seed(
 }
 
 #[pyfunction]
-fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
+#[pyo3(signature = (config, *, check=false))]
+fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>, check: bool) -> PyResult<Py<PyDict>> {
     match catch_unwind(AssertUnwindSafe(|| {
-        compile_backend::compile_project(py, config)
+        compile_backend::compile_project(py, config, check)
     })) {
         Ok(result) => result,
         Err(payload) => {

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, mpsc};
 use std::time::Instant;
 
+#[derive(Default)]
 pub struct ProjectOutput {
     pub scene_count: usize,
     pub compiled_scene_count: usize,
@@ -1017,7 +1018,6 @@ fn write_gameexe_dat(
     exe_key: Option<&[u8]>,
     stdout: &mut OutputLog<'_>,
 ) -> Result<(), String> {
-    let mut payload = Vec::new();
     let options = TextCommentOptions {
         case_mode: CaseMode::Upper,
         single_quote_mode: SingleQuoteMode::None,
@@ -1055,10 +1055,19 @@ fn write_gameexe_dat(
     }
     if parsed.text.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
         let gameexe_ini = &config.context.gameexe_ini;
+        let action = if config.options.check {
+            ""
+        } else {
+            "; generating Gameexe.dat anyway"
+        };
         stdout.push_warning(&format!(
-            "siglus-ssu -c: warning: {gameexe_ini} is empty; generating Gameexe.dat anyway"
+            "siglus-ssu -c: warning: {gameexe_ini} is empty{action}"
         ))?;
     }
+    if config.options.check {
+        return Ok(());
+    }
+    let mut payload = Vec::new();
     if !parsed.text.is_empty() {
         payload = crate::lzss::pack(&utf16le(&parsed.text), false)?;
         crate::xor::cycle_inplace(&mut payload, &config.constants.gameexe_dat_angou_code, 0);
@@ -1437,7 +1446,11 @@ fn finalize_scene<const FULL_STATS: bool>(
     }
     Ok(FinalizedScene {
         stem: prepared.stem,
-        bytes: SceneBytes::Dat(dat),
+        bytes: SceneBytes::Dat(if config.options.check {
+            Vec::new()
+        } else {
+            dat
+        }),
         command_labels: prepared.scene.cmd_label_list,
         read_flag_count: prepared.scene.read_flag_list.len(),
         source_stats: prepared.source_stats,
@@ -1517,7 +1530,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
     let exe_key = (key.len() == 16).then_some(key);
     if let Some(source) = gameexe_source {
         write_gameexe_dat(config, source, exe_key, stdout)?;
-    } else {
+    } else if !config.options.check {
         stdout.push_warning(&format!(
             "siglus-ssu -c: warning: {gameexe_ini} not found; skipped Gameexe.dat"
         ))?;
@@ -1525,16 +1538,8 @@ fn compile_project_inner<const FULL_STATS: bool>(
     record_stage_time(stage_times, "GEI", stage_start);
     if config.options.gei {
         return Ok(ProjectOutput {
-            scene_count: 0,
-            compiled_scene_count: 0,
-            full_compile_stats: false,
             stage_times: std::mem::take(stage_times),
-            macro_counts: None,
-            read_flag_stats: None,
-            source_stats: None,
-            binary_size_stats: None,
-            shuffle_seeds: Vec::new(),
-            original_source_sizes: Vec::new(),
+            ..ProjectOutput::default()
         });
     }
     let stage_start = Instant::now();
@@ -1571,7 +1576,7 @@ fn compile_project_inner<const FULL_STATS: bool>(
     let link_workers = default_parallel_worker_count(config.context.scn_list.len());
     let mut inc_command_locations = vec![(0i32, 0i32); base_ia.commands.entries.len()];
     let mut inc_command_defined = vec![false; base_ia.commands.entries.len()];
-    let use_lzss = config.context.lzss_mode && !config.context.easy_link;
+    let use_lzss = !config.options.check && config.context.lzss_mode && !config.context.easy_link;
     let bs_dir = Path::new(&config.tmp_dir).join("bs");
     if !config.tmp_dir.is_empty() {
         fs::create_dir_all(&bs_dir).map_err(|error| format_path_error(&bs_dir, error))?;
@@ -1837,6 +1842,14 @@ fn compile_project_inner<const FULL_STATS: bool>(
                 base_ia.commands.entries[index].name
             ));
         }
+    }
+    if config.options.check {
+        return Ok(ProjectOutput {
+            scene_count: scene_records.len(),
+            compiled_scene_count: config.cache.compiled_scene_files,
+            stage_times: std::mem::take(stage_times),
+            ..ProjectOutput::default()
+        });
     }
     if let Some(elapsed) = concurrent_lzss_elapsed {
         stdout.push_line("[PARALLEL] LZSS compressed scenes alongside compilation")?;

@@ -23,7 +23,7 @@ from .BS import (
     empty_source_stat_counts,
 )
 from .GEI import write_gameexe_dat
-from .linker import link_pack
+from .linker import command_link_errors, link_pack
 from .native_ops import (
     _native_compile_constants_config,
     lzss_pack,
@@ -877,6 +877,8 @@ def _print_summary(ctx, ok=False):
     if angou is not None:
         print("=== \u6697\u53f7.dat ===")
         print(angou)
+    if ok and ctx["check"]:
+        print("Compilation check passed.")
 
 
 def _native_compile_config(
@@ -948,7 +950,7 @@ def _native_compile_config(
 
 
 def _try_native_compile(config, ctx, shuffle_seeds):
-    result = compile_project_native(config)
+    result = compile_project_native(config, check=ctx["check"])
     if not isinstance(result, dict):
         sys.stderr.write(
             "warning: Rust compile backend error: invalid native result; falling back to Python\n"
@@ -999,12 +1001,26 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
     test_dir = ""
     argv = list(argv)
     argv, positional_args = split_end_of_options(argv)
+    check = has_option(argv, "--check")
     if "--test-shuffle" in argv:
         i = argv.index("--test-shuffle")
         argv.pop(i)
         test_shuffle = True
         if i < len(argv) and _is_int_token(argv[i]):
             test_seed_index = i
+    if check:
+        incompatible = [
+            option
+            for option in ("--tmp", "--debug", "--dat-repack", "--gei", "--csv")
+            if has_option(argv, option)
+        ]
+        if test_shuffle:
+            incompatible.append("--test-shuffle")
+        if incompatible:
+            sys.stderr.write(
+                f"{prog}: error: --check cannot be used with {', '.join(incompatible)}\n"
+            )
+            return 2
     if test_shuffle and has_option(argv, "--gei"):
         sys.stderr.write(f"{prog}: error: --gei cannot be used with --test-shuffle\n")
         return 2
@@ -1048,13 +1064,12 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             raise ValueError(message)
 
     ap = _ArgParser(prog=prog, add_help=False, allow_abbrev=False)
+    ap.add_argument("input_dir")
+    if not check:
+        ap.add_argument("output_pck")
     if test_shuffle:
-        ap.add_argument("input_dir")
-        ap.add_argument("output_pck")
         ap.add_argument("test_dir")
-    else:
-        ap.add_argument("input_dir")
-        ap.add_argument("output_pck")
+    ap.add_argument("--check", action="store_true")
     ap.add_argument("--tmp", dest="tmp_dir", default="")
     ap.add_argument(
         "--charset", default="", help="Force source charset (Python codec name)."
@@ -1168,18 +1183,16 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         gei_ini = os.path.basename(inp)
         inp = os.path.dirname(inp) or "."
         inp = os.path.abspath(inp)
-    out_pck_arg = str(a.output_pck)
-    out_pck = os.path.abspath(out_pck_arg)
-    if a.gei:
-        out = out_pck
-        scene_pck = "Scene.pck"
-    elif os.path.isdir(out_pck) or out_pck_arg.endswith(("/", "\\")):
-        out = out_pck
-        scene_pck = "Scene.pck"
-    else:
-        out = os.path.dirname(out_pck) or "."
-        out = os.path.abspath(out)
-        scene_pck = os.path.basename(out_pck)
+    out = scene_pck = ""
+    if not a.check:
+        out_pck_arg = str(a.output_pck)
+        out_pck = os.path.abspath(out_pck_arg)
+        if a.gei or os.path.isdir(out_pck) or out_pck_arg.endswith(("/", "\\")):
+            out = out_pck
+            scene_pck = "Scene.pck"
+        else:
+            out = os.path.abspath(os.path.dirname(out_pck) or ".")
+            scene_pck = os.path.basename(out_pck)
     if not os.path.isdir(inp):
         sys.stderr.write(
             f"{prog}: error: input_dir is not a directory: {a.input_dir}\n"
@@ -1216,7 +1229,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             if ascii_lower(name).startswith("gameexe")
             and ascii_lower(name).endswith(".ini")
             and (
-                (not a.gei and not a.no_angou and not a.no_lzss)
+                not (a.check or a.gei or a.no_angou or a.no_lzss)
                 or windows_filename_key(name) == gameexe_key
             )
         ]
@@ -1245,14 +1258,9 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
     key_txt_name = auxiliary_names[KEY_TXT_NAME]
     if not gei_ini:
         gei_ini = auxiliary_names["Gameexe.ini"]
-    tmp = ""
-    tmp_auto = False
-    if not a.gei:
-        if a.tmp_dir:
-            tmp = os.path.realpath(a.tmp_dir)
-        else:
-            tmp_auto = True
-    embed_sources = not (a.gei or a.no_angou or a.no_lzss or a.no_os)
+    tmp = os.path.realpath(a.tmp_dir) if a.tmp_dir else ""
+    tmp_auto = not (a.check or a.gei or a.tmp_dir)
+    embed_sources = not (a.check or a.gei or a.no_angou or a.no_lzss or a.no_os)
     original_names = (
         [
             name
@@ -1285,8 +1293,8 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         for name in dict.fromkeys([*source_bytes, angou_name, key_txt_name])
         if name
     ]
-    output_names = [] if a.gei else [scene_pck]
-    if gei_ini:
+    output_names = [] if a.check or a.gei else [scene_pck]
+    if gei_ini and not a.check:
         if not a.gei and windows_filename_key(scene_pck) == "gameexe.dat":
             sys.stderr.write(f"{prog}: error: PCK and configuration outputs collide\n")
             return 1
@@ -1312,20 +1320,24 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
             + key_sources
             + [(name, source_bytes[name]) for name in scripts]
         )
-        os.makedirs(out, exist_ok=True)
-        if a.tmp_dir:
-            os.makedirs(tmp, exist_ok=True)
-            resources.enter_context(
-                directory_lock(os.path.join(tmp, "_compile.lockdir"))
-            )
-            _check_compile_cache(tmp, ss, input_paths, output_paths)
-        elif tmp_auto:
-            tmp = tempfile.mkdtemp(
-                prefix="tmp_" + time.strftime("%Y%m%d_%H%M%S", time.localtime()) + "_",
-                dir=out,
-            )
-        outputs = StagedOutputs(out, output_names)
-        resources.callback(outputs.close)
+        outputs = None
+        if not a.check:
+            os.makedirs(out, exist_ok=True)
+            if a.tmp_dir:
+                os.makedirs(tmp, exist_ok=True)
+                resources.enter_context(
+                    directory_lock(os.path.join(tmp, "_compile.lockdir"))
+                )
+                _check_compile_cache(tmp, ss, input_paths, output_paths)
+            elif tmp_auto:
+                tmp = tempfile.mkdtemp(
+                    prefix="tmp_"
+                    + time.strftime("%Y%m%d_%H%M%S", time.localtime())
+                    + "_",
+                    dir=out,
+                )
+            outputs = StagedOutputs(out, output_names)
+            resources.callback(outputs.close)
         compile_list = ss
         pending_digests = None
         shuffle_seeds = None
@@ -1399,7 +1411,8 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
     ctx = {
         "scn_path": inp,
         "tmp_path": tmp,
-        "out_path": outputs.staging,
+        "out_path": outputs.staging if outputs is not None else "",
+        "check": a.check,
         "scene_pck": scene_pck,
         "gameexe_ini": gei_ini,
         "exe_el_key": exe_el_key,
@@ -1420,10 +1433,10 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
         "easy_link": bool(a.no_lzss),
         "stats": stats,
     }
-    stats["angou_content"] = angou_content
+    stats["angou_content"] = None if a.check else angou_content
     full_compile_stats = (
         collect_statistics
-        and not (a.gei or a.dat_repack or a.tmp_dir or test_shuffle)
+        and not (a.check or a.gei or a.dat_repack or a.tmp_dir or test_shuffle)
         and bool(ss)
     )
     native_rc = None
@@ -1435,7 +1448,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 args=a,
                 ctx=ctx,
                 input_dir=inp,
-                output_dir=outputs.staging,
+                output_dir=ctx["out_path"],
                 scene_pck=scene_pck,
                 tmp_dir=tmp,
                 ss=ss,
@@ -1445,7 +1458,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 initial_seed=initial_seed,
             )
             native_rc = _try_native_compile(native_config, ctx, shuffle_seeds)
-            if native_rc == 0:
+            if native_rc == 0 and outputs is not None:
                 if pending_digests is not None:
                     _write_digest_cache(
                         tmp, pending_digests, compile_list, cache_workers, ctx
@@ -1470,7 +1483,7 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
     stage = "GEI"
     try:
         t = time.time()
-        if write_gameexe_dat(ctx) is None:
+        if write_gameexe_dat(ctx, check=a.check) is None and not a.check:
             sys.stderr.write(
                 f"{prog}: warning: {ctx.get('gameexe_ini') or 'Gameexe.ini'} not found; "
                 "skipped Gameexe.dat\n"
@@ -1547,21 +1560,33 @@ def _compile_cli(argv, resources, *, collect_statistics, stats):
                 stats["macro_counts"] = _collect_macro_stats(ctx, compile_stats)
                 stats["source_stats"] = _finalize_source_stats(ctx, compile_stats)
             stage = "link"
-            link_pack(ctx)
-            if pending_digests is not None:
-                stage = "compile cache"
-                _write_digest_cache(
-                    tmp, pending_digests, compile_list, cache_workers, ctx
+            if a.check:
+                ia_data = ctx["ia_data"]
+                names = [command["name"] for command in ia_data["commands"].values()]
+                errors = command_link_errors(
+                    names[: ia_data["inc_command_cnt"]], compile_stats["command_ids"]
                 )
-        stage = "publish"
-        final_output = (
-            (seed_report[0], partial(_write_test_shuffle_csv, *seed_report))
-            if seed_report is not None
-            else None
-        )
-        outputs.publish(input_paths, final_output=final_output)
-        if seed_report is not None:
-            sys.stderr.write(f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n")
+                if errors:
+                    raise RuntimeError(errors[0][1])
+            else:
+                link_pack(ctx)
+                if pending_digests is not None:
+                    stage = "compile cache"
+                    _write_digest_cache(
+                        tmp, pending_digests, compile_list, cache_workers, ctx
+                    )
+        if outputs is not None:
+            stage = "publish"
+            final_output = (
+                (seed_report[0], partial(_write_test_shuffle_csv, *seed_report))
+                if seed_report is not None
+                else None
+            )
+            outputs.publish(input_paths, final_output=final_output)
+            if seed_report is not None:
+                sys.stderr.write(
+                    f"{test_shuffle_prefix} csv: {test_shuffle_csv_path}\n"
+                )
         ok = True
     except Exception as exc:
         sys.stderr.write(

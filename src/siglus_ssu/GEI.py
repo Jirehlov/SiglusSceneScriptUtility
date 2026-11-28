@@ -155,9 +155,7 @@ def restore_gameexe_ini(gameexe_dat_path, output_dir, *, explicit_angou=""):
             return out_path
 
 
-def write_gameexe_dat(ctx):
-    out = ctx.get("out_path") or "."
-    tmp = ctx.get("tmp_path") or ""
+def write_gameexe_dat(ctx, *, check=False):
     gameexe_ini = ctx["gameexe_ini"]
     gei = ctx["source_texts"].get(gameexe_ini)
     if gei is None:
@@ -173,13 +171,19 @@ def write_gameexe_dat(ctx):
             )
         ged = d
     if not ged.strip(" \t\r\n"):
+        action = "" if check else "; generating Gameexe.dat anyway"
         sys.stderr.write(
-            f"{command_name()} -c: warning: {gameexe_ini} is empty; generating Gameexe.dat anyway\n"
+            f"{command_name()} -c: warning: {gameexe_ini} is empty{action}\n"
         )
+    encoded = ged.encode("utf-16le")
+    if check:
+        return None
+    out = ctx.get("out_path") or "."
+    tmp = ctx.get("tmp_path") or ""
     mode = int(bool(el))
     lz = None
-    if ged:
-        lz = bytearray(lzss_pack(ged.encode("utf-16le")))
+    if encoded:
+        lz = bytearray(lzss_pack(encoded))
         xor_cycle_inplace(lz, C.GAMEEXE_DAT_ANGOU_CODE)
     dat_out = bytearray(struct.pack("<ii", 0, mode))
     if lz:

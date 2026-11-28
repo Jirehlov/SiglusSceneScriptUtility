@@ -493,8 +493,12 @@ fn stage_time_dict<'py>(py: Python<'py>, times: &[(String, f64)]) -> PyResult<Bo
     Ok(output)
 }
 
-pub fn compile_project(py: Python<'_>, config: Bound<'_, PyAny>) -> PyResult<Py<PyDict>> {
-    let parsed = config::parse_compile_config(config)?;
+pub fn compile_project(
+    py: Python<'_>,
+    config: Bound<'_, PyAny>,
+    check: bool,
+) -> PyResult<Py<PyDict>> {
+    let parsed = config::parse_compile_config(config, check)?;
     let out = PyDict::new(py);
     if !project::supported(&parsed) {
         out.set_item("handled", false)?;
