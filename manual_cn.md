@@ -283,7 +283,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 
 | 参数 | 说明 |
 |---|---|
-| `<input_pck>` | 要提取的场景 `.pck`，加密场景需要有效的密钥来源。 |
+| `<input_pck>` | 要提取的场景 `.pck`。将加密场景解码成 DAT 需要有效密钥。 |
 | `<input_dir>` | 与 `--disam` 同用时，扫描当前层的 `.dat`，跳过非场景文件。 |
 | `[output_dir]` | 输出基目录，默认为输入文件所在目录或输入目录本身。PCK 提取会创建带时间戳的子目录。 |
 | `--disam` | 额外写出 `<scene>.dat.txt` 反汇编，不能与 `--gei` 同用。 |
@@ -292,6 +292,8 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--gei` | 从 `Gameexe.dat` 或所在目录还原 `Gameexe.ini`。给定目录时，程序按固定的 Windows 文件名大小写映射查找，并对大小写冲突发出警告。已有同名文件时，依次尝试 `Gameexe_1.ini` 等文件名。 |
 
 提取 PCK 时，程序在 `Output:` 后打印带时间戳的子目录，为重名输出添加数字后缀，并报告目标文件系统无法表示的文件名。可在该目录编辑内嵌源码，再将目录传给 `-c` 回编。
+
+提取 PCK 时，如果密钥来源有问题，程序会发出告警并继续查找可用密钥。如果所有候选密钥都失败，程序会提取已有的内嵌源码，并将加密场景的原始字节保存为 `<scene>.enc`。反汇编和反编译需要解密后的 DAT。
 
 如果场景和包内密钥文件都叫 `暗号.dat`，密钥会提取到 `.siglus-ssu-keys/`。编译和回包时可以从该目录读取密钥。
 
@@ -367,7 +369,7 @@ siglus-ssu -a --gei <Gameexe.dat> [Gameexe.dat_2] [--angou VALUE]
 | `angou=text` | 从字面量形式的 `暗号.dat` 首行派生密钥。 |
 | `key=bytes` | 指定 16 字节密钥，建议使用明确的 `0xNN` 写法，避免数字歧义。 |
 
-程序依次查找显式密钥来源、输入 PCK 的内嵌密钥、输入目录和父目录。显式给出文件或目录路径时，程序跳过父目录。目录内依次查找 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt` 和 `SiglusEngine*.exe`，只查当前层。显式来源必须能提供有效密钥。该密钥解密失败时，程序可尝试后续候选项。
+程序依次查找显式密钥来源、输入 PCK 的内嵌密钥、输入目录和父目录。若显式指定的文件或目录能提供密钥，程序会跳过父目录。目录内依次查找 `Scene.pck`、`Scene*.pck`、`暗号.dat`、`key.txt` 和 `SiglusEngine*.exe`，只查当前层。提取 PCK 或反汇编 DAT 目录时，`-x` 会告警并跳过无效的显式密钥来源和无法读取的密钥目录。其他命令要求显式来源能提供密钥。候选密钥无法解密时，程序可尝试后续候选项。
 
 加密的 `Gameexe.dat` 要求去掉注释后的每个非空行都是配置赋值，例如 `#WINDOW_XSIZE=640`。可省略 `#`。名称以 ASCII 字母、数字或下划线开头，也可包含点、方括号、连字符、空格或制表符。值可含 Unicode。候选密钥解出不同的有效文本时，解密会失败。
 

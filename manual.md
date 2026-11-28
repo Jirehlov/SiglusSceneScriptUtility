@@ -283,7 +283,7 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 
 | Parameter | Description |
 |---|---|
-| `<input_pck>` | Scene `.pck` to extract. Encrypted scenes require a valid key source. |
+| `<input_pck>` | Scene `.pck` to extract. A valid key is needed to decode encrypted scenes to DATs. |
 | `<input_dir>` | With `--disam`, scan immediate `.dat` files, skipping non-scene files. |
 | `[output_dir]` | Base output directory. Defaults to the input file's directory, or the input directory itself. PCK extraction creates a timestamped subdirectory. |
 | `--disam` | Also write `<scene>.dat.txt` disassembly. Cannot be combined with `--gei`. |
@@ -292,6 +292,8 @@ siglus-ssu -x --gei <Gameexe.dat | input_dir> [output_dir] [--angou <path|angou=
 | `--gei` | Restore `Gameexe.ini` from `Gameexe.dat` or its parent directory. Directory lookup uses the fixed Windows filename case mapping and warns about case-colliding candidates. If the output already exists, use `Gameexe_1.ini` and so on. |
 
 PCK extraction prints the timestamped subdirectory after `Output:`. It adds numeric suffixes to resolve output collisions and reports filenames the output filesystem cannot represent. Edit embedded sources in that directory and pass it to `-c`.
+
+PCK extraction warns about invalid key sources and continues looking for a usable key. If no key can decrypt the scenes, it extracts any embedded sources and saves the encrypted scene bytes as `<scene>.enc`. Scene disassembly and decompilation require decrypted DATs.
 
 If a scene and its embedded key file are both named `暗号.dat`, the key goes in `.siglus-ssu-keys/`. Compilation and repacking can read the key from there.
 
@@ -367,7 +369,7 @@ Place `--angou VALUE` at the end of the arguments before any `--` separator. Sup
 | `angou=text` | Derive a key from a literal `暗号.dat` first line. |
 | `key=bytes` | Supply a 16-byte key. Prefer explicit `0xNN` tokens to avoid numeric ambiguity. |
 
-Key lookup tries the explicit source, the input PCK's embedded keys, the input directory, then its parent. An explicit file or directory path skips the parent lookup. Directory order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`. Lookup scans immediate files. An explicit source must yield a valid key. If that key fails decryption, lookup can try subsequent candidates.
+Key lookup tries the explicit source, the input PCK's embedded keys, the input directory, then its parent. An explicit file or directory that yields a key skips the parent lookup. Directory order is `Scene.pck`, `Scene*.pck`, `暗号.dat`, `key.txt`, then `SiglusEngine*.exe`. Lookup scans immediate files. During PCK extraction and DAT directory disassembly, `-x` warns and skips invalid explicit key sources and unreadable key directories. Other commands require an explicit source to yield a key. When a candidate fails decryption, lookup can try subsequent candidates.
 
 Encrypted `Gameexe.dat` requires a configuration assignment on each nonblank line after comment removal. For example, `#WINDOW_XSIZE=640`. The `#` is optional. Names begin with an ASCII letter, digit, or underscore and may also contain periods, brackets, hyphens, spaces, and tabs. Values may contain Unicode. Decryption fails if keys produce different valid texts.
 

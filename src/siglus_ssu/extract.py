@@ -31,16 +31,13 @@ def _disassemble_dat_dir(
 
     input_dir = os.path.abspath(input_dir)
     output_dir = os.path.abspath(output_dir)
-    try:
-        exe_el_candidates = list(
-            iter_exe_el_sources(
-                explicit_angou=explicit_angou,
-                base_dir=input_dir,
-            )
+    exe_el_candidates = list(
+        iter_exe_el_sources(
+            explicit_angou=explicit_angou,
+            base_dir=input_dir,
+            warn_key_errors=True,
         )
-    except ValueError as e:
-        sys.stderr.write(str(e) + "\n")
-        return 2
+    )
     try:
         dat_paths = iter_files_by_ext(input_dir, [".dat"], recursive=False)
     except Exception as e:
@@ -109,11 +106,11 @@ def main(argv):
     if not args:
         return 2
     if explicit_angou and not gei:
-        try:
-            list(iter_exe_el_sources(explicit_angou=explicit_angou))
-        except ValueError as e:
-            sys.stderr.write(str(e) + "\n")
-            return 2
+        sources = iter_exe_el_sources(
+            explicit_angou=explicit_angou, warn_key_errors=True
+        )
+        if next(sources, None) is None:
+            explicit_angou = ""
     if gei:
         from . import GEI
 

@@ -600,6 +600,8 @@ def _resolve_pck_scene_exe_el(
     explicit_angou: str = "",
     source_entries=None,
     read_paths=None,
+    *,
+    warn_key_errors=False,
 ):
     from .dat import scn_structure_valid
 
@@ -616,6 +618,7 @@ def _resolve_pck_scene_exe_el(
         input_blob=blob,
         input_source_entries=source_entries,
         read_paths=read_paths,
+        warn_key_errors=warn_key_errors,
     )
     first_candidate = True
     entries_by_prefix = None
@@ -2011,39 +2014,52 @@ def extract_pck(
     except BinaryFormatError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
-    source_entries = None
     source_failed = False
-    if not decompile:
+
+    def read_original_sources():
+        nonlocal source_failed
         try:
-            source_entries = _pck_original_source_entries(dat, hdr)
+            return _pck_original_source_entries(dat, hdr)
         except ValueError as exc:
             source_failed = True
             sys.stderr.write(f"Failed to extract original sources: {exc}\n")
-    try:
-        scene_exe_el = require_pck_scene_exe_el(
-            dat,
-            input_pck=input_pck,
-            hdr=hdr,
-            data_entries=scene_directory[1],
-            explicit_angou=explicit_angou,
-            source_entries=source_entries,
-            read_paths=read_paths,
+            return None
+
+    source_entries = None if decompile else read_original_sources()
+    scene_names, data_entries, _ = scene_directory
+    scene_exe_el = _resolve_pck_scene_exe_el(
+        dat,
+        input_pck=input_pck,
+        hdr=hdr,
+        data_entries=data_entries,
+        explicit_angou=explicit_angou,
+        source_entries=source_entries,
+        read_paths=read_paths,
+        warn_key_errors=True,
+    )
+    preserve_encrypted = hdr["scn_data_exe_angou_mod"] and not scene_exe_el
+    if preserve_encrypted:
+        sys.stderr.write(
+            f"warning: {input_pck}: no valid scene key. "
+            "Extracting encrypted scene data as .enc.\n"
         )
-    except RuntimeError as exc:
-        sys.stderr.write(str(exc) + "\n")
-        return 1
+        if dat_txt or decompile:
+            sys.stderr.write(
+                "warning: scene disassembly and decompilation require decrypted scenes.\n"
+            )
+        if decompile:
+            source_entries = read_original_sources()
     out_dir = _create_extract_dir(output_dir)
     output_names = {}
     key_output_names = {}
     angou_name = windows_filename_key(os.path.splitext(ANGOU_DAT_NAME)[0])
-    separate_key = any(
-        windows_filename_key(name) == angou_name for name in scene_directory[0]
-    )
+    separate_key = any(windows_filename_key(name) == angou_name for name in scene_names)
     if separate_key:
         output_names[windows_filename_key(PCK_KEY_DIR)] = 1
     sys.stdout.write(f"Output: {out_dir}\n")
+    extract_sources = not decompile or preserve_encrypted
     if (
-        not decompile
+        extract_sources
         and not source_failed
         and int(hdr.get("original_source_header_size", 0) or 0) != 0
     ):
@@ -2059,8 +2075,19 @@ def extract_pck(
         except Exception as e:
             source_failed = True
             sys.stderr.write(f"Failed to extract original sources: {e}\n")
-    elif not decompile and not source_failed:
+    elif extract_sources and not source_failed:
         sys.stdout.write("Original sources: not embedded\n")
+    if preserve_encrypted:
+        data_start = hdr["scn_data_list_ofs"]
+        view = memoryview(dat)
+        for name, (offset, size) in zip(scene_names, data_entries):
+            out_name = os.path.basename(_safe_relpath(name + ".enc"))
+            start = data_start + offset
+            _write_extracted_file(
+                out_dir, out_name, view[start : start + size], output_names
+            )
+        sys.stdout.write(f"Extracted encrypted scene files: {len(data_entries):d}\n")
+        return int(source_failed)
     D = None
     disam_stats = None
     disam_fail_cnt = 0

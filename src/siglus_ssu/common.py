@@ -1827,12 +1827,18 @@ def find_named_path(base_dir, target_name):
     return paths.get(windows_filename_key(target_name), "")
 
 
-def find_angou_dat(base_dir: str) -> str:
+def find_angou_dat(base_dir: str, *, warn_key_errors=False) -> str:
     separated = os.path.join(base_dir, PCK_KEY_DIR)
     if os.path.isdir(separated):
-        path = find_named_path(separated, ANGOU_DAT_NAME)
-        if path:
-            return path
+        try:
+            path = find_named_path(separated, ANGOU_DAT_NAME)
+        except OSError as exc:
+            if not warn_key_errors:
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
+        else:
+            if path:
+                return path
     return find_named_path(base_dir, ANGOU_DAT_NAME)
 
 
@@ -2461,7 +2467,7 @@ def consume_angou_option(argv):
     return out, value
 
 
-def iter_directory_key_paths(directory):
+def iter_directory_key_paths(directory, *, warn_key_errors=False):
     if not directory:
         return
     try:
@@ -2470,15 +2476,23 @@ def iter_directory_key_paths(directory):
         return
     hits = []
     others = []
-    for e in entries:
-        if not e.is_file():
+    for entry in entries:
+        name = windows_filename_key(entry.name)
+        if not (name.startswith("scene") and name.endswith(".pck")):
             continue
-        cf = windows_filename_key(e.name)
-        if cf == "scene.pck":
-            hits.append(_safe_abspath(e.path))
+        try:
+            if not entry.is_file():
+                continue
+        except OSError as exc:
+            if not warn_key_errors:
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
             continue
-        if cf.startswith("scene") and cf.endswith(".pck"):
-            others.append(_safe_abspath(e.path))
+        path = _safe_abspath(entry.path)
+        if name == "scene.pck":
+            hits.append(path)
+        else:
+            others.append(path)
     hits.sort(
         key=lambda p: (
             0 if os.path.basename(p) == "Scene.pck" else 1,
@@ -2498,11 +2512,18 @@ def iter_directory_key_paths(directory):
         selected.setdefault(windows_filename_key(path), path)
     for path in selected.values():
         yield "pck", path
-    for kind, path in (
-        ("angou_dat", find_angou_dat(directory)),
-        ("key_txt", find_named_path(directory, KEY_TXT_NAME)),
-        ("siglusengine_exe", find_siglus_engine_exe(directory)),
+    for kind, finder in (
+        ("angou_dat", partial(find_angou_dat, warn_key_errors=warn_key_errors)),
+        ("key_txt", partial(find_named_path, target_name=KEY_TXT_NAME)),
+        ("siglusengine_exe", find_siglus_engine_exe),
     ):
+        try:
+            path = finder(directory)
+        except OSError as exc:
+            if not warn_key_errors:
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
+            continue
         if path:
             yield kind, path
 
@@ -2514,6 +2535,8 @@ def iter_exe_el_sources(
     input_blob: bytes = b"",
     input_source_entries=None,
     read_paths=None,
+    *,
+    warn_key_errors=False,
 ):
     seen = set()
 
@@ -2615,29 +2638,36 @@ def iter_exe_el_sources(
                 out.append(src)
         return out
 
-    def add_dir(path, label):
+    def add_dir(path, label, *, explicit_source=False):
         out = []
-        for kind, source_path in iter_directory_key_paths(path):
-            if kind == "pck":
-                out.extend(add_pck(source_path, label))
-                continue
-            record_read(source_path)
-            if kind == "angou_dat":
-                src = add_angou_text(
-                    read_angou_first_line(source_path),
-                    kind,
-                    path=source_path,
-                    label=label,
-                )
-            else:
-                key = (
-                    read_exe_el_key(source_path)
-                    if kind == "key_txt"
-                    else read_siglus_engine_exe_el(source_path)
-                )
-                src = add(key, kind, path=source_path, label=label)
-            if src:
-                out.append(src)
+        try:
+            for kind, source_path in iter_directory_key_paths(
+                path, warn_key_errors=warn_key_errors
+            ):
+                if kind == "pck":
+                    out.extend(add_pck(source_path, label))
+                    continue
+                record_read(source_path)
+                if kind == "angou_dat":
+                    src = add_angou_text(
+                        read_angou_first_line(source_path),
+                        kind,
+                        path=source_path,
+                        label=label,
+                    )
+                else:
+                    key = (
+                        read_exe_el_key(source_path)
+                        if kind == "key_txt"
+                        else read_siglus_engine_exe_el(source_path)
+                    )
+                    src = add(key, kind, path=source_path, label=label)
+                if src:
+                    out.append(src)
+        except OSError as exc:
+            if not warn_key_errors or (explicit_source and not out):
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
         return out
 
     def add_dir_with_parent(path):
@@ -2648,7 +2678,13 @@ def iter_exe_el_sources(
             ap = resolve_read_path(path, kind="dir")
         except (FileNotFoundError, NotADirectoryError):
             return out
-        out.extend(add_dir(ap, "current_dir"))
+        except OSError as exc:
+            if not warn_key_errors:
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
+            ap = path
+        else:
+            out.extend(add_dir(ap, "current_dir"))
         parent = os.path.dirname(ap)
         if parent and parent != ap:
             out.extend(add_dir(parent, "parent_dir"))
@@ -2657,41 +2693,47 @@ def iter_exe_el_sources(
     explicit = str(explicit_angou or "").strip()
     stop_parent_after_explicit_path = False
     if explicit:
-        low = explicit.casefold()
-        if low.startswith("key="):
-            src = add(
-                parse_exe_el_key_text(explicit.split("=", 1)[1]),
-                "key_literal",
-                label="explicit",
-            )
-            if not src:
-                raise ValueError("invalid --angou key value")
-            yield src
-        elif low.startswith("angou="):
-            src = add_angou_text(
-                explicit.split("=", 1)[1],
-                "angou_literal",
-                label="explicit",
-            )
-            if not src:
-                raise ValueError("invalid --angou angou value")
-            yield src
-        else:
-            stop_parent_after_explicit_path = True
-            try:
-                p = resolve_read_path(explicit)
-            except (FileNotFoundError, NotADirectoryError):
-                raise ValueError(
-                    f"not found: {explicit}; use angou=... for literal angou text"
+        try:
+            low = explicit.casefold()
+            if low.startswith("key="):
+                src = add(
+                    parse_exe_el_key_text(explicit.split("=", 1)[1]),
+                    "key_literal",
+                    label="explicit",
                 )
-            if os.path.isdir(p):
-                found = add_dir(p, "explicit_dir")
-            else:
-                found = add_file(p)
-            if not found:
-                raise ValueError(f"could not derive exe_el from --angou: {explicit}")
-            for src in found:
+                if not src:
+                    raise ValueError("invalid --angou key value")
                 yield src
+            elif low.startswith("angou="):
+                src = add_angou_text(
+                    explicit.split("=", 1)[1],
+                    "angou_literal",
+                    label="explicit",
+                )
+                if not src:
+                    raise ValueError("invalid --angou angou value")
+                yield src
+            else:
+                try:
+                    p = resolve_read_path(explicit)
+                except (FileNotFoundError, NotADirectoryError):
+                    raise ValueError(
+                        f"not found: {explicit}; use angou=... for literal angou text"
+                    )
+                if os.path.isdir(p):
+                    found = add_dir(p, "explicit_dir", explicit_source=True)
+                else:
+                    found = add_file(p)
+                if not found:
+                    raise ValueError(
+                        f"could not derive exe_el from --angou: {explicit}"
+                    )
+                stop_parent_after_explicit_path = True
+                yield from found
+        except (OSError, ValueError) as exc:
+            if not warn_key_errors:
+                raise
+            sys.stderr.write(f"warning: {exc}\n")
     ip = str(input_path or "")
     if ip:
         try:
